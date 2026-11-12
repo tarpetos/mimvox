@@ -396,6 +396,9 @@ pub struct TtsStarted {
     /// Characters per segment, in order (weights for progress and for the buffering estimate).
     #[serde(default)]
     pub segment_chars: Vec<u32>,
+    /// Why `accent: "native-us"` was not possible and the voice's own reference speaks instead (see [`NativeVoice`]).
+    #[serde(default)]
+    pub accent_note: Option<String>,
 }
 
 /// `voices.warm`: `warming = false` means nothing will be reported (`reason`: for example `already_warm`).
@@ -843,15 +846,63 @@ impl Quality {
     }
 }
 
+/// The native-accent speaker of `accent: "native-us"` (English spoken by a native American reference voice, then
+/// converted to the user's timbre by RVC; needs a trained voice). `Auto` lets the engine pick by the voice's pitch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NativeVoice {
+    #[default]
+    Auto,
+    Male,
+    Female,
+}
+
+impl NativeVoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Male => "male",
+            Self::Female => "female",
+        }
+    }
+
+    pub fn from_str(v: &str) -> NativeVoice {
+        match v {
+            "male" => Self::Male,
+            "female" => Self::Female,
+            _ => Self::Auto,
+        }
+    }
+}
+
+/// Adds `accent` / `native_voice` to a speech request: `Some` asks for the native accent with that speaker, `None`
+/// leaves the default (`own`: the voice's own reference).
+fn with_accent(mut params: Value, accent: Option<NativeVoice>) -> Value {
+    if let Some(v) = accent {
+        params["accent"] = json!("native-us");
+        params["native_voice"] = json!(v.as_str());
+    }
+    params
+}
+
 /// `expressiveness` (default 0.8) maps to OmniVoice's sampling temperatures, `voice_match` (default 1.0) to the RVC
 /// index rate (capped by the engine for a language the voice was not recorded in). `speed` (0.8..=1.3, default 1.0) is
 /// OmniVoice's speaking speed. `language` is the ISO code of `text`. `output_format` is the format the result is saved
-/// in (`wav`, `mp3`, `flac`, `ogg`, `opus`, `m4a` or `aiff`).
+/// in (`wav`, `mp3`, `flac`, `ogg`, `opus`, `m4a` or `aiff`). `accent`: see [`NativeVoice`].
 #[allow(clippy::too_many_arguments)]
-pub fn tts_generate(voice_id: &str, text: &str, expressiveness: f32, voice_match: f32, quality: Quality, speed: f32, language: &str, output_format: &str) -> Request {
+pub fn tts_generate(
+    voice_id: &str,
+    text: &str,
+    expressiveness: f32,
+    voice_match: f32,
+    quality: Quality,
+    speed: f32,
+    language: &str,
+    output_format: &str,
+    accent: Option<NativeVoice>,
+) -> Request {
     (
         "tts.generate",
-        json!({
+        with_accent(json!({
             "voice_id": voice_id,
             "text": text,
             "expressiveness": expressiveness,
@@ -860,7 +911,7 @@ pub fn tts_generate(voice_id: &str, text: &str, expressiveness: f32, voice_match
             "speed": speed,
             "language": language,
             "output_format": output_format,
-        }),
+        }), accent),
     )
 }
 
@@ -912,6 +963,8 @@ pub struct RedubDubParams<'a> {
     pub speed: f32,
     /// The format the result is saved in (see [`tts_generate`]).
     pub output_format: &'a str,
+    /// The native accent for an English target (see [`NativeVoice`]).
+    pub accent: Option<NativeVoice>,
 }
 
 /// `redub.dub {path, voice_id, source_language, target_language, review, voice_match, expressiveness, quality, speed,
@@ -921,7 +974,7 @@ pub struct RedubDubParams<'a> {
 pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
     (
         "redub.dub",
-        json!({
+        with_accent(json!({
             "path": p.path,
             "voice_id": p.voice_id,
             "source_language": p.source_language,
@@ -932,7 +985,7 @@ pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
             "quality": p.quality.as_str(),
             "speed": p.speed,
             "output_format": p.output_format,
-        }),
+        }), p.accent),
     )
 }
 
@@ -948,7 +1001,8 @@ pub enum TextLanguage {
 }
 
 /// `segments` and `text_language` are only sent in `Respeak` mode (the possibly edited transcript). `output_format` is
-/// the format the result is saved in (see [`tts_generate`]).
+/// the format the result is saved in (see [`tts_generate`]). `accent` applies to an English `respeak` (see
+/// [`NativeVoice`]).
 #[allow(clippy::too_many_arguments)]
 pub fn redub_render(
     voice_id: &str,
@@ -961,6 +1015,7 @@ pub fn redub_render(
     quality: Quality,
     speed: f32,
     output_format: &str,
+    accent: Option<NativeVoice>,
 ) -> Request {
     let mut params = json!({
         "voice_id": voice_id,
@@ -984,7 +1039,7 @@ pub fn redub_render(
             }
         }
     }
-    ("redub.render", params)
+    ("redub.render", with_accent(params, accent))
 }
 
 pub fn redub_cancel(job: &str) -> Request {

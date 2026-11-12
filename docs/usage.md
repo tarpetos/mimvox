@@ -470,6 +470,36 @@ for the lossy formats (for example MP3 at 320, 192 or 128 kbps). Your last choic
    in the hint. It opens the Voices screen with the per-language panel ready: read the sample text for about 10
    seconds, press **Use for Ukrainian**, come back and generate again.
 
+### Native accent: English with an American accent
+
+The speech model copies the accent of the clip it clones, so a voice recorded in Ukrainian speaks English with a
+Ukrainian accent. For English, a **trained** voice can instead speak with a native American accent: a native US English
+speaker (shipped with the app, from the public CMU ARCTIC corpus) says the text, and your trained voice model then
+turns it into your timbre, moved to your own pitch.
+
+**Accent** appears in the Style panel when the output language is English and the voice was recorded in another
+language:
+
+- **Native (American)** (the default for a trained voice): a native speaker says it, your timbre is kept. With it,
+  **Speaker** picks the native speaker: **Auto** (the one whose pitch is closest to yours), **Male** or **Female**.
+- **Like my recordings**: your own reference clip speaks, with your accent (an English reference clip of yours in
+  Voices sets that accent).
+
+An untrained voice cannot keep its timbre this way, so the choice is off with the hint *Train this voice to use a
+native accent*. The choice is remembered and also applies to **Translate & dub** into English (see Redub).
+
+Example: a Ukrainian voice speaking English with an American accent.
+
+1. Pick a voice recorded in Ukrainian and trained (the header badge reads *Trained*).
+2. Open **Speak**, set **Language** to **English** and leave **Accent** on **Native (American)**.
+3. Paste: *The weather was clear this morning, so we walked along the river and talked about our plans for the
+   summer.*
+4. Press **Generate**. The words come out with native American vowels and rhythm, in your voice. Switch to **Like my
+   recordings** and generate again to hear the difference.
+
+The native speaker's delivery (calm, read speech) replaces the manner of your own clip, and Voice match is kept low
+(at most 0.2) so your recordings do not pull the vowels back to your accent.
+
 ---
 
 ## 7. Redub

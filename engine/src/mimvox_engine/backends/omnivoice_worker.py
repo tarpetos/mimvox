@@ -4,26 +4,29 @@ Runs with the engine venv's interpreter (``<data>/runtime/engine/.venv``: torch 
 openai-whisper, num2words), started by ``backends/omnivoice.py`` as
 
     python -I omnivoice_worker.py --model-dir <data>/runtime/models/omnivoice --whisper-dir <data>/runtime/models/whisper
-                                  [--device cuda|cpu|mps] [--unload-after S] [--exit-after S]
+                                  [--device cuda|cpu|mps] [--unload-after S] [--exit-after S] [--prompt-cache N]
 
 Standalone on purpose: it imports nothing from ``mimvox_engine``; the event-driven skeleton ``worker_kit.py`` and
 the text normalizer ``omnivoice_text.py`` are loaded by their file paths. Wire format: see ``worker_kit.py``.
 
 Ops (one at a time, on the op thread):
   load     {}                                         -> {"load_s","device","vram_gb"}   (no-op when loaded)
-  synth    {"text","lang","ref","out", "steps":32, "speed":1.0, "duration":null, "normalize":true,
+  synth    {"text","lang","ref","out", "steps":32, "speed":1.0, "duration":null, "normalize":true, "ref_text":null,
             "model_lang", "position_temperature", "class_temperature", "guidance_scale" (optional sampling knobs)}
                                                       -> {"out","sr","duration_s","gen_s","text"}
            ``ref``: a WAV of the voice. A clip longer than REF_MAX_S (12 s) is cut to a 7-12 s run of whole sentences
            (Whisper turbo finds them once; the cut and its transcript are cached next to the clip in
-           ``<clip>.omnivoice.json``). The voice-clone prompt of the last reference stays cached in memory.
-  warm     {"ref"}                                    -> {"elapsed_s"}  (builds the voice-clone prompt only)
+           ``<clip>.omnivoice.json``). ``ref_text``, the transcript of a clip of at most REF_MAX_S, skips Whisper and
+           the sidecar (the shipped native-accent clips, whose folder may be read-only). The voice-clone prompts of
+           the last ``--prompt-cache`` references (default 3: the user's clip and the native ones) stay in memory.
+  warm     {"ref","ref_text"?}                        -> {"elapsed_s"}  (builds the voice-clone prompt only)
   release  {}                                         -> {}  (drops the models and frees the GPU; ``load`` or the next
                                                               ``synth`` loads them again)
   status   {}                                         -> {"loaded","rss_gb","vram_gb"}
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"}, {"event":"exit","reason":"idle"}.
 """
 import argparse
+import collections
 import gc
 import importlib.util
 import json
@@ -50,6 +53,7 @@ ap.add_argument("--whisper-dir", default="")
 ap.add_argument("--device", default="cuda")
 ap.add_argument("--unload-after", type=float, default=0.0)  # 0: keep the model while the process lives
 ap.add_argument("--exit-after", type=float, default=0.0)    # 0: never exit on idleness
+ap.add_argument("--prompt-cache", type=int, default=3)      # voice-clone prompts kept in memory (least recently used out)
 args = ap.parse_args()
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -70,7 +74,8 @@ REF_MAX_S = float(os.environ.get("MIMVOX_OMNIVOICE_REF_MAX_S", "12"))
 REF_CUT_MIN_S, REF_CUT_MAX_S, REF_CUT_TARGET_S = 7.0, REF_MAX_S, 10.0
 SIDECAR_VERSION = 3
 
-_state = {"model": None, "device": None, "prompt": None, "prompt_sig": None}
+_state = {"model": None, "device": None}
+_prompts = collections.OrderedDict()  # (sig, ref_text) -> voice-clone prompt, most recently used last
 
 
 def _log(msg):
@@ -129,7 +134,8 @@ def op_load(_req=None):
     dev = _device()
     dtype = torch.float16 if dev in ("cuda", "mps") else torch.float32
     model = OmniVoice.from_pretrained(args.model_dir, device_map=dev if dev != "cuda" else "cuda:0", dtype=dtype)
-    _state.update(model=model, device=dev, prompt=None, prompt_sig=None)
+    _state.update(model=model, device=dev)
+    _prompts.clear()
     gc.collect()
     _trim_working_set()  # the weights passed through host RAM on their way to the GPU
     _log(f"loaded on {dev} in {time.time() - t0:.1f}s, VRAM in use {_vram_gb()} GB")
@@ -150,7 +156,8 @@ def _trim_working_set():
 
 
 def op_release(_req=None):
-    _state.update(model=None, prompt=None, prompt_sig=None)
+    _state.update(model=None)
+    _prompts.clear()
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -218,12 +225,15 @@ def _pick_window(segs, total):
     return max(0.0, segs[i][0] - 0.05), min(total, segs[j][1] + 0.15), " ".join(s[2] for s in segs[i:j + 1])
 
 
-def _reference(ref):
-    """(waveform float32 mono, sample rate, transcript) for the voice-clone prompt, via the sidecar cache."""
+def _reference(ref, ref_text=None):
+    """(waveform float32 mono, sample rate, transcript) for the voice-clone prompt: a clip of at most REF_MAX_S with
+    a known ``ref_text`` as it is, else via the sidecar cache."""
     sig = _sig(ref)
     side = os.path.splitext(ref)[0] + ".omnivoice.json"
     x, sr = _load_mono(ref)
     total = len(x) / sr
+    if ref_text and total <= REF_MAX_S:
+        return x, sr, ref_text
     cached = None
     try:
         with open(side, encoding="utf-8") as fh:
@@ -254,14 +264,17 @@ def _reference(ref):
     return cut, sr, cached["text"]
 
 
-def _prompt(ref):
-    sig = _sig(ref)
-    if _state["prompt"] is not None and _state["prompt_sig"] == sig:
-        return _state["prompt"]
-    wav, sr, text = _reference(ref)
+def _prompt(ref, ref_text=None):
+    key = (tuple(_sig(ref)), ref_text or None)
+    if key in _prompts:
+        _prompts.move_to_end(key)
+        return _prompts[key]
+    wav, sr, text = _reference(ref, ref_text)
     kit_worker.check_cancel()
     prompt = _state["model"].create_voice_clone_prompt((torch.from_numpy(wav), sr), ref_text=text)
-    _state.update(prompt=prompt, prompt_sig=sig)
+    _prompts[key] = prompt
+    while len(_prompts) > max(1, args.prompt_cache):
+        _prompts.popitem(last=False)
     return prompt
 
 
@@ -270,7 +283,7 @@ def _prompt(ref):
 def op_warm(req):
     t0 = time.time()
     op_load()
-    _prompt(req["ref"])
+    _prompt(req["ref"], req.get("ref_text"))
     return {"elapsed_s": round(time.time() - t0, 2)}
 
 
@@ -282,7 +295,7 @@ def op_synth(req):
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
     lang = str(req.get("lang") or "").lower() or None
     op_load()
-    prompt = _prompt(ref)
+    prompt = _prompt(ref, req.get("ref_text"))
     if req.get("normalize", True) and lang:
         text = text_norm.normalize(text, lang)
     kit_worker.check_cancel()

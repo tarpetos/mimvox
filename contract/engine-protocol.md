@@ -672,6 +672,50 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
   instead of 6 %), 0.3 keeps them and most of the timbre. `MIMVOX_RVC_FOREIGN_INDEX` overrides the 0.3.
 - **Training hand-over**: the worker process is ended (all its VRAM and RAM back) and started again after the training.
 
+### Native accent (`accent`)
+
+OmniVoice carries the accent of the reference clip into the target language, and RVC keeps the pronunciation it is
+given. `accent: "native-us"` makes English come out with a native American accent in the user's timbre: OmniVoice speaks
+from a shipped native reference instead of the voice's clip, then the voice's RVC model converts it (`accent.py`).
+
+- **Parameters** (optional) of `tts.generate`, `redub.dub` and `redub.render` (`respeak` only; ignored by `convert`):
+  `"accent": "own" | "native-us"` (default `own`: the voice's own reference, as before) and `"native_voice": "auto" |
+  "male" | "female"` (default `auto`). Other values are `bad_request`.
+- **When it applies**: the speech is English (`language` of `tts.generate`, `target_language` of `redub.dub`, the
+  spoken language of a respeak), the voice is trained (`rvc/model.pth`) and `voice_match > 0`. Otherwise the request
+  is **not refused**: it speaks with the voice's own reference and says why (see below). It works for a voice of any
+  recording language (the app offers it when the voice's `language` is not English).
+- **Native references**: `engine/src/mimvox_engine/assets/native/` (shipped inside the engine package, so every install
+  has them): `en-us-male.wav` (CMU ARCTIC `bdl`) and `en-us-female.wav` (`slt`), US English, about 11.5 s, mono 24 kHz;
+  `en-us-<gender>.txt` is the transcript (sent to the worker as `ref_text`, so no Whisper pass and no
+  `.omnivoice.json` sidecar: the folder may be read-only); `voices.json` lists them with their median F0 (116.6 and
+  182.9 Hz); the licence is `CMU_ARCTIC_COPYING.txt` next to them. Rebuilt by `tools/release/make_native_refs.py`.
+- **Speaker**: `auto` picks the native speaker whose median F0 is closest on a log scale to the median F0 of the voice's
+  `reference.wav` (pYIN 60-500 Hz over at most 30 s, measured once per clip state per engine run, a few seconds of CPU;
+  unknown pitch: male). `male` / `female` force one.
+- **RVC**: `pitch = round(12 * log2(voice F0 / native F0))` semitones (within +-12; 0 when the voice's pitch is
+  unknown), so the timbre model gets a pitch in the user's own range; index rate `min(voice_match, 0.2)`
+  (`MIMVOX_RVC_NATIVE_INDEX` overrides 0.2): the retrieval index holds the user's own phoneme features, and a high rate
+  pulls the native vowels back towards the user's accent; the timbre comes mostly from the model itself. RVC worker
+  `convert` takes `"pitch"` (int semitones, default 0).
+- **Results**: the `tts.generate` answer, the `redub.dub` answer (`review:false`) and the `redub.render` answer
+  (`respeak`) carry `"accent"` (what the job does: `own` | `native-us`); `tts.done` and `redub.done` carry it too, plus
+  `"native_voice"` (`male` | `female`) and `"pitch"` when it is `native-us`. When `native-us` was asked but cannot be
+  used they add `"accent_fallback"`: `not_english`, `untrained`, `voice_match_off` or `unavailable` (the clips are
+  missing), and `"accent_note"`, a sentence for the user. A `redub.dub` with `review:true` speaks nothing: send
+  `accent` again with the `redub.render` that finishes it.
+- **Warm-up**: `voices.warm {"id","accent"?:"native-us","native_voice"?}` with a trained voice also measures the voice's
+  pitch and builds the native clip's voice-clone prompt (included in the `voice.warm` it ends with; `already_warm`
+  only when that is done too). The OmniVoice worker keeps the voice-clone prompts of the last 3 clips
+  (`--prompt-cache`, least recently used out), so the user's reference and the native clips stay warm side by side
+  and switching between `own` and `native-us` rebuilds nothing.
+- **App side**: Speak's Style panel shows "Accent" (Native (American) | Like my recordings, with Speaker Auto | Male |
+  Female under Native) when the output language is English and the voice's `language` is not; Redub shows the same
+  in Translate & dub when "To" is English, and sends it with the `redub.render` of a reviewed dub (Re-speak does not
+  offer it). It is disabled for an untrained voice ("Train this voice to use a native accent"), default Native, and
+  remembered in `settings.json` (`accent`: `native-us` | `own`, `native_voice`). `voices.warm` is sent with the
+  accent for a trained voice whose `language` is not English. An `accent_note` is shown as a warning toast.
+
 ### `shutdown`
 `{}` -> `{}` then exit.
 

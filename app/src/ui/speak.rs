@@ -9,6 +9,11 @@
 //! voice was recorded in and is remembered per voice (`speak_languages` in `settings.json`); `tts.generate` sends it as
 //! `language`. Another language than the voice's own shows a hint about per-language reference clips.
 //!
+//! English output from a voice recorded in another language shows an "Accent" choice (see [`accent_block`], shared
+//! with Redub's Translate & dub): "Native (American)" sends `accent: "native-us"` (a native reference voice speaks, the
+//! trained RVC model brings the user's timbre back), "Like my recordings" the voice's own reference. It needs a trained
+//! voice; the choice and the native speaker override are remembered in `settings.json` (`accent`, `native_voice`).
+//!
 //! Playback is pre-buffered: a single-segment job plays at once; for longer text the finished segments are held
 //! back until, by the engine's real-time factor, the segments still to come will arrive before the buffered audio
 //! runs out (see [`can_start`]). So it starts as early as it can without ever stuttering, and never later than
@@ -16,12 +21,12 @@
 
 use super::components::{
     Button, Slider, TextArea, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel,
-    segmented_help, status_dot,
+    segmented_fill, segmented_help, status_dot,
 };
 use super::lang;
 use super::shell::{self, EngineStatus, VoiceInfo};
 use super::theme::{self, Palette, motion, ty};
-use crate::engine::protocol::{self, EngineEvent, Quality, TtsChunk, TtsStarted};
+use crate::engine::protocol::{self, EngineEvent, NativeVoice, Quality, TtsChunk, TtsStarted};
 use crate::engine::EngineMsg;
 use crate::state::{AppState, Screen};
 use rune::{Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, row, text};
@@ -162,6 +167,12 @@ pub struct SpeakState {
     /// Output language per voice id, when it is not the voice's own language (`speak_languages` in settings.json).
     pub languages: HashMap<String, String>,
     languages_dirty: bool,
+    /// "Native (American)" accent for English from a voice recorded in another language (default on; `accent` in
+    /// settings.json: `native-us` | `own`). Shared with Redub.
+    pub native_accent: bool,
+    /// Which native speaker (`native_voice` in settings.json; `Auto` picks by the voice's pitch).
+    pub native_voice: NativeVoice,
+    accent_dirty: bool,
     gen_: Gen,
     pub takes: Vec<Take>,
     playing: Playing,
@@ -182,6 +193,9 @@ impl Default for SpeakState {
             speed_dirty: false,
             languages: HashMap::new(),
             languages_dirty: false,
+            native_accent: true,
+            native_voice: NativeVoice::Auto,
+            accent_dirty: false,
             gen_: Gen::Idle,
             takes: Vec::new(),
             playing: Playing::Nothing,
@@ -219,6 +233,26 @@ pub fn set_language(s: &mut AppState, code: &str) {
     s.speak.languages_dirty = true;
 }
 
+/// Whether the Accent choice applies to speech in `lang` with the active voice: English output from a voice recorded
+/// in another language.
+pub fn accent_applies(s: &AppState, lang: &str) -> bool {
+    shell::active_voice(s).is_some_and(|v| lang::base(lang) == "en" && lang::base(v.lang()) != "en")
+}
+
+/// The `accent` of a speech request in `lang`: the native speaker when the native accent applies, is chosen and the
+/// voice is trained (an untrained voice would lose its timbre), else `None` (the voice's own reference).
+pub fn accent_param(s: &AppState, lang: &str) -> Option<NativeVoice> {
+    let trained = shell::active_voice(s).is_some_and(|v| v.trained);
+    (accent_applies(s, lang) && trained && s.speak.native_accent).then_some(s.speak.native_voice)
+}
+
+/// The `accent` to warm the active voice with (`voices.warm`): native when chosen and the voice is trained and was
+/// recorded in another language than English (its English output would use it).
+pub fn warm_accent(s: &AppState) -> Option<NativeVoice> {
+    let v = shell::active_voice(s)?;
+    (v.trained && lang::base(v.lang()) != "en" && s.speak.native_accent).then_some(s.speak.native_voice)
+}
+
 /// Why Generate cannot run right now (shown next to the button), or `None` when it can.
 fn blocker(s: &AppState) -> Option<&'static str> {
     match &s.shell.engine {
@@ -248,7 +282,9 @@ pub fn generate(s: &mut AppState) {
     let Some(voice) = shell::active_voice(s).cloned() else { return };
     let lang = language(s);
     let out = super::formats::output_format(s);
-    let (method, params) = protocol::tts_generate(&voice.id, &text, s.speak.expressiveness, s.speak.voice_match, s.speak.quality, s.speak.speed, &lang, &out);
+    let accent = accent_param(s, &lang);
+    let (method, params) =
+        protocol::tts_generate(&voice.id, &text, s.speak.expressiveness, s.speak.voice_match, s.speak.quality, s.speak.speed, &lang, &out, accent);
     shell::stop_audio(s);
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -325,16 +361,21 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
         EngineMsg::Response { id, result } if *id == a.req => match result {
             Ok(v) => {
-                if let Ok(TtsStarted { job, segments, segment_chars }) = protocol::parse_result(v.clone()) {
+                let mut note = None;
+                if let Ok(TtsStarted { job, segments, segment_chars, accent_note }) = protocol::parse_result(v.clone()) {
                     a.job = Some(job);
                     if segments > 0 {
                         a.total = segments as usize;
                         a.exact = true;
                     }
                     a.seg_chars = segment_chars;
+                    note = accent_note;
                 }
                 let stop = a.cancel;
                 s.speak.gen_ = Gen::Active(a);
+                if let Some(n) = note.filter(|n| !n.is_empty()) {
+                    shell::toast(s, Tone::Warning, n);
+                }
                 if stop {
                     cancel(s);
                 }
@@ -449,6 +490,12 @@ pub fn settle(s: &mut AppState) -> bool {
             if let Some(Value::Object(m)) = super::onboarding::setting("speak_languages") {
                 s.speak.languages = m.into_iter().filter_map(|(k, v)| v.as_str().map(|c| (k, c.to_owned()))).collect();
             }
+            if let Some(a) = super::onboarding::setting("accent") {
+                s.speak.native_accent = a.as_str() != Some("own");
+            }
+            if let Some(v) = super::onboarding::setting("native_voice") {
+                s.speak.native_voice = NativeVoice::from_str(v.as_str().unwrap_or(""));
+            }
             changed = true;
         } else {
             if s.speak.speed_dirty {
@@ -458,6 +505,11 @@ pub fn settle(s: &mut AppState) -> bool {
             if s.speak.languages_dirty {
                 s.speak.languages_dirty = false;
                 super::onboarding::save_setting("speak_languages", json!(s.speak.languages));
+            }
+            if s.speak.accent_dirty {
+                s.speak.accent_dirty = false;
+                super::onboarding::save_setting("accent", json!(if s.speak.native_accent { "native-us" } else { "own" }));
+                super::onboarding::save_setting("native_voice", json!(s.speak.native_voice.as_str()));
             }
         }
     }
@@ -682,6 +734,9 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     // Redub shares this panel but chooses its languages itself.
     if s.screen == Screen::Speak {
         c = c.child(language_row(s, p));
+        if accent_applies(s, &language(s)) {
+            c = c.child(accent_block(s, p, "speak-accent"));
+        }
     }
     c = c.child(speed).child(expr).child(m).child(quality);
     if !trained && shell::active_voice(s).is_some() {
@@ -703,6 +758,10 @@ fn language_row(s: &AppState, p: Palette) -> El {
     if let Some(v) = voice.filter(|v| v.lang() != code) {
         let (rec, target) = (lang::name(v.lang()), lang::name(&code));
         let has_ref = v.references.iter().any(|r| *r == code);
+        if accent_param(s, &code).is_some() {
+            // The native accent replaces the per-language reference clip: no hint to record one.
+            return c;
+        }
         let hint = if has_ref {
             format!("Voice recorded in {rec}. Your {target} reference clip sets the accent.")
         } else {
@@ -720,6 +779,66 @@ fn language_row(s: &AppState, p: Palette) -> El {
                 }).build(p)));
         }
         c = c.child(box_);
+    }
+    c
+}
+
+/// The "Accent" choice (Speak's Style panel and Redub's Translate & dub to English): "Native (American)" or "Like my
+/// recordings", disabled with a hint until the voice is trained; with Native, the native speaker (Auto / Male / Female).
+pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
+    let voice = shell::active_voice(s);
+    let trained = voice.is_some_and(|v| v.trained);
+    let rec = voice.map(|v| lang::name(v.lang())).unwrap_or_default();
+    let native = trained && s.speak.native_accent;
+    let pick = segmented_fill(
+        p,
+        &format!("{key}-pick"),
+        &["Native (American)", "Like my recordings"],
+        if trained {
+            &["A native American speaker says it, then your trained voice model gives it your timbre", "Copies the accent of your own recordings"]
+        } else {
+            &["Train this voice to use a native accent", "Copies the accent of your own recordings"]
+        },
+        usize::from(!native),
+        trained,
+        |s, i| {
+            s.speak.native_accent = i == 0;
+            s.speak.accent_dirty = true;
+        },
+    );
+    let caption = if !trained {
+        "Train this voice to use a native accent.".to_owned()
+    } else if native {
+        "A native American speaker says it; your trained voice model keeps your timbre.".to_owned()
+    } else {
+        format!("English with the accent of your {rec} recordings.")
+    };
+    let mut c = col().key(key.to_owned()).w_full().gap(8.0)
+        .child(text("Accent").font(ty::LABEL).color(p.text))
+        .child(pick)
+        .child(text(caption).font(ty::CAPTION).color(if trained { p.text_faint } else { p.warn }).wrap());
+    if native {
+        let v = s.speak.native_voice;
+        let sel = match v {
+            NativeVoice::Auto => 0,
+            NativeVoice::Male => 1,
+            NativeVoice::Female => 2,
+        };
+        let pick = segmented_fill(
+            p,
+            &format!("{key}-speaker-pick"),
+            &["Auto", "Male", "Female"],
+            &["The native speaker whose pitch is closest to yours", "Always the male native speaker", "Always the female native speaker"],
+            sel,
+            true,
+            |s, i| {
+                s.speak.native_voice = [NativeVoice::Auto, NativeVoice::Male, NativeVoice::Female][i.min(2)];
+                s.speak.accent_dirty = true;
+            },
+        );
+        c = c.child(row().key(format!("{key}-speaker")).w_full().center_y().gap(10.0)
+            .child(text("Speaker").font(ty::LABEL).color(p.text))
+            .child(el().grow(1.0).min_w(0.0).child(pick)));
     }
     c
 }
@@ -829,6 +948,32 @@ pub fn scene_language_uk(s: &mut AppState) {
     demo_voice(s, true);
     s.speak.text = TextEdit::new(SAMPLE_UK);
     s.speak.languages.insert("me".into(), "uk".into());
+}
+
+/// A voice recorded in Ukrainian, speaking English: the Accent choice, native by default.
+fn demo_voice_uk(s: &mut AppState, trained: bool) {
+    demo_voice(s, trained);
+    for v in &mut s.shell.voices {
+        v.language = "uk".into();
+    }
+    s.speak.languages.insert("me".into(), "en".into());
+    s.speak.text = TextEdit::new(SAMPLE);
+}
+
+pub fn scene_accent_native(s: &mut AppState) {
+    demo_voice_uk(s, true);
+    demo_takes(s);
+}
+
+/// "Like my recordings" chosen: the language hint about an English reference clip is back.
+pub fn scene_accent_own(s: &mut AppState) {
+    demo_voice_uk(s, true);
+    s.speak.native_accent = false;
+}
+
+/// An untrained voice: the choice is disabled with the hint to train it.
+pub fn scene_accent_untrained(s: &mut AppState) {
+    demo_voice_uk(s, false);
 }
 
 /// The output-language picker open.
