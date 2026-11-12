@@ -681,10 +681,10 @@ fn setup_view(s: &AppState, p: &Palette) -> El {
     // Estimate
     let epochs = if t.manual { t.epochs } else { sum.map_or(t.epochs, |x| x.recommended_epochs.max(1)) };
     let est = match crate::ui::onboarding::backend(s) {
-        Some("cuda") => format!("About {} on an RTX-class GPU.", fmt_dur(epochs as f32 * SECONDS_PER_EPOCH_CUDA)),
+        Some("cuda") => format!("About {} on an RTX 4070-class GPU.", fmt_dur(epochs as f32 * SECONDS_PER_EPOCH_CUDA)),
         Some("mps") => "Expect several hours on an Apple GPU.".to_string(),
         Some("cpu") => "Expect many hours without a GPU.".to_string(),
-        _ => format!("About {} on an RTX-class GPU.", fmt_dur(epochs as f32 * SECONDS_PER_EPOCH_CUDA)),
+        _ => format!("About {} on an RTX 4070-class GPU.", fmt_dur(epochs as f32 * SECONDS_PER_EPOCH_CUDA)),
     };
     out.child(
         col()
@@ -1114,6 +1114,7 @@ fn base(s: &mut AppState) {
         name: Some("NVIDIA GeForce RTX 4070".into()),
         vram_gb: Some(12.0),
         version: None,
+        vendor: None,
     });
 }
 

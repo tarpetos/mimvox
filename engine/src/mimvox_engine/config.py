@@ -33,6 +33,11 @@ def backend(runtime: dict[str, Any]) -> str:
     return str(runtime.get("device", {}).get("backend", "cuda")).lower()
 
 
+def vendor(runtime: dict[str, Any]) -> str:
+    """``nvidia`` or ``amd`` for the cuda backend (ROCm torch also uses the ``cuda`` device), else ``""``."""
+    return str(runtime.get("device", {}).get("vendor", "")).lower()
+
+
 @dataclass(frozen=True)
 class DataDir:
     """Layout of ``<data>`` (see the contract)."""

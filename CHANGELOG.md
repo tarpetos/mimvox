@@ -39,5 +39,7 @@ Early version: expect bugs.
   first), Convert voice and Re-speak, for audio and video files.
 * **Voices:** several voices, reference clip choice, a reference picked from many media files, per-language reference
   clips.
+* **AMD GPUs on Linux:** setup finds a Radeon card and installs the ROCm builds of PyTorch, and the app shows it
+  with the ROCm backend.
 * **Setup and build:** one-click setup scripts (`setup.sh`, `setup.cmd`) that install the engine and the models, and
   installer builds for Windows, Linux and macOS (`scripts/build/`).

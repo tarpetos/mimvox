@@ -222,8 +222,14 @@ async def _stop_workers() -> None:
 
 def _device_info(runtime: dict[str, Any]) -> dict[str, Any]:
     backend = config.backend(runtime)
+    vendor = config.vendor(runtime)
     info: dict[str, Any] = {"backend": backend, "name": backend.upper(), "vram_gb": 0.0}
-    if backend == "cuda":
+    if vendor:
+        info["vendor"] = vendor
+    if backend == "cuda" and vendor == "amd":
+        device = runtime.get("device", {})
+        info.update(name=str(device.get("name") or "AMD GPU"), vram_gb=round(float(device.get("vram_gb", 0.0)), 1))
+    elif backend == "cuda":
         try:
             out = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
