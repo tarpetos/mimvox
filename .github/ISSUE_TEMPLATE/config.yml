@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Usage guide
+    url: https://github.com/tarpetos/mimvox/blob/master/docs/usage.md
+    about: How to install, record, train, speak and redub, with examples and troubleshooting.

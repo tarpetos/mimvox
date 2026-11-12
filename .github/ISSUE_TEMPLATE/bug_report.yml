@@ -1,0 +1,52 @@
+name: Bug report
+description: Something does not work or works badly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Mimvox is an early version, so bugs are expected; a good report gets them fixed fast.
+        Do not attach recordings or voices of other people.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Redub, choose a 2-minute MP4
+        2. Translate & dub from Ukrainian to English
+        3. ...
+  - type: dropdown
+    id: screen
+    attributes:
+      label: Screen
+      options: [Setup / first start, Record, Train, Speak, Redub, Voices, Other]
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Operating system, GPU and its video memory (the engine status tooltip shows the device).
+      placeholder: Windows 11, NVIDIA RTX 4070 12 GB
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Mimvox version or commit
+      placeholder: 0.1.0 or a commit hash
+  - type: textarea
+    id: log
+    attributes:
+      label: Engine log
+      description: |
+        The end of `logs/engine.log` in your data folder (copy it before restarting the app: it starts fresh on every
+        engine start). For setup problems, the setup window's last lines.
+      render: text

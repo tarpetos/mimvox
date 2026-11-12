@@ -9,6 +9,10 @@ from that recording, and from then on you type any text (English, Ukrainian and 
 spoken in your own voice. Everything runs
 on your computer: your recordings, your voice models and the generated speech are never uploaded anywhere.
 
+<p align="center">
+  <img src="docs/demo.gif" alt="Mimvox: recording, training, speaking and dubbing in your own voice" width="880">
+</p>
+
 > [!WARNING]
 > **Early version: expect bugs.** This is a hobby project in active development. Features may not work, may work
 > badly, or may change between versions, and setup may fail on systems it was not tried on. Keep your own copies of
