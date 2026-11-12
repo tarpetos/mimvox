@@ -56,5 +56,5 @@ as its frames stop changing.
 Hiding a window that presents through a flip-model swap chain lets DWM play its hide animation on a stale or white
 copy of the window, so closing the app flashed white with artefacts. `Cloak::hide_quietly`
 (`src/platform/win32/cloak.rs`) cloaks the window, hides it and uncloaks it, so nothing of it is on screen while it
-hides; `Win::hide` (`src/window/win.rs`) uses it on Windows, and a quit hides the window before the event loop ends
+hides; `Win::hide` (`src/window/win.rs`) uses it on Windows. A close hides the window that way before Rune releases the GPU and destroys the window (`Windows::hide`, which used to destroy it while still visible), and a quit hides it before the event loop ends
 (`src/window/lifecycle.rs`). Lines are marked `PATCH (local)`.

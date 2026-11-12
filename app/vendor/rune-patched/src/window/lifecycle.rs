@@ -374,6 +374,9 @@ impl<S: 'static> Host<S> {
     }
 
     pub(super) fn hide(&mut self, event_loop: &ActiveEventLoop) {
+        // PATCH (local): off the screen at once and without the system's hide animation, before the GPU and the
+        // window are released below (destroying a still visible window flashed white on Windows).
+        if let Some(w) = &self.win { w.hide(); }
         self.stop_showing();
         self.wind_down();
         let launcher = self.launcher();
