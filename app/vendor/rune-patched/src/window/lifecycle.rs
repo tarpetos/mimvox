@@ -189,6 +189,8 @@ impl<S: 'static> Host<S> {
         // The next frame polls for the wake.
         if wake && !quiet { self.rt.cancel_timer_frame(); }
         if let Some(after) = requests.quit {
+            // PATCH (local): gone from the screen at once, before the loop ends and the window is destroyed.
+            if let Some(w) = &self.win { w.hide(); }
             // Quitting from now on: a close later in this turn closes for the quit.
             // `Windows::exiting` carries out its effects.
             let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
@@ -291,6 +293,8 @@ impl<S: 'static> Host<S> {
             let minimize = std::mem::take(&mut self.rt.minimize_request);
             match self.rt.shell_request.take() {
                 Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
+                    // PATCH (local): gone from the screen at once, before the loop ends and the window is destroyed.
+                    if let Some(w) = &self.win { w.hide(); }
                     let after = shell.after().unwrap_or(crate::quit::After::Exit);
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
                     self.popup.cancel(&mut self.rt);

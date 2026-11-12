@@ -81,6 +81,16 @@ impl Cloak {
     /// Uncloaks once `now` is past the deadline.
     pub(crate) fn lift_if_due(&self, window: &winit::window::Window, now: Instant) { self.apply(window, CloakEvent::Tick { now }); }
 
+    /// PATCH (local): hides the window with no system hide animation. Hiding a window that presents through a
+    /// flip-model swap chain lets DWM animate a stale or white copy of it, which flashes on close; cloaked first,
+    /// nothing of it is on screen when it hides.
+    pub(crate) fn hide_quietly(&self, window: &winit::window::Window) {
+        let cloaked = set(window, true);
+        window.set_visible(false);
+        if cloaked { set(window, false); }
+        self.state.set(CloakState::Lifted);
+    }
+
     fn apply(&self, window: &winit::window::Window, event: CloakEvent) {
         let (next, effect) = self.state.get().step(event);
         match effect {

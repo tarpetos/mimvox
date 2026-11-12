@@ -235,10 +235,11 @@ impl Win {
         if let Some(shadow) = &self.native.shadow { shadow.hidden(); }
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.native.panel { panel.hide(std::time::Duration::ZERO); return; }
-        self.window.set_visible(false);
-        // Hidden before its frame: the next show cloaks it again.
+        // PATCH (local): no hide animation on Windows (see `Cloak::hide_quietly`).
         #[cfg(target_os = "windows")]
-        self.native.cloak.lift(&self.window);
+        { self.native.cloak.hide_quietly(&self.window); return; }
+        #[cfg(not(target_os = "windows"))]
+        self.window.set_visible(false);
     }
 
     /// Its last frame is on screen and nothing has asked for another since.

@@ -50,3 +50,11 @@ renewed itself on every frame: the idle window presented ~490 times a second (me
 `idle=true` with `steady=Hold`), took most of the GPU and made speech generation 20-40x slower. Even when it ends, it
 would keep the GPU busy for 1 s after every progress event of a running job. `STEADY` is zero, so a window rests as soon
 as its frames stop changing.
+
+### Patch 4: no white flash when the window closes (Windows)
+
+Hiding a window that presents through a flip-model swap chain lets DWM play its hide animation on a stale or white
+copy of the window, so closing the app flashed white with artefacts. `Cloak::hide_quietly`
+(`src/platform/win32/cloak.rs`) cloaks the window, hides it and uncloaks it, so nothing of it is on screen while it
+hides; `Win::hide` (`src/window/win.rs`) uses it on Windows, and a quit hides the window before the event loop ends
+(`src/window/lifecycle.rs`). Lines are marked `PATCH (local)`.
