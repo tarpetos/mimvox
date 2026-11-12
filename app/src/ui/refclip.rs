@@ -825,7 +825,30 @@ fn language_line(p: &Palette, info: &VoiceInfo) -> El {
     } else {
         format!("{own} will carry this clip's accent. Add {} {own} clip under Other languages.", if own.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" })
     };
-    col().w_full().gap(6.0).child(head).child(text(note).key("refclip-spoken-note").font(ty::CAPTION).color(p.warn).wrap())
+    let mut c = col().w_full().gap(6.0).child(head).child(text(note).key("refclip-spoken-note").font(ty::CAPTION).color(p.warn).wrap());
+    // The voice's language says what it was recorded in: when the clip is clearly another language, offer to fix it
+    // (it decides which output counts as foreign: the accent choice, and how strongly the voice model applies).
+    if lang::base(code) != lang::base(info.lang()) {
+        let (id, to) = (info.id.clone(), lang::base(code));
+        let label = format!("Set the voice to {}", lang::name(&to));
+        c = c.child(row().key("refclip-set-lang").gap(10.0).center_y()
+            .child(kit::button(p, &label, BtnKind::Glass, true, move |s: &mut AppState| set_voice_language(s, &id, &to)))
+            .child(text("Changes only how languages are treated; recordings and training stay as they are.").font(ty::CAPTION).color(p.text_faint).wrap().grow(1.0).min_w(0.0)));
+    }
+    c
+}
+
+/// "Set the voice to <language>": the recording language follows the detected language of its clip.
+fn set_voice_language(s: &mut AppState, id: &str, code: &str) {
+    if let Some(v) = s.shell.voices.iter_mut().find(|v| v.id == id) {
+        v.language = code.to_owned();
+    }
+    if shell::request(s, "voices.rename", json!({ "id": id, "language": code })).is_some() {
+        shell::refresh_voices(s);
+        shell::toast(s, Tone::Success, &format!("The voice is now set to {}.", lang::name(code)));
+    } else {
+        shell::toast(s, Tone::Danger, "The engine is not running: try again once it is ready.");
+    }
 }
 
 /// The section shown inside the active voice's card.
