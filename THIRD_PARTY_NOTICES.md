@@ -171,3 +171,11 @@ After setup, each downloaded component keeps its own licence files in its folder
 `runtime/applio/LICENSE`, `runtime/models/omnivoice/audio_tokenizer/LICENSE`, and the package metadata in
 `runtime/engine/.venv`) and next to its model files. For the Rust crates, see the
 sources fetched by Cargo. If a notice here is wrong or missing, open an issue on the project's GitHub page.
+
+### CMU ARCTIC speech database (demo samples)
+
+- Files: `docs/samples/reference.mp3` (five recordings of speaker `slt` joined into one clip, so modified) and the
+  samples generated from it in `docs/samples/`.
+- Copyright (c) 2003 Carnegie Mellon University. Free for any use under the licence in
+  `docs/samples/CMU_ARCTIC_COPYING.txt` (keep the notice, mark modifications, keep the authors' names).
+  <http://festvox.org/cmu_arctic/>
