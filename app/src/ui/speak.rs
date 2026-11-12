@@ -710,6 +710,15 @@ fn results_panel(s: &AppState, p: Palette) -> El {
     section_panel(p, "Results").key("results-panel").w_full().grow(1.0).min_h(0.0).gap(10.0).children(head).child(body)
 }
 
+/// A take's text as one short line for its card: line breaks would make the truncated label as tall as the paragraph.
+fn one_line(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.char_indices().nth(140) {
+        Some((i, _)) => format!("{}…", &flat[..i]),
+        None => flat,
+    }
+}
+
 fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
     let id = t.id;
     let on = s.speak.playing == Playing::Take(id);
@@ -736,7 +745,7 @@ fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
         .child(row().w_full().gap(10.0).center_y()
             .child(play)
             .child(col().grow(1.0).min_w(0.0).gap(1.0)
-                .child(text(t.text.clone()).font(ty::LABEL).color(p.text).truncate())
+                .child(text(one_line(&t.text)).font(ty::LABEL).color(p.text).truncate())
                 .child(text(meta).font(ty::CAPTION).color(p.text_faint))))
         .child(row().w_full().gap(8.0).center_y().child(export).child(reveal).child(open))
 }
@@ -761,7 +770,7 @@ fn demo_voice(s: &mut AppState, trained: bool) {
 fn demo_takes(s: &mut AppState) {
     let mk = |id, text: &str, d, e| Take { id, text: text.into(), voice: "My voice".into(), wav: format!("/tmp/out{id}.wav").into(), mp3: None, duration_s: d, elapsed_s: e };
     s.speak.takes = vec![
-        mk(3, "Welcome back. In a few seconds this paragraph will be read in my own voice.", 14.2, 9.1),
+        mk(3, "Welcome back. In a few seconds this paragraph will be read in my own voice.\n\nA second paragraph follows after an empty line, and a third one after it.\n\nThat is all.", 14.2, 9.1),
         mk(2, "The quick brown fox jumps over the lazy dog.", 3.8, 2.6),
         mk(1, "Hello, this is a test of my cloned voice.", 3.1, 2.2),
     ];
