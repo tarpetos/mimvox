@@ -16,6 +16,8 @@ Voice: the voice's ``reference.wav`` (used whole up to 20 s, else cut by the wor
 transcript cached next to it in
 ``reference.omnivoice.json``). A per-language clip ``reference_<lang>.wav`` next to it wins when present: OmniVoice
 carries the accent of the reference into the target language, so a Ukrainian clip makes the cleanest Ukrainian.
+For English, ``accent.py`` may speak from a shipped native American clip instead (``SynthParams.reference_text``) and
+let RVC bring the user's timbre back.
 
 The voice's RVC model then converts the output like every backend's (pipeline). For languages other than the one the
 RVC model was trained on, keep the index rate low (measured: index 1.0 garbles Ukrainian phonemes through an
@@ -28,6 +30,7 @@ import logging
 import os
 import sys
 import time
+from collections import OrderedDict
 from typing import Any
 
 from .. import config
@@ -43,6 +46,9 @@ BEST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_STEPS", "32"))
 FAST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_FAST_STEPS", "16"))
 FIRST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_FIRST_STEPS", "16"))  # segment 0: ~1.1 s instead of ~2.2 s
 UNLOAD_AFTER_S = float(os.environ.get("MIMVOX_OMNIVOICE_UNLOAD_S", "0"))   # 0: keep the model loaded while idle
+# Voice-clone prompts the worker keeps (least recently used out): the user's reference plus the native-accent clips
+# (accent.py), so switching between them does not rebuild a prompt.
+PROMPT_CACHE = 3
 
 # "expressiveness" (0.1-1.5, default 0.8) -> OmniVoice's two sampling knobs:
 # position_temperature (randomness of the order in which tokens are unmasked: phrasing, pauses; model default 5.0) and
@@ -108,7 +114,7 @@ class OmniVoiceBackend(TtsBackend):
     def __init__(self, unload_after_s: float = UNLOAD_AFTER_S) -> None:
         self._client: WorkerClient | None = None
         self._status = "loading"
-        self._warm_sig: tuple | None = None
+        self._warm: OrderedDict[tuple, None] = OrderedDict()  # mirror of the worker's prompt cache (by clip state)
         self.unload_after_s = unload_after_s
         self.last_load: dict[str, Any] = {}
 
@@ -125,7 +131,7 @@ class OmniVoiceBackend(TtsBackend):
             whisper_dir = os.path.join(os.path.dirname(model), "whisper") if model else ""
             device = config.backend(runtime)
             argv = [py, "-I", WORKER, "--model-dir", model, "--whisper-dir", whisper_dir,
-                    "--device", device if device in ("cuda", "mps", "cpu") else "cuda"]
+                    "--device", device if device in ("cuda", "mps", "cpu") else "cuda", "--prompt-cache", str(PROMPT_CACHE)]
             if self.unload_after_s > 0:
                 argv += ["--unload-after", str(self.unload_after_s)]
             self._client = WorkerClient("omnivoice", argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"),
@@ -153,7 +159,7 @@ class OmniVoiceBackend(TtsBackend):
     async def release(self) -> None:
         """Training takes the GPU: end the worker process (frees VRAM and all its host RAM at once)."""
         self._status = "paused"
-        self._warm_sig = None
+        self._warm.clear()
         if self._client is not None:
             await self._client.stop()
 
@@ -169,7 +175,7 @@ class OmniVoiceBackend(TtsBackend):
             raise EngineError("bad_request", f"OmniVoice does not speak {lang!r}")
         if self._client is None or self._status in ("missing", "paused"):
             raise EngineError("not_ready", "the OmniVoice speech model is not loaded")
-        ref = reference_for(reference, lang)
+        ref = reference if params.reference_text else reference_for(reference, lang)
         steps = FAST_STEPS if params.quality == "fast" else BEST_STEPS
         if params.first:
             steps = min(steps, FIRST_STEPS)
@@ -178,7 +184,9 @@ class OmniVoiceBackend(TtsBackend):
         try:
             res = await self._client.call("synth", {"text": text, "lang": lang, "model_lang": model_lang, "ref": ref,
                                                     "out": params.out_path, "steps": steps, "speed": round(speed, 4),
-                                                    **sampling_for(params.temperature)},
+                                                    **sampling_for(params.temperature),
+                                                    **({"ref_text": params.reference_text} if params.reference_text
+                                                       else {})},
                                           timeout=SYNTH_TIMEOUT_S)
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
@@ -187,27 +195,44 @@ class OmniVoiceBackend(TtsBackend):
             raise EngineError(code, f"OmniVoice: {exc.message}") from exc
         except WorkerDied as exc:
             raise EngineError("internal", f"the OmniVoice worker stopped: {exc}") from exc
-        self._warm_sig = _sig(ref)
+        self._mark_warm(ref)
         log.info("OmniVoice %s: %.2fs for %.2fs of audio (%d steps)", lang, time.time() - t0,
                  float(res.get("duration_s", 0.0)), steps)
         return str(res.get("out") or params.out_path)
 
-    async def warm(self, reference: str, lang: str = "en") -> None:
-        """Build the voice-clone prompt of a voice now (``voices.warm``), so its first sentence is fast."""
+    async def warm(self, reference: str, lang: str = "en", reference_text: str | None = None) -> None:
+        """Build the voice-clone prompt of a clip now (``voices.warm``), so its first sentence is fast.
+        ``reference_text`` as in ``SynthParams``."""
         if self._client is None or self._status != "ready":
             return
-        ref = reference_for(reference, lang)
-        await self._client.call("warm", {"ref": ref}, timeout=SYNTH_TIMEOUT_S)
-        self._warm_sig = _sig(ref)
+        ref = reference if reference_text else reference_for(reference, lang)
+        try:
+            await self._client.call("warm", {"ref": ref, **({"ref_text": reference_text} if reference_text else {})},
+                                    timeout=SYNTH_TIMEOUT_S)
+        except WorkerCancelled as exc:
+            raise EngineError("cancelled", "warm-up cancelled") from exc
+        except (WorkerError, WorkerDied) as exc:
+            raise EngineError("internal", f"OmniVoice: {exc}") from exc
+        self._mark_warm(ref)
+
+    def _mark_warm(self, ref: str) -> None:
+        sig = _sig(ref)
+        if sig is None:
+            return
+        self._warm[sig] = None
+        self._warm.move_to_end(sig)
+        while len(self._warm) > PROMPT_CACHE:
+            self._warm.popitem(last=False)
 
     def count_tokens(self, text: str) -> int:
         return max(1, len(text) // 3)
 
     def is_warm(self, reference: str) -> bool:
-        return self._warm_sig is not None and self._warm_sig == _sig(reference)
+        sig = _sig(reference)
+        return sig is not None and sig in self._warm
 
     def forget_reference(self) -> None:
-        self._warm_sig = None  # the worker re-reads a clip whose size or mtime changed (and its sidecar)
+        self._warm = OrderedDict()  # the worker re-reads a clip whose size or mtime changed (and its sidecar)
 
 
 def reference_for(reference: str, lang: str) -> str:

@@ -39,6 +39,8 @@ class SynthParams:
     quality: str = "best"         # "best" | "fast"
     duration_factor: float = 1.0  # length of the speech relative to natural (1 / speed; Redub slot fitting); <1 faster
     first: bool = False           # the first segment of a job: trade a little quality for a faster first sound
+    reference_text: str | None = None  # transcript of ``reference`` when known (shipped clips): used as is, no
+                                       # per-language variant and no transcription
 
 
 class TtsBackend(abc.ABC):

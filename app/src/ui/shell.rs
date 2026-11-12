@@ -557,7 +557,13 @@ fn ensure_warm(s: &mut AppState) -> bool {
         return false;
     }
     s.shell.warm_for = Some(id.clone());
-    s.shell.warm_req = request(s, "voices.warm", json!({ "id": id }));
+    // A trained voice recorded in another language than English also gets the native-accent clip ready.
+    let mut params = json!({ "id": id });
+    if let Some(v) = super::speak::warm_accent(s) {
+        params["accent"] = json!("native-us");
+        params["native_voice"] = json!(v.as_str());
+    }
+    s.shell.warm_req = request(s, "voices.warm", params);
     if s.shell.warm_req.is_some() {
         s.shell.preparing = Some(id);
         return true;

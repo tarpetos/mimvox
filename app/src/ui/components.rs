@@ -716,6 +716,41 @@ pub fn segmented_help(p: Palette, key: &str, options: &[&str], helps: &[&str], s
     strip
 }
 
+/// A [`segmented_help`] strip that fills its width, the options sharing it equally: long labels in a narrow panel.
+/// `enabled: false` dims it and ignores presses (the help texts still show, to say why).
+#[allow(clippy::too_many_arguments)]
+pub fn segmented_fill(
+    p: Palette,
+    key: &str,
+    options: &[&str],
+    helps: &[&str],
+    selected: usize,
+    enabled: bool,
+    on_pick: impl Fn(&mut AppState, usize) + Clone + 'static,
+) -> El {
+    let mut strip = row().key(key.to_owned()).w_full().padding(3.0).gap(2.0).radius(17.0)
+        .fill(p.well)
+        .border_gradient(1.0, Color::BLACK.alpha(0.35), p.well_rim);
+    for (i, name) in options.iter().enumerate() {
+        let on = i == selected;
+        let mut opt = row().key(format!("{key}-{i}")).role("button").label(*name).checked(on).focusable(enabled).grow(1.0).min_w(0.0).h(28.0).px(8.0)
+            .center().radius(14.0)
+            .fill(if on { p.accent.alpha(0.22) } else { Color::TRANSPARENT })
+            .border(1.0, if on { p.accent.alpha(0.5) } else { Color::TRANSPARENT })
+            .motion(motion::UI)
+            .child(text(*name).font(ty::LABEL).color(if on { p.text } else { p.text_dim }).truncate().a11y_hidden());
+        if enabled {
+            let pick = on_pick.clone();
+            opt = opt.hover(if on { p.accent.alpha(0.28) } else { p.glass_hover }).on_press(move |s: &mut AppState| pick(s, i));
+        }
+        if let Some(h) = helps.get(i).filter(|h| !h.is_empty()) {
+            opt = opt.help((*h).to_owned());
+        }
+        strip = strip.child(opt);
+    }
+    if enabled { strip } else { strip.opacity(0.5) }
+}
+
 pub fn level_meter(p: Palette, level: f32, peak: Option<f32>) -> El {
     const N: usize = 28;
     let level = level.clamp(0.0, 1.0);

@@ -16,7 +16,7 @@ import shutil
 import time
 from typing import Any
 
-from .. import aio, backends, config, media, rvc, speech, tts, voices
+from .. import accent, aio, backends, config, media, rvc, speech, tts, voices
 from .. import audio_util as au
 from ..registry import Context, EngineError, method
 from . import render, transcribe
@@ -307,10 +307,29 @@ class _Voice:
         self.ref = data.reference(self.voice_id)
         self.quality = quality
         self.ctx = ctx
+        self.accent = accent.parse(params)              # respeak / dub only
+        self.native_voice = accent.parse_voice(params)
 
     def index_rate_for(self, lang: str) -> float:
         """RVC index rate for speech in ``lang``: capped for languages the voice was not recorded in (rvc.py)."""
         return rvc.index_rate_for(self.index_rate, lang, self.language)
+
+    def accent_for(self, lang: str) -> accent.Choice:
+        """The accent speech in ``lang`` gets (``native-us`` needs English and RVC, else ``own``; accent.py)."""
+        return accent.choose(self.accent, self.native_voice, lang, self.trained, self.index_rate)
+
+    async def speak_setup(self, choice: accent.Choice, lang: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """(extra ``redub.done`` fields, ``render.respeak`` keyword arguments) for speech in ``lang``: the voice's
+        own reference, or the native clip with its transcript, RVC pitch and index rate."""
+        native = (await aio.run_io(accent.prepare, choice, self.ref, self.index_rate)
+                  if choice.accent == "native-us" else None)
+        if native is None:
+            if choice.accent == "native-us":
+                choice = accent.Choice("own", choice.native_voice, "unavailable")
+            return choice.fields(), {"ref": self.ref, "index_rate": self.index_rate_for(lang)}
+        return ({**choice.fields(), **native.fields()},
+                {"ref": native.ref.path, "ref_text": native.ref.text, "pitch": native.pitch,
+                 "index_rate": native.index_rate})
 
     def respeak_worker(self, lang: str = "en") -> rvc.RvcWorker | None:
         """Checks that a respeak can start (``not_found`` / ``not_ready``) and returns the RVC worker it needs, if any."""
@@ -347,6 +366,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     voice = await aio.run_io(_Voice, ctx, data, params)
     out_fmt = await aio.run_io(media.output_format, params)
     worker = None if review else voice.respeak_worker(target)  # a review stop needs no voice models yet
+    choice = voice.accent_for(target)
     await aio.run_io(_check_speech_ready, data, lang != target)
 
     async def work(job: str, finish: Any) -> None:
@@ -380,9 +400,11 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
             emit.stage("speak", 0)
             speak_segs = [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in segs]
-            track, stats = await render.respeak(speak_segs, float(res["duration_s"]), voice.ref, voice.temperature,
-                                                voice.quality, worker, voice.pth, voice.idx, voice.index_rate_for(target),
-                                                workdir, progress, voice.speed, lang=target)
+            accent_fields, how = await voice.speak_setup(choice, target)
+            track, stats = await render.respeak(speak_segs, float(res["duration_s"]), how["ref"], voice.temperature,
+                                                voice.quality, worker, voice.pth, voice.idx, how["index_rate"],
+                                                workdir, progress, voice.speed, lang=target,
+                                                ref_text=how.get("ref_text"), pitch=how.get("pitch", 0))
             emit.stage("save", 0)
             saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
             emit.stage("save", 100)
@@ -392,12 +414,12 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             finish("redub.done", {**saved, "duration_s": au.duration_s(track, render.SR),
                                   "elapsed_s": elapsed, "mode": "dub", "language": res["language"],
                                   "target_language": target, "translated": res["translated"], "segments": segs,
-                                  "timings_s": timings,
+                                  "timings_s": timings, **accent_fields,
                                   **{k: stats[k] for k in ("stretched", "overrun", "pushed", "drift_s", "max_push_s")}})
         finally:
             await aio.run_io(shutil.rmtree, workdir, ignore_errors=True)
 
-    return {"job": _reg_job(ctx, work, speech_job=True)}
+    return {"job": _reg_job(ctx, work, speech_job=True), **({} if review else choice.fields())}
 
 
 @method("redub.render")
@@ -424,6 +446,7 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                                            "by a training)")
     else:
         worker = voice.respeak_worker(lang)
+    choice = voice.accent_for(lang) if mode == "respeak" else accent.Choice("own")
 
     async def work(job: str, finish: Any) -> None:
         t0 = time.time()
@@ -445,11 +468,14 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                 track = await render.convert(source, workdir, worker, pth, idx, index_rate, progress)
                 extra: dict[str, Any] = {}
             else:
-                track, stats = await render.respeak(segs, total_s, voice.ref, voice.temperature, voice.quality,
-                                                    worker, pth, idx, voice.index_rate_for(lang), workdir, progress,
-                                                    voice.speed, lang=lang)
+                accent_fields, how = await voice.speak_setup(choice, lang)
+                track, stats = await render.respeak(segs, total_s, how["ref"], voice.temperature, voice.quality,
+                                                    worker, pth, idx, how["index_rate"], workdir, progress,
+                                                    voice.speed, lang=lang, ref_text=how.get("ref_text"),
+                                                    pitch=how.get("pitch", 0))
                 extra = {k: stats[k] for k in ("stretched", "overrun", "pushed", "drift_s", "max_push_s")}
                 extra["language"] = lang
+                extra.update(accent_fields)
             progress("save", 96)
             saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
             elapsed = round(time.time() - t0, 2)
@@ -459,4 +485,4 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         finally:
             await aio.run_io(shutil.rmtree, workdir, ignore_errors=True)
 
-    return {"job": _reg_job(ctx, work)}
+    return {"job": _reg_job(ctx, work), **(choice.fields() if mode == "respeak" else {})}

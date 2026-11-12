@@ -189,10 +189,16 @@ After setup, each downloaded component keeps its own licence files in its folder
 `runtime/engine/.venv`) and next to its model files. For the Rust crates, see the
 sources fetched by Cargo. If a notice here is wrong or missing, open an issue on the project's GitHub page.
 
-### CMU ARCTIC speech database (demo samples)
+### CMU ARCTIC speech database (demo samples, native-accent reference clips)
 
 - Files: `docs/samples/reference.mp3` (five recordings of speaker `slt` joined into one clip, so modified) and the
   samples generated from it in `docs/samples/`.
+- Files: `engine/src/mimvox_engine/assets/native/en-us-male.wav` (speaker `bdl`, US English male) and
+  `en-us-female.wav` (speaker `slt`, US English female), each four recordings (`arctic_a0029`, `arctic_a0039`,
+  `arctic_a0187`, `arctic_b0063`) trimmed, filtered, levelled, joined with short pauses and resampled to 24 kHz, so
+  **modified**; the transcripts next to them are the corpus prompts. Shipped with the app as the native-accent
+  references (made by `tools/release/make_native_refs.py`); the licence travels with them as
+  `assets/native/CMU_ARCTIC_COPYING.txt`.
 - Copyright (c) 2003 Carnegie Mellon University. Free for any use under the licence in
   `docs/samples/CMU_ARCTIC_COPYING.txt` (keep the notice, mark modifications, keep the authors' names).
   <http://festvox.org/cmu_arctic/>

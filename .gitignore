@@ -14,6 +14,8 @@ __pycache__/
 *.safetensors
 *.wav
 *.mp3
+# ...except the native-accent reference clips shipped with the engine (CMU ARCTIC)
+!/engine/src/mimvox_engine/assets/native/*.wav
 # Build output
 /dist/
 # OS / editors

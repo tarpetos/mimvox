@@ -1,0 +1,25 @@
+{
+ "corpus": "CMU ARCTIC 0.95 (http://festvox.org/cmu_arctic/), Copyright (c) 2003 Carnegie Mellon University; modified: four recordings trimmed, levelled and joined",
+ "sentences": [
+  "arctic_a0029",
+  "arctic_a0039",
+  "arctic_a0187",
+  "arctic_b0063"
+ ],
+ "voices": {
+  "male": {
+   "file": "en-us-male.wav",
+   "text_file": "en-us-male.txt",
+   "speaker": "bdl",
+   "f0_median": 116.6,
+   "duration_s": 11.73
+  },
+  "female": {
+   "file": "en-us-female.wav",
+   "text_file": "en-us-female.txt",
+   "speaker": "slt",
+   "f0_median": 182.9,
+   "duration_s": 11.49
+  }
+ }
+}

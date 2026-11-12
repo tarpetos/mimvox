@@ -59,11 +59,12 @@ class RvcWorker:
             raise RvcError(str(exc)) from exc
 
     async def convert(self, src: str, dst: str, pth: str, index: str, index_rate: float,
-                      timeout: float = 180.0) -> float:
-        """Convert ``src`` (wav) to the voice of ``pth``; returns the worker's elapsed seconds."""
+                      timeout: float = 180.0, pitch: int = 0) -> float:
+        """Convert ``src`` (wav) to the voice of ``pth``, transposed by ``pitch`` semitones (the native accent moves
+        a native speaker into the user's range, see accent.py); returns the worker's elapsed seconds."""
         try:
             res = await self.client.call("convert", {"in": src, "out": dst, "pth": pth, "index": index,
-                                                     "idx": float(index_rate)}, timeout=timeout)
+                                                     "idx": float(index_rate), "pitch": int(pitch)}, timeout=timeout)
         except (WorkerError, WorkerDied, WorkerCancelled) as exc:
             self.client.last_error = str(exc)
             raise RvcError(str(exc)) from exc

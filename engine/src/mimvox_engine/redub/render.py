@@ -94,12 +94,12 @@ def _read_converted(src: str, dst: str, n_in: int, sr_in: int) -> np.ndarray:
 
 
 async def _rvc_clip(worker: rvc.RvcWorker, x: np.ndarray, sr: int, workdir: str, tag: str, pth: str, idx: str,
-                    index_rate: float, timeout: float = 180.0) -> np.ndarray:
+                    index_rate: float, timeout: float = 180.0, pitch: int = 0) -> np.ndarray:
     """One RVC call on an in-memory clip; returns 44.1 kHz audio of exactly the length of the input at 44.1 kHz."""
     src = await aio.run_io(_write_clip, os.path.join(workdir, f"{tag}_in.wav"), x, sr)
     dst = os.path.join(workdir, f"{tag}_out.wav")
     try:
-        await worker.convert(src, dst, pth, idx, index_rate, timeout=timeout)
+        await worker.convert(src, dst, pth, idx, index_rate, timeout=timeout, pitch=pitch)
     except BaseException:
         for p in (src, dst):
             with contextlib.suppress(OSError):
@@ -231,13 +231,15 @@ class _Track:
 
 async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temperature: float, quality: str,
                   worker: rvc.RvcWorker | None, pth: str, idx: str, index_rate: float, workdir: str,
-                  progress: Progress, speed: float = 1.0, lang: str = "en") -> tuple[np.ndarray, dict[str, Any]]:
+                  progress: Progress, speed: float = 1.0, lang: str = "en", ref_text: str | None = None,
+                  pitch: int = 0) -> tuple[np.ndarray, dict[str, Any]]:
     """Speak every segment and place it at its start on a silent track of ``total_s`` (it grows if the last clip
     overruns). Synthesis runs one segment ahead of a second task that does RVC and mixing (bounded queue).
 
     ``speed`` (0.8-1.3) is the user's pace: it multiplies the slot-fitting ``duration_factor`` by ``1/speed``; when a
     slower pace would no longer fit, the factor is lowered to fit (the slot always wins, within that range).
-    ``lang`` is the language the texts are spoken in (it picks the TTS backend).
+    ``lang`` is the language the texts are spoken in (it picks the TTS backend). ``ref_text`` (a shipped clip's
+    transcript) and ``pitch`` (RVC transpose) are set for the native accent (accent.py).
 
     Fitting (see ``plan_factor``): a clip's room is its slot plus the silence after it, up to ``GAP_S`` before the next
     segment's start. A longer clip first runs into that silence at its natural pace; if the room is still too short,
@@ -274,7 +276,7 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
             t0 = time.time()
             path = await backend.synthesize(text, lang, ref, SynthParams(
                 out_path=os.path.join(workdir, f"s{i}_tts.wav"), temperature=temperature, quality=quality,
-                duration_factor=factor))
+                duration_factor=factor, reference_text=ref_text))
             clip, sr = await aio.run_io(_load_trimmed, path)
             dur = len(clip) / float(sr)
             rate.update(dur / factor, len(text))
@@ -306,7 +308,7 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
     async def consume() -> None:
         async for i, pos, clip, sr in aio.queue_items(todo):
             if worker is not None:
-                y = await _rvc_clip(worker, clip, sr, workdir, f"s{i}", pth, idx, index_rate)
+                y = await _rvc_clip(worker, clip, sr, workdir, f"s{i}", pth, idx, index_rate, pitch=pitch)
             else:
                 y = await aio.run_io(au.resample, clip, sr, SR)
             await aio.run_io(track.mix, pos, _fade(y))
