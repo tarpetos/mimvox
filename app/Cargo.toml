@@ -1,0 +1,36 @@
+[package]
+name = "mimvox"
+version = "0.1.0"
+edition = "2024"
+description = "Clone your own voice and speak any text with it"
+license = "PolyForm-Noncommercial-1.0.0"
+publish = false
+
+[[bin]]
+name = "mimvox"
+path = "src/main.rs"
+
+[dependencies]
+# Rune is pre-release: pinned to a dev revision. Bump deliberately.
+rune = { git = "https://github.com/anomalyco/rune", rev = "a7cea1692a8ce68b1b63c46688c493bb94a8456d" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "6"
+cpal = "0.15"
+hound = "3"
+# Native folder picker for the install location (onboarding).
+rfd = "0.15"
+
+[build-dependencies]
+# Embeds assets/icon.ico (and version info) into the Windows executable; build.rs does nothing on other targets.
+winresource = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Rune with a small patch for the caption buttons (see vendor/README.md): remove once upstream has an equivalent.
+[patch."https://github.com/anomalyco/rune"]
+rune = { path = "vendor/rune-patched" }

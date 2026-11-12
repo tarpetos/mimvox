@@ -1,0 +1,74 @@
+# Rust
+/app/target/
+target/
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Runtime / models / user data (never committed)
+/runtime/
+/data/
+*.pth
+*.index
+*.onnx
+*.safetensors
+*.wav
+*.mp3
+# Build output
+/dist/
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Extended by docs ---
+# Rust
+**/*.rs.bk
+# Python
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+# Setup output and local configuration
+/runtime/
+runtime.toml
+.env
+.env.*
+*.log
+# Models and checkpoints (downloaded by setup, never committed)
+*.pt
+*.ckpt
+*.bin
+*.npy
+*.faiss
+checkpoints/
+logs/
+# User data: recordings, voices, generated speech
+/data/
+*.flac
+*.ogg
+*.m4a
+# Build and packaging output
+/dist/
+/staging/
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.exe
+*.zip
+# Tool state and scratch
+/tmp/
+*.tmp
+# OS / editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

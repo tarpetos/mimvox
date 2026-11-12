@@ -1,0 +1,18 @@
+# gitleaks configuration for the secret scan.
+# The default rules apply; add an allowlist below only for a deliberate exception, as narrow as it can be.
+
+title = "mimvox"
+
+[extend]
+useDefault = true
+
+# Downloaded runtime, models, recordings and build output are never committed (see .gitignore), and are not scanned.
+[allowlist]
+description = "Files that are never part of the source"
+paths = [
+    '''^runtime/''',
+    '''^data/''',
+    '''^dist/''',
+    '''^app/target/''',
+    '''(^|/)Cargo\.lock$''',
+]

@@ -1,0 +1,43 @@
+# Shell scripts run under bash on every platform; a CRLF checkout (core.autocrlf=true on Windows) breaks them.
+*.sh text eol=lf
+# cmd.exe reads a batch file with LF endings wrongly (labels and goto); setup.cmd keeps CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Source and docs: LF everywhere
+*.rs text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.lock text eol=lf
+
+# Binary files: never normalise or diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.wav binary
+*.mp3 binary
+*.flac binary
+*.ogg binary
+*.m4a binary
+*.pth binary
+*.pt binary
+*.index binary
+*.onnx binary
+*.safetensors binary
+*.bin binary
+*.zip binary
+*.dmg binary
+*.msi binary
+*.exe binary
+*.AppImage binary
+*.deb binary

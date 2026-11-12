@@ -1,0 +1,173 @@
+# Third-party notices
+
+Mimvox builds on the software and models below. This repository does **not** contain any of them: the
+Rust crates are fetched by Cargo when the app is built, and setup (`setup.sh` / `setup.cmd`) downloads the Python
+packages and the models onto your computer from their own sources, under their own licences.
+
+The licences are taken from the actual sources (the LICENSE files in the upstream repositories and the licence field of
+the upstream Hugging Face and crates.io pages, checked 2026-11-11). Where something could not be confirmed it is marked
+**verify**. Nothing here is legal advice; the licence of each component controls.
+
+**Summary of what limits you:** the OmniVoice model weights (CC BY-NC 4.0, because of their training data) are the
+reason this project is for **personal, non-commercial use only**; its audio tokenizer adds the Boson Higgs Audio 2
+Community License (attribution below). Everything else below is permissive (MIT, Apache-2.0, BSD).
+
+## Speech models and engine
+
+### OmniVoice (code Apache-2.0, model weights CC BY-NC 4.0)
+
+- Project: <https://github.com/k2-fsa/OmniVoice> (Next-gen Kaldi / k2-fsa), model `k2-fsa/OmniVoice` on Hugging Face,
+  Python package `omnivoice` on PyPI. Paper: "OmniVoice: Towards Omnilingual Zero-Shot Text-to-Speech with Diffusion
+  Language Models", arXiv:2604.00688.
+- Licence: the **code is Apache-2.0**; the **pre-trained model is CC BY-NC 4.0** "due to constraints from its training
+  data (e.g., Emilia)" (model card). Non-commercial use only, with attribution. This project uses the model unmodified
+  and does not redistribute it: setup downloads it into `<data>/runtime/models/omnivoice`.
+- The model's LLM backbone is initialised from **Qwen3-0.6B** (Apache-2.0).
+- **Audio tokenizer** (`audio_tokenizer/` inside the OmniVoice model, the Higgs Audio 2 tokenizer by Boson AI): under
+  the **Boson Higgs Audio 2 Community License Agreement** (its `LICENSE` file next to the weights; based on the Meta
+  Llama 3 Community License). It asks products that use it to display the following notice, reproduced here:
+  "Built with Higgs Materials licensed from Boson AI USA, Inc., Copyright Boson AI USA, Inc., All Rights Reserved and
+  Meta Llama 3 licensed under the Meta Llama 3 Community License, Copyright Meta Platforms, Inc., All Right Reserved",
+  and: "Meta Llama 3 is licensed under the Meta Llama 3 Community License, Copyright © Meta Platforms, Inc. All Rights
+  Reserved." / "Boson Higgs Audio 2 is licensed under the Boson Community License, Copyright © Boson AI USA, Inc. All
+  Rights Reserved." Its acceptable-use policy applies, and its outputs may not be used to improve another large
+  language model.
+- Python dependencies installed into the engine environment with it: PyTorch and torchaudio (BSD-3-Clause),
+  transformers and accelerate (Apache-2.0), librosa (ISC), soundfile, NumPy and SciPy (BSD-3-Clause), num2words (LGPL-2.1,
+  used unmodified as a library for number spelling), gradio (Apache-2.0, a dependency of the package, not used), and
+  others (**verify** with `pip-licenses` in the installed environment).
+
+### Whisper and NLLB-200 (Redub, reference transcripts)
+
+- **OpenAI Whisper** (`openai-whisper` package and the `large-v3-turbo` checkpoint): MIT. Used for Redub transcription
+  and once per reference clip to cut it at sentence boundaries for OmniVoice.
+- **NLLB-200 distilled 600M** (`facebook/nllb-200-distilled-600M`, Meta): **CC BY-NC 4.0** (model card). Used for Redub
+  translation. Non-commercial only.
+- **g2p_en** (Apache-2.0) with NLTK data (CMUdict, BSD-style), for the English recording-text analysis.
+
+### IndexTTS and IndexTTS-2.5 (legacy: used by earlier versions, no longer installed)
+
+Earlier versions of this app spoke through IndexTTS-2.5; it was replaced by OmniVoice. Setup no longer downloads it and
+offers to delete an existing `<data>/runtime/index-tts`. The notice below applies only to such an older install that is
+still on disk.
+
+- Project: <https://github.com/index-tts/index-tts> (code and model weights), model: `IndexTeam/IndexTTS-2.5` on
+  Hugging Face and ModelScope. Developed by the Bilibili IndexTTS Team.
+- Licence: **bilibili Model Use License Agreement** (the `LICENSE` file of the repository and of the model; the Hugging
+  Face page lists it as `other`, `bilibili-model-license`). It is not an OSI licence. Points that matter here (read
+  the full text; the Chinese version prevails over the English one, section 9):
+  - it grants a worldwide, non-exclusive, non-transferable, royalty-free limited licence to use the model and
+    derivative works (section 2.1), including derivatives made by fine-tuning, and a **derivative work** includes the
+    model's outputs and works based on them (section 1.5);
+  - a company whose products had more than 100 million monthly active users, or whose annual revenue exceeded RMB 1
+    billion, needs a separate licence (section 2.2);
+  - the model or any derivative work may not be used to improve any AI model except IndexTTS itself, its derivative
+    works or **non-commercial** AI models (section 3.4 c);
+  - uses that break the law of the place where the output or the model is generated or used are forbidden, and so are
+    high-risk uses such as medical diagnosis, autonomous driving, military applications, critical-infrastructure
+    control, large-scale biometric surveillance and automated decision-making about people (sections 4.1 c, 4.2);
+  - whoever distributes a derivative work must keep the notices and a copy of the licence, and state that modifications
+    are not endorsed or warranted by the original right-holder (sections 3.4 b, 4.1 a);
+  - the right-holder may revoke the licence on breach, and the agreement is governed by the law of the People's
+    Republic of China with arbitration in Shanghai (sections 5.1, 6).
+- Separate **DISCLAIMER** in the repository (Chinese, by the Bilibili Index Team, dated 2025-03-17): it restricts
+  the use of the project to research, study and lawful creative work, and lists as prohibited, among other things,
+  synthesising political or public figures' voices or any unauthorised person's voice, fraud and identity theft,
+  spreading false information, infringing rights, deepfake-law violations, and using synthesized voices for commercial
+  purposes without authorisation.
+- **Commercial use: this project does not offer it.** The IndexTTS README directs commercial use and cooperation to
+  indexspeech@bilibili.com.
+- Setup applies small local patches to the IndexTTS code (a configurable reference length and diffusion settings) and
+  keeps the upstream licence files in the downloaded copy. Modifications made by this project are not endorsed,
+  warranted or guaranteed by the original right-holder, and the original right-holder disclaims all liability related
+  to them.
+- Third-party code inside IndexTTS: its README acknowledges tortoise-tts, XTTSv2 (Coqui), BigVGAN, wenet, icefall,
+  MaskGCT (Amphion) and **Seed-VC** (`Plachtaa/seed-vc`, GPL-3.0 on GitHub). The IndexTTS repository ships a single
+  licence file and the s2mel part is derived from those works; **verify** how their licences combine before you ever
+  redistribute IndexTTS. This project redistributes none of it.
+- Citation: IndexTTS 2.5 technical report, arXiv:2601.03888; IndexTTS2, arXiv:2506.21619; IndexTTS, arXiv:2502.05512.
+
+### Auxiliary models downloaded for IndexTTS (legacy)
+
+| Model | Source | Licence | Notes |
+| --- | --- | --- | --- |
+| **w2v-bert-2.0** (semantic features) | `facebook/w2v-bert-2.0` (Meta) | MIT (model card) | |
+| **MaskGCT semantic codec** | `amphion/MaskGCT` (Amphion, OpenMMLab) | **CC BY-NC 4.0** (model card); the Amphion code is MIT | Non-commercial only. Used by IndexTTS as the semantic codec (`semantic_codec`). |
+| **CAM++ speaker encoder** (`campplus_cn_common.bin`) | `funasr/campplus` on Hugging Face, from `iic/speech_campplus_sv_zh-cn_16k-common` on ModelScope (3D-Speaker / Alibaba DAMO) | Apache-2.0 (Hugging Face card) | Upstream 3D-Speaker repository licence: **verify**. |
+| **BigVGAN v2** (vocoder, `nvidia/bigvgan_v2_22khz_80band_256x`) | NVIDIA | MIT (model card and `NVIDIA/BigVGAN` repository) | |
+| **Qwen emotion model** (`qwen0.6bemo4-merge`, shipped with IndexTTS-2.5) | IndexTeam, based on Qwen | **verify** (Qwen3-0.6B is Apache-2.0; the fine-tune falls under the IndexTTS-2.5 licence) | Downloaded with the checkpoints, **not loaded** by this app (the emotion follows the reference clip). |
+
+The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth`, `feat1.pt`, `feat2.pt`,
+`wav2vec2bert_stats.pt`, the tokenizer files) are under the bilibili Model Use License Agreement above.
+
+## Voice conversion
+
+### Applio (MIT)
+
+- <https://github.com/IAHispano/Applio>. Copyright (c) 2026 AI Hispano. MIT License (the repository's `LICENSE`).
+- Used for RVC dataset preprocessing, feature extraction, training and inference (as a separate worker process
+  in its own Python environment). The Applio repository also has a `TERMS_OF_USE.md`: use only audio that you own or
+  have permission to use, do not use it to harm, defame or deceive, and obey local law. This project's
+  [DISCLAIMER.md](DISCLAIMER.md) is at least as strict.
+- Applio's downloadable prerequisites (from `IAHispano/Applio` on Hugging Face, which lists MIT) are fetched by
+  setup: the **HiFi-GAN pretrained generator and discriminator** weights (`f0G40k.pth`, `f0D40k.pth` and the other
+  sample rates), the RefineGAN pretrained weights, the predictors (`rmvpe.pt`, `fcpe.pt`, `swift.onnx`), and
+  `ffmpeg` / `ffprobe` executables on Windows. **Verify** the licence of each bundled binary and checkpoint (the FFmpeg
+  builds are LGPL or GPL depending on the build; this project does not redistribute them).
+- Python dependencies installed into the Applio environment include PyTorch (BSD-3-Clause), torchaudio, torchcrepe,
+  torchfcpe, faiss-cpu (MIT), librosa (ISC), SciPy (BSD-3-Clause), NumPy (BSD-3-Clause), soundfile (BSD-3-Clause),
+  transformers (Apache-2.0), onnxruntime (MIT) and others listed in Applio's `requirements-engine.txt`; each under its
+  own licence (**verify** the exact versions with `pip-licenses` in the installed environment).
+
+### RVC (Retrieval-based Voice Conversion) project (MIT)
+
+- <https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI>, MIT License. The method, the model code that
+  Applio builds on, and the **RMVPE** pitch extractor (`rmvpe.pt`, originally published through `lj1995/VoiceConversionWebUI`,
+  MIT on Hugging Face) come from it.
+- **ContentVec** embedder (`pytorch_model.bin`, the `contentvec` model; the Hugging Face copy `lengyue233/content-vec-best`
+  is MIT). Original work: ContentVec by Qian et al. (ICML 2022), <https://github.com/auspicious3000/contentvec>
+  (MIT, **verify**).
+
+## Desktop app
+
+### Rune (MIT)
+
+- <https://github.com/anomalyco/rune>, pinned to revision `a7cea1692a8ce68b1b63c46688c493bb94a8456d`. Copyright (c)
+  2026 Anomaly. MIT License. The UI framework the app is built on; its own dependencies (graphics, windowing, text
+  layout and others, see its `Cargo.lock`) come with it under their own licences, mostly MIT and Apache-2.0
+  (**verify** with `cargo about` or `cargo deny` before a release).
+
+### Direct Rust dependencies (from `app/Cargo.toml`)
+
+| Crate | Licence (crates.io) |
+| --- | --- |
+| `cpal` (microphone capture and playback) | Apache-2.0 |
+| `hound` (WAV reading and writing) | Apache-2.0 |
+| `serde`, `serde_json` | MIT OR Apache-2.0 |
+| `anyhow` | MIT OR Apache-2.0 |
+| `toml` | MIT OR Apache-2.0 |
+| `dirs` | MIT OR Apache-2.0 |
+
+All transitive Rust dependencies are listed in `app/Cargo.lock`. Generate the complete licence list of a release build
+with `cargo about` (or `cargo license`) and check it before distributing binaries.
+
+## Fonts and icons
+
+The app icon is made for this project (`tools/release/`).
+
+### Noto Sans (SIL Open Font License 1.1)
+
+- Files: `NotoSans-Regular.ttf` and `NotoSans-Bold.ttf` in `app/assets/fonts/`, with the licence text in
+  `app/assets/fonts/OFL.txt`. From the Noto project.
+- Copyright 2022 The Noto Project Authors (<https://github.com/notofonts/latin-greek-cyrillic>).
+- Licence: **SIL Open Font License, Version 1.1** (<https://scripts.sil.org/OFL>). The fonts are bundled unmodified
+  with the app; the licence allows that, including in commercial products, as long as the fonts are not sold on their
+  own and the copyright notice and licence text travel with them (hence `OFL.txt` next to the files). The Reserved Font
+  Name rules apply if the fonts are ever modified.
+
+## Where the full licence texts are
+
+After setup, each downloaded component keeps its own licence files in its folder under `runtime/` (for example
+`runtime/applio/LICENSE`, `runtime/models/omnivoice/audio_tokenizer/LICENSE`, and the package metadata in
+`runtime/engine/.venv`) and next to its model files. For the Rust crates, see the
+sources fetched by Cargo. If a notice here is wrong or missing, open an issue on the project's GitHub page.

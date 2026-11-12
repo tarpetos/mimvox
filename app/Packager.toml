@@ -1,0 +1,102 @@
+# cargo-packager configuration for Mimvox.
+# Driven by scripts/build/build-{linux.sh,mac.sh,win.ps1}; do not call `cargo packager` by hand unless you also pass
+# --binaries-dir and --out-dir (the scripts do). Docs: https://docs.crabnebula.dev/packager/
+#
+# Paths below are relative to THIS file's folder (app/): cargo-packager switches to it before packaging.
+#
+# ---------------------------------------------------------------------------------------------------------------
+# BUNDLED RESOURCES AND HOW THE APP FINDS THEM AT RUNTIME
+# ---------------------------------------------------------------------------------------------------------------
+# The installer carries the release binary plus the folder staged by scripts/build/stage_resources.py
+# (app/target/bundle-resources/), which holds exactly:
+#
+#     engine/src/mimvox_engine/   Python engine (run with the engine venv interpreter, PYTHONPATH=<res>/engine/src)
+#     presets/                        guided reading presets
+#     tools/setup/                    setup.py: the app runs it on first launch to create the runtime
+#     contract/                       engine protocol (reference)
+#     (+ setup.sh/setup.cmd, DISCLAIMER.md, THIRD_PARTY_NOTICES.md when present)
+#
+# Heavy runtime pieces (Python venvs, the Applio checkout, model weights) are NOT bundled: the engine
+# setup downloads them into the user data dir and writes <data dir>/runtime.toml.
+#
+# Where "<RES>" (the folder that contains engine/, presets/, tools/, contract/) lands per installer:
+#   Linux .deb       /usr/lib/<binary>/                               (binary: /usr/bin/<binary>)
+#   Linux AppImage   $APPDIR/usr/lib/<binary>/                        (binary: $APPDIR/usr/bin/<binary>)
+#   macOS .app/.dmg  <App>.app/Contents/Resources/                     (binary: <App>.app/Contents/MacOS/<binary>)
+#   Windows NSIS/MSI <install dir>\                                    (binary: <install dir>\<binary>.exe)
+#   dev checkout     <repo root>                                       (binary: <repo>/app/target/{debug,release}/)
+#
+# EngineConfig::discover() (app/src/engine/mod.rs) should resolve <RES> in THIS order, first hit wins; a candidate is
+# valid when <candidate>/engine/src/mimvox_engine exists:
+#   1. Environment override: MIMVOX_RESOURCES = <RES>   (MIMVOX_ENGINE_SRC overrides only engine/src)
+#   2. Next to the executable (installed app); with exe_dir = dirname(realpath(current_exe())):
+#        a. <exe_dir>                                   Windows
+#        b. <exe_dir>/../Resources                      macOS
+#        c. <exe_dir>/../lib/mimvox        Linux deb + AppImage
+#        d. <exe_dir>/resources                         portable/unzipped layouts
+#   3. Repo checkout (development): walk up from exe_dir (target/release -> target -> app -> repo root) and from the
+#      compile-time env!("CARGO_MANIFEST_DIR")/.. and take the first ancestor that contains engine/src/mimvox_engine
+#      and contract/.
+# Mutable data never goes into <RES> (read-only on most installs): it lives in the per-user data dir
+# (MIMVOX_DATA or dirs::data_dir()/mimvox).
+# ---------------------------------------------------------------------------------------------------------------
+
+name = "mimvox"
+product-name = "Mimvox"
+version = "0.1.0" # keep equal to app/Cargo.toml (the build scripts check it)
+identifier = "io.github.tarpetos.mimvox"
+description = "Clone your own voice and speak any text with it"
+long-description = """\
+Record a short guided reading, train your own voice model and type any English text to hear it spoken in your voice. \
+The heavy speech models are installed on first run; everything runs locally on your machine."""
+authors = ["tarpetos"]
+publisher = "tarpetos"
+homepage = "https://github.com/tarpetos/mimvox"
+copyright = "Copyright (c) 2026 tarpetos. PolyForm Noncommercial License 1.0.0."
+category = "Music"
+
+# Overridden by the build scripts (--out-dir / --binaries-dir) so they also work with CARGO_TARGET_DIR and
+# the macOS universal binary.
+out-dir = "../dist"
+binaries-dir = "target/release"
+binaries = [{ path = "mimvox", main = true }]
+
+icons = [
+    "../tools/release/icons/icon_32x32.png",
+    "../tools/release/icons/icon_64x64.png",
+    "../tools/release/icons/icon_128x128.png",
+    "../tools/release/icons/icon_256x256.png",
+    "../tools/release/icons/icon_512x512.png",
+    "../tools/release/icons/icon.ico",
+    "../tools/release/icons/icon.icns",
+]
+
+# target = "" copies the staged folder's contents into the resources root, so the layout above holds.
+resources = [{ src = "target/bundle-resources", target = "" }]
+
+[deb]
+section = "sound"
+# Runtime libraries of the cpal (ALSA) audio backend and the Rune/winit/wgpu window stack.
+depends = [
+    "libasound2t64 | libasound2",
+    "libxkbcommon0",
+    "libvulkan1",
+    "libwayland-client0",
+    "libx11-6",
+    "libxcursor1",
+    "libxi6",
+    "libxrandr2",
+]
+
+[macos]
+minimum-system-version = "13.0"
+# Signing is opt-in: scripts/build/build-mac.sh injects `signing-identity` from APPLE_SIGNING_IDENTITY when set.
+
+[nsis]
+installer-mode = "currentUser"
+compression = "lzma"
+
+[dmg]
+window-size = { width = 540, height = 380 }
+app-position = { x = 140, y = 190 }
+application-folder-position = { x = 400, y = 190 }
