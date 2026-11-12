@@ -489,9 +489,9 @@ sentence and saves the result. You can use other tabs meanwhile; **Cancel** stop
 
 ![A finished dub](screenshots/usage-redub-done.png)
 
-How the timing works: each translated sentence is fitted into the time of the original sentence. The speech is made a
-bit faster or slower first, then stretched slightly if needed; if it still does not fit, it runs into the following
-pause and later sentences move a little. Speech is never cut off and sentences never overlap.
+How the timing works: each translated sentence is fitted into the time of the original sentence. A longer sentence
+first uses the pause after it, at its natural pace; if that is not enough, it is spoken a bit faster and then sped up
+slightly; if it still does not fit, later sentences move a little. Speech is never cut off and sentences never overlap.
 
 ### The same, with "Review text before dubbing"
 

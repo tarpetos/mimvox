@@ -2,7 +2,7 @@
 segment, fitted into the original time slots).
 
 Async, on the engine loop: synthesis is awaited from the TTS backend (GPU thread), RVC from the RVC worker client, and
-the numpy work runs on the IO pool. Cancel by cancelling the awaiting task."""
+the numpy and ffmpeg work runs on the IO pool. Cancel by cancelling the awaiting task."""
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .. import aio, backends, rvc, tts
+from .. import aio, backends, media, rvc, tts
 from .. import audio_util as au
 from ..backends import SynthParams
 from ..registry import EngineError
@@ -29,9 +29,11 @@ SILENT_PEAK = 1e-4              # a chunk quieter than this is copied, not conve
 GAP_S = 0.12                    # silence kept before the next original start when fitting a clip
 MIN_AVAIL_S = 0.25              # never fit a clip into less than this
 CLIP_GAP_S = 0.05               # minimum silence between two placed clips
+FIT_TOL_S = 0.02                # a clip at most this much longer than its room is left alone (GAP_S absorbs it)
 FACTOR_MIN, FACTOR_MAX = 0.8, 1.25   # duration_factor range handed to the speech model for slot fitting (outside it quality drops)
+FACTOR_EASE = 0.85              # the model goes below this only once the stretch is planned at its cap as well
 FACTOR_LO, FACTOR_HI = 0.65, 1.4  # hard limits of the combined (slot x speed) factor
-MAX_STRETCH = 1.2               # librosa time-stretch, faster only
+MAX_STRETCH = 1.15              # ffmpeg time-stretch (rubberband, else atempo; media.time_stretch), faster only
 INITIAL_SEC_PER_CHAR = 0.068    # prior for the speaking rate (about 14.7 characters per second)
 PRIOR_CHARS = 40
 
@@ -142,17 +144,57 @@ def _trim_clip(y: np.ndarray, sr: int) -> np.ndarray:
     return y[max(a - int(0.02 * sr), 0): min(b + int(0.06 * sr), len(y))]
 
 
-def _stretch(y: np.ndarray, rate: float) -> np.ndarray:
-    import librosa  # noqa: PLC0415
-
-    return librosa.effects.time_stretch(y, rate=rate).astype(np.float32, copy=False)
-
-
 def _load_trimmed(path: str) -> tuple[np.ndarray, int]:
     y, sr = au.read_mono(path)
     with contextlib.suppress(OSError):
         os.remove(path)
     return _trim_clip(y.astype(np.float32, copy=False), sr), sr
+
+
+def plan_factor(est: float, own: float, room: float) -> float:
+    """The ``duration_factor`` for a clip at the user's normal pace, before it is spoken.
+
+    ``est`` is the clip's estimated natural length, ``own`` the original segment's length (``end - start``) and
+    ``room`` the time it may take: up to the next segment's start minus ``GAP_S``, so its slot plus the silence after it.
+    Gentle first, hard last:
+      1. a clip shorter than its own length is slowed toward that length (up to ``FACTOR_MAX``);
+      2. a longer one that fits the room keeps its natural pace and runs into the following silence;
+      3. otherwise the model speaks faster, down to ``FACTOR_EASE``;
+      4. then the stretch takes over (planned here, done after synthesis, up to ``MAX_STRETCH``);
+      5. only past that does the model go down to ``FACTOR_MIN``; whatever is left overruns."""
+    if est <= 0:
+        return 1.0
+    aim = min(own, room)
+    if est <= aim:
+        return min(FACTOR_MAX, aim / est)
+    need = est / room  # how much faster than natural the clip must be to fit
+    if need <= 1.0:
+        return 1.0
+    if need <= 1.0 / FACTOR_EASE:
+        return 1.0 / need
+    if need <= MAX_STRETCH / FACTOR_EASE:
+        return FACTOR_EASE
+    return max(FACTOR_MIN, MAX_STRETCH / need)
+
+
+def segment_factor(est: float, own: float, room: float, user_factor: float) -> float:
+    """``plan_factor`` times the user's pace (``user_factor`` = 1 / speed). When a slower pace no longer fits the room,
+    the room wins (but the clip is never squeezed harder than at the normal pace). Clamped to ``FACTOR_LO``-``HI``;
+    within 4 % of 1 it is exactly 1."""
+    planned = plan_factor(est, own, room)
+    factor = planned * user_factor
+    if user_factor > 1.0 and est > 0 and est * factor > room:
+        factor = max(room / est, planned)
+    factor = min(FACTOR_HI, max(FACTOR_LO, factor))
+    return 1.0 if abs(factor - 1.0) < 0.04 else factor
+
+
+def stretch_rate(dur: float, room: float) -> float:
+    """How much faster a spoken clip of ``dur`` seconds is played to fit ``room``: 1.0 when it fits (within
+    ``FIT_TOL_S``), else ``dur / room`` capped at ``MAX_STRETCH`` (the rest overruns)."""
+    if dur <= room + FIT_TOL_S:
+        return 1.0
+    return min(dur / room, MAX_STRETCH)
 
 
 class _Rate:
@@ -193,14 +235,16 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
     """Speak every segment and place it at its start on a silent track of ``total_s`` (it grows if the last clip
     overruns). Synthesis runs one segment ahead of a second task that does RVC and mixing (bounded queue).
 
-    ``speed`` (0.8-1.3) is the user's pace: it multiplies the slot-fitting ``duration_factor`` by ``1/speed``; when that
-    would no longer fit the slot, the factor is lowered to fit it (the slot always wins, within that range).
+    ``speed`` (0.8-1.3) is the user's pace: it multiplies the slot-fitting ``duration_factor`` by ``1/speed``; when a
+    slower pace would no longer fit, the factor is lowered to fit (the slot always wins, within that range).
     ``lang`` is the language the texts are spoken in (it picks the TTS backend).
 
-    Fitting order for a clip longer than its slot: ``duration_factor`` 0.8-1.25 (x the user's speed), then a librosa
-    stretch of at most 1.2x, then the clip overruns and the following segments are pushed later. Speech is never
-    cut and two clips never overlap. ``stats`` reports ``drift_s`` (how much longer the output is than the source) and
-    ``max_push_s`` (the largest delay of any segment's start)."""
+    Fitting (see ``plan_factor``): a clip's room is its slot plus the silence after it, up to ``GAP_S`` before the next
+    segment's start. A longer clip first runs into that silence at its natural pace; if the room is still too short,
+    ``duration_factor`` goes down to 0.85, then an ffmpeg stretch (rubberband, else atempo) of at most 1.15x, then the
+    factor down to 0.8, and what is left overruns: the following segments are pushed later. Without a stretch filter
+    the clip simply overruns. Speech is never cut and two clips never overlap. ``stats`` reports ``drift_s`` (how much
+    longer the output is than the source) and ``max_push_s`` (the largest delay of any segment's start)."""
     backend = backends.for_language(lang)
     if backend is None:
         raise EngineError("bad_request", f"no voice model speaks {lang!r}")
@@ -211,6 +255,7 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
     max_push = [0.0]
     rate = _Rate()
     user_factor = tts.duration_factor_for(speed)
+    no_stretch = [False]
 
     async def produce() -> None:
         cursor = 0.0
@@ -222,17 +267,10 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
             if pos_s > start + 0.01:
                 stats["pushed"] += 1
                 max_push[0] = max(max_push[0], pos_s - start)
-            avail = max(next_start - GAP_S - pos_s, MIN_AVAIL_S)
-            target = max(float(seg["end"]) - start, 0.4)
-            aim = min(target, avail)
+            room = max(next_start - GAP_S - pos_s, MIN_AVAIL_S)  # the slot and the silence after it
+            own = max(float(seg["end"]) - start, 0.4)
             est = rate.per_char * len(text)
-            factor = min(FACTOR_MAX, max(FACTOR_MIN, aim / est)) if est > 0 else 1.0
-            factor *= user_factor
-            if user_factor != 1.0 and est > 0 and est * factor > avail:  # the user's pace does not fit this slot: hurry up
-                factor = avail / est
-            factor = min(FACTOR_HI, max(FACTOR_LO, factor))
-            if abs(factor - 1.0) < 0.04:
-                factor = 1.0
+            factor = segment_factor(est, own, room, user_factor)
             t0 = time.time()
             path = await backend.synthesize(text, lang, ref, SynthParams(
                 out_path=os.path.join(workdir, f"s{i}_tts.wav"), temperature=temperature, quality=quality,
@@ -241,17 +279,26 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
             dur = len(clip) / float(sr)
             rate.update(dur / factor, len(text))
             note = ""
-            if dur > avail:
-                r = min(dur / avail, MAX_STRETCH)
-                clip = await aio.run_io(_stretch, clip, r)
-                dur = len(clip) / float(sr)
-                stats["stretched"] += 1
-                note = f" stretched x{r:.2f}"
-                if dur > avail + 1e-3:
-                    stats["overrun"] += 1
-                    note += " (overruns into the following silence)"
-            log.info("segment %d/%d: factor %.2f, %.1fs (slot %.1fs, target %.1fs) in %.1fs%s", i + 1, n, factor,
-                     dur, avail, target, time.time() - t0, note)
+            r = stretch_rate(dur, room)
+            if r > 1.0:
+                done = None if no_stretch[0] else await aio.run_io(media.time_stretch, clip, sr, r)
+                if done is None:
+                    if not no_stretch[0]:
+                        log.warning("no ffmpeg time-stretch filter (rubberband / atempo): long clips overrun instead")
+                    no_stretch[0] = True
+                    note = " not stretched"
+                else:
+                    clip, how = done
+                    dur = len(clip) / float(sr)
+                    stats["stretched"] += 1
+                    note = f" stretched x{r:.2f} ({how})"
+            if dur > room + FIT_TOL_S:
+                stats["overrun"] += 1
+                note += f" (overruns by {dur - room:.2f}s, the next segments move later)"
+            elif dur > own + 0.05:
+                note += f" (runs {min(dur, room) - own:.1f}s into the following silence)"
+            log.info("segment %d/%d: factor %.2f, %.1fs (segment %.1fs, room %.1fs) in %.1fs%s", i + 1, n, factor,
+                     dur, own, room, time.time() - t0, note)
             cursor = pos_s + dur + CLIP_GAP_S
             await todo.put((i, int(round(pos_s * SR)), clip, sr))
         await todo.put(None)

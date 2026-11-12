@@ -268,22 +268,26 @@ async def load_models(ctx: Context) -> None:
     log.info("models ready in %.1fs: %s", time.time() - t0, models_status())
     if errors:
         log.warning("model start-up problems: %s", errors)
-    aio.spawn(aio.run_io(_prewarm_librosa), name="librosa-prewarm")
+    aio.spawn(aio.run_io(_prewarm_redub), name="redub-prewarm")
 
 
-def _prewarm_librosa() -> None:
-    """Redub's slot fitting trims and time-stretches clips with librosa, whose first call compiles numba kernels
-    (measured ~20 s in the middle of the first dub). Pay that once in the background after start-up instead."""
+def _prewarm_redub() -> None:
+    """Redub's slot fitting trims clips with librosa, whose first call compiles numba kernels (measured ~20 s in the
+    middle of the first dub), and stretches them with an ffmpeg filter (the filter list is read once). Pay both once in
+    the background after start-up instead."""
     try:
         import librosa  # noqa: PLC0415
 
         t0 = time.time()
         y = (0.1 * np.sin(np.arange(22050) * 0.05)).astype(np.float32)
         librosa.effects.trim(y, top_db=40, frame_length=512, hop_length=128)
-        librosa.effects.time_stretch(y, rate=1.1)
         log.info("librosa warmed up in %.1fs", time.time() - t0)
     except Exception:  # noqa: BLE001 - only an optimization
         log.exception("librosa warm-up failed")
+    try:
+        log.info("redub time-stretch: %s", ", ".join(media.stretch_filters()) or "none (long clips overrun)")
+    except Exception:  # noqa: BLE001 - only an optimization
+        log.exception("listing the ffmpeg filters failed")
 
 
 _WARM_TEXT = {"en": "Warming up the voice engine.", "uk": "Розігріваю голосовий рушій."}

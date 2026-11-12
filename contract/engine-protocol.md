@@ -820,22 +820,26 @@ importable format, also video) and convert it themselves: the app never has to.
 - `respeak`: needs `segments` (`bad_request` when missing or empty; `text` is whitespace-normalised, an emptied segment
   stays silent, unsorted input is sorted by `start`; at most 5000). Each segment is spoken with the normal speech
   pipeline (OmniVoice, then RVC when the voice is trained and `voice_match > 0`; an untrained voice answers zero-shot
-  output) and placed at its `start` on a silent track of the source duration. Fitting a clip into its slot (the time from
-  its start to the next segment's start, minus a 0.12 s gap; the last segment's slot ends at the source end):
-  1. aim at the segment's own length (`end - start`, but never more than the slot): the speech length factor is set
-     to aim / (estimated natural length), the estimate calibrating itself from the clips already spoken, clamped to
-     0.75-1.25; the user's `speed` multiplies it by `1 / speed` (a slower voice gets longer clips), and when that product no
-     longer fits the slot it is lowered to fit (the slot wins), the combined factor staying within 0.65-1.4;
-  2. if the clip is still longer than the slot, it is time-stretched (librosa, pitch kept) by at most 1.25x;
-  3. if it is still longer, it overruns into the following silence. Two clips never overlap: a clip that would start before
-     the previous one ended is pushed later (`pushed`), and the next slot shrinks accordingly. The output is longer than
-     the source only when the last clip overruns the end.
+  output) and placed at its `start` on a silent track of the source duration. A clip's room is the time from its start to
+  the next segment's start minus a 0.12 s gap (the last segment's room ends at the source end), so its own slot plus
+  the silence after it. Fitting, gentle first and hard last:
+  1. the speech length factor (`duration_factor`) is planned from the clip's estimated natural length (the estimate
+     calibrates itself from the clips already spoken): a clip shorter than its segment (`end - start`) is slowed toward
+     that length (up to 1.25); a longer one that fits the room keeps its natural pace and runs into the following
+     silence; otherwise the factor goes down to 0.85, then the stretch of step 2 is planned up to its cap, and only past
+     that does the factor go down to 0.8. The user's `speed` multiplies it by `1 / speed` (a slower voice gets longer
+     clips); when a slower pace no longer fits the room it is lowered to fit (the slot wins). The combined factor stays
+     within 0.65-1.4;
+  2. if the clip is still longer than the room, it is time-stretched with ffmpeg (pitch kept; the `rubberband` filter
+     when the ffmpeg build has it, else `atempo`) by at most 1.15x. Without either filter there is no stretch;
+  3. if it is still longer, it overruns. Two clips never overlap: a clip that would start before the previous one ended
+     is pushed later (`pushed`), and the next room shrinks accordingly. The output is longer than the source only when
+     the last clip overruns the end.
   Leading/trailing silence of each clip is trimmed, so speech starts at the segment's `start`.
-  This is also how translated text fits (English is often shorter or longer than the original): `duration_factor` 0.8-1.25
-  first (x the user's `speed`, slot wins), then a librosa stretch of at most **1.2x**, then the clip overruns and the
-  following segments are pushed later; speech is never cut and clips never overlap. The result reports `drift_s` (how much
-  longer the output is than the source, 0 when it ends with the source) and `max_push_s` (the largest delay of any
-  segment's start).
+  This is also how translated text fits (English is often shorter or longer than the original); speech is never cut and
+  clips never overlap. The result reports `stretched` (clips time-stretched), `overrun` (clips still longer than their
+  room), `drift_s` (how much longer the output is than the source, 0 when it ends with the source) and `max_push_s`
+  (the largest delay of any segment's start).
 - **Language guard.** The guard accepts every language the speech model speaks (see
   [Speech model and languages](#speech-model-and-languages-omnivoice); the message lists them). `language` is the transcript's language and
   `translated: true` says the segment texts are translations into `target_language` (default `"en"`; what

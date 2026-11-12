@@ -130,9 +130,11 @@ def require_ffmpeg() -> str:
     return exe
 
 
-def _run(cmd: list[str], timeout: float = 3600.0) -> subprocess.CompletedProcess[bytes]:
+def _run(cmd: list[str], timeout: float = 3600.0, data: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
+    """Run a tool to completion; ``data`` is fed to its stdin (otherwise stdin is closed)."""
+    stdin: dict[str, Any] = {"stdin": subprocess.DEVNULL} if data is None else {"input": data}
     try:
-        return subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=_FLAGS, stdin=subprocess.DEVNULL)
+        return subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=_FLAGS, **stdin)
     except subprocess.TimeoutExpired as exc:
         raise EngineError("internal", "ffmpeg timed out") from exc
     except OSError as exc:
@@ -336,6 +338,72 @@ def formats() -> dict[str, Any]:
 @method("formats.list")
 def formats_list(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return formats()
+
+
+# ------------------------------------------------------------------------------------------- time stretch
+
+# Speed-up filters for speech, best first. rubberband (only in builds with librubberband) with its speech setting
+# ("crispness 6": short window, independent phases); atempo is ffmpeg's built-in WSOLA, in every build. Both keep the
+# pitch and sound far cleaner on speech than a phase vocoder (librosa's time_stretch, which made dubs metallic).
+_STRETCH_FILTERS = (("rubberband", "rubberband=tempo={rate:.6f}:window=short:phase=independent"),
+                    ("atempo", "atempo={rate:.6f}"))
+
+
+def _ffmpeg_filters() -> set[str]:
+    """Names of the filters of the found ffmpeg (empty without one); cached. Blocking: call it on the IO pool."""
+    with _lock:
+        if "filters" in _cache:
+            return _cache["filters"]
+    exe = ffmpeg_path()
+    names: set[str] = set()
+    if exe:
+        try:
+            res = _run([exe, "-hide_banner", "-filters"], 30)
+            for ln in res.stdout.decode("utf-8", errors="replace").splitlines():
+                m = re.match(r"^\s*[T.][S.][C.]\s+(\S+)\s+\S*->\S*\s", ln)  # " ..C atempo   A->A   Adjust ..."
+                if m:
+                    names.add(m.group(1))
+        except EngineError as exc:
+            log.warning("could not list the ffmpeg filters: %s", exc.message)
+    with _lock:
+        _cache["filters"] = names
+    return names
+
+
+def stretch_filters() -> list[str]:
+    """The time-stretch filters this machine's ffmpeg has, best first (``rubberband``, ``atempo``); empty without one."""
+    have = _ffmpeg_filters()
+    return [name for name, _ in _STRETCH_FILTERS if name in have]
+
+
+def time_stretch(y: np.ndarray, sr: int, rate: float) -> tuple[np.ndarray, str] | None:
+    """``y`` (mono float32 at ``sr``) played ``rate`` times faster with its pitch kept (the result is about
+    ``len(y) / rate`` samples long) and the name of the filter that did it: ffmpeg's ``rubberband`` when the build has
+    it, else ``atempo``. ``None`` when neither is available or works; the caller then keeps the clip as it is.
+    Blocking (one short ffmpeg run, raw samples through pipes): call it on the IO pool."""
+    exe = ffmpeg_path()
+    if not exe or len(y) == 0:
+        return None
+    data = np.ascontiguousarray(y, dtype="<f4").tobytes()
+    for name in stretch_filters():
+        graph = dict(_STRETCH_FILTERS)[name].format(rate=float(rate))
+        cmd = [exe, "-v", "error", "-f", "f32le", "-ar", str(int(sr)), "-ac", "1", "-i", "pipe:0",
+               "-af", graph, "-f", "f32le", "-ac", "1", "pipe:1"]
+        try:
+            res = _run(cmd, 60.0 + 4.0 * len(y) / float(sr), data=data)
+        except EngineError as exc:
+            res, err = None, exc.message
+        else:
+            err = _tail(res.stderr)
+        if res is not None and res.returncode == 0 and res.stdout:
+            out = np.frombuffer(res.stdout, dtype="<f4").astype(np.float32)
+            if not np.all(np.isfinite(out)):
+                out = np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+            return out, name
+        log.warning("ffmpeg %s failed (%s); not using it again", name, err)
+        with _lock:  # a filter that is listed but broken is dropped for the rest of the session
+            _cache.get("filters", set()).discard(name)
+    return None
 
 
 # ------------------------------------------------------------------------------------------------- export
