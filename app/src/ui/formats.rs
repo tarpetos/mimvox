@@ -6,16 +6,20 @@
 //! * Export: [`export_button`] is a small button; pressing it opens a menu (format grid, quality, Export...) drawn
 //!   by [`overlay`] (the shell adds it above the screen). The chosen format and quality are remembered in
 //!   `settings.json` (`export_format`, `export_quality`). Export opens the native save dialog (rfd, on its own
-//!   thread) and then asks the engine to `audio.export`; a WAV copy of a WAV needs no engine at all.
+//!   thread) and then asks the engine to `audio.export`, encoding from the result's lossless playback WAV when there
+//!   is one; a WAV copy of a WAV needs no engine at all.
+//! * Results: Speak and Redub save each result as one file in the format chosen with [`output_chip`] ("Save as WAV",
+//!   in their Results headers; the menu is [`output_overlay`]). Remembered as `output_format` in `settings.json`,
+//!   default WAV, and sent with every `tts.generate` / `redub.*` job as `output_format` (see [`output_format`]).
 //! * Window drops: a file dropped anywhere lands on the screen that can use it (see [`window_drops`]); on Voices
 //!   every dropped file goes into the active voice's "Reference from media".
 
-use super::components::{Button, Tone, glass_edge, segmented};
+use super::components::{Button, Tone, dropdown_chip, glass_edge, icon_el, icons, segmented};
 use super::shell;
 use super::theme::{Palette, motion, radius, ty};
 use crate::engine::EngineMsg;
 use crate::state::{AppState, Screen};
-use rune::{Align, El, Icon, Side, col, el, row, text};
+use rune::{Align, Color, El, Icon, ScrollSpec, Side, col, el, row, text};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -83,12 +87,16 @@ impl ExportQuality {
 #[derive(Clone, Debug)]
 pub struct Menu {
     pub anchor: String,
+    /// The file being exported (named in the menu; the save dialog opens in its folder).
     pub src: PathBuf,
+    /// The best copy of its audio to encode from: a lossless playback WAV when there is one, else `src`.
+    pub audio: PathBuf,
 }
 
 #[derive(Clone, Debug)]
 struct Job {
     src: PathBuf,
+    audio: PathBuf,
     format: String,
     quality: ExportQuality,
 }
@@ -111,6 +119,10 @@ pub struct FormatsState {
     pub format: String,
     pub quality: ExportQuality,
     pub menu: Option<Menu>,
+    /// The format Speak and Redub save results in (`output_format` in settings.json).
+    pub output: String,
+    /// The open "Save results as" menu: the key of the chip it hangs from.
+    pub output_menu: Option<String>,
     /// A file drag is over the window (drives the drop highlight).
     pub over: bool,
     phase: Phase,
@@ -127,6 +139,8 @@ impl Default for FormatsState {
             format: "wav".into(),
             quality: ExportQuality::Standard,
             menu: None,
+            output: "wav".into(),
+            output_menu: None,
             over: false,
             phase: Phase::Idle,
             list_req: None,
@@ -208,6 +222,11 @@ fn read_settings(s: &mut AppState) {
     }
     if let Some(q) = v.get("export_quality").and_then(Value::as_str).and_then(ExportQuality::parse) {
         s.formats.quality = q;
+    }
+    if let Some(f) = v.get("output_format").and_then(Value::as_str) {
+        if EXPORT_ALL.iter().any(|(e, _)| *e == f) {
+            s.formats.output = f.to_owned();
+        }
     }
 }
 
@@ -325,22 +344,24 @@ pub fn size_text(bytes: u64) -> String {
 // Export
 // -------------------------------------------------------------------------------------------------
 
-/// A small "Export as..." button for `src`. `key` must be unique on screen (the menu hangs from it).
-pub fn export_button(p: Palette, key: impl Into<String>, src: &Path, grow: bool) -> El {
-    let (key, src) = (key.into(), src.to_path_buf());
+/// A small "Export as..." button for the file `src`, encoded from `audio` (its lossless playback WAV, or `src` again).
+/// `key` must be unique on screen (the menu hangs from it).
+pub fn export_button(p: Palette, key: impl Into<String>, src: &Path, audio: &Path, grow: bool) -> El {
+    let (key, src, audio) = (key.into(), src.to_path_buf(), audio.to_path_buf());
     let k = key.clone();
-    let mut b = Button::new("Export as…").small().icon(&DOWNLOAD).key(key).on_press(move |s: &mut AppState| toggle_menu(s, &k, &src));
+    let mut b = Button::new("Export as…").small().icon(&DOWNLOAD).key(key).on_press(move |s: &mut AppState| toggle_menu(s, &k, &src, &audio));
     if grow {
         b = b.grow();
     }
     b.build(p)
 }
 
-fn toggle_menu(s: &mut AppState, key: &str, src: &Path) {
+fn toggle_menu(s: &mut AppState, key: &str, src: &Path, audio: &Path) {
     if s.formats.menu.as_ref().is_some_and(|m| m.anchor == key) {
         s.formats.menu = None;
     } else {
-        s.formats.menu = Some(Menu { anchor: key.to_owned(), src: src.to_path_buf() });
+        s.formats.output_menu = None;
+        s.formats.menu = Some(Menu { anchor: key.to_owned(), src: src.to_path_buf(), audio: audio.to_path_buf() });
     }
 }
 
@@ -364,7 +385,7 @@ fn start_export(s: &mut AppState) {
     if s.shell.scripted() {
         return;
     }
-    let job = Job { src: menu.src, format: s.formats.format.clone(), quality: s.formats.quality };
+    let job = Job { src: menu.src, audio: menu.audio, format: s.formats.format.clone(), quality: s.formats.quality };
     let name = format!("{}.{}", job.src.file_stem().map_or_else(|| "audio".into(), |n| n.to_string_lossy().into_owned()), job.format);
     let (ext, label) = (job.format.clone(), label_of(&job.format).to_owned());
     let dir = job.src.parent().map(Path::to_path_buf).filter(|d| d.is_dir());
@@ -386,18 +407,31 @@ fn finish_pick(s: &mut AppState, job: Job, mut dest: PathBuf) {
         name.push(&job.format);
         dest = PathBuf::from(name);
     }
-    let src_is_wav = job.src.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("wav"));
-    if job.format == "wav" && src_is_wav {
-        match std::fs::copy(&job.src, &dest) {
+    // Encode from the lossless playback WAV while it exists (tmp is emptied when the engine starts), else the file.
+    let audio = if job.audio.is_file() { job.audio } else { job.src };
+    let audio_is_wav = audio.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("wav"));
+    if job.format == "wav" && audio_is_wav {
+        if same_file(&audio, &dest) {
+            shell::toast(s, Tone::Success, format!("{} is already saved there", file_name(&dest)));
+            return;
+        }
+        match std::fs::copy(&audio, &dest) {
             Ok(n) => shell::toast(s, Tone::Success, format!("Exported {} ({})", file_name(&dest), size_text(n))),
             Err(e) => shell::toast(s, Tone::Danger, format!("Could not save the file: {e}")),
         }
         return;
     }
-    let params = json!({ "path": job.src, "format": job.format, "dest": dest, "quality": job.quality.as_str() });
+    let params = json!({ "path": audio, "format": job.format, "dest": dest, "quality": job.quality.as_str() });
     match shell::request(s, "audio.export", params) {
         Some(req) => s.formats.phase = Phase::Exporting { req, dest },
         None => shell::toast(s, Tone::Danger, "The engine is not running, so this format cannot be made yet."),
+    }
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
     }
 }
 
@@ -495,4 +529,78 @@ fn on_window_drop(s: &mut AppState, files: &[PathBuf]) {
             super::redub::set_file(s, path);
         }
     }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Result format ("Save as WAV" in the Results headers of Speak and Redub)
+// -------------------------------------------------------------------------------------------------
+
+/// The formats the engine can write (all of them until it has answered `formats.list`).
+fn writable(s: &AppState) -> Vec<&'static (&'static str, &'static str)> {
+    let avail: Vec<_> = EXPORT_ALL.iter().filter(|(e, _)| s.formats.export.iter().any(|x| x == e)).collect();
+    if avail.is_empty() { EXPORT_ALL.iter().collect() } else { avail }
+}
+
+/// The `output_format` to send with a Speak or Redub job: the chosen one, or WAV when the engine cannot write it.
+pub fn output_format(s: &AppState) -> String {
+    let f = &s.formats.output;
+    if writable(s).iter().any(|(e, _)| e == f) { f.clone() } else { "wav".to_owned() }
+}
+
+fn pick_output(s: &mut AppState, ext: &str) {
+    s.formats.output_menu = None;
+    s.formats.output = ext.to_owned();
+    if !s.shell.scripted() {
+        super::onboarding::save_setting("output_format", json!(ext));
+    }
+}
+
+/// The compact "Save as WAV" chip: the format new results are saved in. `key` anchors its menu.
+pub fn output_chip(s: &AppState, p: Palette, key: &str) -> El {
+    let label = format!("Save as {}", label_of(&output_format(s)));
+    let k = key.to_owned();
+    dropdown_chip(p, key, &icons::FILE, &label, format!("Results are saved as {}", label_of(&output_format(s))), true, move |s: &mut AppState| {
+        if s.formats.output_menu.as_deref() == Some(k.as_str()) {
+            s.formats.output_menu = None;
+        } else {
+            s.formats.menu = None;
+            s.formats.output_menu = Some(k.clone());
+        }
+    })
+    .help("The format new results are saved in")
+}
+
+/// The "Save results as" menu, added at the root above the screens. `None` when closed.
+pub fn output_overlay(s: &AppState, p: Palette) -> Option<El> {
+    let anchor = s.formats.output_menu.clone()?;
+    let scrim = el().key("outfmt-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.formats.output_menu = None);
+    let cur = output_format(s);
+    let mut list = col().w_full().gap(2.0);
+    for (ext, label) in writable(s) {
+        let on = cur == *ext;
+        let e = (*ext).to_owned();
+        list = list.child(
+            row().key(format!("outfmt-{ext}")).role("button").label(*label).checked(on).w_full().min_h(40.0).px(12.0).py(4.0).gap(10.0).center_y().radius(16.0)
+                .fill(if on { p.accent.alpha(0.16) } else { Color::TRANSPARENT })
+                .hover(p.glass_hover).focusable(true).motion(motion::UI)
+                .on_press(move |s: &mut AppState| pick_output(s, &e))
+                .child(col().grow(1.0).min_w(0.0).gap(1.0)
+                    .child(text(*label).font(ty::LABEL).color(p.text).a11y_hidden())
+                    .child(text(blurb(ext)).font(ty::CAPTION).color(p.text_faint).truncate().a11y_hidden()))
+                .child(el().w(16.0).children(on.then(|| icon_el(&icons::CHECK, 14.0, p.accent)))),
+        );
+    }
+    let panel = col().key("outfmt-menu").w(300.0).min_h(0.0).padding(10.0).gap(8.0).radius(radius::PANEL + 4.0)
+        .fill(rune::oklcha(0.2, 0.03, 255.0, 0.97))
+        .gradient(p.glass_top, p.glass_bottom)
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
+        .shadow(18.0, 50.0, p.shadow)
+        .backdrop_blur(28.0)
+        .anchored_fit(anchor, Side::Bottom, Align::End, 8.0)
+        .transition(rune::Transition::scale(0.98))
+        .child(col().w_full().gap(1.0).px(4.0)
+            .child(text("Save results as").font(ty::TITLE).color(p.text))
+            .child(text("Speak and Redub save each new result as one file in this format.").font(ty::CAPTION).color(p.text_faint).wrap()))
+        .child(col().key("outfmt-list").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).child(list));
+    Some(el().key("outfmt-menu-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(glass_edge(p, panel)))
 }

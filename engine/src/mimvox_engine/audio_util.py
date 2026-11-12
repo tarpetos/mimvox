@@ -1,4 +1,4 @@
-"""Shared audio helpers: float32 mono arrays in memory, 16-bit WAV / MP3 on disk."""
+"""Shared audio helpers: float32 mono arrays in memory, 16-bit WAV on disk (other formats: ``media.save_result``)."""
 from __future__ import annotations
 
 import math
@@ -49,12 +49,6 @@ def concat(parts: list[np.ndarray], gap_ms: float = 0.0, sr: int = OUT_SR) -> np
 def write_wav(path: str, data: np.ndarray, sr: int = OUT_SR) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     sf.write(path, np.clip(data, -1.0, 1.0), sr, subtype="PCM_16", format="WAV")
-
-
-def write_mp3(path: str, data: np.ndarray, sr: int = OUT_SR) -> None:
-    """MP3 cannot store 40 kHz: callers resample to 44.1 kHz first (``OUT_SR``)."""
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    sf.write(path, np.clip(data, -1.0, 1.0), sr, format="MP3")
 
 
 def duration_s(data: np.ndarray, sr: int = OUT_SR) -> float:

@@ -8,7 +8,7 @@
 //!
 //! Typical use:
 //! ```ignore
-//! let id = engine.send(protocol::tts_generate(&voice, "Hello", 0.8, 1.0, protocol::Quality::Best, 1.0, "en"));
+//! let id = engine.send(protocol::tts_generate(&voice, "Hello", 0.8, 1.0, protocol::Quality::Best, 1.0, "en", "wav"));
 //! // later, on EngineMsg::Response { id, result: Ok(v) }:
 //! let started: protocol::TtsStarted = protocol::parse_result(v)?;
 //! ```
@@ -524,9 +524,11 @@ pub struct RedubProgress {
 /// `redub.done` event.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RedubDone {
-    pub path_wav: PathBuf,
+    /// The saved result in `<data>/outputs`, in the requested `output_format`.
+    pub path: PathBuf,
+    /// A WAV of the same audio to play (the saved file itself when it is a WAV; else one in `<data>/tmp/play`).
     #[serde(default)]
-    pub path_mp3: Option<PathBuf>,
+    pub path_play: Option<PathBuf>,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub duration_s: f32,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
@@ -540,6 +542,13 @@ pub struct RedubDone {
     /// The language the result is spoken in (`redub.dub`: `target_language`; respeak: `language`).
     #[serde(default)]
     pub target_language: Option<String>,
+}
+
+impl RedubDone {
+    /// The WAV to play: `path_play`, else the saved file.
+    pub fn play_path(&self) -> PathBuf {
+        self.path_play.clone().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| self.path.clone())
+    }
 }
 
 /// What `redub.render` does with the file.
@@ -651,15 +660,25 @@ pub struct VoiceWarm {
     pub message: Option<String>,
 }
 
+/// `tts.done` event.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TtsDone {
-    pub path_wav: PathBuf,
+    /// The saved result in `<data>/outputs`, in the requested `output_format`.
+    pub path: PathBuf,
+    /// A WAV of the same audio to play (the saved file itself when it is a WAV; else one in `<data>/tmp/play`).
     #[serde(default)]
-    pub path_mp3: Option<PathBuf>,
+    pub path_play: Option<PathBuf>,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub duration_s: f32,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub elapsed_s: f32,
+}
+
+impl TtsDone {
+    /// The WAV to play: `path_play`, else the saved file.
+    pub fn play_path(&self) -> PathBuf {
+        self.path_play.clone().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| self.path.clone())
+    }
 }
 
 /// Typed view of `Event`. `job` is the job id the event belongs to.
@@ -826,8 +845,10 @@ impl Quality {
 
 /// `expressiveness` (default 0.8) maps to OmniVoice's sampling temperatures, `voice_match` (default 1.0) to the RVC
 /// index rate (capped by the engine for a language the voice was not recorded in). `speed` (0.8..=1.3, default 1.0) is
-/// OmniVoice's speaking speed. `language` is the ISO code of `text`.
-pub fn tts_generate(voice_id: &str, text: &str, expressiveness: f32, voice_match: f32, quality: Quality, speed: f32, language: &str) -> Request {
+/// OmniVoice's speaking speed. `language` is the ISO code of `text`. `output_format` is the format the result is saved
+/// in (`wav`, `mp3`, `flac`, `ogg`, `opus`, `m4a` or `aiff`).
+#[allow(clippy::too_many_arguments)]
+pub fn tts_generate(voice_id: &str, text: &str, expressiveness: f32, voice_match: f32, quality: Quality, speed: f32, language: &str, output_format: &str) -> Request {
     (
         "tts.generate",
         json!({
@@ -838,6 +859,7 @@ pub fn tts_generate(voice_id: &str, text: &str, expressiveness: f32, voice_match
             "quality": quality.as_str(),
             "speed": speed,
             "language": language,
+            "output_format": output_format,
         }),
     )
 }
@@ -888,9 +910,12 @@ pub struct RedubDubParams<'a> {
     pub expressiveness: f32,
     pub quality: Quality,
     pub speed: f32,
+    /// The format the result is saved in (see [`tts_generate`]).
+    pub output_format: &'a str,
 }
 
-/// `redub.dub {path, voice_id, source_language, target_language, review, voice_match, expressiveness, quality, speed}`
+/// `redub.dub {path, voice_id, source_language, target_language, review, voice_match, expressiveness, quality, speed,
+/// output_format}`
 /// -> `{job}`; events `redub.progress` (stages `decode`, `load_model`, `transcribe`, `translate`, `speak`, `save`),
 /// then `redub.review` (when `review`) or `redub.done`, or `redub.error`.
 pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
@@ -906,6 +931,7 @@ pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
             "expressiveness": p.expressiveness,
             "quality": p.quality.as_str(),
             "speed": p.speed,
+            "output_format": p.output_format,
         }),
     )
 }
@@ -921,7 +947,8 @@ pub enum TextLanguage {
     Translated(String),
 }
 
-/// `segments` and `text_language` are only sent in `Respeak` mode (the possibly edited transcript).
+/// `segments` and `text_language` are only sent in `Respeak` mode (the possibly edited transcript). `output_format` is
+/// the format the result is saved in (see [`tts_generate`]).
 #[allow(clippy::too_many_arguments)]
 pub fn redub_render(
     voice_id: &str,
@@ -933,6 +960,7 @@ pub fn redub_render(
     expressiveness: f32,
     quality: Quality,
     speed: f32,
+    output_format: &str,
 ) -> Request {
     let mut params = json!({
         "voice_id": voice_id,
@@ -942,6 +970,7 @@ pub fn redub_render(
         "expressiveness": expressiveness,
         "quality": quality.as_str(),
         "speed": speed,
+        "output_format": output_format,
     });
     if let Some(segs) = segments {
         params["segments"] = json!(segs);

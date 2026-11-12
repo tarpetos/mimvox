@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .. import aio, backends, config, rvc, tts
+from .. import aio, backends, rvc, tts
 from .. import audio_util as au
 from ..backends import SynthParams
 from ..registry import EngineError
@@ -73,25 +73,6 @@ def split_chunks(x: np.ndarray, sr: int) -> list[tuple[int, int]]:
         cuts.pop()
     cuts.append(n)
     return list(zip(cuts[:-1], cuts[1:]))
-
-
-def output_base(data: config.DataDir) -> str:
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    base = os.path.join(data.outputs, f"redub_{stamp}")
-    n = 1
-    while os.path.exists(base + ".wav"):
-        n += 1
-        base = os.path.join(data.outputs, f"redub_{stamp}_{n}")
-    os.makedirs(data.outputs, exist_ok=True)
-    return base
-
-
-def save_outputs(data: config.DataDir, track: np.ndarray) -> tuple[str, str]:
-    track = np.clip(track, -1.0, 1.0)
-    base = output_base(data)
-    au.write_wav(base + ".wav", track, SR)
-    au.write_mp3(base + ".mp3", track, SR)
-    return base + ".wav", base + ".mp3"
 
 
 def _write_clip(path: str, x: np.ndarray, sr: int) -> str:

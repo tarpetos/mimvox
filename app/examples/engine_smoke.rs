@@ -172,7 +172,7 @@ fn run() -> anyhow::Result<()> {
                     EngineEvent::TtsDone { done, .. } => {
                         println!(
                             "done: {} ({:.2}s audio in {:.2}s)",
-                            done.path_wav.display(),
+                            done.path.display(),
                             done.duration_s,
                             done.elapsed_s
                         );

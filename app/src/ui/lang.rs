@@ -10,7 +10,7 @@ use rune::{Align, Color, El, ScrollSpec, Side, TextEdit, col, el, row, text};
 
 use crate::engine::protocol::SpeechLanguage;
 use crate::state::AppState;
-use crate::ui::components::{glass_edge, icon_el, icons};
+use crate::ui::components::{dropdown_chip, glass_edge, icon_el, icons};
 use crate::ui::theme::{Palette, motion, radius, ty};
 use crate::ui::voices::kit;
 
@@ -173,20 +173,7 @@ fn options(s: &AppState, target: Target) -> Vec<SpeechLanguage> {
 /// A compact chip showing `label` that opens the picker for `target`. `key` anchors the list.
 pub fn chip(p: &Palette, key: &str, label: &str, target: Target, enabled: bool) -> El {
     let k = key.to_owned();
-    let b = row().key(key.to_owned()).role("button").label(format!("Language: {label}")).h(30.0).pl(12.0).pr(9.0).gap(7.0).center_y().radius(15.0)
-        .fill(p.glass)
-        .gradient(p.glass_top, p.glass_bottom)
-        .border_gradient(1.0, p.rim_top, p.rim_bottom)
-        .shadow(3.0, 10.0, p.shadow_soft);
-    let b = glass_edge(*p, b).motion(motion::UI)
-        .child(icon_el(&GLOBE, 13.0, p.accent))
-        .child(text(label.to_owned()).font(ty::LABEL).color(p.text).max_w(150.0).truncate().a11y_hidden())
-        .child(icon_el(&icons::CHEVRON_DOWN, 11.0, p.text_dim));
-    if enabled {
-        b.hover(p.glass_hover).focusable(true).on_press(move |s: &mut AppState| open(s, target, &k))
-    } else {
-        b.opacity(0.5)
-    }
+    dropdown_chip(*p, key, &GLOBE, label, format!("Language: {label}"), enabled, move |s: &mut AppState| open(s, target, &k))
 }
 
 fn matches(l: &SpeechLanguage, q: &str) -> bool {

@@ -131,7 +131,10 @@ pub struct Redub {
     pub name: String,
     pub voice: String,
     pub mode: RedubMode,
-    pub wav: PathBuf,
+    /// The saved file (`<data>/outputs`, in the chosen format): Show in folder, Open file, Export.
+    pub path: PathBuf,
+    /// A WAV of it to play ("Result"; the saved file itself when that is a WAV).
+    pub play: PathBuf,
     pub preview: Option<PathBuf>,
     pub duration_s: f32,
     pub elapsed_s: f32,
@@ -429,6 +432,7 @@ fn start_dub(s: &mut AppState) {
         return;
     }
     let (Some(src), Some(voice)) = (s.redub.file.clone(), shell::active_voice(s).cloned()) else { return };
+    let out = formats::output_format(s);
     let (method, params) = protocol::redub_dub(&RedubDubParams {
         path: &src.path,
         voice_id: &voice.id,
@@ -439,6 +443,7 @@ fn start_dub(s: &mut AppState) {
         expressiveness: s.speak.expressiveness,
         quality: s.speak.quality,
         speed: s.speak.speed,
+        output_format: &out,
     });
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -467,6 +472,7 @@ fn start_render(s: &mut AppState) {
     let wire = if mode == RedubMode::Dub { RedubMode::Respeak } else { mode };
     let segs: Vec<RedubSegmentIn> =
         s.redub.kept_segments().map(|g| RedubSegmentIn { start: g.start, end: g.end, text: g.edit.text.trim().to_owned() }).collect();
+    let out = formats::output_format(s);
     let (method, params) = protocol::redub_render(
         &voice.id,
         &src.path,
@@ -477,6 +483,7 @@ fn start_render(s: &mut AppState) {
         s.speak.expressiveness,
         s.speak.quality,
         s.speak.speed,
+        &out,
     );
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -700,12 +707,12 @@ fn on_done(s: &mut AppState, done: RedubDone) {
         // The dub (or the reviewed one) is finished: the review text is no longer needed.
         s.redub.clear_text();
     }
-    let wav = if done.path_wav.as_os_str().is_empty() { done.path_mp3.clone().unwrap_or_default() } else { done.path_wav.clone() };
+    let (path, play) = (done.path.clone(), done.play_path());
     let preview = s.redub.file.as_ref().filter(|f| f.name == source).and_then(Source::preview);
     s.redub.next_id += 1;
     let id = s.redub.next_id;
     let elapsed = if done.elapsed_s > 0.0 { done.elapsed_s } else { (s.shell.now - run.started) as f32 };
-    s.redub.history.insert(0, Redub { id, name: source, voice, mode, wav, preview, duration_s: done.duration_s, elapsed_s: elapsed, drift_s: done.drift_s.filter(|d| d.abs() >= 0.5), to });
+    s.redub.history.insert(0, Redub { id, name: source, voice, mode, path, play, preview, duration_s: done.duration_s, elapsed_s: elapsed, drift_s: done.drift_s.filter(|d| d.abs() >= 0.5), to });
     s.redub.history.truncate(50);
     s.redub.result = Some(id);
 }
@@ -1199,7 +1206,7 @@ fn ab_buttons(s: &AppState, p: Palette, r: &Redub, tag: &str) -> El {
     };
     row().w_full().gap(8.0)
         .child(mk("Original", format!("ab-orig-{tag}{id}"), r.preview.clone(), false))
-        .child(mk("Result", format!("ab-res-{tag}{id}"), Some(r.wav.clone()), true))
+        .child(mk("Result", format!("ab-res-{tag}{id}"), Some(r.play.clone()), true))
 }
 
 /// "dubbed to Ukrainian", "converted" or "re-spoken".
@@ -1217,7 +1224,7 @@ fn capitalize(s: &str) -> String {
 }
 
 fn result_card(s: &AppState, p: Palette, r: &Redub) -> El {
-    let (reveal, open) = open_reveal(p, r.id, "main", &r.wav);
+    let (reveal, open) = open_reveal(p, r.id, "main", &r.path);
     let mut meta = format!("{} · made in {:.1} s · {}", fmt_time(r.duration_s), r.elapsed_s, mode_past(r));
     if let Some(d) = r.drift_s {
         meta = format!("{meta} · {d:.1} s longer than the original");
@@ -1228,7 +1235,7 @@ fn result_card(s: &AppState, p: Palette, r: &Redub) -> El {
             .child(col().grow(1.0).min_w(0.0).gap(1.0)
                 .child(text(format!("Your redub of {} is ready", r.name)).font(ty::LABEL).color(p.text).truncate())
                 .child(text(meta).font(ty::CAPTION).color(p.text_faint)))
-            .child(formats::export_button(p, format!("export-main{}", r.id), &r.wav, false))
+            .child(formats::export_button(p, format!("export-main{}", r.id), &r.path, &r.play, false))
             .child(reveal)
             .child(open))
         .child(ab_buttons(s, p, r, "main"))
@@ -1299,7 +1306,7 @@ fn action_bar(s: &AppState, p: Palette) -> El {
 
 fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let h = &s.redub.history;
-    let head = (!h.is_empty()).then(|| badge(p, &format!("{}", h.len()), Tone::Neutral).pin(None, Some(22.0), Some(22.0), None));
+    let head = speak::results_head(s, p, h.len(), "redub-outfmt");
     let body = if h.is_empty() {
         col().key("redubs-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &ICON, "No redubs yet", "Finished redubs from this session appear here."))
     } else {
@@ -1310,11 +1317,11 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
             col().key("redubs").w_full().child(list)
         }
     };
-    section_panel(p, "Results").key("results-panel").w_full().grow(1.0).min_h(0.0).gap(10.0).children(head).child(body)
+    section_panel(p, "Results").key("results-panel").w_full().grow(1.0).min_h(0.0).gap(10.0).child(head).child(body)
 }
 
 fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
-    let (reveal, open) = open_reveal(p, r.id, "h", &r.wav);
+    let (reveal, open) = open_reveal(p, r.id, "h", &r.path);
     let meta = format!("{} · {} · {:.0} s", capitalize(&mode_past(r)), fmt_time(r.duration_s), r.elapsed_s);
     glass_card(p).key(format!("redub{}", r.id)).w_full().padding(10.0).gap(8.0)
         .child(col().w_full().gap(1.0)
@@ -1322,7 +1329,7 @@ fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
             .child(text(format!("{meta} · {}", r.voice)).font(ty::CAPTION).color(p.text_faint).truncate()))
         .child(ab_buttons(s, p, r, "h"))
         .child(row().w_full().gap(8.0).center_y()
-            .child(formats::export_button(p, format!("export-h{}", r.id), &r.wav, true))
+            .child(formats::export_button(p, format!("export-h{}", r.id), &r.path, &r.play, true))
             .child(reveal)
             .child(open))
 }
@@ -1389,7 +1396,7 @@ fn demo_segments(s: &mut AppState) {
 }
 
 fn demo_history(s: &mut AppState) {
-    let mk = |id, name: &str, mode, d, e| Redub { id, name: name.into(), voice: "My voice".into(), mode, wav: format!("/tmp/redub{id}.wav").into(), preview: Some(format!("/tmp/orig{id}.wav").into()), duration_s: d, elapsed_s: e, drift_s: None, to: None };
+    let mk = |id, name: &str, mode, d, e| Redub { id, name: name.into(), voice: "My voice".into(), mode, path: format!("/tmp/redub{id}.wav").into(), play: format!("/tmp/redub{id}.wav").into(), preview: Some(format!("/tmp/orig{id}.wav").into()), duration_s: d, elapsed_s: e, drift_s: None, to: None };
     s.redub.history = vec![
         mk(2, "podcast-intro.wav", RedubMode::Respeak, 48.0, 31.0),
         mk(1, "interview-take-1.mp3", RedubMode::Convert, 161.0, 74.0),
@@ -1445,7 +1452,7 @@ fn scene_done(s: &mut AppState) {
     demo_file(s);
     s.redub.mode = RedubMode::Convert;
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Convert, wav: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 161.0, elapsed_s: 68.4, drift_s: None, to: None });
+    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Convert, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 161.0, elapsed_s: 68.4, drift_s: None, to: None });
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1471,8 +1478,19 @@ fn scene_drop_hover(s: &mut AppState) {
 
 fn scene_export_menu(s: &mut AppState) {
     scene_done(s);
-    s.formats.menu = Some(formats::Menu { anchor: "export-main3".into(), src: "/tmp/redub3.wav".into() });
+    s.formats.menu = Some(formats::Menu { anchor: "export-main3".into(), src: "/tmp/redub3.wav".into(), audio: "/tmp/redub3.wav".into() });
     s.formats.format = "mp3".into();
+}
+
+/// Results saved as FLAC, with the "Save results as" menu open.
+fn scene_output_menu(s: &mut AppState) {
+    scene_done(s);
+    s.formats.scene_ready();
+    for r in &mut s.redub.history {
+        r.path = r.path.with_extension("flac");
+    }
+    s.formats.output = "flac".into();
+    s.formats.output_menu = Some("redub-outfmt".into());
 }
 
 const DUB_LINES: [(f32, f32, &str, &str); 4] = [
@@ -1523,7 +1541,7 @@ fn scene_dub_review(s: &mut AppState) {
 fn scene_dub_done(s: &mut AppState) {
     demo_dub_file(s);
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Dub, wav: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 163.2, elapsed_s: 92.0, drift_s: Some(2.2), to: Some("en".into()) });
+    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 163.2, elapsed_s: 92.0, drift_s: Some(2.2), to: Some("en".into()) });
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1536,7 +1554,7 @@ fn scene_dub_to_uk(s: &mut AppState) {
     s.redub.from = "en".into();
     s.redub.to = "uk".into();
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "podcast-intro.wav".into(), voice: "My voice".into(), mode: RedubMode::Dub, wav: "/tmp/redub3.wav".into(), preview: Some("/tmp/orig3.wav".into()), duration_s: 49.5, elapsed_s: 41.0, drift_s: None, to: Some("uk".into()) });
+    s.redub.history.insert(0, Redub { id: 3, name: "podcast-intro.wav".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/orig3.wav".into()), duration_s: 49.5, elapsed_s: 41.0, drift_s: None, to: Some("uk".into()) });
     s.redub.next_id = 3;
 }
 
@@ -1593,6 +1611,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("redub_convert_untrained", scene_convert_untrained),
         ("redub_training_busy", scene_training_busy),
         ("redub_export_menu", scene_export_menu),
+        ("redub_output_menu", scene_output_menu),
     ]
 }
 

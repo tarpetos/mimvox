@@ -129,7 +129,8 @@ SynthParams(out_path, temperature=0.8, quality="best", duration_factor=1.0, firs
    index rate from *Voice match*, capped at 0.3 for a language the voice was not recorded in, protect 0.33, pitch 0).
    Without a trained model the zero-shot audio is returned as is.
 4. After each segment, the engine emits `tts.chunk` with the path of the final audio so the app can play it at once;
-   at the end it emits `tts.done` with the full WAV and an MP3 (resampled from 40 kHz to 44.1 kHz first).
+   at the end it saves the whole phrase as one file in the requested `output_format` (WAV by default; other formats are
+   encoded from a 44.1 kHz WAV kept in `tmp/play/` for playback) and emits `tts.done` with both paths.
 
 ## Speech model: OmniVoice
 
@@ -175,8 +176,8 @@ The engine owns the data folder; the app reads only the files the engine names. 
 <data>/voices/<voice_id>/dataset/part<N>.wav recorded parts (N from 1)
 <data>/voices/<voice_id>/rvc/model.pth       trained RVC model (after training)
 <data>/voices/<voice_id>/rvc/model.index
-<data>/outputs/<timestamp>.wav|.mp3          generated speech (the history)
-<data>/tmp/                                  scratch, safe to delete
+<data>/outputs/<timestamp>.<ext>             generated speech and redubs, one file each in the chosen format
+<data>/tmp/                                  scratch (incl. tmp/play: playback WAVs of non-WAV results), safe to delete
 ```
 
 The runtime (the two Python environments, the Applio checkout, the models) is created by setup under `runtime/` and

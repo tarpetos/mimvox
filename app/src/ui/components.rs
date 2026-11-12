@@ -10,6 +10,7 @@
 //! | Lighter card inside a panel (no blur) | [`glass_card`] |
 //! | Primary / secondary / ghost / danger button | [`Button`] |
 //! | Square ghost icon button | [`icon_button`] |
+//! | Dropdown chip (icon, label, chevron) | [`dropdown_chip`] |
 //! | Slider with label and value | [`Slider`] |
 //! | Multi-line text field | [`TextArea`] |
 //! | Progress bar (determinate or shimmering) | [`progress_bar`] |
@@ -407,6 +408,21 @@ pub fn icon_button(
         .help(help.to_owned())
         .on_press(on_press)
         .child(icon_el(glyph, 16.0, p.text_dim))
+}
+
+/// A compact glass chip that opens a dropdown (the language pickers, the result format): an accent icon, `label` and a
+/// chevron, 30 pt tall. `key` anchors the dropdown; `a11y` is the accessible label. A disabled chip is dimmed.
+pub fn dropdown_chip(p: Palette, key: &str, glyph: &'static Icon, label: &str, a11y: String, enabled: bool, on_press: impl Fn(&mut AppState) + 'static) -> El {
+    let b = row().key(key.to_owned()).role("button").label(a11y).h(30.0).pl(12.0).pr(9.0).gap(7.0).center_y().radius(15.0)
+        .fill(p.glass)
+        .gradient(p.glass_top, p.glass_bottom)
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
+        .shadow(3.0, 10.0, p.shadow_soft);
+    let b = glass_edge(p, b).motion(motion::UI)
+        .child(icon_el(glyph, 13.0, p.accent))
+        .child(text(label.to_owned()).font(ty::LABEL).color(p.text).max_w(150.0).truncate().a11y_hidden())
+        .child(icon_el(&icons::CHEVRON_DOWN, 11.0, p.text_dim));
+    if enabled { b.hover(p.glass_hover).focusable(true).on_press(on_press) } else { b.opacity(0.5) }
 }
 
 // -------------------------------------------------------------------------------------------------

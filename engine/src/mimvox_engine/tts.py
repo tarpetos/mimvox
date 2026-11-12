@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from . import aio, backends, config, rvc, speech, voices
+from . import aio, backends, config, media, rvc, speech, voices
 from . import audio_util as au
 from .backends import SynthParams
 from .backends.omnivoice import OMNIVOICE
@@ -349,6 +349,7 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     lang, backend = speech_language(params)
     check_backend_ready(backend)
     meta = await aio.run_io(voices.read_meta, data, voice_id)  # not_found
+    out_fmt = await aio.run_io(media.output_format, params)
     rvc_rate = rvc.index_rate_for(index_rate, lang, meta.get("language"))  # capped for foreign languages
     ref = data.reference(voice_id)
     pth, idx = data.rvc_model(voice_id)
@@ -364,7 +365,7 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         raise EngineError("bad_request", "nothing to say in this text")
     # (no await between the busy check in start_exclusive and taking the slot: the loop makes it atomic)
     job = start_exclusive(ctx, lambda j: _generate(ctx, j, data, backend, lang, ref, segs, temperature, quality, pth,
-                                                   idx, rvc_rate, worker, duration_factor_for(speed)),
+                                                   idx, rvc_rate, worker, duration_factor_for(speed), out_fmt),
                           "another generation is running")
     return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs]}
 
@@ -392,22 +393,9 @@ def _chunk_from(src: str, i: int, last: bool, pause: int, jobdir: str) -> tuple[
     return x, path, au.duration_s(x)
 
 
-def _save_output(data: config.DataDir, full: np.ndarray) -> str:
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    base = os.path.join(data.outputs, stamp)
-    n = 1
-    while os.path.exists(base + ".wav"):  # a free name, not a wait
-        n += 1
-        base = os.path.join(data.outputs, f"{stamp}_{n}")
-    os.makedirs(data.outputs, exist_ok=True)
-    au.write_wav(base + ".wav", full)
-    au.write_mp3(base + ".mp3", full)
-    return base
-
-
 async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backends.TtsBackend, lang: str, ref: str,
                     segs: list[tuple[str, int]], temperature: float, quality: str, pth: str, idx: str,
-                    index_rate: float, worker: rvc.RvcWorker | None, duration_factor: float) -> None:
+                    index_rate: float, worker: rvc.RvcWorker | None, duration_factor: float, out_fmt: str) -> None:
     t_start = time.time()
 
     def finish(event: str, payload: dict[str, Any]) -> None:
@@ -456,9 +444,8 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
 
         await aio.gather_or_cancel(produce(), consume())
         full = np.concatenate([c for c in chunks if c is not None])
-        base = await aio.run_io(_save_output, data, full)
-        finish("tts.done", {"path_wav": base + ".wav", "path_mp3": base + ".mp3",
-                            "duration_s": au.duration_s(full), "elapsed_s": round(time.time() - t_start, 2)})
+        saved = await aio.run_io(media.save_result, data, full, au.OUT_SR, "", out_fmt)
+        finish("tts.done", {**saved, "duration_s": au.duration_s(full), "elapsed_s": round(time.time() - t_start, 2)})
         log.info("job %s done in %.1fs (first chunk %.1fs)", job, time.time() - t_start,
                  first_chunk_at[0] if first_chunk_at else -1)
     except asyncio.CancelledError:

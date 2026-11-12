@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -412,3 +413,67 @@ def _encode_soundfile(src: str, dst: str, fmt: str) -> None:
 @method("audio.export")
 def audio_export(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return export(params.get("path"), params.get("format"), params.get("dest"), params.get("quality") or "standard")
+
+
+# -------------------------------------------------------------------------------------------- saved results
+
+PLAY_DIR = "play"  # <data>/tmp/play: playback WAVs of results saved in another format (tmp is emptied at start)
+
+
+def output_format(params: dict[str, Any], key: str = "output_format") -> str:
+    """The ``output_format`` of a job request (default ``wav``), checked against what this machine can write.
+    Blocking (the first call lists the ffmpeg encoders): call it on the IO pool."""
+    v = params.get(key)
+    if v in (None, ""):
+        return "wav"
+    if not isinstance(v, str):
+        raise EngineError("bad_request", f"'{key}' must be one of {', '.join(_EXPORT)}")
+    fmt = v.lower().lstrip(".")
+    fmt = _IMPORT_ALIASES.get(fmt, fmt)
+    if fmt not in _EXPORT:
+        raise EngineError("bad_request", f"'{key}' must be one of {', '.join(_EXPORT)}")
+    if fmt != "wav" and fmt not in formats()["export"]:
+        raise EngineError("not_ready", f"{fmt.upper()} cannot be written on this machine "
+                                       f"({'install ffmpeg' if not ffmpeg_path() else 'this ffmpeg build lacks its encoder'})")
+    return fmt
+
+
+def save_result(data: config.DataDir, track: np.ndarray, sr: int, prefix: str, fmt: str) -> dict[str, str]:
+    """Save a finished result as ONE file ``<data>/outputs/<prefix><stamp>.<ext>`` in ``fmt``.
+
+    The app plays WAV only, so another format also gets a 16-bit playback WAV in ``<data>/tmp/play/`` (the same name),
+    from which the saved file is encoded (``export``: ffmpeg, else libsndfile). ``track`` is mono float32 at ``sr``
+    (44.1 kHz from Speak and Redub; MP3 cannot store 40 kHz). Returns ``{"path", "path_play", "format"}``; if the
+    encoder fails anyway, the result is kept as WAV in outputs instead of being lost (``format`` says ``wav``)."""
+    from . import audio_util as au  # noqa: PLC0415 - only results need it (it imports scipy)
+
+    ext = _EXPORT[fmt]["ext"]
+    play_dir = os.path.join(data.tmp, PLAY_DIR)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    name, n = f"{prefix}{stamp}", 1
+
+    def taken(nm: str) -> bool:
+        return (os.path.exists(os.path.join(data.outputs, f"{nm}.{ext}"))
+                or os.path.exists(os.path.join(play_dir, f"{nm}.wav")))
+
+    while taken(name):  # a free name, not a wait
+        n += 1
+        name = f"{prefix}{stamp}_{n}"
+    os.makedirs(data.outputs, exist_ok=True)
+    path = os.path.join(data.outputs, f"{name}.{ext}")
+    if fmt == "wav":
+        au.write_wav(path, track, sr)
+        return {"path": path, "path_play": path, "format": "wav"}
+    play = os.path.join(play_dir, f"{name}.wav")
+    au.write_wav(play, track, sr)
+    try:
+        export(play, fmt, path, "high")
+    except EngineError as exc:
+        log.warning("saving %s as %s failed (%s): keeping it as WAV", name, fmt, exc.message)
+        path = os.path.join(data.outputs, f"{name}.wav")
+        while os.path.exists(path):
+            n += 1
+            path = os.path.join(data.outputs, f"{prefix}{stamp}_{n}.wav")
+        shutil.copyfile(play, path)
+        return {"path": path, "path_play": play, "format": "wav"}
+    return {"path": path, "path_play": play, "format": fmt}

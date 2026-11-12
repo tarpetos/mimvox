@@ -47,7 +47,7 @@ on your computer: your recordings, your voice models and the generated speech ar
 | **Recording quality checks** | Every take is checked right away: duration, peak level, clipping, loudness, noise floor, signal-to-noise ratio and silence. You get a plain verdict (ok, warn, bad) with advice such as "Too quiet: speak closer to the mic", so you re-record before training, not after. |
 | **One-click training** | Press **Train**. The app prepares the dataset, extracts features, trains the timbre model, builds its index, shows progress and an estimated time, and can be cancelled. The number of epochs is chosen from the length of your recording. |
 | **Fast streaming generation** | Type text in English, Ukrainian or another supported language and press **Speak**. Long text is split into segments and each segment plays as soon as it is ready, while the rest is still being generated. The models stay loaded in a persistent engine, so the second phrase is much faster than the first. |
-| **History and export** | Every generated phrase is kept in your history. Play it again, or export it as WAV or MP3. |
+| **History and export** | Every result is saved as one file in the format you pick (WAV by default, or MP3, FLAC, OGG, Opus, M4A, AIFF). Play it again, or export it to another format. |
 | **Several voices** | Keep more than one voice (for example "Studio" and "Casual"), rename or delete them, and see how much data each one has. |
 | **Two sliders** | **Expressiveness** and **Voice match**. The validated defaults are already set; you do not need to touch anything else. |
 | **Private by design** | No account, no cloud, no telemetry. Setup downloads the models once; after that the app works offline. |
@@ -63,7 +63,7 @@ on your computer: your recordings, your voice models and the generated speech ar
                                                │  24 kHz speech
                                                ▼
                     RVC timbre model trained on your recording (Applio)
-                                               │  40 kHz, resampled to 44.1 kHz for MP3
+                                               │  40 kHz, resampled to 44.1 kHz
                                                ▼
                                      speech in your voice
 ```
