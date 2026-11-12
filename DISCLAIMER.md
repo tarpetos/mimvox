@@ -15,9 +15,8 @@ document before you record anything.
 - Never use audio you did not record for this purpose: not a call, a video, a podcast, a stream, a voice message or any
   other source of someone else's voice, whether or not it is public.
 - Do not clone the voice of a child, or of a person who cannot give informed consent.
-- Before the first recording the app shows this consent text and asks you to confirm that the voice you are about to
-  record is your own, or that you have the speaker's explicit permission. Nothing is recorded before that. The
-  acceptance is stored in your user data on your computer; when the consent text changes materially, the app asks again.
+- By using the app you confirm that every voice you record, import or clone is your own, or that you have the
+  speaker's explicit permission.
 
 ## 2. Prohibited use
 

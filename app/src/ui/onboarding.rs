@@ -1,4 +1,4 @@
-//! Onboarding (first run): welcome, how it works, consent, engine/runtime status and setup.
+//! Onboarding (first run): welcome, how it works, engine/runtime status and setup.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -67,20 +67,6 @@ pub fn setting(key: &str) -> Option<Value> {
 /// Sets one value of the settings file, keeping the others.
 pub fn save_setting(key: &str, value: Value) {
     update_settings(|v| v[key] = value);
-}
-
-/// Whether the consent step was accepted on this machine.
-pub fn consent_saved() -> bool {
-    read_settings().get("consent_accepted").and_then(Value::as_bool).unwrap_or(false)
-}
-
-fn save_consent() {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    update_settings(|v| {
-        v["consent_accepted"] = json!(true);
-        v["consent_accepted_at_unix"] = json!(now);
-        v["consent_version"] = json!(1);
-    });
 }
 
 /// The voice selected last time, if any.
@@ -164,8 +150,6 @@ impl DeviceInfo {
 }
 
 pub struct OnboardingState {
-    pub consent_checked: bool,
-    pub accepted: bool,
     pub runtime_present: bool,
     pub device: Option<DeviceInfo>,
     /// Result of the last "Run setup" press (a hint or an error).
@@ -219,10 +203,7 @@ pub(crate) fn free_bytes(path: &str) -> Option<u64> {
 
 impl Default for OnboardingState {
     fn default() -> Self {
-        let accepted = consent_saved();
         OnboardingState {
-            consent_checked: accepted,
-            accepted,
             runtime_present: runtime_toml_path().is_file(),
             device: None,
             setup_note: None,
@@ -237,9 +218,9 @@ impl Default for OnboardingState {
     }
 }
 
-/// True when the first-run flow still has something to do (consent or runtime setup).
+/// True when the first-run flow still has something to do (runtime setup).
 pub fn needed(s: &AppState) -> bool {
-    !s.onboarding.accepted || !s.onboarding.runtime_present
+    !s.onboarding.runtime_present
 }
 
 /// The compute backend reported by the engine (`cuda`, `mps`, `cpu`), if known.
@@ -441,13 +422,6 @@ fn run_setup(s: &mut AppState) {
     });
 }
 
-fn accept(s: &mut AppState) {
-    if s.onboarding.consent_checked {
-        s.onboarding.accepted = true;
-        save_consent();
-    }
-}
-
 fn finish(s: &mut AppState) {
     s.screen = Screen::Voices;
 }
@@ -455,8 +429,6 @@ fn finish(s: &mut AppState) {
 // ---------------------------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------------------------
-
-const CONSENT_TEXT: &str = "I will only clone my own voice or a voice I have explicit permission to use";
 
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
@@ -494,13 +466,10 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let mut page = col().w_full().gap(18.0).child(
         kit::panel(&p).gap(18.0).child(hero).child(intro).child(steps).child(kit::notice(&p, Tone::Warning, EARLY_VERSION)),
     );
-    page = page.child(consent_card(&p, o));
     page = page.child(engine_card(&p, s));
 
-    let ready = o.accepted && o.runtime_present;
-    let hint = if !o.accepted {
-        "Accept the consent above to continue."
-    } else if !o.runtime_present {
+    let ready = o.runtime_present;
+    let hint = if !o.runtime_present {
         "Run setup first, then you can continue."
     } else {
         "You are all set."
@@ -533,31 +502,6 @@ fn step(p: &Palette, n: u32, title: &str, sub: &str) -> El {
         )
         .child(text(title.to_string()).font(ty::TITLE).color(p.text))
         .child(text(sub.to_string()).font(ty::CAPTION).color(p.text_dim).wrap())
-}
-
-fn consent_card(p: &Palette, o: &OnboardingState) -> El {
-    let mut card = kit::card(p).gap(14.0).child(text("Consent").font(ty::TITLE).color(p.text));
-    if o.accepted {
-        card = card.child(
-            row()
-                .gap(10.0)
-                .center_y()
-                .child(kit::badge(p, "Accepted", Tone::Success))
-                .child(text(CONSENT_TEXT).font(ty::CAPTION).color(p.text_dim).wrap().grow(1.0).min_w(0.0)),
-        );
-    } else {
-        card = card
-            .child(kit::checkbox(p, o.consent_checked, CONSENT_TEXT, |s: &mut AppState| {
-                s.onboarding.consent_checked = !s.onboarding.consent_checked
-            }))
-            .child(
-                row()
-                    .w_full()
-                    .justify_end()
-                    .child(kit::button(p, "Accept", BtnKind::Primary, o.consent_checked, accept)),
-            );
-    }
-    card
 }
 
 /// The install folder (editable) and the free space on its drive.
@@ -689,8 +633,6 @@ fn base(s: &mut AppState) {
     s.screen = Screen::Onboarding;
     s.shell.set_engine(ShellEngine::Idle);
     s.onboarding = OnboardingState {
-        consent_checked: false,
-        accepted: false,
         runtime_present: false,
         device: None,
         setup_note: None,
@@ -710,21 +652,13 @@ fn device(backend: &str, name: &str, vram: f32) -> Option<DeviceInfo> {
 fn scene_welcome(s: &mut AppState) {
     base(s);
 }
-fn scene_consent_checked(s: &mut AppState) {
-    base(s);
-    s.onboarding.consent_checked = true;
-}
 fn scene_setup_missing(s: &mut AppState) {
     base(s);
-    s.onboarding.accepted = true;
-    s.onboarding.consent_checked = true;
     s.onboarding.setup_note = Some((Tone::Accent, "Setup is running in a terminal window. This can take a while.".into()));
     s.onboarding.setup_started = true;
 }
 fn scene_ready_gpu(s: &mut AppState) {
     base(s);
-    s.onboarding.accepted = true;
-    s.onboarding.consent_checked = true;
     s.onboarding.runtime_present = true;
     s.shell.set_engine(ShellEngine::Ready { device: None, tts: Some("ready".into()), rvc: Some("ready".into()) });
     s.onboarding.device = device("cuda", "NVIDIA GeForce RTX 4070", 12.0);
@@ -743,7 +677,6 @@ fn scene_engine_stopped(s: &mut AppState) {
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
     &[
         ("onboarding-welcome", scene_welcome),
-        ("onboarding-consent", scene_consent_checked),
         ("onboarding-setup", scene_setup_missing),
         ("onboarding-ready", scene_ready_gpu),
         ("onboarding-cpu", scene_cpu_warning),

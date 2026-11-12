@@ -121,7 +121,7 @@ cd app
 cargo run --release
 ```
 
-On first start the app shows the consent text and asks you to accept it before it records anything. Then choose a
+On first start the welcome screen checks that setup has run. Then choose a
 preset (or paste your own text), record, press **Train**, and start typing.
 
 ## Usage

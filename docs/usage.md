@@ -99,21 +99,18 @@ cargo run --release
 If you installed the app from an installer (see `scripts/build/README.md`), start it like any other program. An
 installed app does not include the models: if they are missing, the first screen offers **Run setup** (see below).
 
-### First launch: the welcome screen and consent
+### First launch: the welcome screen
 
-The first start shows a welcome screen with three steps (Record, Train, Speak) and two cards:
+The first start shows a welcome screen with three steps (Record, Train, Speak) and the engine card:
 
-![The welcome screen with consent and the engine status](screenshots/usage-onboarding.png)
+![The welcome screen and the engine status](screenshots/usage-onboarding.png)
 
-1. **Consent.** Tick *"I will only clone my own voice or a voice I have explicit permission to use"* and press
-   **Accept**. Nothing is recorded before you accept. The acceptance is saved in your data folder, so you see this
-   only once.
-2. **Engine and device.** *Runtime found* means setup has run. If it says *Runtime missing*, the card shows the size
+1. **Engine and device.** *Runtime found* means setup has run. If it says *Runtime missing*, the card shows the size
    warning and an **Install location** field with **Change location…**. Press **Run setup**: a terminal window opens
    and runs the same setup script with that folder. When it is done, the screen updates by itself (or press
    **Check again**). Once the engine is running, the card shows your device, its video memory and the backend. On a
    computer without a GPU it says that training would take many hours, while a quick (zero-shot) voice still works.
-3. Press **Get started**. You land on the Voices screen.
+2. Press **Get started**. You land on the Voices screen.
 
 The first start of the engine takes a while: the models load in the background (about 20-30 seconds on a GPU). The
 status pill at the top right says *Starting engine…*, then *Loading models…*, then **Ready**.
@@ -597,7 +594,7 @@ Everything the app makes lives in one folder (the one you chose during setup; se
   outputs/                       every generated phrase and redub, as WAV and MP3
   logs/engine.log                the engine log
   tmp/                           scratch files, emptied at every engine start
-  settings.json                  your app settings (consent, microphone, last choices)
+  settings.json                  your app settings (microphone, last choices)
   runtime/, runtime.toml         the installed engine and models (about 28 GB)
 ```
 
