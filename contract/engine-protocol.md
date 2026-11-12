@@ -676,6 +676,19 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   segment_chars[0]` and holds chunk 0 back for `max(0, rtf * (S - duration_s(chunk 0)) - S)` seconds, taking `rtf`
   from chunk 0 (a first estimate) and refining it with each new chunk. With `rtf <= 1` this is 0: start at once.
 
+
+### `outputs.delete` (delete a saved result)
+`{"path":"<absolute path>","path_play"?:"<absolute path>"}` -> `{"deleted":["<absolute path>", ...]}`
+- Deletes a saved result: `path` (the `path` of a `tts.done` / `redub.done`) and, when given, `path_play` (its playback
+  WAV; omit it, or send the same path, for a `wav` result). Only regular files inside `<data>/outputs` or
+  `<data>/tmp/play` can be deleted: every path is resolved first (symlinks and `..` included) and checked before
+  anything is removed, so one path outside those folders, a relative path or a folder refuses the whole request with
+  `bad_request` and deletes nothing.
+- A file that is already gone is not an error (it is simply not listed in `deleted`). A file that cannot be removed
+  (permissions, held open by another program on Windows) is `internal` with the reason.
+- **App side:** the trash button on a Speak take card and on a Redub Results row asks "Delete this result?" inline,
+  stops the result if it is playing, sends this request and drops the entry from the list when the answer arrives (an
+  error leaves it and shows a toast).
 ### Speech model and languages (OmniVoice)
 
 Every segment is spoken by OmniVoice (k2-fsa, 0.6B, CC BY-NC 4.0 weights), run by a persistent worker process with the

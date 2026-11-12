@@ -34,6 +34,8 @@ use super::lang;
 use super::shell::{self, EngineStatus, VoiceInfo};
 use super::speak;
 use super::theme::{self, Palette, motion, radius, ty};
+use super::trash;
+use super::playbar;
 use super::voices::kit;
 use crate::engine::EngineMsg;
 use crate::engine::protocol::{self, EngineEvent, JobStarted, RedubDone, RedubDubParams, RedubMode, RedubProbe, RedubReview, RedubSegmentIn, RedubTiming, RedubTranscript, TextLanguage};
@@ -200,7 +202,6 @@ pub struct RedubState {
     pub history: Vec<Redub>,
     /// The latest result for the current file (shown in the result card).
     result: Option<u64>,
-    playing: Option<PathBuf>,
     error: Option<String>,
     /// The file dialog is open (its answer arrives as an event).
     picking: bool,
@@ -229,7 +230,6 @@ impl Default for RedubState {
             job: Job::Idle,
             history: Vec::new(),
             result: None,
-            playing: None,
             error: None,
             picking: false,
             next_id: 0,
@@ -642,20 +642,23 @@ fn remove_segment(s: &mut AppState, key: u64) {
     s.redub.segments.retain(|g| g.key != key);
 }
 
-fn toggle_play(s: &mut AppState, path: &Path) {
-    if s.redub.playing.as_deref() == Some(path) {
-        stop_play(s);
-        return;
-    }
-    match shell::play(s, path) {
-        Ok(()) => s.redub.playing = Some(path.to_path_buf()),
-        Err(e) => shell::toast(s, Tone::Danger, e),
+/// A play button (the original, a result): play it, or pause / resume it in the player bar.
+fn toggle_play(s: &mut AppState, path: &Path, title: String, what: &str) {
+    if let Err(e) = playbar::toggle(s, path, title, what, playbar::Source::Redub) {
+        shell::toast(s, Tone::Danger, e);
     }
 }
 
+/// Stops playback started on this screen.
 fn stop_play(s: &mut AppState) {
-    if s.redub.playing.take().is_some() {
-        shell::stop_audio(s);
+    playbar::stop_from(s, playbar::Source::Redub);
+}
+
+/// The engine deleted a result's files (`ui::trash`): drop it from the history (and the result card).
+pub fn remove_result(s: &mut AppState, id: u64) {
+    s.redub.history.retain(|r| r.id != id);
+    if s.redub.result == Some(id) {
+        s.redub.result = None;
     }
 }
 
@@ -922,11 +925,6 @@ pub fn settle(s: &mut AppState) -> bool {
     changed
 }
 
-/// The player ran dry: the result or original that was playing has ended.
-pub fn on_playback_end(s: &mut AppState) -> bool {
-    s.redub.playing.take().is_some()
-}
-
 /// The start of the running job (its elapsed time ticks on the Redub screen).
 pub fn clock_origin(s: &AppState) -> Option<f64> {
     match &s.redub.job {
@@ -1035,11 +1033,12 @@ fn file_card(s: &AppState, p: Palette, f: &Source, over: bool) -> El {
     let preview = f.preview();
     let play: El = match preview {
         Some(path) => {
-            let on = s.redub.playing.as_deref() == Some(path.as_path());
-            let b = el().key("play-original").role("button").label(if on { "Stop original" } else { "Play original" }).help(if on { "Stop" } else { "Play the original" })
+            let on = playbar::playing(s, &path);
+            let name = f.name.clone();
+            let b = el().key("play-original").role("button").label(if on { "Pause original" } else { "Play original" }).help(if on { "Pause" } else { "Play the original" })
                 .size(40.0, 40.0).radius(20.0).center().hover(rune::Color::WHITE.alpha(0.1)).focusable(true).motion(motion::UI)
-                .on_press(move |s: &mut AppState| toggle_play(s, &path))
-                .child(icon_el(if on { &icons::STOP } else { &icons::PLAY }, 16.0, p.on_accent));
+                .on_press(move |s: &mut AppState| toggle_play(s, &path, name.clone(), "Redub · original"))
+                .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 16.0, p.on_accent));
             accent_glass(p, b)
         }
         None => icon_button(p, "play-original", &icons::PLAY, "Preview needs a WAV file, but the original is still used for the redub", |_| {}).opacity(0.4),
@@ -1375,17 +1374,18 @@ fn open_reveal(p: Palette, id: u64, tag: &str, path: &Path) -> (El, El) {
     (reveal, open)
 }
 
-/// "Original" and "Result" play buttons: press one to hear it, press it again to stop (A/B).
+/// "Original" and "Result" play buttons: press one to hear it, press it again to pause (A/B).
 fn ab_buttons(s: &AppState, p: Palette, r: &Redub, tag: &str) -> El {
     let id = r.id;
     let mk = |label: &str, key: String, path: Option<PathBuf>, lead: bool| -> El {
-        let on = path.as_ref().is_some_and(|x| s.redub.playing.as_deref() == Some(x.as_path()));
-        let mut b = Button::new(label).small().grow().key(key).icon(if on { &icons::STOP } else { &icons::PLAY });
+        let on = path.as_ref().is_some_and(|x| playbar::playing(s, x));
+        let mut b = Button::new(label).small().grow().key(key).icon(if on { &icons::PAUSE } else { &icons::PLAY });
         if lead && !on {
             b = b.primary();
         }
+        let (name, what) = (r.name.clone(), if lead { "Redub · result" } else { "Redub · original" });
         match path {
-            Some(path) => b.on_press(move |s| toggle_play(s, &path)).build(p),
+            Some(path) => b.on_press(move |s| toggle_play(s, &path, name.clone(), what)).build(p),
             None => b.disabled(true).build(p),
         }
     };
@@ -1513,10 +1513,15 @@ fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
             .child(text(r.name.clone()).font(ty::LABEL).color(p.text).truncate())
             .child(text(format!("{meta} · {}", r.voice)).font(ty::CAPTION).color(p.text_faint).truncate()))
         .child(ab_buttons(s, p, r, "h"))
-        .child(row().w_full().gap(8.0).center_y()
-            .child(formats::export_button(p, format!("export-h{}", r.id), &r.path, &r.play, true))
-            .child(reveal)
-            .child(open))
+        .child(if trash::confirming(s, trash::Kind::Redub, r.id) {
+            trash::confirm_row(s, p, trash::Kind::Redub, r.id, &r.path, &r.play)
+        } else {
+            row().w_full().gap(8.0).center_y()
+                .child(formats::export_button(p, format!("export-h{}", r.id), &r.path, &r.play, true))
+                .child(reveal)
+                .child(open)
+                .child(trash::button(p, trash::Kind::Redub, r.id))
+        })
 }
 
 /// A right arrow between "From" and "To".
@@ -1874,8 +1879,18 @@ fn scene_respeak_accent_zero_shot(s: &mut AppState) {
     s.shell.zero_shot_vc = true;
 }
 
+/// "Delete this result?" on a Results row, with the other result paused in the player bar (the action bar above
+/// it stays usable).
+fn scene_trash_confirm(s: &mut AppState) {
+    scene_file(s);
+    demo_history(s);
+    trash::scene_confirm(s, trash::Kind::Redub, 2);
+    playbar::scene_now(s, "/tmp/redub1.wav", "interview-take-1.mp3", "Redub · result", playbar::Source::Redub, playbar::Status::Paused, 97.0, 161.0);
+}
+
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
     &[
+        ("redub_trash_confirm", scene_trash_confirm),
         ("redub_dub_accent_foreign_ref", scene_dub_accent_foreign_ref),
         ("redub_respeak_accent", scene_respeak_accent),
         ("redub_respeak_accent_untrained", scene_respeak_accent_untrained),

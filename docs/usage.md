@@ -144,6 +144,37 @@ fixed by the `MIMVOX_DATA` environment variable cannot be moved from the app.
   *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice**.
 - **Dropping files** anywhere on the window works on every screen: on Record they become the current part's take, on
   Voices they build a reference from media, and elsewhere a single file opens in Redub (see the sections below).
+- **The player bar** appears at the bottom of the window whenever something plays (see below).
+
+### The player bar
+
+Everything the app plays goes through one player: a result on Speak or Redub, Speak's live playback, Redub's
+**Original** and **Result**, a reference clip or a candidate in Voices, a recorded take on Record. Only one thing plays
+at a time; starting another stops the first. While something is loaded, a compact glass bar is docked along the bottom
+of the window. It takes its own strip (the screen above it gets a little shorter), so it never covers a screen's
+buttons, and messages pop up just above it.
+
+![The player bar under Speak](screenshots/usage-player.png)
+
+- **Play / Pause**, and **Stop**, which ends playback and hides the bar. The **×** at the right end does the same.
+- The **title** of what plays (the start of the text, the file name, the clip) and where it comes from
+  (*Speak · result*, *Redub · original*, *Voices · My voice*, *Record*).
+- The **time** played and the total, with a **seek bar**: click or drag anywhere on it to jump. With the seek bar
+  focused, the Left and Right arrow keys jump 5 seconds.
+- **Loop** (the two arrows): when on, the track starts again from the beginning when it ends.
+- **Speed**: 0.5×, 0.75×, 1×, 1.25×, 1.5× or 2×. The pitch stays the same, so the voice sounds like itself, only
+  slower or faster (the app time-stretches the sound while it plays; switching speed takes effect at once, without
+  restarting). Loop and speed stay as you set them for the next things you play, until the app is closed.
+- **Space** plays and pauses while the bar has the keyboard focus (after you clicked one of its buttons). On the Record
+  screen Space always starts and stops the recording.
+
+The play buttons on the screens follow the bar: a result's button shows a pause sign while it plays, pressing it pauses
+(the bar stays, with its position), and pressing it again continues. When a track has played to its end the bar
+stays, so **Play** starts it again; close the bar when you are done.
+
+While Speak is still generating (see [Streaming playback](#streaming-playback)) the bar shows the part that has
+arrived so far (the total ends in *…*), and seeking is off until the whole text is ready. When generation finishes, the
+bar shows the finished result and seeking works.
 
 ---
 
@@ -454,6 +485,8 @@ Long text is split into segments: the first sentence alone, then growing groups 
 as soon as it is ready while the rest is still being made, so you hear the first words after a few seconds. On slower
 hardware the app holds the first segment back a little (*Getting ahead · part k of n*) so playback never stutters.
 
+The playback shows in the [player bar](#the-player-bar), where you can pause it or change its speed while it plays.
+
 The very first phrase after the app starts is slower, because the voice has to be prepared (*Preparing voice…*). Later
 phrases are much faster: leave the app open and the models stay loaded.
 
@@ -461,9 +494,13 @@ phrases are much faster: leave the app open and the models stay loaded.
 
 Each finished phrase appears under **Results** with its length and how long it took to make. For each one:
 
-- the **play** button plays it again;
+- the **play** button plays it in the [player bar](#the-player-bar) (press it again to pause);
 - **Export as…** saves a copy in another format (see below);
-- the folder button shows the file in your file manager, and the other button opens it in your default player.
+- the folder button shows the file in your file manager, and the other button opens it in your default player;
+- the **trash** button deletes the result. It asks first (*Delete this result?* **Delete** / **Cancel**); **Delete**
+  stops it if it is playing, removes the saved file from `outputs` (and its temporary playback copy) and takes it off
+  the list. This cannot be undone. If the file cannot be deleted (for example it is open in another program), a
+  message says so and the result stays in the list.
 
 Every result is also saved automatically as one file in the `outputs` folder of your data folder
 (`outputs/<date>_<time>.wav`). The Results list itself shows the phrases made since the app was started.
@@ -645,6 +682,10 @@ it.
   file, `outputs/redub_<date>_<time>.wav`, or in the format chosen with **Save as** in the Results header (shared with
   Speak, see [Results and export](#results-and-export)).
 - **Export as…** on a result saves it as WAV, MP3, FLAC, OGG, Opus, M4A or AIFF, as on Speak.
+- The **trash** button on a result in the Results list deletes it, after asking, exactly as on Speak: the saved file
+  in `outputs` and its playback copy are removed and the row leaves the list. The original file you dropped is never
+  touched.
+- **Original** and **Result** play in the [player bar](#the-player-bar); press one again to pause it.
 
 To put the new audio back into your video, use a video editor and replace the original sound track with the exported
 file.

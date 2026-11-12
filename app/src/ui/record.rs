@@ -270,6 +270,7 @@ pub struct RecordState {
     pub active: Option<Active>,
     /// One-line message above the recorder (auto-advance confirmation, errors).
     pub notice: Option<(String, Tone)>,
+    /// The current part's take is playing in the player bar (kept up to date by `settle`).
     pub playing: bool,
     pub creating_voice: bool,
     /// The name for the voice `ensure_voice` creates next (default "My voice").
@@ -858,7 +859,6 @@ pub fn import_dropped(s: &mut AppState, files: Vec<PathBuf>) {
         return;
     }
     shell::stop_audio(s);
-    s.record.playing = false;
     import_paths(s, files);
 }
 
@@ -874,7 +874,6 @@ fn import_paths(s: &mut AppState, mut paths: Vec<PathBuf>) {
 pub fn toggle_recording(s: &mut AppState) {
     if s.record.active.is_none() {
         shell::stop_audio(s);
-        s.record.playing = false;
     }
     s.record.toggle_recording();
 }
@@ -882,22 +881,23 @@ pub fn toggle_recording(s: &mut AppState) {
 /// "Record again" on a rejected or saved part.
 pub fn rerecord(s: &mut AppState) {
     shell::stop_audio(s);
-    s.record.playing = false;
     s.record.rerecord();
 }
 
-/// Plays or stops the current part's take through the shell's player.
+/// The current part's take, when it has one.
+fn current_take(s: &AppState) -> Option<PathBuf> {
+    s.record.takes.get(s.record.current).and_then(|t| t.path.clone())
+}
+
+/// Plays, pauses or resumes the current part's take in the player bar.
 pub fn toggle_play(s: &mut AppState) {
-    if s.record.playing {
-        shell::stop_audio(s);
-        s.record.playing = false;
-        return;
+    let Some(path) = current_take(s) else { return };
+    let title = format!("Part {} take", s.record.current + 1);
+    let what = s.record.part().map(|p| format!("Record · {}", p.title)).unwrap_or_else(|| "Record".to_owned());
+    if let Err(e) = super::playbar::toggle(s, &path, title, what, super::playbar::Source::Record) {
+        s.record.notice = Some((e, Tone::Danger));
     }
-    let Some(path) = s.record.takes.get(s.record.current).and_then(|t| t.path.clone()) else { return };
-    match shell::play(s, &path) {
-        Ok(()) => s.record.playing = true,
-        Err(e) => s.record.notice = Some((e, Tone::Danger)),
-    }
+    s.record.playing = current_take(s).is_some_and(|p| super::playbar::playing(s, &p));
 }
 
 /// Space toggles record/stop, Left/Right move between parts. Returns true when it took the key.
@@ -1014,6 +1014,12 @@ pub fn settle(s: &mut AppState) -> bool {
         changed = true;
     }
     changed |= mic::settle(s);
+    // The take's button follows the player bar (paused, ended or replaced there, or another part shown).
+    let playing = current_take(s).is_some_and(|p| super::playbar::playing(s, &p));
+    if playing != s.record.playing {
+        s.record.playing = playing;
+        changed = true;
+    }
 
     // follow the header's voice
     if s.shell.active_voice != s.record.voice_id && !s.record.creating_voice && s.record.active.is_none() {
@@ -1055,9 +1061,4 @@ pub fn settle(s: &mut AppState) -> bool {
         shell::refresh_voices(s);
     }
     changed
-}
-
-/// The player ran dry: the take that was playing has ended.
-pub fn on_playback_end(s: &mut AppState) -> bool {
-    std::mem::replace(&mut s.record.playing, false)
 }

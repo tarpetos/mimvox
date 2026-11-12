@@ -3,8 +3,8 @@
 //! The root also owns the two long-lived backends: the engine process client and the audio player.
 //! Both are `Option`s: `None` until the shell has started them (and for good if they cannot start,
 //! e.g. no engine installed or no audio device), so every screen must cope with `None` and show a
-//! friendly state instead of failing. Use the guarded helpers in `ui::shell` (`request`, `play`,
-//! `enqueue`, `stop_audio`) rather than touching them directly.
+//! friendly state instead of failing. Use the guarded helpers (`ui::shell::request`, `ui::playbar::play` and
+//! friends, `ui::shell::stop_audio`) rather than touching them directly.
 
 use crate::audio::Player;
 use crate::engine::EngineClient;
@@ -44,6 +44,10 @@ pub struct AppState {
     pub relocate: RelocateState,
     /// The shared language picker (see `ui::lang`).
     pub langpick: crate::ui::lang::PickerState,
+    /// What the shared player bar shows (see `ui::playbar`).
+    pub playbar: crate::ui::playbar::PlaybarState,
+    /// Deleting saved results (see `ui::trash`).
+    pub trash: crate::ui::trash::TrashState,
 }
 
 impl Default for AppState {
@@ -66,6 +70,8 @@ impl Default for AppState {
             formats: FormatsState::default(),
             relocate: RelocateState::default(),
             langpick: Default::default(),
+            playbar: Default::default(),
+            trash: Default::default(),
         }
     }
 }

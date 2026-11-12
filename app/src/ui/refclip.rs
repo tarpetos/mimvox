@@ -29,6 +29,7 @@ use crate::engine::EngineMsg;
 use crate::state::{AppState, Screen};
 use crate::ui::components::{Button, Tone, accent_glass, glass_card, icon_el, icons, level_meter};
 use crate::ui::lang;
+use crate::ui::playbar;
 use crate::ui::shell::{self, VoiceInfo};
 use crate::ui::theme::{Palette, motion, radius, ty};
 use crate::ui::voices::kit::{self, BtnKind};
@@ -171,8 +172,6 @@ pub struct RefState {
     pub loading: bool,
     pub applying: bool,
     pub open: bool,
-    /// Preview file that is playing.
-    pub playing: Option<String>,
     pub error: Option<String>,
     /// A language reference being added (record / import, check, save).
     pub adding: Option<LangRef>,
@@ -211,23 +210,32 @@ fn toggle_open(s: &mut AppState) {
     s.voices.refclip.error = None;
 }
 
+/// Stops a clip preview started on this screen (the player bar plays something else on).
 pub(super) fn stop_preview(s: &mut AppState) {
-    if s.voices.refclip.playing.take().is_some() {
-        shell::stop_audio(s);
+    playbar::stop_from(s, playbar::Source::Voices);
+}
+
+/// Whether the preview `path` is playing (its button shows "pause").
+pub(super) fn previewing(s: &AppState, path: &str) -> bool {
+    playbar::playing(s, Path::new(path))
+}
+
+/// What the player bar calls a preview: the candidate's place, a language's clip, a fresh take.
+fn preview_title(s: &AppState, path: &str) -> String {
+    if let Some(c) = s.voices.refclip.candidates.iter().find(|c| c.preview_path == path) {
+        return where_line(c);
     }
+    if let Some(code) = Path::new(path).file_stem().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("reference_")) {
+        return format!("{} reference", lang::label(code));
+    }
+    "Reference clip".to_owned()
 }
 
 fn toggle_play(s: &mut AppState, path: &str) {
-    if s.voices.refclip.playing.as_deref() == Some(path) {
-        stop_preview(s);
-        return;
-    }
-    match shell::play(s, Path::new(path)) {
-        Ok(()) => s.voices.refclip.playing = Some(path.to_owned()),
-        Err(e) => {
-            s.voices.refclip.playing = None;
-            shell::toast(s, Tone::Danger, e);
-        }
+    let title = preview_title(s, path);
+    let what = shell::active_voice(s).map(|v| format!("Voices · {}", v.name)).unwrap_or_else(|| "Voices".to_owned());
+    if let Err(e) = playbar::toggle(s, Path::new(path), title, what, playbar::Source::Voices) {
+        shell::toast(s, Tone::Danger, e);
     }
 }
 
@@ -561,8 +569,8 @@ pub fn settle(s: &mut AppState) -> bool {
     }
     changed |= super::refmedia::settle(s);
     if s.screen != Screen::Voices {
-        if s.voices.refclip.open || s.voices.refclip.playing.is_some() {
-            stop_preview(s);
+        // A preview keeps playing in the player bar.
+        if s.voices.refclip.open {
             s.voices.refclip.open = false;
             changed = true;
         }
@@ -596,11 +604,6 @@ pub fn settle(s: &mut AppState) -> bool {
         }
     }
     changed
-}
-
-/// The player ran dry: the preview that was playing has ended.
-pub fn on_playback_end(s: &mut AppState) -> bool {
-    s.voices.refclip.playing.take().is_some()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -649,15 +652,15 @@ fn where_line(c: &Clip) -> String {
 }
 
 pub(super) fn play_button(p: &Palette, key: String, path: String, on: bool) -> El {
-    let b = el().key(key).role("button").label(if on { "Stop" } else { "Play" }).size(36.0, 36.0).radius(18.0).center()
+    let b = el().key(key).role("button").label(if on { "Pause" } else { "Play" }).size(36.0, 36.0).radius(18.0).center()
         .hover(rune::Color::WHITE.alpha(0.1)).focusable(true).motion(motion::UI)
         .on_press(move |s: &mut AppState| toggle_play(s, &path))
-        .child(icon_el(if on { &icons::STOP } else { &icons::PLAY }, 15.0, p.on_accent));
+        .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 15.0, p.on_accent));
     accent_glass(*p, b)
 }
 
 fn clip_row(s: &AppState, p: &Palette, key: &str, c: &Clip, action: Option<El>) -> El {
-    let on = s.voices.refclip.playing.as_deref() == Some(c.preview_path.as_str());
+    let on = previewing(s, &c.preview_path);
     let mut badges = row().gap(8.0).center_y().flex_wrap().child(pace_badge(p, c));
     if c.recommended {
         badges = badges.child(kit::badge(p, "Recommended", Tone::Accent));
@@ -698,14 +701,14 @@ fn languages_block(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
         let mut pills = row().w_full().gap(8.0).flex_wrap();
         for code in &info.references {
             let path = ref_path(s, &info.id, code).to_string_lossy().into_owned();
-            let on = r.playing.as_deref() == Some(path.as_str());
+            let on = previewing(s, &path);
             let (pp, rc) = (path.clone(), code.clone());
             pills = pills.child(
                 row().key(format!("refclip-lang-{code}")).h(32.0).pl(4.0).pr(4.0).gap(6.0).center_y().radius(16.0).fill(p.glass).border(1.0, p.rim_top)
-                    .child(el().key(format!("refclip-lang-play-{code}")).role("button").label(if on { "Stop" } else { "Play" }).size(24.0, 24.0).radius(12.0).center()
+                    .child(el().key(format!("refclip-lang-play-{code}")).role("button").label(if on { "Pause" } else { "Play" }).size(24.0, 24.0).radius(12.0).center()
                         .fill(p.accent.alpha(0.25)).hover(p.accent.alpha(0.4)).focusable(true)
                         .on_press(move |s: &mut AppState| toggle_play(s, &pp))
-                        .child(icon_el(if on { &icons::STOP } else { &icons::PLAY }, 11.0, p.text)))
+                        .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 11.0, p.text)))
                     .child(text(lang::label(code)).font(ty::LABEL).color(p.text))
                     .child(el().key(format!("refclip-lang-del-{code}")).role("button").label("Remove").help("Remove this reference").size(24.0, 24.0).radius(12.0).center()
                         .hover(p.glass_hover).focusable(true)
@@ -761,7 +764,7 @@ fn adding_panel(s: &AppState, p: &Palette, a: &LangRef) -> El {
         }
         AddPhase::Checked => {
             let take = a.take.as_ref().map(|t| t.to_string_lossy().into_owned()).unwrap_or_default();
-            let on = s.voices.refclip.playing.as_deref() == Some(take.as_str());
+            let on = previewing(s, &take);
             let mut line = row().w_full().gap(10.0).center_y()
                 .child(play_button(p, "refadd-play".into(), take, on))
                 .child(verdict_badge(p, a.verdict.as_deref()))
@@ -980,7 +983,7 @@ pub(super) fn scene_demo_media(s: &mut AppState) {
 fn scene_choose(s: &mut AppState) {
     demo(s);
     s.voices.refclip.open = true;
-    s.voices.refclip.playing = Some("/tmp/demo/part3.wav".into());
+    playbar::scene_now(s, "/tmp/demo/part3.wav", "Part 3 · The lighthouse keeper", "Voices · My voice", playbar::Source::Voices, playbar::Status::Playing, 6.0, 19.0);
 }
 
 fn scene_choose_busy(s: &mut AppState) {

@@ -810,8 +810,9 @@ pub struct Toast {
     pub expires: f64,
 }
 
-/// The toast column, pinned bottom-centre. The shell draws it once; screens only push toasts.
-pub fn toast_stack(p: Palette, toasts: &[Toast]) -> El {
+/// The toast column, pinned bottom-centre, `bottom` points above the window's bottom edge (above the player bar
+/// while it shows). The shell draws it once; screens only push toasts.
+pub fn toast_stack(p: Palette, toasts: &[Toast], bottom: f32) -> El {
     let items = toasts.iter().map(|t| {
         let id = t.id;
         // Long messages wrap onto more lines inside a bounded card instead of being cut off. The width follows the
@@ -835,7 +836,7 @@ pub fn toast_stack(p: Palette, toasts: &[Toast]) -> El {
             .child(status_dot(p, t.tone, false))
             .child(text(t.text.clone()).font(ty::LABEL).color(p.text).wrap().grow(1.0).min_w(0.0))
     });
-    col().key("toasts").pin(Some(0.0), None, Some(0.0), Some(26.0)).items_center().gap(10.0).inert_if_empty(toasts.is_empty()).children(items)
+    col().key("toasts").pin(Some(0.0), None, Some(0.0), Some(bottom)).items_center().gap(10.0).inert_if_empty(toasts.is_empty()).children(items)
 }
 
 trait InertIfEmpty {

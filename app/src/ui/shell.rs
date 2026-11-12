@@ -14,13 +14,14 @@
 //!   header's voice) and return true when that changed what the screen shows. It must only look at `AppState`:
 //!   no I/O to find out whether something happened (that is an event), and no timing.
 //! * Background work (a dialog, a disk probe, a subprocess) runs on its own thread and reports with
-//!   `events::post(|s| ...)`; audio reaches screens through `on_playback_end` and the recorder's meter events.
+//!   `events::post(|s| ...)`; playback state lives in `ui::playbar` (screens read [`super::playbar::playing`]), the
+//!   recorder reports through its meter events.
 //! * A clock that must tick while a job runs (elapsed time) is a deadline: return the job's start time from the
 //!   screen's `clock_origin`, and [`settle`] arms a timer for the next whole second while the screen shows it.
 //!
 //! The shell owns the engine and the player. Never call `EngineClient`/`Player` methods directly: use the guarded
-//! helpers [`request`], [`play`], [`enqueue`], [`stop_audio`], which never panic and return `None`/`Err` with a
-//! friendly message when a backend is unavailable.
+//! helpers [`request`], `playbar::play` / `toggle` / `play_live` / `enqueue` and [`stop_audio`], which never panic
+//! and return `None`/`Err` with a friendly message when a backend is unavailable.
 //!
 //! Screens return a *transparent* element that fills the body (`.w_full().h_full()`); the shell paints the
 //! background and header.
@@ -34,7 +35,7 @@ use crate::state::{AppState, Screen};
 use rune::{Align, ChromeInsets, Color, Cx, El, Side, Tx, col, el, row, text};
 use serde_json::{Value, json};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub use super::components::Toast;
@@ -310,27 +311,9 @@ pub fn set_screen(s: &mut AppState, screen: Screen) {
     s.shell.voice_menu_open = false;
 }
 
-/// Stops what plays and plays `path`. `Err` carries a friendly message.
-pub fn play(s: &AppState, path: &Path) -> Result<(), String> {
-    let p = s.player.as_ref().ok_or_else(|| audio_unavailable(s))?;
-    guard(|| p.play(path)).map_err(|_| "Audio playback is not available.".to_owned())?.map_err(|e| format!("Could not play audio: {e}"))
-}
-
-/// Appends `path` to the playback queue (streaming chunks).
-pub fn enqueue(s: &AppState, path: &Path) -> Result<(), String> {
-    let p = s.player.as_ref().ok_or_else(|| audio_unavailable(s))?;
-    guard(|| p.enqueue(path)).map_err(|_| "Audio playback is not available.".to_owned())?.map_err(|e| format!("Could not play audio: {e}"))
-}
-
-pub fn stop_audio(s: &AppState) {
-    if let Some(p) = &s.player {
-        let _ = guard(|| p.stop());
-    }
-}
-
-/// Whether the player is currently making sound (its queue holds audio). A state query for event handlers.
-pub fn is_playing(s: &AppState) -> bool {
-    s.player.as_ref().is_some_and(|p| guard(|| p.is_playing()).unwrap_or(false))
+/// Stops whatever plays and hides the player bar.
+pub fn stop_audio(s: &mut AppState) {
+    super::playbar::stop(s);
 }
 
 pub fn audio_unavailable(s: &AppState) -> String {
@@ -369,8 +352,7 @@ fn start_audio(s: &mut AppState) {
     if s.player.is_some() {
         return;
     }
-    let drained: crate::audio::DrainSink = std::sync::Arc::new(|| super::events::post_if(on_playback_end));
-    match guard(|| Player::new(Some(drained))) {
+    match guard(|| Player::new(Some(super::playbar::sink()))) {
         Ok(Ok(p)) => s.player = Some(p),
         Ok(Err(e)) => s.shell.audio_error = Some(format!("No audio output: {e}")),
         Err(_) => s.shell.audio_error = Some("Audio is not available in this build.".into()),
@@ -488,19 +470,7 @@ fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     super::speak::on_engine(s, &m);
     super::redub::on_engine(s, &m);
     super::formats::on_engine(s, &m);
-}
-
-/// The player's queue played out (event from the audio thread). Whatever was shown as playing has ended, unless
-/// something was queued again since.
-fn on_playback_end(s: &mut AppState) -> bool {
-    if is_playing(s) {
-        return false;
-    }
-    let mut changed = super::record::on_playback_end(s);
-    changed |= super::speak::on_playback_end(s);
-    changed |= super::redub::on_playback_end(s);
-    changed |= super::refclip::on_playback_end(s);
-    changed
+    super::trash::on_engine(s, &m);
 }
 
 /// The shell's own share of engine messages: engine status, the voice list and voice warm-up.
@@ -662,8 +632,11 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         body = body.child(b);
     }
     body = body.child(col().key(format!("screen-{:?}", s.screen)).w_full().grow(1.0).min_h(0.0).child(page));
+    // The player bar docks under the screen (the screen gets shorter), so it never covers a screen's controls.
+    let dock = super::playbar::view(s, p);
+    let toasts_at = if dock.is_some() { super::playbar::DOCK_H + 14.0 } else { 26.0 };
     let mut root = el().key("root").w_full().h_full().fill(p.bg_top).child(background(p)).child(
-        col().key("chrome").w_full().h_full().child(header(s, p, insets, fit)).child(body),
+        col().key("chrome").w_full().h_full().child(header(s, p, insets, fit)).child(body).children(dock),
     );
     if s.shell.voice_menu_open {
         root = root.child(voice_menu(s, p));
@@ -683,7 +656,10 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if let Some(menu) = super::lang::overlay(s, &p) {
         root = root.child(menu);
     }
-    super::formats::window_drops(root, s).child(toast_stack(p, &s.shell.toasts))
+    if let Some(menu) = super::playbar::overlay(s, p) {
+        root = root.child(menu);
+    }
+    super::formats::window_drops(root, s).child(toast_stack(p, &s.shell.toasts, toasts_at))
 }
 
 /// The active screen's element (used when the banner pushes it down).

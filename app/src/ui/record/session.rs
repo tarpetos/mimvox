@@ -130,7 +130,7 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
             )),
         )
         .child(el().grow(1.0))
-        .child(button(p, "play", if r.playing { "Stop playing" } else { "Play take" }, BtnKind::Secondary, can_nav && take.path.is_some(), |s: &mut AppState| {
+        .child(button(p, "play", if r.playing { "Pause take" } else { "Play take" }, BtnKind::Secondary, can_nav && take.path.is_some(), |s: &mut AppState| {
             crate::ui::record::toggle_play(s)
         }))
         .child(button(p, "next", "Next", BtnKind::Secondary, can_nav && r.current + 1 < n, |s: &mut AppState| {

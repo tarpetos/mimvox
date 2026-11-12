@@ -481,7 +481,7 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
     if let Some(o) = st.outcome.as_ref().filter(|_| mine) {
         let mut res = row().key("refmedia-done").w_full().gap(10.0).center_y();
         if let Some(path) = o.preview_path.clone().filter(|_| o.applied) {
-            let on = s.voices.refclip.playing.as_deref() == Some(path.as_str());
+            let on = super::refclip::previewing(s, &path);
             res = res.child(super::refclip::play_button(p, "refmedia-play".into(), path, on));
         }
         res = res

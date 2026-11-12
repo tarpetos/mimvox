@@ -31,7 +31,9 @@ use super::components::{
     segmented_fill, segmented_help, status_dot,
 };
 use super::lang;
+use super::playbar;
 use super::shell::{self, EngineStatus, VoiceInfo};
+use super::trash;
 use super::theme::{self, Palette, motion, ty};
 use crate::engine::protocol::{self, EngineEvent, NativeVoice, Quality, TtsChunk, TtsStarted};
 use crate::engine::EngineMsg;
@@ -158,15 +160,6 @@ enum Gen {
     Active(Active),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum Playing {
-    #[default]
-    Nothing,
-    /// Streaming chunks of the current generation.
-    Live,
-    Take(u64),
-}
-
 pub struct SpeakState {
     pub text: TextEdit,
     /// 0.4..=1.0, maps to OmniVoice's sampling temperatures.
@@ -190,7 +183,6 @@ pub struct SpeakState {
     accent_dirty: bool,
     gen_: Gen,
     pub takes: Vec<Take>,
-    playing: Playing,
     next_take: u64,
 }
 
@@ -213,7 +205,6 @@ impl Default for SpeakState {
             accent_dirty: false,
             gen_: Gen::Idle,
             takes: Vec::new(),
-            playing: Playing::Nothing,
             next_take: 0,
         }
     }
@@ -341,7 +332,6 @@ pub fn generate(s: &mut AppState) {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
         return;
     };
-    s.speak.playing = Playing::Nothing;
     let mut a = Active::new(req, shell::clock_now(s), text, voice.name);
     (a.voice_id, a.lang) = (voice.id, lang);
     s.speak.gen_ = Gen::Active(a);
@@ -364,21 +354,20 @@ pub fn cancel(s: &mut AppState) {
     }
     shell::stop_audio(s);
     s.speak.gen_ = Gen::Idle;
-    s.speak.playing = Playing::Nothing;
 }
 
-fn play_take(s: &mut AppState, id: u64) {
+/// A take's play button: play it, or pause / resume it in the player bar.
+fn toggle_take(s: &mut AppState, id: u64) {
     let Some(t) = s.speak.takes.iter().find(|t| t.id == id) else { return };
-    let path = t.play.clone();
-    match shell::play(s, &path) {
-        Ok(()) => s.speak.playing = Playing::Take(id),
-        Err(e) => shell::toast(s, Tone::Danger, e),
+    let (path, title) = (t.play.clone(), one_line(&t.text));
+    if let Err(e) = playbar::toggle(s, &path, title, "Speak · result", playbar::Source::Speak) {
+        shell::toast(s, Tone::Danger, e);
     }
 }
 
-fn stop_play(s: &mut AppState) {
-    shell::stop_audio(s);
-    s.speak.playing = Playing::Nothing;
+/// The engine deleted a take's files (`ui::trash`): drop it from the list.
+pub fn remove_take(s: &mut AppState, id: u64) {
+    s.speak.takes.retain(|t| t.id != id);
 }
 
 /// A rough segment count: sentences packed up to ~120 tokens (about 4 characters each).
@@ -452,6 +441,8 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     duration_s: done.duration_s,
                     elapsed_s: if ev.data.get("elapsed_s").is_some() { done.elapsed_s } else { (s.shell.now - a.started) as f32 },
                 };
+                // What streamed is this take now: the player bar names it and its card shows it playing.
+                playbar::finish_live(s, Some((&take.play, one_line(&take.text))));
                 s.speak.takes.insert(0, take);
                 s.speak.takes.truncate(50);
                 s.speak.gen_ = Gen::Idle;
@@ -462,10 +453,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                         shell::toast(s, Tone::Warning, n);
                     }
                 }
-                // Everything may have played already (the queue ran dry before the job ended).
-                if s.speak.playing == Playing::Live && !shell::is_playing(s) {
-                    s.speak.playing = Playing::Nothing;
-                }
             }
             EngineEvent::TtsError { error, .. } => {
                 if error.code != "cancelled" {
@@ -473,13 +460,14 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     shell::toast(s, Tone::Danger, text);
                 }
                 s.speak.gen_ = Gen::Idle;
-                s.speak.playing = Playing::Nothing;
+                // What arrived can still be played to its end.
+                playbar::finish_live(s, None);
             }
             _ => {}
         },
         EngineMsg::Exited { .. } => {
             s.speak.gen_ = Gen::Idle;
-            s.speak.playing = Playing::Nothing;
+            playbar::finish_live(s, None);
         }
         _ => {}
     }
@@ -515,12 +503,9 @@ fn on_chunk(s: &mut AppState, mut a: Active, chunk: TtsChunk) {
 fn release(s: &mut AppState, a: &mut Active) {
     for path in std::mem::take(&mut a.held) {
         let first = !a.began;
-        let r = if first { shell::play(s, &path) } else { shell::enqueue(s, &path) };
+        let r = if first { playbar::play_live(s, &path, one_line(&a.text)) } else { playbar::enqueue(s, &path) };
         match r {
-            Ok(()) => {
-                a.began = true;
-                s.speak.playing = Playing::Live;
-            }
+            Ok(()) => a.began = true,
             Err(e) if first => {
                 a.began = true;
                 shell::toast(s, Tone::Warning, e);
@@ -572,15 +557,6 @@ pub fn settle(s: &mut AppState) -> bool {
         }
     }
     changed
-}
-
-/// The player ran dry: a take ended, or the live stream did (unless the job is still making more).
-pub fn on_playback_end(s: &mut AppState) -> bool {
-    if s.speak.playing == Playing::Nothing || s.speak.is_generating() {
-        return false;
-    }
-    s.speak.playing = Playing::Nothing;
-    true
 }
 
 /// The start of the running generation (its elapsed time ticks on the Speak screen).
@@ -963,11 +939,11 @@ fn one_line(text: &str) -> String {
 
 fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
     let id = t.id;
-    let on = s.speak.playing == Playing::Take(id);
-    let play = el().key(format!("play{id}")).role("button").label(if on { "Stop" } else { "Play" }).size(36.0, 36.0).radius(18.0).center()
+    let on = playbar::playing(s, &t.play);
+    let play = el().key(format!("play{id}")).role("button").label(if on { "Pause" } else { "Play" }).size(36.0, 36.0).radius(18.0).center()
         .hover(rune::Color::WHITE.alpha(0.1)).focusable(true).motion(motion::UI)
-        .on_press(move |s: &mut AppState| if s.speak.playing == Playing::Take(id) { stop_play(s) } else { play_take(s, id) })
-        .child(icon_el(if on { &icons::STOP } else { &icons::PLAY }, 15.0, p.on_accent));
+        .on_press(move |s: &mut AppState| toggle_take(s, id))
+        .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 15.0, p.on_accent));
     let play = accent_glass(p, play);
     let path = t.path.clone();
     let path2 = t.path.clone();
@@ -989,7 +965,11 @@ fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
             .child(col().grow(1.0).min_w(0.0).gap(1.0)
                 .child(text(one_line(&t.text)).font(ty::LABEL).color(p.text).truncate())
                 .child(text(meta).font(ty::CAPTION).color(p.text_faint))))
-        .child(row().w_full().gap(8.0).center_y().child(export).child(reveal).child(open))
+        .child(if trash::confirming(s, trash::Kind::Speak, id) {
+            trash::confirm_row(s, p, trash::Kind::Speak, id, &t.path, &t.play)
+        } else {
+            row().w_full().gap(8.0).center_y().child(export).child(reveal).child(open).child(trash::button(p, trash::Kind::Speak, id))
+        })
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1108,7 +1088,7 @@ pub fn scene_generating(s: &mut AppState) {
     (a.chunks, a.total, a.exact, a.audible, a.began, a.audio_s) = (1, 3, true, true, true, 9.0);
     a.seg_chars = vec![80, 70, 60];
     s.speak.gen_ = Gen::Active(a);
-    s.speak.playing = Playing::Live;
+    super::playbar::scene_live(s, &one_line(SAMPLE), 3.4, 9.0);
 }
 
 /// A long job whose first segments are held back for a smooth start.
@@ -1136,6 +1116,15 @@ pub fn scene_done(s: &mut AppState) {
     demo_voice(s, true);
     s.speak.text = TextEdit::new(SAMPLE);
     demo_takes(s);
+}
+
+/// "Delete this result?" on the second take, while the first one plays in the player bar.
+pub fn scene_trash_confirm(s: &mut AppState) {
+    scene_done(s);
+    trash::scene_confirm(s, trash::Kind::Speak, 2);
+    let t = &s.speak.takes[0];
+    let (path, title) = (t.play.to_string_lossy().into_owned(), one_line(&t.text));
+    playbar::scene_now(s, &path, &title, "Speak · result", playbar::Source::Speak, playbar::Status::Playing, 4.0, 14.2);
 }
 
 /// A long warning toast wraps instead of being cut off.

@@ -553,3 +553,48 @@ def save_result(data: config.DataDir, track: np.ndarray, sr: int, prefix: str, f
         shutil.copyfile(play, path)
         return {"path": path, "path_play": play, "format": "wav"}
     return {"path": path, "path_play": play, "format": fmt}
+
+
+def _inside(path: str, folder: str) -> bool:
+    """``path`` (already resolved) lies inside ``folder`` (resolved here), not ``folder`` itself."""
+    root = os.path.normcase(os.path.realpath(folder))
+    p = os.path.normcase(path)
+    try:
+        return p != root and os.path.commonpath([p, root]) == root
+    except ValueError:  # another drive (Windows)
+        return False
+
+
+def delete_outputs(data: config.DataDir, paths: list[Any]) -> dict[str, Any]:
+    """Delete saved results: files in ``<data>/outputs`` and playback WAVs in ``<data>/tmp/play`` only. Every path is
+    checked before anything is deleted (absolute, resolved through symlinks, a file inside one of those folders); one
+    that is not refuses the whole request with ``bad_request``. A file already gone is not an error."""
+    allowed = (data.outputs, os.path.join(data.tmp, PLAY_DIR))
+    checked: list[str] = []
+    for p in paths:
+        if not isinstance(p, str) or not p or not os.path.isabs(p):
+            raise EngineError("bad_request", "'path' must be an absolute file path")
+        real = os.path.realpath(p)
+        if not any(_inside(real, d) for d in allowed):
+            raise EngineError("bad_request", "only results in the outputs folder (and their playback WAVs) can be deleted")
+        if os.path.isdir(real):
+            raise EngineError("bad_request", "'path' must be a file, not a folder")
+        checked.append(real)
+    deleted: list[str] = []
+    for real in dict.fromkeys(checked):
+        try:
+            os.remove(real)
+            deleted.append(real)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise EngineError("internal", f"Could not delete {os.path.basename(real)}: {exc.strerror or exc}") from exc
+    return {"deleted": deleted}
+
+
+@method("outputs.delete")
+def outputs_delete(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    paths = [params.get("path")]
+    if params.get("path_play") not in (None, ""):
+        paths.append(params.get("path_play"))
+    return delete_outputs(config.data_dir(ctx), paths)

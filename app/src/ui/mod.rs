@@ -12,6 +12,7 @@ pub mod events;
 pub mod formats;
 pub mod lang;
 pub mod onboarding;
+pub mod playbar;
 pub mod record;
 pub mod refclip;
 pub mod refmedia;
@@ -22,6 +23,7 @@ pub mod speak;
 pub mod stats;
 pub mod theme;
 pub mod train;
+pub mod trash;
 pub mod voices;
 
 use crate::state::AppState;
@@ -68,6 +70,7 @@ pub const SCENES: &[(&str, fn(&mut AppState))] = &[
     ("speak_buffering", speak::scene_buffering),
     ("speak_preparing", speak::scene_preparing),
     ("speak_done", speak::scene_done),
+    ("speak_trash_confirm", speak::scene_trash_confirm),
     ("speak_toast_long", speak::scene_toast_long),
     ("speak_export_menu", speak::scene_export_menu),
     ("speak_output_menu", speak::scene_output_menu),
@@ -93,6 +96,7 @@ pub fn all_scenes() -> &'static [Scene] {
         all.extend_from_slice(refmedia::scenes());
         all.extend_from_slice(train::scenes());
         all.extend_from_slice(redub::scenes());
+        all.extend_from_slice(playbar::scenes());
         all
     })
 }

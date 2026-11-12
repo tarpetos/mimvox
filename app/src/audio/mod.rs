@@ -1,6 +1,7 @@
 //! Microphone capture and playback (cpal + hound). Event-driven, never blocks the UI thread: the capture callback
-//! reports the input level at a capped rate ([`METER_HZ`]) to a [`MeterSink`], the playback callback reports when the
-//! queue runs dry to a [`DrainSink`]. Nothing has to be polled.
+//! reports the input level at a capped rate ([`METER_HZ`]) to a [`MeterSink`], the playback callback reports the
+//! position at a capped rate ([`PROGRESS_HZ`], only while sound plays) and the end of a track to a [`PlaySink`].
+//! Nothing has to be polled. Playback speed keeps the pitch (WSOLA time-stretch, see [`stretch`]).
 //!
 //! cpal streams are not `Send`, so each `Recorder` / `Player` owns a small worker thread that creates and holds the
 //! stream; the public handles only share atomics and short-lived mutexes with it (so they are `Send + Sync`).
@@ -8,7 +9,6 @@
 
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -18,6 +18,9 @@ use std::thread::{self, JoinHandle};
 use anyhow::{Context, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
+
+pub mod stretch;
+use stretch::{Flow, Stretcher};
 
 pub struct RecInfo {
     pub path: PathBuf,
@@ -101,8 +104,21 @@ pub enum CaptureEvent {
 /// Receives [`CaptureEvent`]s on the audio thread: keep it short (hand the value on, see `ui::events::Latest`).
 pub type MeterSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
 
-/// Called on the audio thread when the playback queue has played out (it held audio and is now empty).
-pub type DrainSink = Arc<dyn Fn() + Send + Sync>;
+/// Position reports per second while a track plays (the player bar's redraw rate). None while paused or stopped.
+pub const PROGRESS_HZ: u32 = 20;
+
+/// What the player reports, from the audio thread. `track` is the id [`Player::play`] returned: a report about a
+/// track that was replaced meanwhile can still arrive and must be ignored.
+#[derive(Clone, Copy, Debug)]
+pub enum PlayEvent {
+    /// About [`PROGRESS_HZ`] times a second while the position moves: seconds played and the track's length.
+    Progress { track: u64, pos_s: f32, len_s: f32 },
+    /// The track played to its end (not looping).
+    Ended { track: u64 },
+}
+
+/// Receives [`PlayEvent`]s on the audio thread: keep it short (hand the value on, see `ui::events`).
+pub type PlaySink = Arc<dyn Fn(PlayEvent) + Send + Sync>;
 
 struct RecShared {
     /// Mono samples at the device rate.
@@ -369,38 +385,29 @@ pub fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
 // Player
 // ---------------------------------------------------------------------------------------------------------------
 
-#[derive(Default)]
-struct Queue {
-    chunks: VecDeque<Vec<f32>>,
-    pos: usize,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum State {
+    Idle,
+    Playing,
+    Paused,
+    Ended,
 }
 
-impl Queue {
-    fn next_sample(&mut self) -> Option<f32> {
-        let front = self.chunks.front()?;
-        let s = front[self.pos];
-        self.pos += 1;
-        if self.pos >= front.len() {
-            self.chunks.pop_front();
-            self.pos = 0;
-        }
-        Some(s)
-    }
-
-    fn remaining(&self) -> usize {
-        self.chunks.iter().map(Vec::len).sum::<usize>().saturating_sub(self.pos)
-    }
-
-    fn clear(&mut self) {
-        self.chunks.clear();
-        self.pos = 0;
-    }
+/// The loaded track: mono samples at the device rate, read by the stretcher.
+struct Track {
+    id: u64,
+    samples: Vec<f32>,
+    state: State,
+    /// Still growing (Speak's streaming playback): reaching the end waits for more instead of ending.
+    live: bool,
+    looped: bool,
+    speed: f32,
+    stretch: Stretcher,
 }
 
 struct PlayShared {
-    queue: Mutex<Queue>,
-    /// Frames played since the last `play()` / `stop()`.
-    played: AtomicU64,
+    track: Mutex<Track>,
+    next_id: AtomicU64,
     error: Mutex<Option<String>>,
 }
 
@@ -412,44 +419,84 @@ pub struct Player {
     thread: Option<JoinHandle<()>>,
 }
 
+/// Renders `out.len()` mono samples of the track. Returns whether it reached its end (not looping) this time.
+fn render(t: &mut Track, out: &mut [f32]) -> bool {
+    let mut filled = 0;
+    if t.state == State::Playing {
+        loop {
+            let (n, flow) = t.stretch.process(&t.samples, t.speed, !t.live, &mut out[filled..]);
+            filled += n;
+            match flow {
+                Flow::Full | Flow::Starved => break,
+                Flow::End if t.looped && !t.samples.is_empty() => t.stretch.reset(0.0),
+                Flow::End => {
+                    t.state = State::Ended;
+                    out[filled..].iter_mut().for_each(|v| *v = 0.0);
+                    return true;
+                }
+            }
+        }
+    }
+    out[filled..].iter_mut().for_each(|v| *v = 0.0);
+    false
+}
+
 fn build_output<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     shared: Arc<PlayShared>,
-    drained: Option<DrainSink>,
+    sink: Option<PlaySink>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
     T: SizedSample + FromSample<f32>,
 {
     let channels = config.channels.max(1) as usize;
+    let rate = config.sample_rate.0.max(1);
     let err_shared = shared.clone();
+    let mut mono: Vec<f32> = Vec::new();
+    // Progress reports, counted in output samples (the audio clock), only when the position moved.
+    let every = (rate / PROGRESS_HZ).max(1) as usize;
+    let (mut since, mut last_pos) = (0usize, f64::NAN);
     device.build_output_stream(
         config,
         move |data: &mut [T], _| {
-            let mut q = lock(&shared.queue);
-            let had_audio = !q.chunks.is_empty();
-            let mut consumed = 0u64;
-            for frame in data.chunks_mut(channels) {
-                let s = match q.next_sample() {
-                    Some(s) => {
-                        consumed += 1;
-                        s
+            let frames = data.len() / channels;
+            if mono.len() < frames {
+                mono.resize(frames, 0.0);
+            }
+            let mut report = None;
+            let mut ended = None;
+            {
+                let mut t = lock(&shared.track);
+                let playing = t.state == State::Playing;
+                if render(&mut t, &mut mono[..frames]) {
+                    ended = Some(t.id);
+                    since = 0;
+                } else if playing {
+                    since += frames;
+                    if since >= every {
+                        since = 0;
+                        let pos = t.stretch.position().min(t.samples.len() as f64);
+                        if pos != last_pos {
+                            last_pos = pos;
+                            report = Some((t.id, (pos / rate as f64) as f32, t.samples.len() as f32 / rate as f32));
+                        }
                     }
-                    None => 0.0,
-                };
-                let v = <T as FromSample<f32>>::from_sample_(s);
+                }
+            }
+            for (frame, s) in data.chunks_mut(channels).zip(&mono[..frames]) {
+                let v = <T as FromSample<f32>>::from_sample_(*s);
                 for o in frame {
                     *o = v;
                 }
             }
-            let ran_dry = had_audio && q.chunks.is_empty();
-            drop(q);
-            if consumed > 0 {
-                shared.played.fetch_add(consumed, Ordering::Relaxed);
-            }
-            if ran_dry {
-                if let Some(sink) = &drained {
-                    sink();
+            if let Some(sink) = &sink {
+                if let Some((track, pos_s, len_s)) = report {
+                    sink(PlayEvent::Progress { track, pos_s, len_s });
+                }
+                if let Some(track) = ended {
+                    last_pos = f64::NAN;
+                    sink(PlayEvent::Ended { track });
                 }
             }
         },
@@ -461,11 +508,12 @@ where
 }
 
 impl Player {
-    /// Opens the default output. `drained` is told every time the queue plays out.
-    pub fn new(drained: Option<DrainSink>) -> anyhow::Result<Self> {
+    /// Opens the default output. `sink` hears the position while a track plays and when it ends.
+    pub fn new(sink: Option<PlaySink>) -> anyhow::Result<Self> {
         let shared = Arc::new(PlayShared {
-            queue: Mutex::new(Queue::default()),
-            played: AtomicU64::new(0),
+            // The real rate is only known once the device is open; the stretcher is rebuilt for it below.
+            track: Mutex::new(Track { id: 0, samples: Vec::new(), state: State::Idle, live: false, looped: false, speed: 1.0, stretch: Stretcher::new(48_000) }),
+            next_id: AtomicU64::new(1),
             error: Mutex::new(None),
         });
         let (init_tx, init_rx) = mpsc::channel::<Result<(u32, String), String>>();
@@ -484,16 +532,17 @@ impl Player {
                         .default_output_config()
                         .map_err(|e| anyhow!("cannot open the audio output \"{name}\": {e}"))?;
                     let rate = supported.sample_rate().0;
+                    lock(&thread_shared.track).stretch = Stretcher::new(rate);
                     let format = supported.sample_format();
                     let config: cpal::StreamConfig = supported.into();
                     let stream = match format {
-                        SampleFormat::F32 => build_output::<f32>(&dev, &config, thread_shared, drained),
-                        SampleFormat::I16 => build_output::<i16>(&dev, &config, thread_shared, drained),
-                        SampleFormat::U16 => build_output::<u16>(&dev, &config, thread_shared, drained),
-                        SampleFormat::I32 => build_output::<i32>(&dev, &config, thread_shared, drained),
-                        SampleFormat::I8 => build_output::<i8>(&dev, &config, thread_shared, drained),
-                        SampleFormat::U8 => build_output::<u8>(&dev, &config, thread_shared, drained),
-                        SampleFormat::F64 => build_output::<f64>(&dev, &config, thread_shared, drained),
+                        SampleFormat::F32 => build_output::<f32>(&dev, &config, thread_shared, sink),
+                        SampleFormat::I16 => build_output::<i16>(&dev, &config, thread_shared, sink),
+                        SampleFormat::U16 => build_output::<u16>(&dev, &config, thread_shared, sink),
+                        SampleFormat::I32 => build_output::<i32>(&dev, &config, thread_shared, sink),
+                        SampleFormat::I8 => build_output::<i8>(&dev, &config, thread_shared, sink),
+                        SampleFormat::U8 => build_output::<u8>(&dev, &config, thread_shared, sink),
+                        SampleFormat::F64 => build_output::<f64>(&dev, &config, thread_shared, sink),
                         other => return Err(anyhow!("unsupported output sample format {other:?}")),
                     }
                     .map_err(|e| anyhow!("cannot start playback on \"{name}\": {e}"))?;
@@ -527,24 +576,43 @@ impl Player {
         }
     }
 
-    /// Stops whatever plays and plays `path`.
-    pub fn play(&self, path: &Path) -> anyhow::Result<()> {
+    /// Stops whatever plays and plays `path` from the start (loop and speed stay as set). Returns the new track's
+    /// id (for [`PlayEvent`]s) and its length in seconds. `live`: more audio will be appended with [`Self::enqueue`]
+    /// (reaching the end waits for it, until [`Self::set_live`] `(false)`).
+    pub fn play(&self, path: &Path, live: bool) -> anyhow::Result<(u64, f32)> {
         let samples = self.load(path)?;
-        let mut q = lock(&self.shared.queue);
-        q.clear();
-        self.shared.played.store(0, Ordering::Relaxed);
-        q.chunks.push_back(samples);
-        Ok(())
+        let len_s = samples.len() as f32 / self.sample_rate as f32;
+        let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
+        let old = {
+            let mut t = lock(&self.shared.track);
+            t.id = id;
+            t.state = State::Playing;
+            t.live = live;
+            t.stretch.reset(0.0);
+            std::mem::replace(&mut t.samples, samples)
+        };
+        drop(old); // freed outside the lock
+        Ok((id, len_s))
     }
 
-    /// Appends `path` to the queue (gapless streaming of tts.chunk files).
-    pub fn enqueue(&self, path: &Path) -> anyhow::Result<()> {
+    /// Appends `path` to the live track (gapless streaming of tts.chunk files). Returns the track's new length in
+    /// seconds.
+    pub fn enqueue(&self, path: &Path) -> anyhow::Result<f32> {
         let samples = self.load(path)?;
-        lock(&self.shared.queue).chunks.push_back(samples);
-        Ok(())
+        let mut t = lock(&self.shared.track);
+        t.samples.extend_from_slice(&samples);
+        if t.state == State::Idle || t.state == State::Ended {
+            t.state = State::Playing;
+        }
+        Ok(t.samples.len() as f32 / self.sample_rate as f32)
     }
 
-    /// Decodes and resamples to the device rate before the queue lock is taken.
+    /// No more audio will be appended: the end of what is there is the end of the track.
+    pub fn set_live(&self, live: bool) {
+        lock(&self.shared.track).live = live;
+    }
+
+    /// Decodes and resamples to the device rate before the track lock is taken.
     fn load(&self, path: &Path) -> anyhow::Result<Vec<f32>> {
         let (mono, rate) = read_wav_mono(path)?;
         let out = resample_linear(&mono, rate, self.sample_rate);
@@ -554,23 +622,78 @@ impl Player {
         Ok(out)
     }
 
+    /// Drops the track: silence.
     pub fn stop(&self) {
-        lock(&self.shared.queue).clear();
-        self.shared.played.store(0, Ordering::Relaxed);
+        let old = {
+            let mut t = lock(&self.shared.track);
+            t.state = State::Idle;
+            t.live = false;
+            t.stretch.reset(0.0);
+            std::mem::take(&mut t.samples)
+        };
+        drop(old);
     }
 
+    pub fn pause(&self) {
+        let mut t = lock(&self.shared.track);
+        if t.state == State::Playing {
+            t.state = State::Paused;
+        }
+    }
+
+    /// Continues a paused track, or plays an ended one again from the start. False when nothing is loaded.
+    pub fn resume(&self) -> bool {
+        let mut t = lock(&self.shared.track);
+        match t.state {
+            State::Paused => t.state = State::Playing,
+            State::Ended => {
+                t.stretch.reset(0.0);
+                t.state = State::Playing;
+            }
+            State::Playing => {}
+            State::Idle => return false,
+        }
+        true
+    }
+
+    /// Jumps to `pos_s` seconds (clamped to the track). An ended track stays ended until [`Self::resume`], which
+    /// then plays from there.
+    pub fn seek(&self, pos_s: f32) {
+        let mut t = lock(&self.shared.track);
+        let pos = (f64::from(pos_s.max(0.0)) * self.sample_rate as f64).min(t.samples.len() as f64);
+        t.stretch.reset(pos);
+        if t.state == State::Ended {
+            t.state = State::Paused;
+        }
+    }
+
+    pub fn set_loop(&self, on: bool) {
+        lock(&self.shared.track).looped = on;
+    }
+
+    /// Playback speed, pitch kept (0.25..4; takes effect within one frame, about 16 ms).
+    pub fn set_speed(&self, speed: f32) {
+        lock(&self.shared.track).speed = speed.clamp(0.25, 4.0);
+    }
+
+    /// Sound is playing (a track is loaded, not paused, not at its end).
     pub fn is_playing(&self) -> bool {
-        !lock(&self.shared.queue).chunks.is_empty()
+        lock(&self.shared.track).state == State::Playing
     }
 
-    /// Seconds played since the last `play()` / `stop()` (keeps counting across enqueued chunks).
+    /// Seconds into the track.
     pub fn position_s(&self) -> f32 {
-        self.shared.played.load(Ordering::Relaxed) as f32 / self.sample_rate as f32
+        let t = lock(&self.shared.track);
+        (t.stretch.position().min(t.samples.len() as f64) / self.sample_rate as f64) as f32
     }
 
-    /// Seconds still queued.
-    pub fn queued_s(&self) -> f32 {
-        lock(&self.shared.queue).remaining() as f32 / self.sample_rate as f32
+    /// The track's length in seconds (what has arrived, for a live track).
+    pub fn duration_s(&self) -> f32 {
+        lock(&self.shared.track).samples.len() as f32 / self.sample_rate as f32
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 
     pub fn device_name(&self) -> &str {
