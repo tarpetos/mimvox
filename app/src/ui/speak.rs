@@ -702,7 +702,9 @@ fn language_row(s: &AppState, p: Palette) -> El {
 fn results_panel(s: &AppState, p: Palette) -> El {
     let head = (!s.speak.takes.is_empty()).then(|| badge(p, &format!("{}", s.speak.takes.len()), Tone::Neutral).pin(None, Some(22.0), Some(22.0), None));
     let body = if s.speak.takes.is_empty() {
-        col().w_full().grow(1.0).justify_center().child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here."))
+        // Scrolls like the list, so a short panel (a small window) clips the placeholder instead of letting it spill out.
+        col().key("takes-empty").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
+            .child(col().w_full().pt(24.0).child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here.")))
     } else {
         col().key("takes").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
             .child(col().w_full().gap(8.0).children(s.speak.takes.iter().map(|t| take_row(s, p, t))))

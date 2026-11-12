@@ -1301,7 +1301,9 @@ fn results_panel(s: &AppState, p: Palette) -> El {
     let h = &s.redub.history;
     let head = (!h.is_empty()).then(|| badge(p, &format!("{}", h.len()), Tone::Neutral).pin(None, Some(22.0), Some(22.0), None));
     let body = if h.is_empty() {
-        col().w_full().grow(1.0).justify_center().child(empty_state(p, &ICON, "No redubs yet", "Finished redubs from this session appear here."))
+        // Scrolls like the list, so a short panel (a small window) clips the placeholder instead of letting it spill out.
+        col().key("redubs-empty").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
+            .child(col().w_full().pt(24.0).child(empty_state(p, &ICON, "No redubs yet", "Finished redubs from this session appear here.")))
     } else {
         col().key("redubs").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
             .child(col().w_full().gap(8.0).children(h.iter().map(|r| history_row(s, p, r))))

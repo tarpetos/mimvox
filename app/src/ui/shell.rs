@@ -591,11 +591,13 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let header_w = cx.layout_with("header", |r| r[2]).unwrap_or(1300.0);
     let compact = header_w < 1260.0;
     // Centre the tabs on the window, not between the brand and the right-hand pills: pad the lighter side by
-    // the difference (widths from the last layout; skipped when compact, where every point counts).
+    // the difference (widths from the last layout), but never by more than the free room around the tabs, so a
+    // narrow window keeps the tabs as central as it can without squeezing anything.
     let side = |key: &str| cx.layout_with(key, |r| r[2]).unwrap_or(0.0);
     let left = 16.0 + insets.leading + side("brand");
     let right = (if insets.trailing > 0.0 { insets.trailing + 14.0 } else { 12.0 }) + side("right");
-    let balance = if compact { 0.0 } else { right - left };
+    let free = side("header-gap-l") + side("header-gap-r") + side("header-pad-l") + side("header-pad-r");
+    let balance = (right - left).clamp(-free, free);
     let fit = HeaderFit { compact, tight: header_w < 1120.0, balance };
     let page = body_page(s, cx);
     let mut body = col().key("body").w_full().grow(1.0).min_h(0.0).pt(14.0).gap(12.0);
