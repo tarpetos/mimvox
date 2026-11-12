@@ -665,8 +665,18 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
   (`backends/omnivoice_text.py`): for Ukrainian with case after prepositions and agreement of units
   (`у 2026 році` -> `у дві тисячі двадцять шостому році`, `5 травня` -> `п'ятого травня`, `15%` -> `п'ятнадцять відсотків`,
   `3,5 години` -> `три з половиною години`, `1 250 грн`, `т.д.`, `вул.`, `о 10:30`), for English years, ordinals,
-  money, time and decimals, for other languages integers and decimals through `num2words`. Stress marks (combining
-  acute, `+`) are removed: OmniVoice places Ukrainian stress itself.
+  money, time and decimals, for other languages integers and decimals through `num2words`. The text is NFC-composed
+  first.
+- **Word stress** (`backends/omnivoice_stress.py`): OmniVoice follows an upper-case stressed vowel (`співакОм`); a
+  combining acute (U+0301) after the vowel works except on a stressed last syllable, where it pulls the stress one
+  syllable earlier, and `+` is sometimes read aloud. So in `uk`, `ru` and `be` text the user's marks (`+` right before a
+  vowel, or U+0301 / `´` after it) become an upper-case vowel (`співак+ом` -> `співакОм`); a stressed word-initial
+  vowel keeps the acute (`+атлас` -> `а́тлас`), a word in capitals loses the mark, and `´` after a consonant is a typed
+  apostrophe and becomes `'`. In other languages the marks are removed (a grave U+0300 everywhere). Automatic stress
+  from lang-uk's dictionary (`ukrainian-word-stress` in dictionary-only mode with `marisa-trie`, installed by setup,
+  offline) is off by default: `MIMVOX_STRESS_AUTO=last` marks unmarked Ukrainian words stressed on their last
+  syllable, `all` every word with two or more vowels; heteronyms, unknown words and words that already have a mark or
+  an inner capital are skipped. Off because it did not improve whole test sentences.
 - **Reference**: `reference.wav` used whole up to 12 s, longer clips are cut to 7-12 s of whole sentences (statements
   preferred over questions; Whisper turbo finds the sentences once per clip, cached in `reference.omnivoice.json`).
   `reference_<lang>.wav`, when present, is used for that language instead: OmniVoice carries the accent of the reference

@@ -50,6 +50,9 @@ Apache-2.0, BSD).
   setup (by default only with an NVIDIA GPU). Setup stores the weights in half precision (fp16 safetensors) on your
   computer; this changes only the number format, and the project does not redistribute them. Non-commercial only.
 - **g2p_en** (Apache-2.0) with NLTK data (CMUdict, BSD-style), for the English recording-text analysis.
+- **ukrainian-word-stress** (lang-uk, MIT) with the stress dictionary in its package, and **marisa-trie** (MIT; the
+  bundled libmarisa is BSD-2-Clause or LGPL-2.1-or-later), for the optional automatic Ukrainian word stress in the
+  OmniVoice text front-end. Installed without its optional Stanza dependency.
 
 ### Hybrid Demucs (Remove background music)
 

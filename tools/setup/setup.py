@@ -92,7 +92,12 @@ ENGINE_DIR = "engine"
 ENGINE_PYTHON = "3.11"
 ENGINE_TORCH = ("torch==2.8.0", "torchaudio==2.8.0")
 ENGINE_PACKAGES = ("omnivoice==0.2.1", "openai-whisper==20250625", "num2words==0.5.14", "sentencepiece", "g2p_en==2.1.0",
-                   "soundfile", "librosa", "scipy", "numpy")
+                   "soundfile", "librosa", "scipy", "numpy", "marisa-trie==1.4.1")
+# Ukrainian word stress for the OmniVoice text front-end (backends/omnivoice_stress.py, used when MIMVOX_STRESS_AUTO is
+# set): lang-uk's dictionary (12.5 MB, inside the wheel, so it works offline) in dictionary-only mode with marisa-trie.
+# Installed with --no-deps: its declared Stanza dependency (and the ~500 MB of models Stanza downloads) is only needed
+# for the context mode, which is not used.
+ENGINE_NO_DEPS = ("ukrainian-word-stress==2.1.0",)
 OMNIVOICE_REPO = "k2-fsa/OmniVoice"
 OMNIVOICE_DIR = "omnivoice"   # <runtime>/models/omnivoice
 OMNIVOICE_REQUIRED = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json",
@@ -833,9 +838,10 @@ class Setup:
 
     def engine_env(self) -> None:
         """The engine environment (Python 3.11, torch 2.8, transformers 5): the engine, the OmniVoice worker
-        (omnivoice, num2words for the text front-end) and the speech worker (Whisper, NLLB via transformers +
-        sentencepiece), g2p_en for the recording-text analysis."""
-        stamp_value = f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {self.gpu.backend} {self.plat}"
+        (omnivoice; num2words and the Ukrainian stress dictionary for the text front-end) and the speech worker
+        (Whisper, NLLB via transformers + sentencepiece), g2p_en for the recording-text analysis."""
+        stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {' '.join(ENGINE_NO_DEPS)} "
+                       f"{self.gpu.backend} {self.plat}")
         stamp = self._stamp(self.engine_venv)
         py = self.engine_python()
         if py.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
@@ -854,10 +860,16 @@ class Setup:
         elif self.gpu.backend == "cpu" and self.plat != "macos":
             command += ["--torch-backend", "cpu"]
         self.must(command, "Installing the engine environment", cwd=self.runtime)
+        stress = self.uv("pip", "install", "--python", py, "--no-deps", *ENGINE_NO_DEPS)
+        stress_ok = self.run(stress, cwd=self.runtime) == 0
+        if not stress_ok:
+            warn("The Ukrainian stress dictionary could not be installed (the next setup run tries again); Ukrainian "
+                 "speech works without automatic stress.")
         # g2p_en fetches its NLTK data (CMUdict, tagger; a few MB) on first import: do it now, not in the app.
         if self.run([py, "-I", "-c", "import g2p_en"], cwd=self.runtime) != 0:
             warn("g2p_en could not fetch its NLTK data; the recording-text analysis falls back to a simpler method.")
-        stamp.write_text(stamp_value, encoding="utf-8")
+        if stress_ok:
+            stamp.write_text(stamp_value, encoding="utf-8")
 
     def omnivoice_models(self) -> None:
         """The OmniVoice weights (``hf download k2-fsa/OmniVoice``, 3.3 GB). The Whisper turbo checkpoint it uses once per
