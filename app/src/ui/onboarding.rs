@@ -171,7 +171,8 @@ pub struct OnboardingState {
 
 /// What setup downloads, shown before it runs.
 const SETUP_SIZE_WARNING: &str = "Setup downloads about 28 GB (engine and speech model ~11 GB, voice-training tools ~12 GB, \
-Redub models ~4.5 GB, music removal ~0.3 GB). Make sure the drive has at least 32 GB free.";
+Redub models ~4.5 GB, music removal ~0.3 GB), plus ~2.7 GB for the better translation model with an NVIDIA GPU. \
+Make sure the drive has at least 32 GB free (38 GB with an NVIDIA GPU).";
 const NEEDED_FREE_BYTES: u64 = 32 * 1_000_000_000;
 
 /// Free bytes on the drive that holds `path` (or its nearest existing parent). `None` when it cannot be told.
