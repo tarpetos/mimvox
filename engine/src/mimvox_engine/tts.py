@@ -35,6 +35,8 @@ MIN_FIRST_TOKENS = 6  # the first segment is one sentence unless that is shorter
 FIRST_TOKENS = 40   # cap for segment 0 (normally just the first sentence, ~13 tokens = ~4 s of speech)
 GROWTH = float(os.environ.get("MIMVOX_SEGMENT_GROWTH", "2.5"))  # each segment may hold ~2.5x the previous target (measured: lowest total time)
 LATER_TOKENS = 70   # cap for every later segment
+MIN_PIECE_WORDS = 3   # a cut sentence never leaves a piece shorter than this many words...
+MIN_PIECE_SHARE = 0.3  # ...or than this share of the segment budget
 MIN_TAIL_TOKENS = 10  # a paragraph never ends in a segment shorter than this (merged into the previous one)
 
 # Loop-thread state (only the event loop changes it, so no locks).
@@ -130,31 +132,62 @@ def segment_text(text: str, count: Callable[[str], int]) -> list[tuple[str, int]
             target[0] = min(LATER_TOKENS, max(target[0] + 6, round(target[0] * GROWTH)))
         segs.append((seg, pause))
 
+    def words_split(words: list[str], parts: int) -> list[str]:
+        """``words`` cut into ``parts`` runs of about equal length (never an empty or one-word run when avoidable)."""
+        goal = count(" ".join(words)) / max(parts, 1)
+        out: list[str] = []
+        cur: list[str] = []
+        for i, w in enumerate(words):
+            left = len(words) - i  # words not placed yet, this one included
+            if cur and len(out) < parts - 1 and left >= 2 and count(" ".join(cur + [w])) > goal:
+                carry: list[str] = []
+                # do not end a run on a preposition, conjunction or article ("з", "в", "the", "of"): it belongs with
+                # the word after it
+                while len(cur) > 1 and len(cur[-1].strip("\"'«»()")) <= 3 and not re.search(r"[,.;:!?…—–]$", cur[-1]):
+                    carry.insert(0, cur.pop())
+                out.append(" ".join(cur))
+                cur = carry + [w]
+            else:
+                cur.append(w)
+        out.append(" ".join(cur))
+        return out
+
+    def short(piece: str, limit: int) -> bool:
+        return len(piece.split()) < MIN_PIECE_WORDS or count(piece) < limit * MIN_PIECE_SHARE
+
     def pieces(sentence: str, limit: int) -> list[str]:
-        """Cut an over-budget sentence at clause punctuation (clauses stay whole; only a clause longer than
-        LATER_TOKENS is cut at words) and re-pack neighbouring clauses up to ``limit``."""
+        """Cut an over-budget sentence: at clause punctuation first (clauses stay whole), a clause longer than
+        LATER_TOKENS into equal runs of words, then re-pack neighbouring clauses up to ``limit``. No piece is left
+        as a stub (a last word or two on its own): a short piece joins its neighbour, or the pair is re-cut evenly."""
         if count(sentence) <= limit:
             return [sentence]
         out: list[str] = []
         for clause in _CLAUSE.split(sentence):
-            if count(clause) <= LATER_TOKENS:
-                out.append(clause)
-                continue
-            cur = ""
-            for w in clause.split(" "):
-                if cur and count(cur + " " + w) > LATER_TOKENS:
-                    out.append(cur)
-                    cur = w
-                else:
-                    cur = f"{cur} {w}".strip()
-            if cur:
-                out.append(cur)
+            n = -(-count(clause) // LATER_TOKENS)
+            out.extend([clause] if n <= 1 else words_split(clause.split(" "), n))
         merged: list[str] = []
         for p in out:
             if merged and count(merged[-1] + " " + p) <= limit:
                 merged[-1] += " " + p
             else:
                 merged.append(p)
+        # stubs: join them to a neighbour when the pair still fits (a little over is fine), else re-cut the pair evenly
+        i = 0
+        while i < len(merged):
+            if len(merged) > 1 and short(merged[i], limit):
+                j = i - 1 if i > 0 else i + 1
+                a, b = (merged[j], merged[i]) if j < i else (merged[i], merged[j])
+                pair = f"{a} {b}"
+                k = min(i, j)
+                if count(pair) <= limit + MIN_TAIL_TOKENS:
+                    merged[k:k + 2] = [pair]
+                else:
+                    merged[k:k + 2] = words_split(pair.split(" "), 2)
+                    i = k + 2
+                    continue
+                i = max(k, 0)
+                continue
+            i += 1
         return merged
 
     for par in paragraphs:
