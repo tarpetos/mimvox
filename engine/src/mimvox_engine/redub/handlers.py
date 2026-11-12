@@ -16,7 +16,7 @@ import shutil
 import time
 from typing import Any
 
-from .. import accent, aio, backends, config, media, rvc, speech, tts, voices
+from .. import accent, aio, backends, config, media, reflang, rvc, speech, tts, voices
 from .. import audio_util as au
 from ..registry import Context, EngineError, method
 from . import render, transcribe
@@ -332,6 +332,10 @@ class _Voice:
         """The accent speech in ``lang`` gets (``native-us`` needs English and RVC, else ``own``; accent.py)."""
         return accent.choose(self.accent, self.native_voice, lang, self.trained, self.index_rate)
 
+    async def ref_fields(self, choice: accent.Choice, lang: str) -> dict[str, Any]:
+        """``reference_language`` / ``reference_foreign`` / ``reference_note`` of speech in ``lang`` (reflang.py)."""
+        return await aio.run_io(reflang.fields, self.ref, lang, choice.accent == "native-us")
+
     async def speak_setup(self, choice: accent.Choice, lang: str) -> tuple[dict[str, Any], dict[str, Any]]:
         """(extra ``redub.done`` fields, ``render.respeak`` keyword arguments) for speech in ``lang``: the voice's
         own reference, or the native clip with its transcript, RVC pitch and index rate."""
@@ -420,6 +424,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                                                 voice.quality, worker, voice.pth, voice.idx, how["index_rate"],
                                                 workdir, progress, voice.speed, lang=target,
                                                 ref_text=how.get("ref_text"), pitch=how.get("pitch", 0))
+            accent_fields.update(await voice.ref_fields(accent.Choice(accent_fields["accent"]), target))
             emit.stage("save", 0)
             saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
             emit.stage("save", 100)
@@ -434,7 +439,8 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         finally:
             await aio.run_io(shutil.rmtree, workdir, ignore_errors=True)
 
-    return {"job": _reg_job(ctx, work, speech_job=True), **({} if review else choice.fields())}
+    start = {} if review else {**choice.fields(), **await voice.ref_fields(choice, target)}
+    return {"job": _reg_job(ctx, work, speech_job=True), **start}
 
 
 @method("redub.render")
@@ -491,6 +497,7 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                 extra = {k: stats[k] for k in ("stretched", "overrun", "pushed", "drift_s", "max_push_s")}
                 extra["language"] = lang
                 extra.update(accent_fields)
+                extra.update(await voice.ref_fields(accent.Choice(accent_fields["accent"]), lang))
             progress("save", 96)
             saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
             elapsed = round(time.time() - t0, 2)
@@ -500,4 +507,5 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         finally:
             await aio.run_io(shutil.rmtree, workdir, ignore_errors=True)
 
-    return {"job": _reg_job(ctx, work), **(choice.fields() if mode == "respeak" else {})}
+    start = {**choice.fields(), **await voice.ref_fields(choice, lang)} if mode == "respeak" else {}
+    return {"job": _reg_job(ctx, work), **start}

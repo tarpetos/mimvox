@@ -11,6 +11,10 @@
 //! and quality check as the Record screen (`recording.check`), or imports a file, and stores it with
 //! `voices.add_reference`; `voices.remove_reference` drops one. The voice list names the languages that have one.
 //!
+//! **Spoken language.** Under the clip in use, the language the engine detected in it (`voices.list`
+//! `reference_language`, e.g. "Ukrainian speech"); when it is not the language the voice was recorded in, a note that
+//! speech in that language carries the clip's accent, and how to avoid it.
+//!
 //! **Reference from media** (`refmedia`): many audio / video files of the same speaker are combined into a pool and its
 //! best window becomes the reference; the pool's other good windows join the candidate list (`source: "media"`).
 
@@ -799,6 +803,31 @@ fn media_heading(p: &Palette, pool: Option<&Pool>, after_parts: bool) -> El {
     if after_parts { h.pt(6.0) } else { h }
 }
 
+/// The detected language of `reference.wav` ("Ukrainian speech") and, when it is not the voice's own language and
+/// that language has no clip of its own, what that means for speech in it.
+fn language_line(p: &Palette, info: &VoiceInfo) -> El {
+    let Some(code) = info.reference_language.as_deref() else {
+        return row().key("refclip-spoken").w_full().child(
+            text("Spoken language: not checked yet (the next time this voice is prepared or speaks).").font(ty::CAPTION).color(p.text_faint).wrap(),
+        );
+    };
+    let mismatch = info.reference_mismatch() && !info.references.iter().any(|r| lang::base(r) == lang::base(info.lang()));
+    let head = row().key("refclip-spoken").w_full().gap(8.0).center_y()
+        .child(kit::badge(p, &format!("{} speech", lang::name(code)), if mismatch { Tone::Warning } else { Tone::Neutral }))
+        .child(text("detected in this clip").font(ty::CAPTION).color(p.text_faint));
+    if !mismatch {
+        return head;
+    }
+    let own = lang::name(info.lang());
+    let note = if lang::base(info.lang()) == "en" {
+        let fix = if info.trained { "or choose Native accent when it speaks" } else { "or train the voice for a native accent" };
+        format!("English will carry this clip's accent. Add an English clip under Other languages, {fix}.")
+    } else {
+        format!("{own} will carry this clip's accent. Add {} {own} clip under Other languages.", if own.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" })
+    };
+    col().w_full().gap(6.0).child(head).child(text(note).key("refclip-spoken-note").font(ty::CAPTION).color(p.warn).wrap())
+}
+
 /// The section shown inside the active voice's card.
 pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let r = &s.voices.refclip;
@@ -819,7 +848,7 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
 
     let mut c = col().key("refclip").w_full().gap(10.0).child(head);
     match &r.current {
-        Some(cur) => c = c.child(clip_row(s, p, "refclip-current", cur, None)),
+        Some(cur) => c = c.child(clip_row(s, p, "refclip-current", cur, None)).child(language_line(p, info)),
         None if r.loading => c = c.child(text("Checking the clip…").font(ty::CAPTION).color(p.text_dim)),
         None => c = c.child(text("No reference clip yet. Record this voice, or add media files of it below.").font(ty::CAPTION).color(p.text_dim)),
     }
@@ -871,6 +900,8 @@ fn clip(part: u32, title: &str, start: f32, end: f32, rate: f32, pauses: f32, hi
 
 fn demo(s: &mut AppState) {
     super::voices::scene_list(s);
+    let own = s.shell.voices[0].lang().to_owned();
+    s.shell.voices[0].reference_language = Some(own);
     let r = &mut s.voices.refclip;
     r.voice = Some("my-voice".into());
     let mut current = clip(5, "Questions, questions", 31.6, 50.9, 3.4, 0.17, "slow");
@@ -983,8 +1014,32 @@ fn scene_langs_picker(s: &mut AppState) {
     s.langpick.open = Some((lang::Target::Reference, "refclip-add-lang".into()));
 }
 
+/// The owner's case: a voice set to English whose clip is Ukrainian speech (untrained): the warning note.
+fn scene_spoken_mismatch(s: &mut AppState) {
+    demo(s);
+    s.shell.voices[0].language = "en".into();
+    s.shell.voices[0].trained = false;
+    s.shell.voices[0].reference_language = Some("uk".into());
+    s.shell.voices[0].references = vec!["uk".into()];
+}
+
+/// The clip's language matches the voice's: just the badge.
+fn scene_spoken_match(s: &mut AppState) {
+    demo(s);
+    s.shell.voices[0].reference_language = Some("en".into());
+}
+
+/// A new clip the speech worker has not transcribed yet.
+fn scene_spoken_unknown(s: &mut AppState) {
+    demo(s);
+    s.shell.voices[0].reference_language = None;
+}
+
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
     &[
+        ("voices_reference_spoken_mismatch", scene_spoken_mismatch),
+        ("voices_reference_spoken_match", scene_spoken_match),
+        ("voices_reference_spoken_unknown", scene_spoken_unknown),
         ("voices-reference", scene_current),
         ("voices-reference-choose", scene_choose),
         ("voices-reference-error", scene_choose_busy),

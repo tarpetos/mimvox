@@ -158,6 +158,7 @@ def describe(data: config.DataDir, voice_id: str) -> dict[str, Any]:
         "trained_at": meta.get("trained_at") if trained else None,
         "training_paused": paused_training(meta),
         "references": _language_references(vdir),
+        **_reference_languages(vdir),
     }
 
 
@@ -165,6 +166,16 @@ def _language_references(vdir: str) -> list[str]:
     from .dataset.reference import language_references  # noqa: PLC0415 - lazy: the dataset package imports this one
 
     return language_references(vdir)
+
+
+def _reference_languages(vdir: str) -> dict[str, Any]:
+    """``reference_language`` / ``reference_languages``: the real language of the clips (reflang.py)."""
+    from . import reflang  # noqa: PLC0415 - lazy, as above
+
+    try:
+        return reflang.describe(vdir)
+    except Exception:  # noqa: BLE001 - a broken sidecar must not hide the voice
+        return {"reference_language": None, "reference_languages": {}}
 
 
 def list_voice_ids(data: config.DataDir) -> list[str]:

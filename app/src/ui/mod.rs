@@ -60,6 +60,8 @@ pub const SCENES: &[(&str, fn(&mut AppState))] = &[
     ("speak_accent_native", speak::scene_accent_native),
     ("speak_accent_own", speak::scene_accent_own),
     ("speak_accent_untrained", speak::scene_accent_untrained),
+    ("speak_accent_foreign_ref", speak::scene_accent_foreign_ref),
+    ("speak_accent_foreign_ref_trained", speak::scene_accent_foreign_ref_trained),
     ("speak_generating", speak::scene_generating),
     ("speak_buffering", speak::scene_buffering),
     ("speak_preparing", speak::scene_preparing),

@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from . import accent, aio, backends, config, media, rvc, speech, voices
+from . import accent, aio, backends, config, media, reflang, rvc, speech, voices
 from . import audio_util as au
 from .backends import SynthParams
 from .backends.omnivoice import OMNIVOICE
@@ -399,6 +399,8 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if use_rvc and (worker is None or models_status()["rvc"] != "ready"):
         raise EngineError("not_ready", "the voice-conversion model is not ready")
     choice = accent.choose(requested, native_voice, lang, has_pth, index_rate)  # native-us needs RVC, else "own"
+    # The clip that will speak and its real language (a foreign one carries its accent into `lang`; reflang.py).
+    ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")
     segs = segment_text(text, backend.count_tokens)
     if not segs:
         raise EngineError("bad_request", "nothing to say in this text")
@@ -407,7 +409,8 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                                                    idx, rvc_rate, worker, duration_factor_for(speed), out_fmt,
                                                    choice, index_rate),
                           "another generation is running")
-    return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], **choice.fields()}
+    return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], **choice.fields(),
+            **ref_fields}
 
 
 @method("tts.cancel")
@@ -495,8 +498,10 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         await aio.gather_or_cancel(produce(), consume())
         full = np.concatenate([c for c in chunks if c is not None])
         saved = await aio.run_io(media.save_result, data, full, au.OUT_SR, "", out_fmt)
+        # Read again: the first synthesis from a new clip has just transcribed it (and detected its language).
+        ref_fields = await aio.run_io(reflang.fields, ref, lang, native is not None)
         finish("tts.done", {**saved, "duration_s": au.duration_s(full), "elapsed_s": round(time.time() - t_start, 2),
-                            **choice.fields(), **(native.fields() if native else {})})
+                            **choice.fields(), **(native.fields() if native else {}), **ref_fields})
         log.info("job %s done in %.1fs (first chunk %.1fs)", job, time.time() - t_start,
                  first_chunk_at[0] if first_chunk_at else -1)
     except asyncio.CancelledError:
@@ -617,7 +622,14 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
             native = await aio.run_io(accent.prepare, choice, ref, 1.0)
             if native is not None:
                 await OMNIVOICE.warm(native.ref.path, accent.NATIVE_LANG, native.ref.text)
-        ctx.emit("voice.warm", {"id": vid, "ok": True, "elapsed_s": round(time.time() - t0, 2)})
+        # The real language of reference.wav (reflang.py): the warm-up above transcribed it when it spoke from it;
+        # otherwise (a reference_<lang>.wav spoke) or for a sidecar from before the language was recorded whose
+        # transcript the script heuristic cannot place, the worker builds the sidecar / detects it now (Whisper only).
+        ref_lang = await aio.run_io(lambda: reflang.detected(ref)[0])
+        if ref_lang is None:
+            ref_lang = await OMNIVOICE.inspect(ref)
+        ctx.emit("voice.warm", {"id": vid, "ok": True, "elapsed_s": round(time.time() - t0, 2),
+                                "reference_language": reflang.norm(ref_lang)})
     except asyncio.CancelledError:
         ctx.emit("voice.warm", {"id": vid, "ok": False, "message": "cancelled"})
     except Exception as exc:  # noqa: BLE001

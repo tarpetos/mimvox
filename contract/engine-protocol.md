@@ -71,7 +71,7 @@ Error codes: `bad_request`, `not_found`, `busy`, `not_ready`, `paused`, `cancell
 | --- | --- | --- |
 | `ready` | the `hello` result | once, at start |
 | `models` | `{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"}` | every time a model state changes (start-up, training hand-over, reload) |
-| `voice.warm` | `{"id","ok":true,"elapsed_s"}` or `{"id","ok":false,"message"}` | a `voices.warm` finished |
+| `voice.warm` | `{"id","ok":true,"elapsed_s","reference_language"}` or `{"id","ok":false,"message"}` | a `voices.warm` finished (`reference_language`: see [Reference language](#reference-language)) |
 
 `paused` means the models were unloaded on purpose while a voice trains (the GPU and host RAM are handed to Applio); `tts.generate` and redub answer `not_ready` until both are `ready` again after `train.done`/`train.error`.
 
@@ -186,8 +186,9 @@ the quick check, and only then delete the old directory.
 <data>/tmp/separate-<job>/                   # mix.npy / vocals.npy of the file being separated (deleted after each file)
 <data>/runtime/engine/.venv/                 # the engine environment (setup): engine, OmniVoice worker, speech worker
 <data>/runtime/models/omnivoice/             # OmniVoice weights k2-fsa/OmniVoice (3.3 GB), fetched by setup with `hf download`; never auto-downloaded
-<data>/voices/<voice_id>/reference.omnivoice.json  # OmniVoice's cut of reference.wav: {"version","sig":[mtime_ns,size],"start","end","text"}
-                                             #  (whole clip up to 12 s, else 7-12 s of whole sentences, + Whisper transcript; rebuilt when it changes)
+<data>/voices/<voice_id>/reference.omnivoice.json  # OmniVoice's cut of reference.wav: {"version","sig":[mtime_ns,size],"start","end","text","language"}
+                                             #  (whole clip up to 12 s, else 7-12 s of whole sentences, + Whisper transcript and Whisper's detected
+                                             #  language; rebuilt when it changes; sidecars written by earlier versions have no "language")
 <data>/voices/<voice_id>/reference_<lang>.wav  # optional per-language reference (e.g. reference_uk.wav, 7-12 s of speech in that
                                              #  language); OmniVoice uses it instead of reference.wav for <lang> (+ its own .omnivoice.json)
 <data>/tmp/                                  # scratch (job chunks, training logs), wiped at every engine start
@@ -218,9 +219,13 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 
 ### `voices.list`
 `{}` -> `{"voices":[{"id","name","created","preset","language":"en","dataset_minutes":6.4,"parts":5,"trained":true,
-"trained_epochs":300,"trained_at":"2026-11-11T10:20:30","training_paused":null,"references":["uk"]}]}`, oldest first.
+"trained_epochs":300,"trained_at":"2026-11-11T10:20:30","training_paused":null,"references":["uk"],
+"reference_language":"uk","reference_languages":{"uk":"uk"}}]}`, oldest first.
 `references` lists the languages that have their own reference clip (`reference_<lang>.wav`, see
-[Per-language references](#per-language-references-voicesadd_reference--voicesremove_reference)). `trained_epochs` and `trained_at` are `null`
+[Per-language references](#per-language-references-voicesadd_reference--voicesremove_reference)). `reference_language` is
+the language actually spoken in `reference.wav`, detected by the speech worker (`null` until it has transcribed the
+current clip), and `reference_languages` the same for every `reference_<lang>.wav` (`{lang: detected or null}`); see
+[Reference language](#reference-language). Neither changes `language`. `trained_epochs` and `trained_at` are `null`
 when the voice has no RVC model (or when the number is unknown). `created` is UTC ISO 8601 (`...Z`), `trained_at` is
 local time without zone. `preset` is the preset id the voice was recorded with or `null`. `language` is the language
 the voice was recorded in ([language code](#languages); `"en"` for voices made before languages existed): the preset
@@ -248,7 +253,10 @@ language, e.g. when the first texts read into a still empty voice are in another
   `not_found` (a path is missing). On any failure the half-made voice is removed again.
 
 ### `voices.warm`
-`{"id"}` -> `{"warming":true}` | `{"warming":false,"reason":"already_warm|busy"}`. Call it when the user selects a voice:
+`{"id"}` -> `{"warming":true}` | `{"warming":false,"reason":"already_warm|busy"}`. Call it when the user selects a voice.
+The `voice.warm` event that ends it carries `reference_language` (the detected language of `reference.wav`, see
+[Reference language](#reference-language); the warm-up transcribes a new clip, or has the worker detect the language
+of an older sidecar whose transcript the script fallback cannot place):
 it computes the speaker conditioning of the voice's `reference.wav` and, for a trained voice, loads its RVC model
 and index, in the background (5-22 s, depending on what is already loaded; the first chunk of the next `tts.generate`
 then takes about 5 s instead of about 26 s) and ends with the `voice.warm` event. Call it again after the models have
@@ -272,12 +280,13 @@ is removed or re-recorded.
 
 `voices.reference_candidates {"id"}` -> `{"candidates":[{"source":"part|media","file","part","title","start_s","end_s","duration_s","rate","pauses",
 "snr_db","hint":"natural|slow|fast","recommended":bool,"is_current":bool,"preview_path"}],"current":{...}|null,
-"rate_median","media":{...}|null}`: the best 5 windows over all parts (at most 2 per part, no overlaps), best first (the first is the
+"rate_median","media":{...}|null,"reference_language":"uk"|null}`: the best 5 windows over all parts (at most 2 per part, no overlaps), best first (the first is the
 automatic pick, `recommended`). `rate` is syllables per second, `pauses` a fraction (0.12 or more is "many pauses"),
 `hint` compares `rate` with `rate_median` (under 0.88 of it `slow`, over 1.12 `fast`). `title` is the reading-text title
 of the part (null for a voice without a known preset). `preview_path`: a WAV written to `<data>/tmp/refcand/<id>/`
 (rewritten on every call). `current` describes `reference.wav` with the same keys plus `"manual":bool` (its
 `preview_path` is `reference.wav` itself); `part` is null when no part explains the file (imported reference).
+`reference_language` is the detected language of `reference.wav` (see [Reference language](#reference-language)).
 `candidates` is empty for a voice without recordings. Parts stored before this analysis existed are analysed on the first
 call (a second or two). Errors: `bad_request`, `not_found` (voice).
 Part candidates have `"source":"part"` and `"file":null`. When the voice has a media pool, its best windows follow the part
@@ -654,7 +663,7 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
 
 Every segment is spoken by OmniVoice (k2-fsa, 0.6B, CC BY-NC 4.0 weights), run by a persistent worker process with the
 engine's interpreter (`backends/omnivoice_worker.py`, wire format `worker_kit.py`, ops `load`, `synth`, `warm`, `release`,
-`status`). Its state is the `tts` entry of the `models` event. IndexTTS-2.5 is no longer used. The rest of the pipeline
+`status`, `inspect`). Its state is the `tts` entry of the `models` event. IndexTTS-2.5 is no longer used. The rest of the pipeline
 (RVC, resampling, pauses, slot fitting, events) does not depend on the model (`backends/__init__.py`).
 
 Languages (`language` of `tts.generate`, Redub's language guard; ISO 639-1, every language with at least ~100 h of
@@ -678,7 +687,8 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
   syllable, `all` every word with two or more vowels; heteronyms, unknown words and words that already have a mark or
   an inner capital are skipped. Off because it did not improve whole test sentences.
 - **Reference**: `reference.wav` used whole up to 12 s, longer clips are cut to 7-12 s of whole sentences (statements
-  preferred over questions; Whisper turbo finds the sentences once per clip, cached in `reference.omnivoice.json`).
+  preferred over questions; Whisper turbo finds the sentences once per clip, cached in `reference.omnivoice.json`
+  with the detected language, see [Reference language](#reference-language)).
   `reference_<lang>.wav`, when present, is used for that language instead: OmniVoice carries the accent of the reference
   into the target language.
 - **RVC in other languages**: the voice's RVC index only holds sounds of the language it was recorded in
@@ -699,7 +709,7 @@ from a shipped native reference instead of the voice's clip, then the voice's RV
 - **When it applies**: the speech is English (`language` of `tts.generate`, `target_language` of `redub.dub`, the
   spoken language of a respeak), the voice is trained (`rvc/model.pth`) and `voice_match > 0`. Otherwise the request
   is **not refused**: it speaks with the voice's own reference and says why (see below). It works for a voice of any
-  recording language (the app offers it when the voice's `language` is not English).
+  recording language (the app offers it when the voice has no English clip, see App side).
 - **Native references**: `engine/src/mimvox_engine/assets/native/` (shipped inside the engine package, so every install
   has them): `en-us-male.wav` (CMU ARCTIC `bdl`) and `en-us-female.wav` (`slt`), US English, about 11.5 s, mono 24 kHz;
   `en-us-<gender>.txt` is the transcript (sent to the worker as `ref_text`, so no Whisper pass and no
@@ -725,11 +735,61 @@ from a shipped native reference instead of the voice's clip, then the voice's RV
   (`--prompt-cache`, least recently used out), so the user's reference and the native clips stay warm side by side
   and switching between `own` and `native-us` rebuilds nothing.
 - **App side**: Speak's Style panel shows "Accent" (Native (American) | Like my recordings, with Speaker Auto | Male |
-  Female under Native) when the output language is English and the voice's `language` is not; Redub shows the same
-  in Translate & dub when "To" is English, and sends it with the `redub.render` of a reviewed dub (Re-speak does not
-  offer it). It is disabled for an untrained voice ("Train this voice to use a native accent"), default Native, and
-  remembered in `settings.json` (`accent`: `native-us` | `own`, `native_voice`). `voices.warm` is sent with the
-  accent for a trained voice whose `language` is not English. An `accent_note` is shown as a warning toast.
+  Female under Native) when the output language is English and the voice has **no English clip**: no
+  `reference_en.wav`, and `reference.wav` is not English (its detected `reference_language`, or while that is `null`
+  the voice's `language`; see [Reference language](#reference-language)). Redub shows the same in Translate & dub
+  when "To" is English (sent with `redub.dub` and with the `redub.render` of a reviewed dub) and in Re-speak when the
+  text is English (the transcript's language, the "Translate the transcript" target, or the spoken language; sent with
+  its `redub.render`). For an untrained voice it is shown disabled, with "Train this voice to speak English without
+  an accent (Native accent), or add an English reference clip in Voices" and an "Add an English clip" button that
+  opens Voices with the Other languages panel set to English; with "Like my recordings" on a trained voice the button
+  is there too. Default Native, remembered in `settings.json` (`accent`: `native-us` | `own`, `native_voice`).
+  `voices.warm` is sent with the accent for a trained voice without an English clip. An `accent_note` is shown as a
+  warning toast.
+
+### Reference language
+
+OmniVoice copies the accent of the clip it clones, so the language actually spoken in a voice's reference clip
+decides the accent of its speech in every other language. The engine reads it from the clip, never from `voice.json`
+`language` (`reflang.py`):
+
+- **Per-language clips** `reference_<lang>.wav` are in `<lang>` by their name.
+- **`reference.wav`**: the OmniVoice worker transcribes a clip once per clip state (with Whisper turbo, language not
+  forced) and stores Whisper's detected language in the sidecar `reference.omnivoice.json` (`"language"`), next to
+  the transcript. A sidecar that does not match the clip's current mtime and size counts as missing.
+- **Fallback** for sidecars written before the field existed: a script heuristic on the stored transcript. Cyrillic
+  is Ukrainian when it has `і ї є ґ`, Russian with `ы э ъ ё` (the larger count wins), Belarusian with `ў`, Serbian with
+  `ђ ј љ њ ћ џ`, Kazakh with its own letters, otherwise unknown; Greek, Hebrew, Arabic, Devanagari, Hangul, kana, Han,
+  Thai and Georgian by script; Latin text by counting very frequent words of `en de fr es it pt pl cs nl` (at least
+  two hits and a single winner, else unknown).
+- **Unknown** (`null`) while no current sidecar exists. Whisper never runs in the engine process: the sidecar is built
+  by the worker on the next `voices.warm` or generation from that clip. `voices.warm` also asks the worker to
+  `inspect` the clip when the language is still unknown afterwards (worker op `inspect {"ref","detect"?:true}` ->
+  `{"language","text","elapsed_s"}`: builds the sidecar with Whisper only, without loading the TTS model, and adds
+  Whisper's language detection to an older sidecar without `language`).
+- Where it is reported: `voices.list` (`reference_language`, `reference_languages`), the `voice.warm` event,
+  `voices.reference_candidates` (`reference_language`, for `reference.wav`).
+
+**Which clip speaks** language L (unchanged): `reference_L.wav` when it exists, else `reference.wav` (or the native
+clip with `accent:"native-us"`, see below). The answers of `tts.generate`, `redub.dub` (`review:false`) and
+`redub.render` (`respeak`), and their `tts.done` / `redub.done`, carry:
+
+- `"reference_language"`: the language of the clip that speaks (`L` for `reference_L.wav`, the detected language of
+  `reference.wav`, `"en"` for the native clip; `null` while unknown);
+- `"reference_foreign"`: `true` when that clip is known to be in another language than L (its accent carries over);
+- `"reference_note"` (only when foreign): a sentence for the user, e.g. "The reference clip is Ukrainian speech, so the
+  English carries a Ukrainian accent. Add an English reference clip in Voices, or train the voice and use the native
+  accent." It is separate from `accent_note` (which says why `native-us` was not used): both can apply at once.
+
+The end event reads the sidecar again, so a clip transcribed for the first time by that job is reported correctly
+there even when the answer still said `null`. `voice.json` `language` is never rewritten from the detection.
+
+**App side.** `VoiceInfo.reference_language` comes from `voices.list` and is refreshed by `voice.warm` and by the end
+events of jobs spoken from `reference.wav`. The Voices reference section shows it under the clip in use ("Ukrainian
+speech · detected in this clip", or "not checked yet"); when it differs from the voice's `language` and that language
+has no `reference_<lang>.wav`, a warning line follows ("English will carry this clip's accent. Add an English clip
+under Other languages, or train the voice for a native accent."). A `reference_note` (from the answer, else from the
+end event) is shown as a warning toast, joined with an `accent_note` when both come.
 
 ### `shutdown`
 `{}` -> `{}` then exit.

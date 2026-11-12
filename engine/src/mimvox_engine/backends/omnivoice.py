@@ -12,9 +12,8 @@ blocks the engine loop or polls.
 Measured on an RTX 4070 (12 GB, Windows 11), fp16, 32 steps: about 2.2 s per segment of up to ~10 s of speech
 (RTF 0.2-0.33; 16 steps halves it), ~4 GB of VRAM with a 9 s reference (~7 GB with 19 s), ~2.2 GB of host RAM, 10-25 s to load.
 
-Voice: the voice's ``reference.wav`` (used whole up to 20 s, else cut by the worker to 10-18 s of whole sentences;
-transcript cached next to it in
-``reference.omnivoice.json``). A per-language clip ``reference_<lang>.wav`` next to it wins when present: OmniVoice
+Voice: the voice's ``reference.wav`` (used whole up to 12 s, else cut by the worker to 7-12 s of whole sentences;
+transcript and Whisper's detected language cached next to it in ``reference.omnivoice.json``, read by ``reflang.py``). A per-language clip ``reference_<lang>.wav`` next to it wins when present: OmniVoice
 carries the accent of the reference into the target language, so a Ukrainian clip makes the cleanest Ukrainian.
 For English, ``accent.py`` may speak from a shipped native American clip instead (``SynthParams.reference_text``) and
 let RVC bring the user's timbre back.
@@ -214,6 +213,19 @@ class OmniVoiceBackend(TtsBackend):
         except (WorkerError, WorkerDied) as exc:
             raise EngineError("internal", f"OmniVoice: {exc}") from exc
         self._mark_warm(ref)
+
+    async def inspect(self, reference: str, detect: bool = True) -> str | None:
+        """Whisper's language of a user clip (``reference.wav`` or ``reference_<lang>.wav`` itself, no per-language
+        swap), building its sidecar when missing; with ``detect`` an older sidecar without the language gets it. The
+        worker does this without loading the TTS model. ``None`` when not ready or unknown (never raises)."""
+        if self._client is None or self._status != "ready":
+            return None
+        try:
+            res = await self._client.call("inspect", {"ref": reference, "detect": detect}, timeout=SYNTH_TIMEOUT_S)
+        except (WorkerError, WorkerDied, WorkerCancelled) as exc:
+            log.warning("OmniVoice could not inspect %s: %s", reference, exc)
+            return None
+        return str(res.get("language") or "") or None
 
     def _mark_warm(self, ref: str) -> None:
         sig = _sig(ref)

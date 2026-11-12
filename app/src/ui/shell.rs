@@ -75,12 +75,32 @@ pub struct VoiceInfo {
     pub language: String,
     /// Languages with their own reference clip (`reference_<lang>.wav`).
     pub references: Vec<String>,
+    /// The language actually spoken in `reference.wav`, detected by the engine (`reference_language`); `None` until the
+    /// speech worker has transcribed the clip (its next warm-up or generation).
+    pub reference_language: Option<String>,
 }
 
 impl VoiceInfo {
     /// The recording language (`en` when unknown).
     pub fn lang(&self) -> &str {
         if self.language.is_empty() { "en" } else { &self.language }
+    }
+
+    /// The language of `reference.wav` as far as it is known: the detected one, else the recording language.
+    pub fn reference_lang(&self) -> &str {
+        self.reference_language.as_deref().filter(|l| !l.is_empty()).unwrap_or(self.lang())
+    }
+
+    /// `reference.wav` is known to be speech in another language than the voice's own (its accent carries over).
+    pub fn reference_mismatch(&self) -> bool {
+        self.reference_language.as_deref().is_some_and(|l| !l.is_empty() && super::lang::base(l) != super::lang::base(self.lang()))
+    }
+
+    /// Speech in `code` is spoken from a clip in that language: its own `reference_<code>.wav`, or `reference.wav`
+    /// when that clip is in `code` (detected, or the recording language while the detection is not known yet).
+    pub fn has_reference_in(&self, code: &str) -> bool {
+        let code = super::lang::base(code);
+        self.references.iter().any(|r| super::lang::base(r) == code) || super::lang::base(self.reference_lang()) == code
     }
 
     pub fn from_json(v: &Value) -> Option<VoiceInfo> {
@@ -95,6 +115,7 @@ impl VoiceInfo {
             paused: v.get("training_paused").filter(|p| p.is_object()).and_then(|p| serde_json::from_value(p.clone()).ok()),
             language: v.get("language").and_then(Value::as_str).filter(|l| !l.is_empty()).unwrap_or("en").to_owned(),
             references: v.get("references").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
+            reference_language: v.get("reference_language").and_then(Value::as_str).filter(|l| !l.is_empty()).map(str::to_owned),
         })
     }
 }
@@ -529,6 +550,10 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             if id.is_some() && id == s.shell.preparing.as_deref() {
                 s.shell.preparing = None;
             }
+            // The warm-up transcribed the reference clip: its detected language is known now.
+            if let (Some(id), Some(l)) = (id, ev.data.get("reference_language")) {
+                set_reference_language(s, id, l);
+            }
         }
         EngineMsg::Event(ev) if ev.event == "train.done" => reset_warm(s),
         EngineMsg::Exited { code, stderr_tail } => {
@@ -540,6 +565,15 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             toast(s, Tone::Danger, "The voice engine stopped");
         }
         _ => {}
+    }
+}
+
+/// Records the detected language of a voice's `reference.wav` from an engine message (`voice.warm`, `tts.done`,
+/// `redub.done`): a string, or `null` while unknown.
+pub fn set_reference_language(s: &mut AppState, voice_id: &str, value: &Value) {
+    let lang = value.as_str().filter(|l| !l.is_empty()).map(str::to_owned);
+    if let Some(v) = s.shell.voices.iter_mut().find(|v| v.id == voice_id) {
+        v.reference_language = lang;
     }
 }
 

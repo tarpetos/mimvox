@@ -14,9 +14,10 @@
 //! review choice and target language are remembered in `settings.json` (`redub_mode`, `redub_language`, `redub_review`,
 //! `redub_target`), and so is "Translation quality" (`redub_translator`: `nllb-1.3b` | `nllb-600m`), offered when the
 //! engine has both translators (`hello` -> `translators`). The language lists come from the engine (`ui::lang`).
-//! Dubbing into English with a voice recorded in another language shows Speak's "Accent" choice
-//! (`speak::accent_block`, the same setting), sent as `accent` with `redub.dub` and with the `redub.render` that
-//! finishes a reviewed dub.
+//! Dubbing into English, or re-speaking English, with a voice that has no English reference clip shows Speak's
+//! "Accent" choice (`speak::accent_block`, the same setting), sent as `accent` with `redub.dub`, with the
+//! `redub.render` that finishes a reviewed dub and with a Re-speak's `redub.render`. A job spoken from a clip in another
+//! language than its text (`reference_note`) shows a warning toast.
 //!
 //! The file comes from a drop anywhere on the window (see `formats::window_drops`) or "Choose file..." (rfd on its
 //! own thread). The voice is the header's active voice; Voice match, Expressiveness and Quality are the Speak
@@ -112,12 +113,32 @@ struct Run {
     segment: Option<(u32, u32)>,
     /// Cancel pressed before the job id arrived.
     cancel: bool,
+    /// The voice speaking (to record its detected reference language from `redub.done`).
+    voice_id: String,
+    /// The foreign-reference warning was shown with the answer already.
+    warned: bool,
 }
 
 impl Run {
     fn new(req: u64, now: f64) -> Run {
-        Run { req, job: None, started: now, stage: String::new(), pct: 0.0, segment: None, cancel: false }
+        Run { req, job: None, started: now, stage: String::new(), pct: 0.0, segment: None, cancel: false, voice_id: String::new(), warned: false }
     }
+
+    fn for_voice(req: u64, now: f64, voice_id: &str) -> Run {
+        Run { voice_id: voice_id.to_owned(), ..Run::new(req, now) }
+    }
+}
+
+/// The language a Re-speak speaks: the transcript's (the target after a translation), else what the options say
+/// ("Translate the transcript" to, or the spoken language when it is not Auto-detect).
+fn respeak_lang(r: &RedubState) -> Option<String> {
+    if let Some(l) = r.transcript_lang.as_deref().filter(|l| !l.trim().is_empty()) {
+        return Some(l.to_owned());
+    }
+    if r.translate {
+        return Some(r.to.clone());
+    }
+    (!r.from.eq_ignore_ascii_case("auto")).then(|| r.from.clone())
 }
 
 #[derive(Clone, Debug, Default)]
@@ -478,7 +499,7 @@ fn start_dub(s: &mut AppState) {
     r.clear_text();
     r.result = None;
     r.error = None;
-    r.job = Job::Rendering { run: Run::new(req, now), mode: RedubMode::Dub, source: src.name, voice: voice.name };
+    r.job = Job::Rendering { run: Run::for_voice(req, now, &voice.id), mode: RedubMode::Dub, source: src.name, voice: voice.name };
 }
 
 fn start_render(s: &mut AppState) {
@@ -496,8 +517,12 @@ fn start_render(s: &mut AppState) {
     let segs: Vec<RedubSegmentIn> =
         s.redub.kept_segments().map(|g| RedubSegmentIn { start: g.start, end: g.end, text: g.edit.text.trim().to_owned() }).collect();
     let out = formats::output_format(s);
-    // Only a reviewed dub offers the accent choice (Re-speak keeps the voice's own reference).
-    let accent = if mode == RedubMode::Dub { speak::accent_param(s, s.redub.transcript_lang.as_deref().unwrap_or(&s.redub.to)) } else { None };
+    // A reviewed dub and a Re-speak in English offer the accent choice (Convert keeps the original speech).
+    let accent = match mode {
+        RedubMode::Dub => speak::accent_param(s, s.redub.transcript_lang.as_deref().unwrap_or(&s.redub.to)),
+        RedubMode::Respeak => respeak_lang(&s.redub).and_then(|l| speak::accent_param(s, &l)),
+        RedubMode::Convert => None,
+    };
     let (method, params) = protocol::redub_render(
         &voice.id,
         &src.path,
@@ -518,7 +543,7 @@ fn start_render(s: &mut AppState) {
     stop_play(s);
     s.redub.result = None;
     s.redub.error = None;
-    s.redub.job = Job::Rendering { run: Run::new(req, shell::clock_now(s)), mode, source: src.name, voice: voice.name };
+    s.redub.job = Job::Rendering { run: Run::for_voice(req, shell::clock_now(s), &voice.id), mode, source: src.name, voice: voice.name };
 }
 
 fn cancel(s: &mut AppState) {
@@ -597,10 +622,9 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     run.job = Some(job);
                 }
                 let stop = run.cancel;
+                let note = |k: &str| v.get(k).and_then(|n| n.as_str()).map(str::to_owned);
+                run.warned = speak::job_notes(s, note("accent_note").as_deref(), note("reference_note").as_deref());
                 set_run(s, run);
-                if let Some(n) = v.get("accent_note").and_then(|n| n.as_str()).filter(|n| !n.is_empty()) {
-                    shell::toast(s, Tone::Warning, n.to_owned());
-                }
                 if stop {
                     cancel(s);
                 }
@@ -732,6 +756,15 @@ fn on_done(s: &mut AppState, done: RedubDone) {
     let to = (mode == RedubMode::Dub).then(|| {
         done.target_language.clone().filter(|l| !l.is_empty()).or_else(|| s.redub.transcript_lang.clone()).unwrap_or_else(|| s.redub.to.clone())
     });
+    // The language spoken and the clip that spoke it (a clip transcribed for the first time is known only now).
+    if let Some(spoken) = to.clone().or_else(|| done.language.clone()).filter(|l| !l.is_empty()) {
+        speak::note_reference(s, &run.voice_id, &spoken, &done.reference);
+    }
+    if !run.warned {
+        if let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty()) {
+            shell::toast(s, Tone::Warning, n);
+        }
+    }
     if mode == RedubMode::Dub {
         // The dub (or the reviewed one) is finished: the review text is no longer needed.
         s.redub.clear_text();
@@ -1145,12 +1178,16 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
     } else {
         "Your voice speaks the transcript in its own language.".to_owned()
     };
-    let options = glass_card(p).key("respeak-options").w_full().padding(14.0).gap(12.0)
+    let mut options = glass_card(p).key("respeak-options").w_full().padding(14.0).gap(12.0)
         .opacity(if busy { 0.6 } else { 1.0 })
         .child(row().w_full().gap(10.0).center_y().child(text("Spoken language").font(ty::LABEL).color(p.text)).child(from))
         .child(col().w_full().gap(3.0).child(tr)
-            .child(text(tr_note).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)))
-        .child(transcribe_row(s, p));
+            .child(text(tr_note).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
+    // English without an English reference clip: the same Accent choice as Speak and Translate & dub.
+    if respeak_lang(r).is_some_and(|l| speak::accent_applies(s, &l)) {
+        options = options.child(el().w_full().max_w(420.0).child(speak::accent_block(s, p, "respeak-accent")));
+    }
+    let options = options.child(transcribe_row(s, p));
     let mut c = col().key("respeak-block").w_full().gap(12.0)
         .child(text("Transcribes the speech so you can fix or translate the words, then says them again in your voice's own delivery.").font(ty::CAPTION).color(p.text_dim).wrap())
         .child(options);
@@ -1688,8 +1725,34 @@ fn scene_respeak_foreign(s: &mut AppState) {
     }
 }
 
+/// The owner's case in Translate & dub: Ukrainian -> English with a voice set to English whose reference clip is
+/// Ukrainian speech, not trained: the Accent choice, disabled, with "Add an English clip".
+fn scene_dub_accent_foreign_ref(s: &mut AppState) {
+    demo(s, false);
+    demo_file(s);
+    s.redub.mode = RedubMode::Dub;
+    s.redub.from = "uk".into();
+    s.shell.voices[0].reference_language = Some("uk".into());
+}
+
+/// Re-speak of an English transcript with that voice, trained: the Accent choice (Native) under the options.
+fn scene_respeak_accent(s: &mut AppState) {
+    scene_transcript(s);
+    s.shell.voices[0].reference_language = Some("uk".into());
+}
+
+/// The same untrained: disabled, with the hint to train or add an English clip.
+fn scene_respeak_accent_untrained(s: &mut AppState) {
+    scene_respeak_accent(s);
+    s.shell.voices[0].trained = false;
+    s.shell.voices[0].trained_epochs = 0;
+}
+
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
     &[
+        ("redub_dub_accent_foreign_ref", scene_dub_accent_foreign_ref),
+        ("redub_respeak_accent", scene_respeak_accent),
+        ("redub_respeak_accent_untrained", scene_respeak_accent_untrained),
         ("redub_dub_ready", scene_dub_ready),
         ("redub_dub_accent", scene_dub_accent),
         ("redub_dub_accent_untrained", scene_dub_accent_untrained),

@@ -402,6 +402,28 @@ pub struct TtsStarted {
     /// Why `accent: "native-us"` was not possible and the voice's own reference speaks instead (see [`NativeVoice`]).
     #[serde(default)]
     pub accent_note: Option<String>,
+    /// Set when the clip that speaks is in another language than the text (its accent carries over): a sentence for
+    /// the user. See [`ReferenceUse`].
+    #[serde(default)]
+    pub reference_note: Option<String>,
+}
+
+/// Which reference clip spoke a job, from its end event (`tts.done`, `redub.done` of a speech job).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ReferenceUse {
+    /// `own` | `native-us`: whether the voice's own clip spoke, or the native-accent clip.
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// The language of the clip that spoke (`reference_<lang>.wav` by its name, `reference.wav` as detected, `en` for
+    /// the native clip); `None` while unknown.
+    #[serde(default)]
+    pub reference_language: Option<String>,
+    /// The clip is in another language than the speech: its accent carries over.
+    #[serde(default)]
+    pub reference_foreign: bool,
+    /// A sentence for the user when `reference_foreign`.
+    #[serde(default)]
+    pub reference_note: Option<String>,
 }
 
 /// `voices.warm`: `warming = false` means nothing will be reported (`reason`: for example `already_warm`).
@@ -548,6 +570,12 @@ pub struct RedubDone {
     /// The language the result is spoken in (`redub.dub`: `target_language`; respeak: `language`).
     #[serde(default)]
     pub target_language: Option<String>,
+    /// `respeak`: the language spoken.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// The clip that spoke and its language (speech jobs; empty for `convert`).
+    #[serde(flatten)]
+    pub reference: ReferenceUse,
 }
 
 impl RedubDone {
@@ -678,6 +706,9 @@ pub struct TtsDone {
     pub duration_s: f32,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub elapsed_s: f32,
+    /// The clip that spoke and its language.
+    #[serde(flatten)]
+    pub reference: ReferenceUse,
 }
 
 impl TtsDone {

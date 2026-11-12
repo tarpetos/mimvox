@@ -10,10 +10,14 @@
 //! `language`. Another language than the voice's own shows a hint about per-language reference clips; Ukrainian
 //! shows how to fix a wrong word stress ("+" before the vowel, see `backends/omnivoice_stress.py`).
 //!
-//! English output from a voice recorded in another language shows an "Accent" choice (see [`accent_block`], shared
-//! with Redub's Translate & dub): "Native (American)" sends `accent: "native-us"` (a native reference voice speaks, the
-//! trained RVC model brings the user's timbre back), "Like my recordings" the voice's own reference. It needs a trained
-//! voice; the choice and the native speaker override are remembered in `settings.json` (`accent`, `native_voice`).
+//! English output without an English reference clip (no `reference_en.wav`, and `reference.wav` is detected as another
+//! language, or, while its language is not known yet, the voice was recorded in another one) shows an "Accent" choice
+//! (see [`accent_block`], shared with Redub's Translate & dub and Re-speak): "Native (American)" sends
+//! `accent: "native-us"` (a native reference voice speaks, the trained RVC model brings the user's timbre back), "Like
+//! my recordings" the voice's own reference. It needs a trained voice: an untrained one shows the choice disabled with
+//! a way to add an English clip instead. The choice and the native speaker override are remembered in `settings.json`
+//! (`accent`, `native_voice`). A job spoken from a clip in another language than its text (`reference_note`) shows a
+//! warning toast.
 //!
 //! Playback is pre-buffered: a single-segment job plays at once; for longer text the finished segments are held
 //! back until, by the engine's real-time factor, the segments still to come will arrive before the buffered audio
@@ -76,6 +80,11 @@ struct Active {
     began: bool,
     text: String,
     voice: String,
+    /// The voice id and the language spoken (to record the detected reference language from `tts.done`).
+    voice_id: String,
+    lang: String,
+    /// The foreign-reference warning was shown already (from the answer; the end event then stays quiet).
+    warned: bool,
     /// Stop pressed before the job id arrived: cancel as soon as it does.
     cancel: bool,
 }
@@ -97,6 +106,9 @@ impl Active {
             began: false,
             text,
             voice,
+            voice_id: String::new(),
+            lang: String::new(),
+            warned: false,
             cancel: false,
         }
     }
@@ -234,10 +246,11 @@ pub fn set_language(s: &mut AppState, code: &str) {
     s.speak.languages_dirty = true;
 }
 
-/// Whether the Accent choice applies to speech in `lang` with the active voice: English output from a voice recorded
-/// in another language.
+/// Whether the Accent choice applies to speech in `lang` with the active voice: English output with no English
+/// reference clip, so the voice's clip in another language would lend English its accent (see
+/// [`VoiceInfo::has_reference_in`]: a `reference_en.wav`, or a `reference.wav` detected as English).
 pub fn accent_applies(s: &AppState, lang: &str) -> bool {
-    shell::active_voice(s).is_some_and(|v| lang::base(lang) == "en" && lang::base(v.lang()) != "en")
+    shell::active_voice(s).is_some_and(|v| lang::base(lang) == "en" && !v.has_reference_in("en"))
 }
 
 /// The `accent` of a speech request in `lang`: the native speaker when the native accent applies, is chosen and the
@@ -247,11 +260,40 @@ pub fn accent_param(s: &AppState, lang: &str) -> Option<NativeVoice> {
     (accent_applies(s, lang) && trained && s.speak.native_accent).then_some(s.speak.native_voice)
 }
 
-/// The `accent` to warm the active voice with (`voices.warm`): native when chosen and the voice is trained and was
-/// recorded in another language than English (its English output would use it).
+/// The `accent` to warm the active voice with (`voices.warm`): native when chosen and the voice is trained and has no
+/// English reference clip (its English output would use it).
 pub fn warm_accent(s: &AppState) -> Option<NativeVoice> {
     let v = shell::active_voice(s)?;
-    (v.trained && lang::base(v.lang()) != "en" && s.speak.native_accent).then_some(s.speak.native_voice)
+    (v.trained && !v.has_reference_in("en") && s.speak.native_accent).then_some(s.speak.native_voice)
+}
+
+/// Opens Voices with "Add a language" set to `code`: record or import a reference clip in that language.
+pub fn add_reference(s: &mut AppState, code: &str) {
+    super::refclip::start_language(s, code);
+    shell::set_screen(s, Screen::Voices);
+}
+
+/// The warning toast of a job's start answer: why the native accent was not used and/or that the clip speaking is in
+/// another language (`accent_note`, `reference_note`). True when the reference warning was part of it.
+pub(crate) fn job_notes(s: &mut AppState, accent_note: Option<&str>, reference_note: Option<&str>) -> bool {
+    let notes: Vec<&str> = [accent_note, reference_note].into_iter().flatten().filter(|n| !n.is_empty()).collect();
+    if !notes.is_empty() {
+        shell::toast(s, Tone::Warning, notes.join(" "));
+    }
+    reference_note.is_some_and(|n| !n.is_empty())
+}
+
+/// After a speech job: the detected language of `reference.wav` when that clip spoke (not the native clip, not a
+/// `reference_<lang>.wav`), so the Accent choice and the Voices screen follow a clip transcribed for the first time.
+pub(crate) fn note_reference(s: &mut AppState, voice_id: &str, lang: &str, used: &protocol::ReferenceUse) {
+    if used.accent.as_deref() == Some("native-us") || used.reference_language.is_none() {
+        return;
+    }
+    let own_clip = s.shell.voices.iter().find(|v| v.id == voice_id).is_some_and(|v| !v.references.iter().any(|r| lang::base(r) == lang::base(lang)));
+    if own_clip {
+        let value = json!(used.reference_language);
+        shell::set_reference_language(s, voice_id, &value);
+    }
 }
 
 /// Why Generate cannot run right now (shown next to the button), or `None` when it can.
@@ -292,7 +334,9 @@ pub fn generate(s: &mut AppState) {
         return;
     };
     s.speak.playing = Playing::Nothing;
-    s.speak.gen_ = Gen::Active(Active::new(req, shell::clock_now(s), text, voice.name));
+    let mut a = Active::new(req, shell::clock_now(s), text, voice.name);
+    (a.voice_id, a.lang) = (voice.id, lang);
+    s.speak.gen_ = Gen::Active(a);
 }
 
 /// Stops the running generation (and the audio that is streaming from it).
@@ -362,21 +406,19 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
         EngineMsg::Response { id, result } if *id == a.req => match result {
             Ok(v) => {
-                let mut note = None;
-                if let Ok(TtsStarted { job, segments, segment_chars, accent_note }) = protocol::parse_result(v.clone()) {
+                let mut notes = (None, None);
+                if let Ok(TtsStarted { job, segments, segment_chars, accent_note, reference_note }) = protocol::parse_result(v.clone()) {
                     a.job = Some(job);
                     if segments > 0 {
                         a.total = segments as usize;
                         a.exact = true;
                     }
                     a.seg_chars = segment_chars;
-                    note = accent_note;
+                    notes = (accent_note, reference_note);
                 }
                 let stop = a.cancel;
+                a.warned = job_notes(s, notes.0.as_deref(), notes.1.as_deref());
                 s.speak.gen_ = Gen::Active(a);
-                if let Some(n) = note.filter(|n| !n.is_empty()) {
-                    shell::toast(s, Tone::Warning, n);
-                }
                 if stop {
                     cancel(s);
                 }
@@ -405,6 +447,13 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 s.speak.takes.insert(0, take);
                 s.speak.takes.truncate(50);
                 s.speak.gen_ = Gen::Idle;
+                // A clip transcribed for the first time by this job: its language is known only now.
+                note_reference(s, &a.voice_id, &a.lang, &done.reference);
+                if !a.warned {
+                    if let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty()) {
+                        shell::toast(s, Tone::Warning, n);
+                    }
+                }
                 // Everything may have played already (the queue ran dry before the job ended).
                 if s.speak.playing == Playing::Live && !shell::is_playing(s) {
                     s.speak.playing = Playing::Nothing;
@@ -763,8 +812,8 @@ fn language_row(s: &AppState, p: Palette) -> El {
     if let Some(v) = voice.filter(|v| v.lang() != code) {
         let (rec, target) = (lang::name(v.lang()), lang::name(&code));
         let has_ref = v.references.iter().any(|r| *r == code);
-        if accent_param(s, &code).is_some() {
-            // The native accent replaces the per-language reference clip: no hint to record one.
+        if accent_applies(s, &code) {
+            // The Accent choice below says what happens and offers the English clip.
             return c;
         }
         let hint = if has_ref {
@@ -788,12 +837,16 @@ fn language_row(s: &AppState, p: Palette) -> El {
     c
 }
 
-/// The "Accent" choice (Speak's Style panel and Redub's Translate & dub to English): "Native (American)" or "Like my
-/// recordings", disabled with a hint until the voice is trained; with Native, the native speaker (Auto / Male / Female).
+/// The "Accent" choice (Speak's Style panel, Redub's Translate & dub to English and Re-speak in English): "Native
+/// (American)" or "Like my recordings"; with Native, the native speaker (Auto / Male / Female). An untrained voice
+/// shows it disabled, with the two ways to English without an accent: train the voice, or add an English clip
+/// ("Add an English clip" opens Voices on it).
 pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     let voice = shell::active_voice(s);
     let trained = voice.is_some_and(|v| v.trained);
-    let rec = voice.map(|v| lang::name(v.lang())).unwrap_or_default();
+    // The language the voice's clip is in: detected, else the one it was recorded in.
+    let rec = voice.map(|v| lang::name(v.reference_lang())).unwrap_or_default();
+    let detected = voice.is_some_and(|v| v.reference_language.is_some());
     let native = trained && s.speak.native_accent;
     let pick = segmented_fill(
         p,
@@ -802,7 +855,7 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
         if trained {
             &["A native American speaker says it, then your trained voice model gives it your timbre", "Copies the accent of your own recordings"]
         } else {
-            &["Train this voice to use a native accent", "Copies the accent of your own recordings"]
+            &["Train this voice to speak English without an accent", "Copies the accent of your own recordings"]
         },
         usize::from(!native),
         trained,
@@ -811,17 +864,31 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
             s.speak.accent_dirty = true;
         },
     );
-    let caption = if !trained {
-        "Train this voice to use a native accent.".to_owned()
-    } else if native {
+    // Whose accent English gets from the voice's own clip: "your Ukrainian reference clip" once its language is
+    // detected, else the recording language.
+    let source = if detected { format!("your {rec} reference clip") } else { format!("your {rec} recordings") };
+    let caption = if native {
         "A native American speaker says it; your trained voice model keeps your timbre.".to_owned()
     } else {
-        format!("English with the accent of your {rec} recordings.")
+        format!("English gets the accent of {source}.")
     };
     let mut c = col().key(key.to_owned()).w_full().gap(8.0)
         .child(text("Accent").font(ty::LABEL).color(p.text))
         .child(pick)
-        .child(text(caption).font(ty::CAPTION).color(if trained { p.text_faint } else { p.warn }).wrap());
+        .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap());
+    if !native {
+        let hint = if trained {
+            "Pick Native, or add an English reference clip in Voices."
+        } else {
+            "Train this voice to speak English without an accent (Native accent), or add an English reference clip in Voices."
+        };
+        c = c.child(col().key(format!("{key}-hint")).w_full().gap(8.0).padding(10.0).radius(theme::radius::CONTROL)
+            .fill(p.warn.alpha(0.08)).border(1.0, p.warn.alpha(0.25))
+            .child(text(hint).font(ty::CAPTION).color(if trained { p.text_dim } else { p.warn }).wrap())
+            .child(row().gap(8.0)
+                .child(Button::new("Add an English clip").small().icon(&icons::MIC).key(format!("{key}-add-en"))
+                    .on_press(|s| add_reference(s, "en")).build(p))));
+    }
     if native {
         let v = s.speak.native_voice;
         let sel = match v {
@@ -979,6 +1046,22 @@ pub fn scene_accent_own(s: &mut AppState) {
 /// An untrained voice: the choice is disabled with the hint to train it.
 pub fn scene_accent_untrained(s: &mut AppState) {
     demo_voice_uk(s, false);
+}
+
+/// The owner's case: a voice set to English whose reference clip was detected as Ukrainian speech, not trained. The
+/// Accent choice shows (English would carry the clip's accent), disabled, with "Add an English clip".
+pub fn scene_accent_foreign_ref(s: &mut AppState) {
+    demo_voice(s, false);
+    s.shell.voices[0].reference_language = Some("uk".into());
+    s.shell.voices[0].references = vec!["uk".into()];
+    s.speak.text = TextEdit::new(SAMPLE);
+}
+
+/// The same voice trained: Native is on.
+pub fn scene_accent_foreign_ref_trained(s: &mut AppState) {
+    scene_accent_foreign_ref(s);
+    s.shell.voices[0].trained = true;
+    s.shell.voices[0].trained_epochs = 300;
 }
 
 /// The output-language picker open.

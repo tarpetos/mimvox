@@ -158,7 +158,12 @@ def reference_candidates(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         media, pool = _media_candidates(vdir, meta, current, pdir, len(out))
     except EngineError:
         media, pool = [], None
-    return {"candidates": out + media, "current": current, "rate_median": round(median, 2), "media": pool}
+    from .. import reflang  # noqa: PLC0415
+
+    # The detected language of reference.wav (None until the speech worker has transcribed this clip: the next
+    # warm-up or generation does; its `voice.warm` event carries it).
+    return {"candidates": out + media, "current": current, "rate_median": round(median, 2), "media": pool,
+            "reference_language": reflang.detected(os.path.join(vdir, "reference.wav"))[0]}
 
 
 @method("voices.set_reference")

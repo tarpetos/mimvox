@@ -15,11 +15,14 @@ Ops (one at a time, on the op thread):
             "model_lang", "position_temperature", "class_temperature", "guidance_scale" (optional sampling knobs)}
                                                       -> {"out","sr","duration_s","gen_s","text"}
            ``ref``: a WAV of the voice. A clip longer than REF_MAX_S (12 s) is cut to a 7-12 s run of whole sentences
-           (Whisper turbo finds them once; the cut and its transcript are cached next to the clip in
-           ``<clip>.omnivoice.json``). ``ref_text``, the transcript of a clip of at most REF_MAX_S, skips Whisper and
+           (Whisper turbo finds them once; the cut, its transcript and Whisper's detected language are cached next
+           to the clip in ``<clip>.omnivoice.json``). ``ref_text``, the transcript of a clip of at most REF_MAX_S, skips Whisper and
            the sidecar (the shipped native-accent clips, whose folder may be read-only). The voice-clone prompts of
            the last ``--prompt-cache`` references (default 3: the user's clip and the native ones) stay in memory.
   warm     {"ref","ref_text"?}                        -> {"elapsed_s"}  (builds the voice-clone prompt only)
+  inspect  {"ref","detect"?:true}                     -> {"language","text","elapsed_s"}  (the clip's sidecar, built
+           when missing: Whisper only, the TTS model is not loaded; with ``detect`` a sidecar without ``language``
+           gets Whisper's language detection added)
   release  {}                                         -> {}  (drops the models and frees the GPU; ``load`` or the next
                                                               ``synth`` loads them again)
   status   {}                                         -> {"loaded","rss_gb","vram_gb"}
@@ -185,12 +188,13 @@ def _load_mono(path):
 
 
 def _transcribe(x, sr):
-    """Whisper turbo segments of a clip: [(start, end, text)], language auto-detected."""
+    """Whisper turbo on a clip, language auto-detected (not forced): ([(start, end, text)], detected language code or
+    None)."""
     import whisper
     import torchaudio
 
     x16 = torchaudio.functional.resample(torch.from_numpy(x), sr, 16000).numpy() if sr != 16000 else x
-    dev = "cuda" if _state["device"] == "cuda" else "cpu"
+    dev = "cuda" if (_state["device"] or _device()) == "cuda" else "cpu"  # `inspect` runs without the TTS model
     wm = whisper.load_model("turbo", download_root=args.whisper_dir or None, device=dev)
     try:
         res = wm.transcribe(x16.astype(np.float32), fp16=dev == "cuda", condition_on_previous_text=False)
@@ -200,7 +204,29 @@ def _transcribe(x, sr):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         _trim_working_set()  # Whisper was loaded through host RAM: give those pages back now
-    return [(float(s["start"]), float(s["end"]), s["text"].strip()) for s in res["segments"] if s["text"].strip()]
+    segs = [(float(s["start"]), float(s["end"]), s["text"].strip()) for s in res["segments"] if s["text"].strip()]
+    return segs, (str(res.get("language") or "").lower() or None)
+
+
+def _detect_language(x, sr):
+    """Whisper turbo's language detection alone (the first 30 s of a clip): an ISO code or None."""
+    import whisper
+    import torchaudio
+
+    x16 = torchaudio.functional.resample(torch.from_numpy(x), sr, 16000).numpy() if sr != 16000 else x
+    dev = "cuda" if (_state["device"] or _device()) == "cuda" else "cpu"
+    wm = whisper.load_model("turbo", download_root=args.whisper_dir or None, device=dev)
+    try:
+        audio = whisper.pad_or_trim(torch.from_numpy(x16.astype(np.float32)))
+        mel = whisper.log_mel_spectrogram(audio, n_mels=wm.dims.n_mels).to(wm.device)
+        _, probs = wm.detect_language(mel)
+        return max(probs, key=probs.get) if probs else None
+    finally:
+        del wm
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        _trim_working_set()
 
 
 def _pick_window(segs, total):
@@ -244,24 +270,30 @@ def _reference(ref, ref_text=None):
         cached = None
     if cached is None:
         t0 = time.time()
-        segs = _transcribe(x, sr)
+        segs, language = _transcribe(x, sr)
         if not segs:
             raise kit.OpError("bad_request", "the reference clip has no recognizable speech")
         if total > REF_MAX_S:
             a, b, text = _pick_window(segs, total)
         else:
             a, b, text = 0.0, total, " ".join(s[2] for s in segs)
-        cached = {"version": SIDECAR_VERSION, "sig": sig[1:], "start": round(a, 3), "end": round(b, 3), "text": text}
-        try:
-            tmp = side + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(cached, fh, ensure_ascii=False, indent=1)
-            os.replace(tmp, side)
-        except OSError as exc:
-            _log(f"could not cache the reference transcript: {exc}")
-        _log(f"reference {ref}: {a:.2f}-{b:.2f}s of {total:.1f}s chosen in {time.time() - t0:.1f}s: {text!r}")
+        cached = {"version": SIDECAR_VERSION, "sig": sig[1:], "start": round(a, 3), "end": round(b, 3), "text": text,
+                  "language": language}
+        _write_sidecar(side, cached)
+        _log(f"reference {ref} ({language or '?'}): {a:.2f}-{b:.2f}s of {total:.1f}s chosen in "
+             f"{time.time() - t0:.1f}s: {text!r}")
     cut = x[int(cached["start"] * sr):int(cached["end"] * sr)]
     return cut, sr, cached["text"]
+
+
+def _write_sidecar(side, cached):
+    try:
+        tmp = side + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(cached, fh, ensure_ascii=False, indent=1)
+        os.replace(tmp, side)
+    except OSError as exc:
+        _log(f"could not cache the reference transcript: {exc}")
 
 
 def _prompt(ref, ref_text=None):
@@ -285,6 +317,29 @@ def op_warm(req):
     op_load()
     _prompt(req["ref"], req.get("ref_text"))
     return {"elapsed_s": round(time.time() - t0, 2)}
+
+
+def op_inspect(req):
+    """The sidecar of a user clip, built when missing (Whisper only: the TTS model is not loaded for this). With
+    ``detect`` (default) a sidecar written before the worker recorded the language (version 3 without ``language``)
+    gets Whisper's language detection added."""
+    ref = req.get("ref")
+    if not ref or not os.path.isfile(ref):
+        raise kit.OpError("not_found", f"reference clip not found: {ref}")
+    t0 = time.time()
+    _reference(ref)
+    side = os.path.splitext(ref)[0] + ".omnivoice.json"
+    try:
+        with open(side, encoding="utf-8") as fh:
+            cached = json.load(fh)
+    except (OSError, ValueError) as exc:  # the folder is read-only: _reference could not write it
+        raise kit.OpError("internal", f"no sidecar for {ref}: {exc}") from None
+    if not cached.get("language") and req.get("detect", True):
+        x, sr = _load_mono(ref)
+        cached["language"] = _detect_language(x, sr)
+        _write_sidecar(side, cached)
+        _log(f"reference {ref}: language {cached['language'] or '?'} detected in {time.time() - t0:.1f}s")
+    return {"language": cached.get("language"), "text": cached.get("text"), "elapsed_s": round(time.time() - t0, 2)}
 
 
 def op_synth(req):
@@ -330,7 +385,7 @@ if args.unload_after > 0:
 if args.exit_after > 0:
     idle.append((args.exit_after, "exit"))
 kit_worker = kit.Worker("omnivoice", INP, OUT,
-                        {"load": op_load, "synth": op_synth, "warm": op_warm, "release": op_release,
+                        {"load": op_load, "synth": op_synth, "warm": op_warm, "inspect": op_inspect, "release": op_release,
                          "status": op_status, "ping": lambda _r: {}},
                         idle=idle)
 kit_worker.run()

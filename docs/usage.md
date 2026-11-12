@@ -343,6 +343,12 @@ gives Ukrainian with a slight English colour. A short clip of you speaking the o
 The clip is used whenever you speak or dub into that language. The voice's card lists the languages that have one;
 each can be played or removed. A clip needs 3 to 40 seconds of speech; about 10 seconds is best.
 
+**What your main clip really speaks.** Under the clip in use, the reference section shows the language detected in it,
+for example *Ukrainian speech* (the engine transcribes the clip the first time the voice is prepared or speaks; until
+then it reads *not checked yet*). This matters more than the language the voice was created with: a voice set to
+English whose clip is Ukrainian speech speaks English with a Ukrainian accent. In that case a note says so: *English
+will carry this clip's accent. Add an English clip under Other languages, or train the voice for a native accent.*
+
 ![Per-language reference clips](screenshots/usage-voices-languages.png)
 
 ---
@@ -492,21 +498,32 @@ for the lossy formats (for example MP3 at 320, 192 or 128 kbps). Your last choic
 
 ### Native accent: English with an American accent
 
-The speech model copies the accent of the clip it clones, so a voice recorded in Ukrainian speaks English with a
-Ukrainian accent. For English, a **trained** voice can instead speak with a native American accent: a native US English
-speaker (shipped with the app, from the public CMU ARCTIC corpus) says the text, and your trained voice model then
-turns it into your timbre, moved to your own pitch.
+The speech model copies the accent of the clip it clones, so English spoken from a clip of Ukrainian speech has a
+Ukrainian accent. What counts is the language actually spoken in the clip (shown in Voices, see above), not the
+language the voice was created with. For English, a **trained** voice can instead speak with a native American accent:
+a native US English speaker (shipped with the app, from the public CMU ARCTIC corpus) says the text, and your trained
+voice model then turns it into your timbre, moved to your own pitch.
 
-**Accent** appears in the Style panel when the output language is English and the voice was recorded in another
-language:
+**Zero-shot or trained.** A voice you have only recorded is *zero-shot*: the speech model imitates your reference clip
+directly, timbre and accent together, so the only way to English without your clip's accent is an English clip of
+yours (**Add an English clip**, which opens the Other languages panel in Voices). A *trained* voice also has its own
+voice model, which can put your timbre on someone else's speech; that is what makes the native accent possible.
+
+**Accent** appears in the Style panel when the output language is English and the voice has no English clip: no
+English clip under Other languages, and its main clip is in another language (or, while that is not checked yet, the
+voice was created with another language):
 
 - **Native (American)** (the default for a trained voice): a native speaker says it, your timbre is kept. With it,
   **Speaker** picks the native speaker: **Auto** (the one whose pitch is closest to yours), **Male** or **Female**.
-- **Like my recordings**: your own reference clip speaks, with your accent (an English reference clip of yours in
-  Voices sets that accent).
+- **Like my recordings**: your own reference clip speaks, with its accent. The caption names it (*English gets the
+  accent of your Ukrainian reference clip*), and **Add an English clip** is right below.
 
-An untrained voice cannot keep its timbre this way, so the choice is off with the hint *Train this voice to use a
-native accent*. The choice is remembered and also applies to **Translate & dub** into English (see Redub).
+For an untrained voice the choice is shown but off, with *Train this voice to speak English without an accent (Native
+accent), or add an English reference clip in Voices* and the **Add an English clip** button. The choice is remembered
+and also applies to **Translate & dub** into English and to **Re-speak** when the transcript is English (see Redub).
+
+When a result is spoken from a clip in another language than the text anyway, a warning says so, for example *The
+reference clip is Ukrainian speech, so the English carries a Ukrainian accent.*
 
 Example: a Ukrainian voice speaking English with an American accent.
 
@@ -593,6 +610,10 @@ recording of speech. With an untrained voice the mode offers **Go to Train** or 
 3. Press **Transcribe**. The transcript appears as editable lines with their times.
 4. Fix the words, delete lines you do not want, then press **Render**. Transcribing again replaces your edits.
 
+When the text is English (spoken or translated) and the voice has no English clip, the options show the same
+**Accent** choice as Speak (see [Native accent](#native-accent-english-with-an-american-accent)), and the render uses
+it.
+
 ### Supported formats and exporting
 
 - **Input:** WAV, MP3, M4A, AAC, FLAC, OGG, Opus, AIFF, WMA (when your ffmpeg can decode it), and the video formats
@@ -621,8 +642,9 @@ Redub uses the GPU like Speak: only one job runs at a time, and Redub is unavail
 - **Reference length.** The automatic reference is a 15-20 second window, and the speech model uses up to 12 seconds
   of it; media references are 8-12 seconds; per-language clips need 3-40 seconds, about 10 is best. Longer is not
   better here: clean and natural is what counts.
-- **Accent across languages.** The voice keeps the accent of its reference. For the most natural result in a language
-  you did not record in, add a per-language reference clip in that language. For trained voices, Voice match is
+- **Accent across languages.** The voice keeps the accent of its reference clip, in whatever language that clip is
+  spoken (Voices shows it). For the most natural result in another language, add a per-language reference clip in
+  that language; for English, a trained voice can also use the native accent. For trained voices, Voice match is
   capped at 0.3 in other languages so the words stay clear.
 - **Quality beats quantity.** Six clean minutes are better than twenty noisy ones. Re-record a part as soon as the check
   says *Please record again*, not after training.
