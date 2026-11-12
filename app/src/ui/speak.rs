@@ -541,7 +541,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     row().key("speak").w_full().h_full().px(16.0).pb(16.0).gap(16.0)
         .child(text_panel(s, p))
-        .child(side_column(s, p, cx, results_panel(s, p)))
+        .child(side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
 }
 
 /// The Results panel never gets shorter than this: below it, the side column scrolls instead.
@@ -549,7 +549,9 @@ const RESULTS_MIN_H: f32 = 240.0;
 
 /// The right-hand column of Speak and Redub: Style on top, Results filling the rest. In a short window, where
 /// Results would be squeezed below `RESULTS_MIN_H`, the column scrolls and Results keeps that height.
-pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, results: El) -> El {
+/// `results(own_scroll)` builds the Results panel: with `own_scroll` its list scrolls inside the panel; without it
+/// the list grows and the whole column scrolls (one scroller, so the wheel works anywhere over the column).
+pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, results: impl Fn(bool) -> El) -> El {
     let side_h = cx.layout_with("side", |r| r[3]);
     let style_h = cx.layout_with("side-style", |r| r[3]).unwrap_or(0.0);
     let cramped = side_h.is_some_and(|h| h < style_h + 16.0 + RESULTS_MIN_H);
@@ -557,9 +559,9 @@ pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, resul
     let side = col().key("side").w(320.0).h_full();
     if cramped {
         side.scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
-            .child(col().w_full().gap(16.0).child(style).child(col().key("side-results").w_full().h(RESULTS_MIN_H).child(results)))
+            .child(col().w_full().gap(16.0).child(style).child(col().key("side-results").w_full().min_h(RESULTS_MIN_H).child(results(false))))
     } else {
-        side.gap(16.0).child(style).child(results)
+        side.gap(16.0).child(style).child(results(true))
     }
 }
 
@@ -718,15 +720,17 @@ fn language_row(s: &AppState, p: Palette) -> El {
     c
 }
 
-fn results_panel(s: &AppState, p: Palette) -> El {
+fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let head = (!s.speak.takes.is_empty()).then(|| badge(p, &format!("{}", s.speak.takes.len()), Tone::Neutral).pin(None, Some(22.0), Some(22.0), None));
     let body = if s.speak.takes.is_empty() {
-        // Scrolls like the list, so a short panel (a small window) clips the placeholder instead of letting it spill out.
-        col().key("takes-empty").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
-            .child(col().w_full().pt(24.0).child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here.")))
+        col().key("takes-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here."))
     } else {
-        col().key("takes").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
-            .child(col().w_full().gap(8.0).children(s.speak.takes.iter().map(|t| take_row(s, p, t))))
+        let list = col().w_full().gap(8.0).children(s.speak.takes.iter().map(|t| take_row(s, p, t)));
+        if own_scroll {
+            col().key("takes").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(list)
+        } else {
+            col().key("takes").w_full().child(list)
+        }
     };
     section_panel(p, "Results").key("results-panel").w_full().grow(1.0).min_h(0.0).gap(10.0).children(head).child(body)
 }

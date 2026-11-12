@@ -58,3 +58,6 @@ copy of the window, so closing the app flashed white with artefacts. `Cloak::hid
 (`src/platform/win32/cloak.rs`) cloaks the window, hides it and uncloaks it, so nothing of it is on screen while it
 hides; `Win::hide` (`src/window/win.rs`) uses it on Windows. A close hides the window that way before Rune releases the GPU and destroys the window (`Windows::hide`, which used to destroy it while still visible), and a quit hides it before the event loop ends
 (`src/window/lifecycle.rs`). Lines are marked `PATCH (local)`.
+Every window is also hidden that way just before it is dropped at exit (`AnyHost::hide_for_exit`, called from
+`exiting` in `src/window.rs`). The app itself never blocks the UI thread on quit: it only asks the engine to exit and
+waits for it after the loop has ended (`ui::train::quit_now`, `main`).

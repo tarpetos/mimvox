@@ -147,6 +147,9 @@ pub(crate) trait AnyHost {
     /// Ends a tracking pop-up menu and answers waiting ones `None`, before the host drops or
     /// the loop exits.
     fn cancel_menus(&mut self) {}
+    /// PATCH (local): takes the window off the screen without the system's hide animation, just before it is
+    /// dropped at exit (a visible window that is destroyed flashed white on Windows).
+    fn hide_for_exit(&mut self) {}
     /// False for hosts that must not keep the loop running alone (overlays).
     fn keeps_loop(&self) -> bool { true }
     /// An app window's key; overlays have none.
@@ -385,6 +388,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
             for host in self.hosts.iter_mut().flatten() { host.terminate(); }
         }
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
+        // PATCH (local): hidden before they are dropped.
+        for host in self.hosts.iter_mut().flatten() { host.hide_for_exit(); }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::marks::mark("windows.dropped");

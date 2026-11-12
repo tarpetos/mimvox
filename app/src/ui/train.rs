@@ -270,13 +270,23 @@ pub fn on_close(s: &mut AppState, tx: &mut Tx) {
     quit_now(s, tx);
 }
 
-/// Stops the engine (which stops Applio) and quits.
+/// Stops the engine (which stops Applio) and quits. The UI thread only asks the engine to exit: waiting for it here,
+/// with the window still on screen, froze the window and Windows painted it white. `main` waits for the engine
+/// after the window is gone (`take_closing_engine`).
 fn quit_now(s: &mut AppState, tx: &mut Tx) {
     super::stats::write();
-    if let Some(c) = s.engine.as_mut() {
-        c.shutdown();
+    if let Some(c) = s.engine.take() {
+        c.request_shutdown();
+        *CLOSING_ENGINE.lock().unwrap_or_else(|e| e.into_inner()) = Some(c);
     }
     tx.quit();
+}
+
+static CLOSING_ENGINE: std::sync::Mutex<Option<crate::engine::EngineClient>> = std::sync::Mutex::new(None);
+
+/// The engine a quit asked to exit, for `main` to wait for once the app loop has ended.
+pub fn take_closing_engine() -> Option<crate::engine::EngineClient> {
+    CLOSING_ENGINE.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
 /// The shell calls this after every event: true once the app should quit (after "Close anyway" or "Pause and close").

@@ -341,6 +341,8 @@ impl<S: 'static> Host<S> {
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
         if let Some(after) = self.rt.shell_request.take().and_then(Shell::after) {
+            // PATCH (local): off the screen before the loop ends and the window is destroyed.
+            if let Some(w) = &self.win { w.hide(); }
             if after == crate::quit::After::Relaunch {
                 let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
             }

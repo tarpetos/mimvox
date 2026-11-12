@@ -428,15 +428,21 @@ impl EngineClient {
 
     /// Asks the engine to exit and waits (blocking, up to [`SHUTDOWN_GRACE`]) for the stdout reader to see it go;
     /// kills it when it does not.
+    /// Asks the engine to exit (the shutdown request, then end of stdin) without waiting for it: for the UI
+    /// thread while the window is still on screen. [`EngineClient::shutdown`] (or dropping the client) finishes it.
+    pub fn request_shutdown(&self) {
+        let (method, params) = protocol::shutdown();
+        let line = serde_json::json!({ "id": "0", "method": method, "params": params }).to_string();
+        let _ = self.write_line(&line);
+        self.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+
     pub fn shutdown(&mut self) {
         if self.shut_down.swap(true, Ordering::SeqCst) {
             return;
         }
-        let (method, params) = protocol::shutdown();
-        let line = serde_json::json!({ "id": "0", "method": method, "params": params }).to_string();
-        let _ = self.write_line(&line);
-        // Closing stdin also makes the engine exit.
-        self.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Closing stdin also makes the engine exit (a no-op after `request_shutdown`).
+        self.request_shutdown();
 
         let exited = self.exited.lock().unwrap_or_else(|e| e.into_inner()).recv_timeout(SHUTDOWN_GRACE);
         if exited.is_ok() {

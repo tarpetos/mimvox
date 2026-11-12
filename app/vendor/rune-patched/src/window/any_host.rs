@@ -50,6 +50,9 @@ impl<S: 'static> AnyHost for Host<S> {
     fn terminate(&mut self) { self.in_turn(Self::terminate_in_turn) }
     fn quit_hook(&mut self) { self.in_turn(Self::quit_hook_in_turn) }
     fn cancel_menus(&mut self) { self.in_turn(Self::cancel_menus_in_turn) }
+    fn hide_for_exit(&mut self) {
+        if let Some(w) = &self.win { w.hide(); }
+    }
     fn reopen_hook(&mut self, event_loop: &ActiveEventLoop, has_visible_windows: bool) -> bool {
         self.in_turn(|h| h.reopen_hook_in_turn(event_loop, has_visible_windows))
     }
