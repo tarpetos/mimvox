@@ -541,7 +541,26 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     row().key("speak").w_full().h_full().px(16.0).pb(16.0).gap(16.0)
         .child(text_panel(s, p))
-        .child(col().key("side").w(320.0).h_full().gap(16.0).child(style_panel(s, p)).child(results_panel(s, p)))
+        .child(side_column(s, p, cx, results_panel(s, p)))
+}
+
+/// The Results panel never gets shorter than this: below it, the side column scrolls instead.
+const RESULTS_MIN_H: f32 = 240.0;
+
+/// The right-hand column of Speak and Redub: Style on top, Results filling the rest. In a short window, where
+/// Results would be squeezed below `RESULTS_MIN_H`, the column scrolls and Results keeps that height.
+pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, results: El) -> El {
+    let side_h = cx.layout_with("side", |r| r[3]);
+    let style_h = cx.layout_with("side-style", |r| r[3]).unwrap_or(0.0);
+    let cramped = side_h.is_some_and(|h| h < style_h + 16.0 + RESULTS_MIN_H);
+    let style = col().key("side-style").w_full().child(style_panel(s, p));
+    let side = col().key("side").w(320.0).h_full();
+    if cramped {
+        side.scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
+            .child(col().w_full().gap(16.0).child(style).child(col().key("side-results").w_full().h(RESULTS_MIN_H).child(results)))
+    } else {
+        side.gap(16.0).child(style).child(results)
+    }
 }
 
 fn text_panel(s: &AppState, p: Palette) -> El {

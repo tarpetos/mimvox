@@ -792,7 +792,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     row().key("redub").w_full().h_full().px(16.0).pb(16.0).gap(16.0)
         .child(main_panel(s, p))
-        .child(col().key("side").w(320.0).h_full().gap(16.0).child(speak::style_panel(s, p)).child(results_panel(s, p)))
+        .child(speak::side_column(s, p, cx, results_panel(s, p)))
 }
 
 fn main_panel(s: &AppState, p: Palette) -> El {
