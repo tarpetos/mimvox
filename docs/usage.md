@@ -426,8 +426,15 @@ Each finished phrase appears under **Results** with its length and how long it t
 - **Export as…** saves a copy in another format (see below);
 - the folder button shows the file in your file manager, and the other button opens it in your default player.
 
-Every result is also saved automatically as WAV and MP3 in the `outputs` folder of your data folder. The Results list
-itself shows the phrases made since the app was started.
+Every result is also saved automatically as one file in the `outputs` folder of your data folder
+(`outputs/<date>_<time>.wav`). The Results list itself shows the phrases made since the app was started.
+
+**Save as** (the chip next to the Results title, "Save as WAV" at first) chooses the format of that file: WAV, MP3,
+FLAC, OGG, Opus, M4A or AIFF, each with a one-line description. The choice is remembered and shared with Redub, and
+applies to the next result. WAV is the default and the best for editing; MP3, Opus or M4A make much smaller files
+(saved at high quality, for example MP3 at 320 kbps). Playback in the app always works, whatever the format: for a
+format other than WAV the app plays a temporary WAV copy that is removed when the app restarts. The folder button,
+**Open file** and **Export as…** use the saved file.
 
 **Export as…** offers WAV, MP3, FLAC, OGG, Opus, M4A and AIFF, with a quality of **High**, **Standard** or **Small**
 for the lossy formats (for example MP3 at 320, 192 or 128 kbps). Your last choice is remembered.
@@ -519,8 +526,9 @@ recording of speech. With an untrained voice the mode offers **Go to Train** or 
 
 - **Input:** WAV, MP3, M4A, AAC, FLAC, OGG, Opus, AIFF, WMA (when your ffmpeg can decode it), and the video formats
   MP4, MKV, MOV, WebM and AVI. From a video, the first audio track is used.
-- **Output:** audio only, mono 44.1 kHz. The video picture is not put back. Each result is saved automatically as WAV
-  and MP3 (`outputs/redub_<date>_<time>.wav` and `.mp3`).
+- **Output:** audio only, mono 44.1 kHz. The video picture is not put back. Each result is saved automatically as one
+  file, `outputs/redub_<date>_<time>.wav`, or in the format chosen with **Save as** in the Results header (shared with
+  Speak, see [Results and export](#results-and-export)).
 - **Export as…** on a result saves it as WAV, MP3, FLAC, OGG, Opus, M4A or AIFF, as on Speak.
 
 To put the new audio back into your video, use a video editor and replace the original sound track with the exported
@@ -591,10 +599,10 @@ Everything the app makes lives in one folder (the one you chose during setup; se
       reference_media.wav        optional combined media for "Reference from media"
       dataset/part1.wav ...      your recorded parts
       rvc/model.pth, model.index the trained voice model (after training)
-  outputs/                       every generated phrase and redub, as WAV and MP3
+  outputs/                       every generated phrase and redub, one file each (WAV unless "Save as" says otherwise)
   logs/engine.log                the engine log
   tmp/                           scratch files, emptied at every engine start
-  settings.json                  your app settings (microphone, last choices)
+  settings.json                  your app settings (microphone, last choices, "Save as" format)
   runtime/, runtime.toml         the installed engine and models (about 28 GB)
 ```
 

@@ -345,6 +345,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(review, bool):
         raise EngineError("bad_request", "'review' must be true or false")
     voice = await aio.run_io(_Voice, ctx, data, params)
+    out_fmt = await aio.run_io(media.output_format, params)
     worker = None if review else voice.respeak_worker(target)  # a review stop needs no voice models yet
     await aio.run_io(_check_speech_ready, data, lang != target)
 
@@ -383,12 +384,12 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                                                 voice.quality, worker, voice.pth, voice.idx, voice.index_rate_for(target),
                                                 workdir, progress, voice.speed, lang=target)
             emit.stage("save", 0)
-            wav, mp3 = await aio.run_io(render.save_outputs, data, track)
+            saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
             emit.stage("save", 100)
             timings = emit.timings()
             elapsed = round(time.time() - t0, 2)
             log.info("job %s (dub): %.1fs of audio in %.1fs %s", job, res["duration_s"], elapsed, timings)
-            finish("redub.done", {"path_wav": wav, "path_mp3": mp3, "duration_s": au.duration_s(track, render.SR),
+            finish("redub.done", {**saved, "duration_s": au.duration_s(track, render.SR),
                                   "elapsed_s": elapsed, "mode": "dub", "language": res["language"],
                                   "target_language": target, "translated": res["translated"], "segments": segs,
                                   "timings_s": timings,
@@ -407,6 +408,7 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if mode not in ("convert", "respeak"):
         raise EngineError("bad_request", "'mode' must be \"convert\" or \"respeak\"")
     voice = await aio.run_io(_Voice, ctx, data, params)
+    out_fmt = await aio.run_io(media.output_format, params)
     pth, idx, trained, index_rate = voice.pth, voice.idx, voice.trained, voice.index_rate
     segs = _segments(params) if mode == "respeak" else []
     lang = _speak_language(params, segs) if mode == "respeak" else "en"
@@ -449,10 +451,10 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                 extra = {k: stats[k] for k in ("stretched", "overrun", "pushed", "drift_s", "max_push_s")}
                 extra["language"] = lang
             progress("save", 96)
-            wav, mp3 = await aio.run_io(render.save_outputs, data, track)
+            saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
             elapsed = round(time.time() - t0, 2)
             log.info("job %s (%s): %.1fs of audio in %.1fs", job, mode, total_s, elapsed)
-            finish("redub.done", {"path_wav": wav, "path_mp3": mp3, "duration_s": au.duration_s(track, render.SR),
+            finish("redub.done", {**saved, "duration_s": au.duration_s(track, render.SR),
                                   "elapsed_s": elapsed, "mode": mode, **extra})
         finally:
             await aio.run_io(shutil.rmtree, workdir, ignore_errors=True)

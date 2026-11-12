@@ -620,6 +620,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if let Some(menu) = super::formats::overlay(s, p) {
         root = root.child(menu);
     }
+    if let Some(menu) = super::formats::output_overlay(s, p) {
+        root = root.child(menu);
+    }
     if let Some(menu) = super::lang::overlay(s, &p) {
         root = root.child(menu);
     }

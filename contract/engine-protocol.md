@@ -171,8 +171,11 @@ the quick check, and only then delete the old directory.
 <data>/tmp/refcand/<voice_id>/               # preview WAVs of voices.reference_candidates (rewritten on every call)
 <data>/voices/<voice_id>/rvc/model.pth       # trained or imported RVC model
 <data>/voices/<voice_id>/rvc/model.index
-<data>/outputs/<YYYYMMDD_HHMMSS>.wav|.mp3    # generated speech (44.1 kHz; a `_2`, `_3` suffix on a name clash)
-<data>/outputs/redub_<YYYYMMDD_HHMMSS>.wav|.mp3  # Redub results (same rules)
+<data>/outputs/<YYYYMMDD_HHMMSS>.<ext>       # generated speech: ONE file per result in the job's `output_format` (default
+                                             #  wav; 44.1 kHz mono, opus 48 kHz; a `_2`, `_3` suffix on a name clash)
+<data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext> # Redub results (same rules)
+<data>/tmp/play/<name>.wav                   # playback WAV of a result saved in another format than wav (the app plays WAV
+                                             #  only; same name as the saved file; gone at the next engine start)
 <data>/runtime/models/whisper/               # Whisper turbo (large-v3-turbo.pt, 1.6 GB), fetched by setup (else on the first Redub)
 <data>/runtime/models/nllb-200-distilled-600M/  # NLLB-200 translation model (2.5 GB), fetched by setup with `hf download`; never auto-downloaded
 <data>/runtime/engine/.venv/                 # the engine environment (setup): engine, OmniVoice worker, speech worker
@@ -544,7 +547,8 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   cache_in_gpu,dataset_sig`).
 
 ### `tts.generate` / `tts.cancel`
-`{"voice_id","text","expressiveness":0.8,"voice_match":1.0,"quality":"best","speed":1.0,"language"?:"en"}` ->
+`{"voice_id","text","expressiveness":0.8,"voice_match":1.0,"quality":"best","speed":1.0,"language"?:"en",
+"output_format"?:"wav"}` ->
 `{"job","segments":3,"segment_chars":[64,150,92]}`; `tts.cancel {"job"}` -> `{}`
 - `expressiveness` (0.1-1.5, default 0.8) maps to OmniVoice's sampling: `position_temperature = 5.0 * e / 0.8` (how
   freely the order of the unmasked tokens, i.e. phrasing and pauses, varies; 5.0 is the model default) and
@@ -566,19 +570,43 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   the default is the active voice's `language`, a different choice is remembered per voice in `settings.json`
   (`speak_languages: {voice_id: code}`); a language the voice was not recorded in shows a hint and "Record a
   <language> reference".
-- Errors: `bad_request` (empty text, bad `quality`, unknown `language`), `not_found` (voice, or it has no `reference.wav`), `not_ready`
-  (models loading, missing, or handed over to training), `busy` (another generation is running; only one at a time).
+- `output_format` (optional, default `"wav"`, so older clients keep getting WAV): the format the finished result is saved
+  in, one of `wav mp3 flac ogg opus m4a aiff` (as `audio.export`, see [Saved results](#saved-results-output_format)).
+- Errors: `bad_request` (empty text, bad `quality`, unknown `language` or `output_format`), `not_found` (voice, or it has
+  no `reference.wav`), `not_ready` (models loading, missing, or handed over to training; or `output_format` cannot be
+  written on this machine), `busy` (another generation is running; only one at a time).
 - The text is cut into `segments` pieces: paragraphs are never merged, the first segment is the first sentence only
   (so audio starts fast), later ones are packed up to about 2.5 times the previous size (at most 70 tokens), and a
   paragraph never ends in a tiny segment. `segment_chars` lets a client estimate the remaining speech per segment.
 - Defaults: OmniVoice fp16, 32 steps (16 for `fast` and segment 0), guidance scale 2.0, reference cut to 7-12 s of
   whole sentences; RVC rmvpe, protect 0.33, pitch 0.
 - Events, in order: `tts.chunk {"index","path","duration_s","segments","ready_s","rtf"}` (one per segment, final audio
-  at 44.1 kHz, already includes the pause after it, play at once), then `tts.done {"path_wav","path_mp3","duration_s",
-  "elapsed_s"}`, or `tts.error {"code","message"}` (`cancelled` after `tts.cancel`; the slot is free again when the
+  at 44.1 kHz, already includes the pause after it, play at once), then `tts.done {"path","path_play","format",
+  "duration_s","elapsed_s"}` (see [Saved results](#saved-results-output_format)), or `tts.error {"code","message"}` (`cancelled` after `tts.cancel`; the slot is free again when the
   event arrives). `ready_s` is the wall time from the start of the job to this chunk; `rtf` is the wall time since the
   previous chunk (or the start) divided by this chunk's speech seconds, so `rtf < 1` means generation is faster than
   playback. Chunk files live in `<data>/tmp/<job>/` and are deleted after an hour.
+
+### Saved results (`output_format`)
+
+`tts.generate`, `redub.dub` and `redub.render` save each finished result as **one file** in `<data>/outputs`:
+`<YYYYMMDD_HHMMSS>.<ext>` (Speak) or `redub_<YYYYMMDD_HHMMSS>.<ext>` (Redub), `<ext>` being the request's
+`output_format` (`wav` default, `mp3`, `flac`, `ogg`, `opus`, `m4a`, `aiff`; `aif`/`oga`/`wave` aliases as in
+`audio.export`). A name already taken in `outputs` with that extension, or by a playback WAV, gets `_2`, `_3`, ....
+- `wav` is written directly (16-bit PCM, 44.1 kHz mono). Every other format is encoded from a 16-bit 44.1 kHz playback WAV
+  written first to `<data>/tmp/play/<same name>.wav`, with the `audio.export` encoders at quality `high` (MP3 320 kbps,
+  Ogg Vorbis q7, Opus 128 kbps at 48 kHz, AAC 256 kbps; FLAC/AIFF lossless); without ffmpeg libsndfile writes wav, mp3,
+  flac, ogg and aiff. MP3 cannot store RVC's 40 kHz: the track is always 44.1 kHz by then.
+- The end event carries `"path"` (the saved file: show it, open it, export it), `"path_play"` (a WAV of the same audio:
+  `path` itself for `wav`, else the playback WAV in `tmp/play`, which is deleted at the next engine start) and
+  `"format"` (the format actually saved). Should the encoder fail after the audio was made, the result is kept as
+  `<name>.wav` in outputs (`"format":"wav"`, logged) rather than lost.
+- The format is checked when the job starts: an unknown name is `bad_request`, one this machine cannot write (no ffmpeg,
+  or a build without the encoder; see `formats.list` `export`) is `not_ready`.
+- **App side:** the Results headers of Speak and Redub have a "Save as WAV" chip (one setting for both, `output_format`
+  in `settings.json`, default `wav`); it lists the formats of `formats.list` `export`. The app plays `path_play`, and
+  "Show in folder", "Open file" and "Export as..." use `path` (an export encodes from `path_play` while it exists).
+  Fields `path_wav` / `path_mp3` of earlier versions are gone.
 - **Pre-buffer rule (client).** Chunk 0 is played as soon as it arrives and later chunks are queued gaplessly behind
   it; the segment growth schedule keeps `rtf` of the later chunks near 1 (measured 1.05-1.4). A client that wants to
   avoid underruns on slower hardware estimates the total speech `S = duration_s(chunk 0) * sum(segment_chars) /
@@ -751,7 +779,7 @@ importable format, also video) and convert it themselves: the app never has to.
 
 ### `redub.dub` (the whole pipeline in one job)
 `{"path","voice_id","source_language":"auto","target_language":"en","review":false,"voice_match":1.0,"expressiveness":0.8,
-"quality":"best","speed":1.0}` -> `{"job"}`
+"quality":"best","speed":1.0,"output_format"?:"wav"}` -> `{"job"}`
 - Decode -> transcribe in the source language -> translate every segment to `target_language` -> **speak** in that
   language (the same respeak render as `redub.render`, see below, with the translated segments at their original times)
   -> save. One job, one GPU slot for the whole run; the speech worker releases the GPU before the speak stage starts.
@@ -766,21 +794,24 @@ importable format, also video) and convert it themselves: the app never has to.
   the (edited) segments' `{start,end,text}`, `"translated":true`, `"target_language"` and the user's sliders, exactly as
   after `redub.transcribe`.
   (No separate `redub.review` event exists: the transcript event is the review.)
-- `review: false` (default): continues straight into speaking and ends with `redub.done {"path_wav","path_mp3",
+- `review: false` (default): continues straight into speaking and ends with `redub.done {"path","path_play","format",
   "duration_s","elapsed_s","mode":"dub","language":"uk","target_language":"en","translated":true,"segments":[...as in the transcript...],
   "stretched","overrun","pushed","drift_s","max_push_s","timings_s":{"decode":..,"load_model":..,"transcribe":..,
-  "translate":..,"speak":..,"save":..}}` (seconds per stage).
+  "translate":..,"speak":..,"save":..}}` (seconds per stage). The result is saved as one file in `output_format`, see
+  [Saved results](#saved-results-output_format) (a review stop saves nothing; send `output_format` again with the
+  `redub.render` that finishes it).
 - Events: `redub.progress {"stage":"decode|load_model|transcribe|translate|speak|save","pct":0-100,"segment"?,"segments"?}`
   with one **monotonic** overall `pct` across the whole pipeline. `review:false`: decode 0-3, load_model 3-8, transcribe
   8-24, translate 24-30, speak 30-95 (`segment` / `segments` as in `redub.render`), save 95-100. `review:true`: decode 0-5,
   load_model 5-25, transcribe 25-80, translate 80-100.
 - Errors at start: `bad_request` (parameters, `target_language`), `not_found` (file, voice, `reference.wav`), `not_ready`
-  (speech model / RVC not ready for `review:false`; Whisper, translation model missing), `busy`. In the job: `redub.error`
+  (speech model / RVC not ready for `review:false`; Whisper, translation model missing; `output_format` not writable),
+  `busy`. In the job: `redub.error`
   with `bad_request` ("No speech was found in this file."), `cancelled`, `not_ready`, `internal`.
 
 ### `redub.render`
 `{"voice_id","path","mode":"convert|respeak","segments"?:[{"start","end","text"}],"language"?:"uk","translated"?:false,
-"voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0}` -> `{"job"}`
+"voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"output_format"?:"wav"}` -> `{"job"}`
 - `convert`: the voice's RVC model is run over the **whole source** (voice, noise and music alike; background/music
   separation is not implemented) in chunks of about 15-30 s cut at the quietest point (a pause), then joined. The result
   has exactly the source's length, so the original timing is kept. Silent stretches are copied. The voice must be
@@ -820,13 +851,15 @@ importable format, also video) and convert it themselves: the app never has to.
 - Events: `redub.progress {"stage":"decode|convert|speak|save","pct":0-100,"segment"?:i,"segments"?:n}` (`pct` overall:
   decode 0-5, convert/speak 5-95, save 95-100; `segment` is the 0-based index of the chunk (`convert`) or transcript
   segment (`speak`) that just finished, `segments` the total; `decode` and `save` carry neither), then
-  `redub.done {"path_wav","path_mp3","duration_s","elapsed_s","mode"}` plus, for `respeak`, `"language"` (the language
+  `redub.done {"path","path_play","format","duration_s","elapsed_s","mode"}` plus, for `respeak`, `"language"` (the language
   spoken) and `"stretched":n,"overrun":n,"pushed":n,"drift_s":s,"max_push_s":s` (informational), or `redub.error {"code","message"}` (`cancelled` after
-  `redub.cancel`; `bad_request` for a file without audio; `internal`). The files are
-  `<data>/outputs/redub_<YYYYMMDD_HHMMSS>.wav|.mp3` (44.1 kHz mono; `_2`, `_3` on a clash). The job slot is free again when
-  the end event arrives. Export to other formats with `audio.export`.
-- Errors at start: `bad_request` (mode, quality, numbers, untrained voice for `convert`, bad `segments`), `not_found`
-  (voice, file, or no `reference.wav` for `respeak`), `not_ready` (the needed models are not `ready`), `busy`.
+  `redub.cancel`; `bad_request` for a file without audio; `internal`). The result is one file
+  `<data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext>` in `output_format` (default `wav`; 44.1 kHz mono; `_2`, `_3` on a clash),
+  plus a playback WAV for other formats, see [Saved results](#saved-results-output_format). The job slot is free again
+  when the end event arrives. Export to other formats with `audio.export`.
+- Errors at start: `bad_request` (mode, quality, numbers, untrained voice for `convert`, bad `segments`, unknown
+  `output_format`), `not_found` (voice, file, or no `reference.wav` for `respeak`), `not_ready` (the needed models are
+  not `ready`, or `output_format` cannot be written here), `busy`.
 - Typical flows: `redub.probe` (show duration) + `redub.prepare` (on drop) ->
   1. **couple of clicks**: `redub.dub` (`review:false`) -> `redub.done`;
   2. **with review**: `redub.dub` (`review:true`) or `redub.transcribe` (`translate_to`) -> `redub.transcript` -> the user

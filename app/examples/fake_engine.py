@@ -72,7 +72,7 @@ def tts_job(data_dir, job, params):
     os.makedirs(out, exist_ok=True)
     final = os.path.join(out, f"{job}.wav")
     write_tone(final, total, 330)
-    send({"event": "tts.done", "job": job, "data": {"path_wav": os.path.abspath(final), "path_mp3": None,
+    send({"event": "tts.done", "job": job, "data": {"path": os.path.abspath(final), "path_play": os.path.abspath(final),
                                                     "duration_s": total, "elapsed_s": time.time() - started}})
 
 

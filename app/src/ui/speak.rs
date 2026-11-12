@@ -1,7 +1,9 @@
 //! Speak screen: type text, press Generate, hear it in your voice while it is still being made.
 //!
 //! Flow: `tts.generate` -> `tts.chunk` per text segment -> `tts.done` (the result lands in the history list with
-//! play / open / reveal actions).
+//! play / open / reveal actions). Each result is saved as one file in the format of the "Save as" chip in the Results
+//! header (`output_format`, shared with Redub; see `formats::output_chip`); a non-WAV result plays from the engine's
+//! playback WAV.
 //!
 //! The output language (a chip in the Style panel, any language the engine speaks) defaults to the language the active
 //! voice was recorded in and is remembered per voice (`speak_languages` in `settings.json`); `tts.generate` sends it as
@@ -34,8 +36,10 @@ pub struct Take {
     pub id: u64,
     pub text: String,
     pub voice: String,
-    pub wav: PathBuf,
-    pub mp3: Option<PathBuf>,
+    /// The saved file (`<data>/outputs`, in the chosen format): Show in folder, Open file, Export.
+    pub path: PathBuf,
+    /// A WAV of it to play (the saved file itself when that is a WAV).
+    pub play: PathBuf,
     pub duration_s: f32,
     pub elapsed_s: f32,
 }
@@ -243,7 +247,8 @@ pub fn generate(s: &mut AppState) {
     }
     let Some(voice) = shell::active_voice(s).cloned() else { return };
     let lang = language(s);
-    let (method, params) = protocol::tts_generate(&voice.id, &text, s.speak.expressiveness, s.speak.voice_match, s.speak.quality, s.speak.speed, &lang);
+    let out = super::formats::output_format(s);
+    let (method, params) = protocol::tts_generate(&voice.id, &text, s.speak.expressiveness, s.speak.voice_match, s.speak.quality, s.speak.speed, &lang, &out);
     shell::stop_audio(s);
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -275,7 +280,7 @@ pub fn cancel(s: &mut AppState) {
 
 fn play_take(s: &mut AppState, id: u64) {
     let Some(t) = s.speak.takes.iter().find(|t| t.id == id) else { return };
-    let path = t.wav.clone();
+    let path = t.play.clone();
     match shell::play(s, &path) {
         Ok(()) => s.speak.playing = Playing::Take(id),
         Err(e) => shell::toast(s, Tone::Danger, e),
@@ -344,15 +349,14 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             EngineEvent::TtsChunk { chunk, .. } => on_chunk(s, a, chunk),
             EngineEvent::TtsDone { done, .. } => {
                 flush_held(s, &mut a);
-                let path_wav = done.path_wav.clone();
-                let wav = if path_wav.as_os_str().is_empty() { done.path_mp3.clone().unwrap_or_default() } else { path_wav };
+                let play = done.play_path();
                 s.speak.next_take += 1;
                 let take = Take {
                     id: s.speak.next_take,
                     text: a.text.clone(),
                     voice: a.voice.clone(),
-                    wav,
-                    mp3: done.path_mp3.clone(),
+                    path: done.path.clone(),
+                    play,
                     duration_s: done.duration_s,
                     elapsed_s: if ev.data.get("elapsed_s").is_some() { done.elapsed_s } else { (s.shell.now - a.started) as f32 },
                 };
@@ -720,8 +724,16 @@ fn language_row(s: &AppState, p: Palette) -> El {
     c
 }
 
+/// The right end of a Results header (Speak and Redub): the count badge, when there are results, and the "Save as"
+/// chip. Pinned beside the title, so the header is as tall as Style's.
+pub(crate) fn results_head(s: &AppState, p: Palette, count: usize, chip_key: &str) -> El {
+    row().key(format!("{chip_key}-head")).pin(None, Some(16.5), Some(22.0), None).gap(8.0).center_y()
+        .children((count > 0).then(|| badge(p, &format!("{count}"), Tone::Neutral)))
+        .child(super::formats::output_chip(s, p, chip_key))
+}
+
 fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
-    let head = (!s.speak.takes.is_empty()).then(|| badge(p, &format!("{}", s.speak.takes.len()), Tone::Neutral).pin(None, Some(22.0), Some(22.0), None));
+    let head = results_head(s, p, s.speak.takes.len(), "speak-outfmt");
     let body = if s.speak.takes.is_empty() {
         col().key("takes-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here."))
     } else {
@@ -732,7 +744,7 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
             col().key("takes").w_full().child(list)
         }
     };
-    section_panel(p, "Results").key("results-panel").w_full().grow(1.0).min_h(0.0).gap(10.0).children(head).child(body)
+    section_panel(p, "Results").key("results-panel").w_full().grow(1.0).min_h(0.0).gap(10.0).child(head).child(body)
 }
 
 /// A take's text as one short line for its card: line breaks would make the truncated label as tall as the paragraph.
@@ -752,8 +764,8 @@ fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
         .on_press(move |s: &mut AppState| if s.speak.playing == Playing::Take(id) { stop_play(s) } else { play_take(s, id) })
         .child(icon_el(if on { &icons::STOP } else { &icons::PLAY }, 15.0, p.on_accent));
     let play = accent_glass(p, play);
-    let path = t.wav.clone();
-    let path2 = t.wav.clone();
+    let path = t.path.clone();
+    let path2 = t.path.clone();
     let reveal = icon_button(p, &format!("reveal{id}"), &icons::FOLDER, "Show in folder", move |s| {
         if let Err(e) = reveal_file(&path) {
             shell::toast(s, Tone::Danger, e);
@@ -765,7 +777,7 @@ fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
         }
     });
     let meta = format!("{} · made in {:.1} s", fmt_time(t.duration_s), t.elapsed_s);
-    let export = super::formats::export_button(p, format!("export-take{id}"), &t.wav, true);
+    let export = super::formats::export_button(p, format!("export-take{id}"), &t.path, &t.play, true);
     glass_card(p).key(format!("take{id}")).w_full().padding(10.0).gap(10.0)
         .child(row().w_full().gap(10.0).center_y()
             .child(play)
@@ -793,7 +805,7 @@ fn demo_voice(s: &mut AppState, trained: bool) {
 }
 
 fn demo_takes(s: &mut AppState) {
-    let mk = |id, text: &str, d, e| Take { id, text: text.into(), voice: "My voice".into(), wav: format!("/tmp/out{id}.wav").into(), mp3: None, duration_s: d, elapsed_s: e };
+    let mk = |id, text: &str, d, e| Take { id, text: text.into(), voice: "My voice".into(), path: format!("/tmp/out{id}.wav").into(), play: format!("/tmp/out{id}.wav").into(), duration_s: d, elapsed_s: e };
     s.speak.takes = vec![
         mk(3, "Welcome back. In a few seconds this paragraph will be read in my own voice.\n\nA second paragraph follows after an empty line, and a third one after it.\n\nThat is all.", 14.2, 9.1),
         mk(2, "The quick brown fox jumps over the lazy dog.", 3.8, 2.6),
@@ -871,8 +883,18 @@ pub fn scene_export_menu(s: &mut AppState) {
     s.formats.scene_ready();
     s.speak.text = TextEdit::new(SAMPLE);
     demo_takes(s);
-    s.formats.menu = Some(super::formats::Menu { anchor: "export-take3".into(), src: "/tmp/out3.wav".into() });
+    s.formats.menu = Some(super::formats::Menu { anchor: "export-take3".into(), src: "/tmp/out3.wav".into(), audio: "/tmp/out3.wav".into() });
     s.formats.format = "opus".into();
+}
+
+/// Results saved as MP3, with the "Save results as" menu open.
+pub fn scene_output_menu(s: &mut AppState) {
+    demo_voice(s, true);
+    s.formats.scene_ready();
+    s.speak.text = TextEdit::new(SAMPLE);
+    demo_takes(s);
+    s.formats.output = "mp3".into();
+    s.formats.output_menu = Some("speak-outfmt".into());
 }
 
 pub fn scene_no_voice(s: &mut AppState) {
