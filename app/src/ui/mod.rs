@@ -66,6 +66,7 @@ pub const SCENES: &[(&str, fn(&mut AppState))] = &[
     ("speak_buffering", speak::scene_buffering),
     ("speak_preparing", speak::scene_preparing),
     ("speak_done", speak::scene_done),
+    ("speak_toast_long", speak::scene_toast_long),
     ("speak_export_menu", speak::scene_export_menu),
     ("speak_output_menu", speak::scene_output_menu),
     ("move_confirm", relocate::scene_confirm),

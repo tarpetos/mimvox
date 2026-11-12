@@ -814,20 +814,26 @@ pub struct Toast {
 pub fn toast_stack(p: Palette, toasts: &[Toast]) -> El {
     let items = toasts.iter().map(|t| {
         let id = t.id;
+        // Long messages wrap onto more lines inside a bounded card instead of being cut off. The width follows the
+        // text (a centred wrapping text would otherwise shrink to its longest word).
+        let width = (t.text.chars().count() as f32 * 7.8 + 72.0).clamp(160.0, 640.0);
         row().key(format!("toast{id}"))
-            .px(14.0)
-            .h(38.0)
+            .w(width)
+            .px(16.0)
+            .py(10.0)
+            .min_h(38.0)
             .gap(10.0)
             .center_y()
-            .radius(19.0)
-            .fill(rune::oklcha(0.22, 0.03, 255.0, 0.9))
+            .radius(16.0)
+            .fill(rune::oklcha(0.22, 0.03, 255.0, 0.97))
+            .backdrop_blur(18.0)
             .border_gradient(1.0, p.rim_top, p.rim_bottom)
             .shadow(8.0, 28.0, p.shadow)
             .hover(p.glass_hover)
             .on_press(move |s: &mut AppState| s.shell.dismiss_toast(id))
             .transition(Transition::offset(0.0, 12.0).combined(Transition::opacity()))
             .child(status_dot(p, t.tone, false))
-            .child(text(t.text.clone()).font(ty::LABEL).color(p.text).max_w(560.0).truncate())
+            .child(text(t.text.clone()).font(ty::LABEL).color(p.text).wrap().grow(1.0).min_w(0.0))
     });
     col().key("toasts").pin(Some(0.0), None, Some(0.0), Some(26.0)).items_center().gap(10.0).inert_if_empty(toasts.is_empty()).children(items)
 }

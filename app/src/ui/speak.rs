@@ -1110,6 +1110,12 @@ pub fn scene_done(s: &mut AppState) {
     demo_takes(s);
 }
 
+/// A long warning toast wraps instead of being cut off.
+pub fn scene_toast_long(s: &mut AppState) {
+    scene_done(s);
+    shell::toast(s, Tone::Warning, "The reference clip is Ukrainian speech, so the English carries a Ukrainian accent. Add an English clip under Other languages in Voices, or choose Native (American) in Accent.");
+}
+
 /// The shared "Export as..." menu open on a take.
 pub fn scene_export_menu(s: &mut AppState) {
     demo_voice(s, true);

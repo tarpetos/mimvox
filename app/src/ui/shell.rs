@@ -252,8 +252,11 @@ pub fn toast(s: &mut AppState, tone: Tone, text: impl Into<String>) {
     let now = clock_now(s);
     let sh = &mut s.shell;
     sh.next_toast += 1;
-    let life = if tone == Tone::Danger { 7.0 } else { 4.0 };
-    sh.toasts.push(Toast { id: sh.next_toast, tone, text: text.into(), expires: now + life });
+    let text = text.into();
+    // Time to read it: longer messages stay longer (about 15 characters a second on top of the base time).
+    let base = if tone == Tone::Danger { 7.0 } else { 4.0 };
+    let life = (base + text.chars().count() as f64 / 15.0).min(14.0);
+    sh.toasts.push(Toast { id: sh.next_toast, tone, text, expires: now + life });
     if sh.toasts.len() > 3 {
         sh.toasts.remove(0);
     }
