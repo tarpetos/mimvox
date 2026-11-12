@@ -805,7 +805,7 @@ fn media_heading(p: &Palette, pool: Option<&Pool>, after_parts: bool) -> El {
 
 /// The detected language of `reference.wav` ("Ukrainian speech") and, when it is not the voice's own language and
 /// that language has no clip of its own, what that means for speech in it.
-fn language_line(p: &Palette, info: &VoiceInfo) -> El {
+fn language_line(p: &Palette, info: &VoiceInfo, zero_shot_vc: bool) -> El {
     let Some(code) = info.reference_language.as_deref() else {
         return row().key("refclip-spoken").w_full().child(
             text("Spoken language: not checked yet (the next time this voice is prepared or speaks).").font(ty::CAPTION).color(p.text_faint).wrap(),
@@ -820,7 +820,7 @@ fn language_line(p: &Palette, info: &VoiceInfo) -> El {
     }
     let own = lang::name(info.lang());
     let note = if lang::base(info.lang()) == "en" {
-        let fix = if info.trained { "or choose Native accent when it speaks" } else { "or train the voice for a native accent" };
+        let fix = if info.trained || zero_shot_vc { "or choose Native accent when it speaks" } else { "or train the voice for a native accent" };
         format!("English will carry this clip's accent. Add an English clip under Other languages, {fix}.")
     } else {
         format!("{own} will carry this clip's accent. Add {} {own} clip under Other languages.", if own.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" })
@@ -871,7 +871,7 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
 
     let mut c = col().key("refclip").w_full().gap(10.0).child(head);
     match &r.current {
-        Some(cur) => c = c.child(clip_row(s, p, "refclip-current", cur, None)).child(language_line(p, info)),
+        Some(cur) => c = c.child(clip_row(s, p, "refclip-current", cur, None)).child(language_line(p, info, s.shell.zero_shot_vc)),
         None if r.loading => c = c.child(text("Checking the clip…").font(ty::CAPTION).color(p.text_dim)),
         None => c = c.child(text("No reference clip yet. Record this voice, or add media files of it below.").font(ty::CAPTION).color(p.text_dim)),
     }

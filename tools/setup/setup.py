@@ -2,15 +2,16 @@
 
 It installs the toolchains the app is built with (Rust, a C/C++ toolchain), then builds the ML runtime under
 ``<data dir>/runtime/``: the engine environment (OmniVoice, the speech model for every language, plus Whisper and NLLB
-for Redub, Hybrid Demucs for removing background music from media files) and Applio (RVC, at a pinned commit), each
-in its own uv virtual environment, plus every model they need, and writes ``<data dir>/runtime.toml`` for the app (see contract/engine-protocol.md).
+for Redub, Hybrid Demucs for removing background music from media files, Seed-VC for the native accent of untrained
+voices) and Applio (RVC, at a pinned commit), each in its own uv virtual environment, plus every model they need, and
+writes ``<data dir>/runtime.toml`` for the app (see contract/engine-protocol.md).
 
 Every step checks what is already there and skips it, a step interrupted by Ctrl-C or a lost connection resumes
 where it stopped (git fetches, uv and Hugging Face downloads are resumable), so running it again is always safe.
 Standard library only: it runs before anything else is installed.
 
 Examples:
-    ./setup.sh                                   full setup (about 28 GB on disk, 31 GB with an NVIDIA GPU)
+    ./setup.sh                                   full setup (about 30 GB on disk, 33 GB with an NVIDIA GPU)
     ./setup.sh --skip-toolchain --yes            no Rust / compiler install, no questions
     ./setup.sh --quick-check                     verify an existing setup, download nothing
 """
@@ -77,6 +78,25 @@ NLLB_FP16_SCRIPT = (
     "                                              **{key: torch.float16})\n"
     "model.save_pretrained(sys.argv[2], max_shard_size='20GB')\n"
 )
+# Zero-shot voice conversion for the native accent of untrained voices (engine zsvc.py): Seed-VC (GPL-3.0), a separately
+# downloaded runtime component, never part of this repository. Its source checkout at a pinned commit, the two packages
+# its modules import that the engine venv lacks, and the weights of its speech model (v1: DiT + Whisper-small encoder +
+# BigVGAN 22 kHz; CAM++ ships in the checkout) at pinned revisions. --no-zero-shot-vc leaves it out.
+SEEDVC_URL = "https://github.com/Plachtaa/seed-vc.git"
+SEEDVC_COMMIT = "51383efd921027683c89e5348211d93ff12ac2a8"
+SEEDVC_DIR = "seed-vc"                 # <runtime>/seed-vc (code) and <runtime>/models/seed-vc (weights)
+SEEDVC_PACKAGES = ("munch==4.0.0", "einops==0.8.0")
+SEEDVC_MODELS = (   # (subfolder, Hugging Face repo, revision, files)
+    ("dit", "Plachta/Seed-VC", "257283f9f41585055e8f858fba4fd044e5caed6e",
+     ("DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth", "config_dit_mel_seed_uvit_whisper_small_wavenet.yml")),
+    ("bigvgan", "nvidia/bigvgan_v2_22khz_80band_256x", "633ff708ed5b74903e86ff1298cf4a98e921c513",
+     ("config.json", "bigvgan_generator.pt")),
+    ("whisper-small", "openai/whisper-small", "973afd24965f72e36ca33b3055d56a652f456b4d",
+     ("config.json", "preprocessor_config.json", "model.safetensors")),
+)
+SEEDVC_STAMP = ".mimvox-setup-ok"      # in the weights folder: the engine uses the converter only once it is there
+ZERO_SHOT_GB = 2.0   # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, BigVGAN 0.45, Whisper-small 0.97)
+
 WHISPER_MODEL = "turbo"
 # "Remove background music" (reference from media, Record's multi-file import): torchaudio's HDEMUCS_HIGH_MUSDB_PLUS
 # weights, the very file that bundle downloads (download.pytorch.org/torchaudio/<its _model_path>), kept in
@@ -105,14 +125,14 @@ OMNIVOICE_REQUIRED = ("config.json", "model.safetensors", "tokenizer.json", "tok
                       "audio_tokenizer/preprocessor_config.json")
 
 MIN_RUST = (1, 97)
-RUNTIME_GB = 28
+RUNTIME_GB = 30
 ENGINE_GB = 11    # engine venv (torch 2.8 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + the OmniVoice model (3.3 GB)
 APPLIO_GB = 12
 SPEECH_GB = 4.5   # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
 BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with an NVIDIA GPU or --better-translation yes
 SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
-DISK_NEEDED_GB = 32
+DISK_NEEDED_GB = 34
 UV_HTTP_TIMEOUT = "600"
 
 # Linux packages: a C/C++ toolchain and the libraries Rune (wgpu, winit, cpal, fontconfig) builds and runs against,
@@ -289,6 +309,7 @@ class Setup:
     gpu: Gpu = field(default_factory=lambda: Gpu("cpu"))
     uv_path: str = ""
     better_translation: str = "auto"   # auto (with an NVIDIA GPU) | yes | no
+    zero_shot_vc: bool = True          # Seed-VC for the native accent of untrained voices (--no-zero-shot-vc)
 
     # ---- paths -----------------------------------------------------------------------------------------------
 
@@ -315,6 +336,14 @@ class Setup:
     @property
     def omnivoice_model(self) -> Path:
         return self.runtime / "models" / OMNIVOICE_DIR
+
+    @property
+    def seed_vc(self) -> Path:
+        return self.runtime / SEEDVC_DIR
+
+    @property
+    def seed_vc_models(self) -> Path:
+        return self.runtime / "models" / SEEDVC_DIR
 
     def engine_python(self) -> Path:
         return venv_python(self.engine_venv, self.plat)
@@ -441,6 +470,9 @@ class Setup:
                     f"{NLLB_BIG_DOWNLOAD_GB} GB, kept as {BETTER_TRANSLATION_GB} GB.")
             if not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() and not self.skip_models:
                 say(f"The music-removal model will be downloaded now (about {SEPARATION_GB} GB: Hybrid Demucs).")
+            if self.zero_shot_vc and not self.has_zero_shot_vc() and not self.skip_models:
+                say(f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
+                    "now: the native accent for voices that are not trained (--no-zero-shot-vc leaves it out).")
             if not self._has(self.omnivoice_model, OMNIVOICE_REQUIRED) and not self.skip_models:
                 say(f"The OmniVoice speech model (every language, Ukrainian included) will be installed now: about "
                     f"{ENGINE_GB} GB (the engine environment in <data>/runtime/engine, the model in "
@@ -450,9 +482,11 @@ class Setup:
                     "at the end.")
         else:
             better = self.wants_better_translation()
-            total = RUNTIME_GB + (round(BETTER_TRANSLATION_GB) if better else 0)
+            total = (RUNTIME_GB + (round(BETTER_TRANSLATION_GB) if better else 0)
+                     - (0 if self.zero_shot_vc else round(ZERO_SHOT_GB)))
             say(f"This will download and install about {total} GB (engine + OmniVoice ~{ENGINE_GB} GB, "
                 f"Applio/RVC ~{APPLIO_GB} GB, Redub models ~{SPEECH_GB} GB, music removal ~{SEPARATION_GB} GB"
+                + (f", zero-shot native accent ~{ZERO_SHOT_GB:.0f} GB" if self.zero_shot_vc else "")
                 + (f", better translation ~{BETTER_TRANSLATION_GB} GB" if better else "") + ") plus ~0.1 GB per voice.")
             say("OmniVoice speaks every language (Ukrainian, English and about 60 more): the engine environment in "
                 "<data>/runtime/engine and the model (3.3 GB) in <data>/runtime/models/omnivoice.")
@@ -465,6 +499,11 @@ class Setup:
                     "<data>/runtime/models/nllb-200-distilled-1.3B; --better-translation no leaves it out).")
             say(f"Removing background music from media files uses Hybrid Demucs (about {SEPARATION_GB} GB, "
                 "<data>/runtime/models/demucs).")
+            if self.zero_shot_vc:
+                say(f"The native accent of voices that are not trained uses Seed-VC, a zero-shot voice converter "
+                    f"(about {ZERO_SHOT_GB:.0f} GB: its source in <data>/runtime/{SEEDVC_DIR}, GPL-3.0, downloaded "
+                    f"from its own repository; weights in <data>/runtime/models/{SEEDVC_DIR}; --no-zero-shot-vc "
+                    "leaves it out).")
             if self.skip_models:
                 say("--skip-models: the model files (most of that size) are left out for now.")
         say("=" * 78)
@@ -836,6 +875,54 @@ class Setup:
         say(f"Music-removal model: downloading Hybrid Demucs (about {DEMUCS_SIZE / 1e6:.0f} MB, resumable)...")
         fetch_demucs(self.models_dir)
 
+    def has_zero_shot_vc(self) -> bool:
+        """The converter is complete: checkout, weights and the stamp (as the engine's ``zsvc.installed``)."""
+        files = [f"{sub}/{name}" for sub, _repo, _rev, names in SEEDVC_MODELS for name in names]
+        return ((self.seed_vc / "modules" / "commons.py").is_file()
+                and self._has(self.seed_vc, ("campplus_cn_common.bin",))
+                and self._has(self.seed_vc_models, (*files, SEEDVC_STAMP)))
+
+    def zero_shot_vc_runtime(self) -> None:
+        """Seed-VC for the native accent of untrained voices: the source checkout (pinned commit), its two extra
+        packages in the engine venv (munch, einops; it needs nothing else the engine does not have: torch 2.8,
+        transformers 5, librosa), the weights (``hf download`` at pinned revisions, resumable), then the stamp that
+        tells the engine it is complete. Runs offline afterwards."""
+        py = self.engine_python()
+        if not py.exists():
+            raise SetupError("The engine environment is missing, so the zero-shot voice converter cannot be installed.")
+        stamp = self.seed_vc_models / SEEDVC_STAMP
+        stamp_value = f"{SEEDVC_COMMIT} {' '.join(SEEDVC_PACKAGES)} {' '.join(rev for _s, _r, rev, _f in SEEDVC_MODELS)}"
+        if self.has_zero_shot_vc() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
+            say("Zero-shot voice converter (Seed-VC): present.")
+            return
+        self.ensure_repo("Seed-VC", SEEDVC_URL, SEEDVC_COMMIT, self.seed_vc)
+        if self.quiet([py, "-I", "-c", "import munch, einops"], cwd=self.runtime) != 0:
+            say("Zero-shot voice converter: adding munch and einops to the engine environment...")
+            self.must(self.uv("pip", "install", "--python", py, *SEEDVC_PACKAGES),
+                      "Installing the zero-shot voice converter's packages", cwd=self.runtime)
+        if self.skip_models:
+            return
+        for sub, repo, rev, files in SEEDVC_MODELS:
+            target = self.seed_vc_models / sub
+            if self._has(target, files):
+                continue
+            say(f"Zero-shot voice converter: downloading {repo} ({', '.join(files)}, resumable)...")
+            target.mkdir(parents=True, exist_ok=True)
+            code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", repo, *files, "--revision", rev,
+                             "--local-dir", target], cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+            if code != 0:
+                script = ("import sys; from huggingface_hub import hf_hub_download\n"
+                          "for f in sys.argv[4:]: hf_hub_download(sys.argv[1], f, revision=sys.argv[2], local_dir=sys.argv[3])")
+                self.must([py, "-I", "-c", script, repo, rev, target, *files],
+                          f"Downloading {repo} for the zero-shot voice converter", cwd=self.runtime,
+                          extra_env={"HF_HUB_DISABLE_XET": "1"})
+            if not self._has(target, files):
+                raise SetupError(f"The {repo} download finished but files are missing; run this again.")
+        stamp.write_text(stamp_value, encoding="utf-8")
+        if not self.has_zero_shot_vc():
+            raise SetupError("The zero-shot voice converter is incomplete; run this again.")
+        say("Zero-shot voice converter (Seed-VC): ready.")
+
     def engine_env(self) -> None:
         """The engine environment (Python 3.11, torch 2.8, transformers 5): the engine, the OmniVoice worker
         (omnivoice; num2words and the Ukrainian stress dictionary for the text front-end) and the speech worker
@@ -923,6 +1010,8 @@ class Setup:
             "\n[paths]\n"
             f"applio = {toml_str(self.applio)}\n"
             f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
+            f"seed_vc = {toml_str(self.seed_vc)}\n"
+            f"seed_vc_models = {toml_str(self.seed_vc_models)}\n"
             "\n[device]\n"
             f'backend = "{self.gpu.backend}"\n'
         )
@@ -1065,6 +1154,11 @@ class Setup:
         else:
             say(f"Music-removal model: not downloaded yet ({demucs}); media files are used with their music until "
                 "setup fetches it.")
+        if self.has_zero_shot_vc():
+            say("Zero-shot voice converter (Seed-VC): present.")
+        else:
+            say("Zero-shot voice converter (Seed-VC): not installed (optional; untrained voices then have no native "
+                "accent until setup installs it).")
         return problems
 
     def _check_torch(self, label: str, py: Path) -> list[str]:
@@ -1178,6 +1272,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--better-translation", choices=("auto", "yes", "no"), default="auto",
                         help="the optional better translation model for Redub (NLLB-200 1.3B, a 5.5 GB download kept "
                              "as 2.7 GB): auto = only with an NVIDIA GPU (default), yes = also without one, no = never")
+    parser.add_argument("--no-zero-shot-vc", action="store_true",
+                        help="leave out Seed-VC (GPL-3.0, about 2 GB), the zero-shot voice converter that gives voices "
+                             "that are not trained a native accent")
     parser.add_argument("--remove-indextts", action="store_true",
                         help="delete <data>/runtime/index-tts (the IndexTTS-2.5 runtime of earlier versions, about 19 GB) "
                              "without asking; without this flag setup only offers it in an interactive terminal")
@@ -1238,7 +1335,7 @@ def build_setup(args: argparse.Namespace) -> Setup:
     return Setup(root=root, plat=plat, arch=host_arch(), data_dir=data_dir,
                  skip_toolchain=args.skip_toolchain, skip_models=args.skip_models, force_cpu=args.cpu,
                  assume_yes=args.yes, force=args.force, uv_path=find_uv(),
-                 better_translation=args.better_translation)
+                 better_translation=args.better_translation, zero_shot_vc=not args.no_zero_shot_vc)
 
 
 def run_move(args: argparse.Namespace) -> int:
@@ -1337,6 +1434,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if attempt(setup.speech_models) and setup.wants_better_translation():
                 attempt(setup.better_translation_model)
         attempt(setup.separation_model)
+    if setup.zero_shot_vc and setup.engine_python().exists():
+        attempt(setup.zero_shot_vc_runtime)
     if applio_cloned and attempt(setup.applio_venv) and not args.skip_models:
         attempt(setup.applio_models)
     attempt(setup.write_runtime_toml)

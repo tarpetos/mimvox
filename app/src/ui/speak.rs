@@ -13,10 +13,12 @@
 //! English output without an English reference clip (no `reference_en.wav`, and `reference.wav` is detected as another
 //! language, or, while its language is not known yet, the voice was recorded in another one) shows an "Accent" choice
 //! (see [`accent_block`], shared with Redub's Translate & dub and Re-speak): "Native (American)" sends
-//! `accent: "native-us"` (a native reference voice speaks, the trained RVC model brings the user's timbre back), "Like
-//! my recordings" the voice's own reference. It needs a trained voice: an untrained one shows the choice disabled with
-//! a way to add an English clip instead. The choice and the native speaker override are remembered in `settings.json`
-//! (`accent`, `native_voice`). A job spoken from a clip in another language than its text (`reference_note`) shows a
+//! `accent: "native-us"` (a native reference voice speaks; a trained voice's RVC model brings the user's timbre back,
+//! an untrained voice gets it from its reference clip through the engine's zero-shot converter), "Like my recordings"
+//! the voice's own reference. Native is the default. An untrained voice needs the zero-shot converter (`hello` ->
+//! `zero_shot_vc`, installed by setup): without it the choice is shown disabled with a way to add an English clip
+//! instead. The choice and the native speaker override are remembered in `settings.json` (`accent`, `native_voice`)
+//! once the user changes them. A job spoken from a clip in another language than its text (`reference_note`) shows a
 //! warning toast.
 //!
 //! Playback is pre-buffered: a single-segment job plays at once; for longer text the finished segments are held
@@ -253,18 +255,24 @@ pub fn accent_applies(s: &AppState, lang: &str) -> bool {
     shell::active_voice(s).is_some_and(|v| lang::base(lang) == "en" && !v.has_reference_in("en"))
 }
 
-/// The `accent` of a speech request in `lang`: the native speaker when the native accent applies, is chosen and the
-/// voice is trained (an untrained voice would lose its timbre), else `None` (the voice's own reference).
-pub fn accent_param(s: &AppState, lang: &str) -> Option<NativeVoice> {
-    let trained = shell::active_voice(s).is_some_and(|v| v.trained);
-    (accent_applies(s, lang) && trained && s.speak.native_accent).then_some(s.speak.native_voice)
+/// Whether the active voice can use the native accent: trained (its RVC model gives the timbre), or the engine has
+/// the zero-shot converter (it takes the timbre from the reference clip, no training).
+pub fn native_possible(s: &AppState) -> bool {
+    shell::active_voice(s).is_some_and(|v| v.trained || s.shell.zero_shot_vc)
 }
 
-/// The `accent` to warm the active voice with (`voices.warm`): native when chosen and the voice is trained and has no
+/// The `accent` of a speech request in `lang`: the native speaker when the native accent applies, is chosen and is
+/// possible (an untrained voice without the zero-shot converter would lose its timbre), else `None` (the voice's own
+/// reference).
+pub fn accent_param(s: &AppState, lang: &str) -> Option<NativeVoice> {
+    (accent_applies(s, lang) && native_possible(s) && s.speak.native_accent).then_some(s.speak.native_voice)
+}
+
+/// The `accent` to warm the active voice with (`voices.warm`): native when chosen and possible and the voice has no
 /// English reference clip (its English output would use it).
 pub fn warm_accent(s: &AppState) -> Option<NativeVoice> {
     let v = shell::active_voice(s)?;
-    (v.trained && !v.has_reference_in("en") && s.speak.native_accent).then_some(s.speak.native_voice)
+    (native_possible(s) && !v.has_reference_in("en") && s.speak.native_accent).then_some(s.speak.native_voice)
 }
 
 /// Opens Voices with "Add a language" set to `code`: record or import a reference clip in that language.
@@ -838,27 +846,31 @@ fn language_row(s: &AppState, p: Palette) -> El {
 }
 
 /// The "Accent" choice (Speak's Style panel, Redub's Translate & dub to English and Re-speak in English): "Native
-/// (American)" or "Like my recordings"; with Native, the native speaker (Auto / Male / Female). An untrained voice
-/// shows it disabled, with the two ways to English without an accent: train the voice, or add an English clip
-/// ("Add an English clip" opens Voices on it).
+/// (American)" or "Like my recordings"; with Native, the native speaker (Auto / Male / Female). A trained voice gets
+/// Native through its RVC model, an untrained one through the engine's zero-shot converter; an untrained voice on an
+/// engine without that converter shows it disabled, with the other ways to English without an accent: install it,
+/// train the voice, or add an English clip ("Add an English clip" opens Voices on it).
 pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     let voice = shell::active_voice(s);
     let trained = voice.is_some_and(|v| v.trained);
+    let possible = native_possible(s);
     // The language the voice's clip is in: detected, else the one it was recorded in.
     let rec = voice.map(|v| lang::name(v.reference_lang())).unwrap_or_default();
     let detected = voice.is_some_and(|v| v.reference_language.is_some());
-    let native = trained && s.speak.native_accent;
+    let native = possible && s.speak.native_accent;
     let pick = segmented_fill(
         p,
         &format!("{key}-pick"),
         &["Native (American)", "Like my recordings"],
         if trained {
             &["A native American speaker says it, then your trained voice model gives it your timbre", "Copies the accent of your own recordings"]
+        } else if possible {
+            &["A native American speaker says it, then it gets the timbre of your reference clip (no training needed)", "Copies the accent of your own recordings"]
         } else {
-            &["Train this voice to speak English without an accent", "Copies the accent of your own recordings"]
+            &["Needs the zero-shot voice converter (run setup) or a trained voice", "Copies the accent of your own recordings"]
         },
         usize::from(!native),
-        trained,
+        possible,
         |s, i| {
             s.speak.native_accent = i == 0;
             s.speak.accent_dirty = true;
@@ -867,8 +879,10 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     // Whose accent English gets from the voice's own clip: "your Ukrainian reference clip" once its language is
     // detected, else the recording language.
     let source = if detected { format!("your {rec} reference clip") } else { format!("your {rec} recordings") };
-    let caption = if native {
+    let caption = if native && trained {
         "A native American speaker says it; your trained voice model keeps your timbre.".to_owned()
+    } else if native {
+        "Native accent from your reference clip (no training needed); training makes it closer to you.".to_owned()
     } else {
         format!("English gets the accent of {source}.")
     };
@@ -877,14 +891,14 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
         .child(pick)
         .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap());
     if !native {
-        let hint = if trained {
+        let hint = if possible {
             "Pick Native, or add an English reference clip in Voices."
         } else {
-            "Train this voice to speak English without an accent (Native accent), or add an English reference clip in Voices."
+            "Run setup to install the zero-shot voice converter, or train this voice, to speak English without an accent (Native accent); or add an English reference clip in Voices."
         };
         c = c.child(col().key(format!("{key}-hint")).w_full().gap(8.0).padding(10.0).radius(theme::radius::CONTROL)
             .fill(p.warn.alpha(0.08)).border(1.0, p.warn.alpha(0.25))
-            .child(text(hint).font(ty::CAPTION).color(if trained { p.text_dim } else { p.warn }).wrap())
+            .child(text(hint).font(ty::CAPTION).color(if possible { p.text_dim } else { p.warn }).wrap())
             .child(row().gap(8.0)
                 .child(Button::new("Add an English clip").small().icon(&icons::MIC).key(format!("{key}-add-en"))
                     .on_press(|s| add_reference(s, "en")).build(p))));
@@ -1043,9 +1057,17 @@ pub fn scene_accent_own(s: &mut AppState) {
     s.speak.native_accent = false;
 }
 
-/// An untrained voice: the choice is disabled with the hint to train it.
+/// An untrained voice on an engine without the zero-shot converter: the choice is disabled with the hint to install
+/// it or train the voice.
 pub fn scene_accent_untrained(s: &mut AppState) {
     demo_voice_uk(s, false);
+}
+
+/// An untrained voice with the zero-shot converter installed: Native is on by default, from the reference clip.
+pub fn scene_accent_zero_shot(s: &mut AppState) {
+    demo_voice_uk(s, false);
+    s.shell.zero_shot_vc = true;
+    demo_takes(s);
 }
 
 /// The owner's case: a voice set to English whose reference clip was detected as Ukrainian speech, not trained. The
@@ -1055,6 +1077,12 @@ pub fn scene_accent_foreign_ref(s: &mut AppState) {
     s.shell.voices[0].reference_language = Some("uk".into());
     s.shell.voices[0].references = vec!["uk".into()];
     s.speak.text = TextEdit::new(SAMPLE);
+}
+
+/// The owner's case with the zero-shot converter installed: Native is on without training.
+pub fn scene_accent_foreign_ref_zero_shot(s: &mut AppState) {
+    scene_accent_foreign_ref(s);
+    s.shell.zero_shot_vc = true;
 }
 
 /// The same voice trained: Native is on.

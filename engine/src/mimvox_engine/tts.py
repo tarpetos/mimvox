@@ -2,9 +2,10 @@
 status (``models`` event) and the GPU hand-over to training.
 
 Everything here runs on the engine loop. Synthesis goes through a TTS backend (``backends/``; OmniVoice in its worker
-process, whose request queue serializes model calls by design), RVC through the RVC worker client. A generation is a
-producer task (synthesis, one segment ahead) and a consumer task (RVC, resample, ``tts.chunk``) joined by a bounded
-queue; ``tts.cancel`` cancels the job task and with it both.
+process, whose request queue serializes model calls by design), RVC through the RVC worker client, the zero-shot
+converter of an untrained voice's native accent through ``zsvc.py``. A generation is a producer task (synthesis, one
+segment ahead) and a consumer task (voice conversion, resample, ``tts.chunk``) joined by a bounded queue;
+``tts.cancel`` cancels the job task and with it both.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from . import accent, aio, backends, config, media, reflang, rvc, speech, voices
+from . import accent, aio, backends, config, media, reflang, rvc, speech, voices, zsvc
 from . import audio_util as au
 from .backends import SynthParams
 from .backends.omnivoice import OMNIVOICE
@@ -398,7 +399,10 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     worker = rvc.get(ctx.runtime) if use_rvc else None
     if use_rvc and (worker is None or models_status()["rvc"] != "ready"):
         raise EngineError("not_ready", "the voice-conversion model is not ready")
-    choice = accent.choose(requested, native_voice, lang, has_pth, index_rate)  # native-us needs RVC, else "own"
+    zs_worker = await aio.run_io(zsvc.get, ctx.runtime, data.root) if requested == "native-us" else None
+    # native-us: RVC for a trained voice, else the zero-shot converter; without either the voice's own reference
+    choice = accent.choose(requested, native_voice, lang, has_pth, index_rate, zs_worker is not None)
+    zs = zero_shot(ctx, choice, zs_worker, ref)
     # The clip that will speak and its real language (a foreign one carries its accent into `lang`; reflang.py).
     ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")
     segs = segment_text(text, backend.count_tokens)
@@ -407,10 +411,19 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     # (no await between the busy check in start_exclusive and taking the slot: the loop makes it atomic)
     job = start_exclusive(ctx, lambda j: _generate(ctx, j, data, backend, lang, ref, segs, temperature, quality, pth,
                                                    idx, rvc_rate, worker, duration_factor_for(speed), out_fmt,
-                                                   choice, index_rate),
+                                                   choice, index_rate, zs),
                           "another generation is running")
     return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], **choice.fields(),
             **ref_fields}
+
+
+def zero_shot(ctx: Context, choice: accent.Choice, worker: zsvc.ZsvcWorker | None, ref: str) -> zsvc.Bound | None:
+    """The zero-shot converter of a native-accent job whose ``choice`` uses it, bound to the voice's ``ref`` (the
+    timbre it gives), with the GPU turn of a tight GPU; None otherwise."""
+    if choice.converter != "zero-shot" or worker is None:
+        return None
+    vram = float((getattr(ctx, "device", None) or {}).get("vram_gb") or 0.0)
+    return zsvc.Bound(worker, ref, zsvc.turn_lock(vram))
 
 
 @method("tts.cancel")
@@ -430,7 +443,7 @@ def _chunk_from(src: str, i: int, last: bool, pause: int, jobdir: str) -> tuple[
         x = np.concatenate([x, au.silence(pause)])
     path = os.path.join(jobdir, f"chunk{i:03d}.wav")
     au.write_wav(path, x, au.OUT_SR)
-    for p in (os.path.join(jobdir, f"s{i}_tts.wav"), os.path.join(jobdir, f"s{i}_rvc.wav")):
+    for p in (os.path.join(jobdir, f"s{i}_{k}.wav") for k in ("tts", "rvc", "vc")):
         with contextlib.suppress(OSError):
             os.remove(p)
     return x, path, au.duration_s(x)
@@ -439,9 +452,10 @@ def _chunk_from(src: str, i: int, last: bool, pause: int, jobdir: str) -> tuple[
 async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backends.TtsBackend, lang: str, ref: str,
                     segs: list[tuple[str, int]], temperature: float, quality: str, pth: str, idx: str,
                     index_rate: float, worker: rvc.RvcWorker | None, duration_factor: float, out_fmt: str,
-                    choice: accent.Choice | None = None, voice_match: float = 1.0) -> None:
+                    choice: accent.Choice | None = None, voice_match: float = 1.0, zs: zsvc.Bound | None = None) -> None:
     """``ref`` is the voice's reference; with a ``native-us`` ``choice`` OmniVoice speaks from the native clip instead
-    and RVC gets the native index rate and pitch (accent.py)."""
+    and RVC gets the native index rate and pitch, or (``zs``, an untrained voice) the zero-shot converter turns each
+    segment into the timbre of ``ref`` (accent.py)."""
     t_start = time.time()
     choice = choice or accent.Choice("own")
 
@@ -455,12 +469,16 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         native = await aio.run_io(accent.prepare, choice, ref, voice_match) if choice.accent == "native-us" else None
         if choice.accent == "native-us" and native is None:
             choice = accent.Choice("own", choice.native_voice, "unavailable")
+        if native is None:
+            zs = None
         synth_ref, ref_text, pitch = (native.ref.path, native.ref.text, native.pitch) if native else (ref, None, 0)
         if native is not None:
             index_rate = native.index_rate
         await speech.yield_gpu()  # Whisper / NLLB (if warm) leave the GPU to the speech model and RVC
-        log.info("job %s: %s (accent %s), %d segment(s), RVC index %s pitch %+d: %s", job, lang, choice.accent,
-                 len(segs), index_rate if worker is not None else "-", pitch, [s for s, _ in segs])
+        log.info("job %s: %s (accent %s%s), %d segment(s), RVC index %s pitch %+d: %s", job, lang, choice.accent,
+                 ", zero-shot conversion" if zs is not None else "", len(segs),
+                 index_rate if worker is not None else "-", pitch, [s for s, _ in segs])
+        turn = zs.turn if zs is not None else None
         chunks: list[np.ndarray | None] = [None] * len(segs)
         todo: asyncio.Queue[tuple[int, str, int] | None] = asyncio.Queue(maxsize=2)
         first_chunk_at: list[float] = []
@@ -469,18 +487,22 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         async def produce() -> None:
             for i, (seg, pause) in enumerate(segs):
                 t0 = time.time()
-                path = await backend.synthesize(seg, lang, synth_ref, SynthParams(
-                    out_path=os.path.join(jobdir, f"s{i}_tts.wav"), temperature=temperature, quality=quality,
-                    duration_factor=duration_factor, first=(i == 0), reference_text=ref_text))
+                async with zsvc.gpu_turn(turn):  # a tight GPU: never at the same time as the converter
+                    path = await backend.synthesize(seg, lang, synth_ref, SynthParams(
+                        out_path=os.path.join(jobdir, f"s{i}_tts.wav"), temperature=temperature, quality=quality,
+                        duration_factor=duration_factor, first=(i == 0), reference_text=ref_text))
                 log.info("job %s seg %d: %s %.2fs", job, i, backend.name, time.time() - t0)
                 await todo.put((i, path, pause))  # waits while two segments are ahead of the consumer
             await todo.put(None)
 
         async def consume() -> None:
-            """RVC + resample + emit, in order, overlapping with the synthesis of the next segment."""
+            """Voice conversion + resample + emit, in order, overlapping with the synthesis of the next segment."""
             async for i, path, pause in aio.queue_items(todo):
                 src = path
-                if worker is not None:
+                if zs is not None:
+                    src = os.path.join(jobdir, f"s{i}_vc.wav")
+                    await zs.convert(path, src)
+                elif worker is not None:
                     src = os.path.join(jobdir, f"s{i}_rvc.wav")
                     await worker.convert(path, src, pth, idx, index_rate, pitch=pitch)
                 last = i == len(segs) - 1
@@ -572,7 +594,8 @@ def forget_reference() -> None:
 @method("voices.warm")
 async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     """Precompute the speaker conditioning of a voice in the background (call when the user selects a voice). With
-    ``accent: "native-us"`` (a trained voice), also the native clip's prompt and the voice's pitch (accent.py)."""
+    ``accent: "native-us"``, also the native clip's prompt and the voice's pitch (accent.py), and for an untrained
+    voice the zero-shot converter with the voice's reference prompt."""
     data = config.data_dir(ctx)
     vid = str(params.get("id") or "")
     requested, native_voice = accent.parse(params), accent.parse_voice(params)
@@ -588,10 +611,14 @@ async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     worker = rvc.get(ctx.runtime) if has_pth else None
     if worker is not None and models_status()["rvc"] != "ready":
         worker = None
-    choice = accent.choose(requested, native_voice, accent.NATIVE_LANG, worker is not None, 1.0)
+    zs_worker = await aio.run_io(zsvc.get, ctx.runtime, data.root) if requested == "native-us" else None
+    choice = accent.choose(requested, native_voice, accent.NATIVE_LANG, worker is not None, 1.0, zs_worker is not None)
+    if choice.converter != "zero-shot":
+        zs_worker = None
     if choice.accent == "native-us":
         known, native_ref = await aio.run_io(accent.peek_native, ref, native_voice)
-        native_warm = known and native_ref is not None and OMNIVOICE.is_warm(native_ref.path)
+        native_warm = (known and native_ref is not None and OMNIVOICE.is_warm(native_ref.path)
+                       and (zs_worker is None or zs_worker.is_warm(ref)))
     else:
         native_warm = True
     if OMNIVOICE.is_warm(ref) and (worker is None or worker.loaded_model == rvc.model_sig(pth)) and native_warm:
@@ -601,12 +628,13 @@ async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if vid in _WARMING:
         return {"warming": True}
     _WARMING.add(vid)
-    aio.spawn(_warm(ctx, data, vid, ref, lang, worker, pth, idx, choice), name=f"warm-{vid}")
+    aio.spawn(_warm(ctx, data, vid, ref, lang, worker, pth, idx, choice, zs_worker), name=f"warm-{vid}")
     return {"warming": True}
 
 
 async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: str, worker: rvc.RvcWorker | None,
-                pth: str, idx: str, choice: accent.Choice | None = None) -> None:
+                pth: str, idx: str, choice: accent.Choice | None = None, zs_worker: zsvc.ZsvcWorker | None = None
+                ) -> None:
     t0 = time.time()
     warm_dir = os.path.join(data.tmp, f"_warm_{vid}")
     try:
@@ -622,6 +650,8 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
             native = await aio.run_io(accent.prepare, choice, ref, 1.0)
             if native is not None:
                 await OMNIVOICE.warm(native.ref.path, accent.NATIVE_LANG, native.ref.text)
+                if zs_worker is not None:  # an untrained voice: the converter and its prompt of reference.wav
+                    await zs_worker.warm(ref)
         # The real language of reference.wav (reflang.py): the warm-up above transcribed it when it spoke from it;
         # otherwise (a reference_<lang>.wav spoke) or for a sidecar from before the language was recorded whose
         # transcript the script heuristic cannot place, the worker builds the sidecar / detects it now (Whisper only).
@@ -644,7 +674,7 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
 
 async def release_gpu(ctx: Context) -> None:
     """Free the GPU and host RAM for training: unload the speech models (on the GPU thread, after any synthesis in
-    flight) and stop the RVC and speech worker processes (their exits are awaited).
+    flight) and stop the RVC, speech and zero-shot converter worker processes (their exits are awaited).
 
     Raises ``EngineError("busy")`` while a generation is running. Until :func:`reacquire_gpu` finishes, both models
     report ``"paused"`` in ``models_status()`` and ``tts.generate`` answers ``not_ready``."""
@@ -656,7 +686,7 @@ async def release_gpu(ctx: Context) -> None:
             await b.release()
         except Exception:  # noqa: BLE001
             log.exception("TTS backend %s could not release the GPU", b.name)
-    await asyncio.gather(rvc.shutdown(), speech.shutdown())
+    await asyncio.gather(rvc.shutdown(), speech.shutdown(), zsvc.shutdown())
 
 
 def reacquire_gpu(ctx: Context) -> asyncio.Task[None] | None:

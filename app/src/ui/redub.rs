@@ -1704,7 +1704,13 @@ fn scene_dub_accent(s: &mut AppState) {
     demo_history(s);
 }
 
-/// The same with an untrained voice: the choice is disabled with the hint to train it.
+/// The same with an untrained voice and the zero-shot converter installed: Native, from the reference clip.
+fn scene_dub_accent_zero_shot(s: &mut AppState) {
+    scene_dub_accent_untrained(s);
+    s.shell.zero_shot_vc = true;
+}
+
+/// The same with an untrained voice and no zero-shot converter: the choice is disabled with the hint.
 fn scene_dub_accent_untrained(s: &mut AppState) {
     demo(s, false);
     demo_file(s);
@@ -1741,11 +1747,18 @@ fn scene_respeak_accent(s: &mut AppState) {
     s.shell.voices[0].reference_language = Some("uk".into());
 }
 
-/// The same untrained: disabled, with the hint to train or add an English clip.
+/// The same untrained without the zero-shot converter: disabled, with the hint to install it, train or add an
+/// English clip.
 fn scene_respeak_accent_untrained(s: &mut AppState) {
     scene_respeak_accent(s);
     s.shell.voices[0].trained = false;
     s.shell.voices[0].trained_epochs = 0;
+}
+
+/// The same untrained with the zero-shot converter installed: Native, from the reference clip.
+fn scene_respeak_accent_zero_shot(s: &mut AppState) {
+    scene_respeak_accent_untrained(s);
+    s.shell.zero_shot_vc = true;
 }
 
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
@@ -1753,9 +1766,11 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("redub_dub_accent_foreign_ref", scene_dub_accent_foreign_ref),
         ("redub_respeak_accent", scene_respeak_accent),
         ("redub_respeak_accent_untrained", scene_respeak_accent_untrained),
+        ("redub_respeak_accent_zero_shot", scene_respeak_accent_zero_shot),
         ("redub_dub_ready", scene_dub_ready),
         ("redub_dub_accent", scene_dub_accent),
         ("redub_dub_accent_untrained", scene_dub_accent_untrained),
+        ("redub_dub_accent_zero_shot", scene_dub_accent_zero_shot),
         ("redub_dub_translator", scene_dub_translator),
         ("redub_dub_translator_faster", scene_dub_translator_faster),
         ("redub_dub_to_uk", scene_dub_to_uk),

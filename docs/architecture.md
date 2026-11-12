@@ -4,7 +4,8 @@ Mimvox has these runtime parts: the **app** (Rust), the **engine** (Python, a ch
 **OmniVoice worker** (the speech model, a child process of the engine with the engine's interpreter), the **RVC worker**
 (a child process of the engine in a second virtual environment) and the **speech worker** (Whisper + NLLB for Redub and
 Hybrid Demucs for removing background music from media files, a child process of the engine with the engine's
-interpreter). RVC **training** is run by the engine
+interpreter) and the **zero-shot converter worker** (Seed-VC, the native accent of untrained voices, with the engine's
+interpreter, started on first use; Seed-VC itself is fetched by setup into `runtime/seed-vc`). RVC **training** is run by the engine
 as a job in the second environment (Applio's CLI).
 
 ## Overview
@@ -26,6 +27,7 @@ flowchart LR
         TRN["Training driver"]
         OVW["OmniVoice worker<br/>persistent, model kept loaded"]
         SPW["Speech worker<br/>Whisper + NLLB + Demucs"]
+        ZSW["Zero-shot converter worker<br/>Seed-VC, native accent of untrained voices"]
         SRV --- DS
         SRV --- TTS
         SRV --- TRN
@@ -45,11 +47,14 @@ flowchart LR
     WRK -- "40 kHz converted speech" --> SRV
     TRN -- "subprocess" --> PRE
     SRV -- "JSON lines" --> SPW
+    OVW -. "native accent, untrained voice" .-> ZSW
+    ZSW -- "22 kHz converted speech" --> SRV
     AUD --> DATA
     SRV --> DATA
     PRE --> DATA
     OVW --> MODELS
     WRK --> MODELS
+    ZSW --> MODELS
     PRE --> MODELS
 ```
 
@@ -134,7 +139,9 @@ SynthParams(out_path, temperature=0.8, quality="best", duration_factor=1.0, firs
    temperatures, *Speed* OmniVoice's speed).
 3. If the voice has a trained RVC model, the engine sends each segment to the RVC worker, which converts it (rmvpe,
    index rate from *Voice match*, capped at 0.3 for a language the voice was not recorded in, protect 0.33, pitch 0).
-   Without a trained model the zero-shot audio is returned as is.
+   Without a trained model the zero-shot audio is returned as is. With the native accent (`accent: "native-us"`)
+   OmniVoice speaks from a shipped native clip instead, and the RVC worker (trained voice) or the zero-shot converter
+   worker (untrained voice; Seed-VC, timbre from `reference.wav`) converts each segment (`accent.py`, `zsvc.py`).
 4. After each segment, the engine emits `tts.chunk` with the path of the final audio so the app can play it at once;
    at the end it saves the whole phrase as one file in the requested `output_format` (WAV by default; other formats are
    encoded from a 44.1 kHz WAV kept in `tmp/play/` for playback) and emits `tts.done` with both paths.
