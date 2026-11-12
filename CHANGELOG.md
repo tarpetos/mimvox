@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3
+
+* **Video redub keeps the music:** for a video source Redub (Translate & dub, Re-speak, Convert voice) separates the
+  original voice from the background with Hybrid Demucs (cached, started when the file is chosen), puts the new voice
+  over the original music and effects at the original voice's loudness, and writes a copy of the video with the new
+  sound. The video stream is copied, never re-encoded; subtitles and metadata are kept. "Output: Video with new voice /
+  Audio only" and "Keep background music and sounds" are remembered; a video output always keeps the original timing.
+* **Player bar:** everything that plays (results, Original/Result, reference clips, takes) plays in one bar at the bottom
+  with play/pause, stop, seek, loop and speed from 0.5x to 2x with the pitch kept.
+* **Delete results:** a trash button on every Speak and Redub result removes its files (and the video of a video
+  redub) after a confirmation.
+
 ## 0.1.2
 
 * **Native accent without training:** an untrained voice can speak English with an American accent. OmniVoice speaks
