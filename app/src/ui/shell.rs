@@ -108,6 +108,8 @@ pub struct ShellState {
     /// When the elapsed-time clock of a running job shows its next second (see [`settle`]).
     clock_due: Option<f64>,
     pub engine: EngineStatus,
+    /// The engine runs on a CUDA GPU (`hello` -> `device.backend`); sets defaults such as "Remove background music".
+    pub gpu: bool,
     /// Voices known to the engine (refreshed by [`refresh_voices`]).
     pub voices: Vec<VoiceInfo>,
     /// Languages the speech model speaks (`hello` -> `languages`; empty until the engine says, see `ui::lang`).
@@ -203,6 +205,7 @@ impl Default for ShellState {
             scripted: headless_run(),
             voices_req: None,
             first_voice_list: true,
+            gpu: false,
         }
     }
 }
@@ -474,6 +477,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
         EngineMsg::Ready(hello) => {
             let device = (!hello.device.name.is_empty()).then(|| hello.device.name.clone());
+            s.shell.gpu = hello.device.backend.eq_ignore_ascii_case("cuda");
             s.shell.engine = EngineStatus::Ready { device, tts: Some(hello.models.tts.as_str().to_owned()), rvc: Some(hello.models.rvc.as_str().to_owned()) };
             if !hello.languages.is_empty() {
                 s.shell.languages = hello.languages.clone();

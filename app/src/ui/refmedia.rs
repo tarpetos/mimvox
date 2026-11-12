@@ -6,6 +6,10 @@
 //! The language chip says which reference it becomes: the voice's own language writes `reference.wav`, another one
 //! `reference_<lang>.wav`. The pool's other good windows then show up in the "Choose..." list of the reference section
 //! (`source: "media"` candidates), so the user can listen and pick another one.
+//!
+//! "Remove background music" sends `remove_music`: the engine then keeps only the vocals of each file (Hybrid Demucs)
+//! before cleaning it. The choice is remembered as `remove_music` in settings.json; until the user makes one it is on
+//! when the engine runs on a CUDA GPU. Record's multi-file import sends the remembered choice too (`media.combine`).
 
 use std::path::PathBuf;
 
@@ -42,6 +46,9 @@ pub struct Outcome {
     pub message: Option<String>,
     pub skipped: Vec<Skipped>,
     pub truncated: Vec<String>,
+    /// Files whose background music was removed (`music_files`), and why not when none was (`music_reason`).
+    pub music_files: usize,
+    pub music_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -75,6 +82,9 @@ pub struct MediaState {
     pub outcome: Option<Outcome>,
     pub error: Option<String>,
     pub skipped: Vec<Skipped>,
+    /// "Remove background music" as the user last set it (`None`: never set, see [`remove_music`]).
+    pub remove_music: Option<bool>,
+    prefs_loaded: bool,
 }
 
 impl MediaState {
@@ -101,6 +111,24 @@ pub fn set_language(s: &mut AppState, code: &str) {
     let own = shell::active_voice(s).map(|v| lang::base(v.lang()));
     let code = lang::base(code);
     m(s).lang = if own.as_deref() == Some(code.as_str()) { None } else { Some(code) };
+}
+
+/// "Remove background music": the remembered choice, else on when the engine has a CUDA GPU.
+pub fn remove_music(s: &AppState) -> bool {
+    s.voices.refclip.media.remove_music.unwrap_or(s.shell.gpu)
+}
+
+/// The remembered choice only (`None` when the user never set it: the engine then decides, `"auto"`).
+pub fn saved_remove_music() -> Option<bool> {
+    super::onboarding::setting("remove_music").and_then(|v| v.as_bool())
+}
+
+fn toggle_music(s: &mut AppState) {
+    let on = !remove_music(s);
+    m(s).remove_music = Some(on);
+    if !s.shell.scripted() {
+        super::onboarding::save_setting("remove_music", json!(on));
+    }
 }
 
 /// "Add media...": the native multi-file picker on its own thread; the choice comes back as an event.
@@ -140,7 +168,7 @@ fn start(s: &mut AppState, paths: Vec<PathBuf>) {
         return;
     }
     super::refclip::stop_preview(s);
-    let mut params = json!({ "id": id, "paths": paths });
+    let mut params = json!({ "id": id, "paths": paths, "remove_music": remove_music(s) });
     if let Some(code) = m(s).lang.clone() {
         params["language"] = json!(code);
     }
@@ -148,7 +176,10 @@ fn start(s: &mut AppState, paths: Vec<PathBuf>) {
     match shell::request(s, "voices.reference_from_media", params) {
         Some(req) => {
             let st = m(s);
-            *st = MediaState { voice: Some(id), lang: st.lang.clone(), phase: Phase::Starting, req: Some(req), files: n, stage: "start".into(), ..Default::default() };
+            *st = MediaState {
+                voice: Some(id), lang: st.lang.clone(), phase: Phase::Starting, req: Some(req), files: n, stage: "start".into(),
+                remove_music: st.remove_music, prefs_loaded: st.prefs_loaded, ..Default::default()
+            };
         }
         None => m(s).error = Some("The voice engine is not running. Check the status at the top and press Retry.".into()),
     }
@@ -198,6 +229,8 @@ fn outcome(v: &Value) -> Outcome {
         message: v.get("message").and_then(Value::as_str).map(str::to_owned),
         skipped: skipped_list(v),
         truncated: v.get("truncated").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
+        music_files: v.get("music_files").and_then(Value::as_u64).unwrap_or(0) as usize,
+        music_reason: v.get("music_reason").and_then(Value::as_str).filter(|r| !r.is_empty()).map(str::to_owned),
     }
 }
 
@@ -304,8 +337,14 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// After every event: a result of another voice is not shown for this one.
+/// After every event: the saved "Remove background music" once; a result of another voice is not shown for this one.
 pub fn settle(s: &mut AppState) -> bool {
+    if !m(s).prefs_loaded && !s.shell.scripted() {
+        let saved = saved_remove_music();
+        let st = m(s);
+        st.prefs_loaded = true;
+        st.remove_music = saved;
+    }
     let active = s.shell.active_voice.clone();
     let st = m(s);
     if !st.busy() && st.voice.is_some() && st.voice != active && (st.outcome.is_some() || st.error.is_some()) {
@@ -331,6 +370,7 @@ fn clock(secs: f32) -> String {
 fn stage_label(stage: &str) -> &'static str {
     match stage {
         "decode" => "Cleaning",
+        "separate" => "Removing background music",
         "combine" => "Combining",
         "analyse" => "Finding the best clip",
         "apply" => "Saving the reference",
@@ -349,6 +389,21 @@ fn skipped_lines(p: &Palette, list: &[Skipped]) -> El {
         c = c.child(text(format!("… and {} more", n - 6)).font(ty::CAPTION).color(p.text_faint));
     }
     c
+}
+
+/// "Background music removed from 3 of 12 files." / "Background music not removed: <why>." / nothing (turned off).
+fn music_line(o: &Outcome) -> Option<String> {
+    match (o.music_files, o.music_reason.as_deref()) {
+        (0, None | Some("turned off")) => None,
+        (0, Some(why)) => Some(format!("Background music not removed: {why}.")),
+        (k, why) => {
+            let files = if o.files <= 1 { String::new() } else if k >= o.files { format!(" from all {} files", o.files) } else { format!(" from {k} of {} files", o.files) };
+            Some(match why {
+                Some(w) => format!("Background music removed{files}; then {w}."),
+                None => format!("Background music removed{files}."),
+            })
+        }
+    }
 }
 
 /// "12 files combined · 7:32 · reference set: 11.4 s from file 3".
@@ -400,7 +455,7 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
     let mut c = col().key("refmedia").w_full().gap(10.0).child(head);
 
     if busy {
-        let line = if st.stage == "decode" && st.file > 0 {
+        let line = if (st.stage == "decode" || st.stage == "separate") && st.file > 0 {
             format!("File {} of {} · {}", st.file, st.files, st.name)
         } else {
             format!("{} files", st.files)
@@ -420,6 +475,9 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
 
     let over = s.formats.over && s.screen == Screen::Voices;
     c = c.child(drop_well(s, p, over));
+    c = c.child(col().key("refmedia-music").w_full().gap(2.0)
+        .child(kit::checkbox(p, remove_music(s), "Remove background music", toggle_music))
+        .child(text("Cleaner reference from videos with music; a little slower.").font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
     if let Some(o) = st.outcome.as_ref().filter(|_| mine) {
         let mut res = row().key("refmedia-done").w_full().gap(10.0).center_y();
         if let Some(path) = o.preview_path.clone().filter(|_| o.applied) {
@@ -434,6 +492,10 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
                 .on_press(dismiss).child(icon_el(&icons::CLOSE, 11.0, p.text_dim)));
         let mut box_ = col().w_full().gap(8.0).padding(12.0).radius(radius::CONTROL).fill(p.ok.alpha(if o.applied { 0.07 } else { 0.0 }))
             .border(1.0, if o.applied { p.ok.alpha(0.3) } else { p.well_rim }).child(res);
+        if let Some(line) = music_line(o) {
+            let tone = if o.music_files > 0 { p.text_dim } else { p.warn };
+            box_ = box_.child(text(line).key("refmedia-music-done").font(ty::CAPTION).color(tone).wrap());
+        }
         if let Some(msg) = &o.message {
             box_ = box_.child(kit::notice(p, Tone::Warning, msg));
         }
@@ -461,8 +523,10 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
 // Scenes for headless snapshots
 // ---------------------------------------------------------------------------------------------
 
+/// The default on a CUDA machine: "Remove background music" ticked (no saved choice).
 fn scene_idle(s: &mut AppState) {
     super::refclip::scene_demo(s);
+    s.shell.gpu = true;
 }
 
 fn scene_drop(s: &mut AppState) {
@@ -476,6 +540,21 @@ fn scene_running(s: &mut AppState) {
         voice: Some("my-voice".into()), phase: Phase::Running, job: Some("job-4".into()), files: 12, file: 5,
         name: "Interview with the author (full).mp4".into(), stage: "decode".into(), pct: 35.4, ..Default::default()
     };
+}
+
+/// Removing the music of file 2 of 6.
+fn scene_separating(s: &mut AppState) {
+    super::refclip::scene_demo(s);
+    s.voices.refclip.media = MediaState {
+        voice: Some("my-voice".into()), phase: Phase::Running, job: Some("job-4".into()), files: 6, file: 2,
+        name: "Channel trailer with music.mp4".into(), stage: "separate".into(), pct: 21.8, remove_music: Some(true), ..Default::default()
+    };
+}
+
+/// The checkbox off (the user's saved choice).
+fn scene_music_off(s: &mut AppState) {
+    super::refclip::scene_demo(s);
+    s.voices.refclip.media.remove_music = Some(false);
 }
 
 fn scene_done(s: &mut AppState) {
@@ -528,6 +607,26 @@ fn scene_done_lang(s: &mut AppState) {
     s.voices.refclip.open = false;
 }
 
+/// Done with the music removed from most files.
+fn scene_done_music(s: &mut AppState) {
+    scene_done(s);
+    s.voices.refclip.media.remove_music = Some(true);
+    if let Some(o) = s.voices.refclip.media.outcome.as_mut() {
+        o.music_files = 9;
+        o.skipped.clear();
+    }
+}
+
+/// Done, but the separation model is missing (an older install): the files were used as they are.
+fn scene_done_nomodel(s: &mut AppState) {
+    scene_done(s);
+    s.voices.refclip.media.remove_music = Some(true);
+    if let Some(o) = s.voices.refclip.media.outcome.as_mut() {
+        o.music_reason = Some("the music-removal model is not installed (run setup again)".into());
+        o.skipped.clear();
+    }
+}
+
 fn scene_error(s: &mut AppState) {
     super::refclip::scene_demo(s);
     let st = &mut s.voices.refclip.media;
@@ -544,9 +643,13 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("voices-media", scene_idle),
         ("voices-media-drop", scene_drop),
         ("voices-media-running", scene_running),
+        ("voices-media-separating", scene_separating),
+        ("voices-media-music-off", scene_music_off),
         ("voices-media-done", scene_done),
         ("voices-media-choose", scene_choose),
         ("voices-media-done-lang", scene_done_lang),
+        ("voices-media-done-music", scene_done_music),
+        ("voices-media-done-nomodel", scene_done_nomodel),
         ("voices-media-error", scene_error),
     ]
 }

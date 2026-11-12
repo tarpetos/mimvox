@@ -507,7 +507,8 @@ impl RecordState {
     }
 
     /// Several files for the current part: the engine joins them into one WAV (`media.combine`), which is then
-    /// imported like a single file.
+    /// imported like a single file. "Remove background music" as remembered from the Voices screen goes along
+    /// (`remove_music`); never set, the engine decides (`"auto"`: video files with sound under the voice, on a GPU).
     fn import_many(&mut self, paths: Vec<PathBuf>) {
         if self.active.is_some() || self.importing {
             return;
@@ -518,7 +519,11 @@ impl RecordState {
         }
         let n = paths.len();
         let part = self.current;
-        if self.request("media.combine", json!({ "paths": paths }), Pending::Combine { part }) {
+        let mut params = json!({ "paths": paths });
+        if let Some(on) = super::refmedia::saved_remove_music() {
+            params["remove_music"] = json!(on);
+        }
+        if self.request("media.combine", params, Pending::Combine { part }) {
             self.importing = true;
             self.notice = Some((format!("Combining {n} files into one recording…"), Tone::Neutral));
         }
@@ -536,6 +541,12 @@ impl RecordState {
         self.import_take(path);
         let mins = f(v, "duration_s") / 60.0;
         let mut msg = format!("{used} files combined into one recording ({mins:.1} min).");
+        let music = v.get("music_files").and_then(Value::as_u64).unwrap_or(0);
+        if music > 0 {
+            msg.push_str(&format!(" Background music removed from {music} of them."));
+        } else if let Some(why) = v.get("music_reason").and_then(Value::as_str).filter(|w| w.contains("not installed") || w.contains("failed")) {
+            msg.push_str(&format!(" Background music not removed: {why}."));
+        }
         if !skipped.is_empty() {
             msg.push_str(&format!(" Skipped: {}.", skipped.join(", ")));
         }

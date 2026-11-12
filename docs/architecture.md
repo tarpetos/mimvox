@@ -2,8 +2,9 @@
 
 Mimvox has these runtime parts: the **app** (Rust), the **engine** (Python, a child process of the app), the
 **OmniVoice worker** (the speech model, a child process of the engine with the engine's interpreter), the **RVC worker**
-(a child process of the engine in a second virtual environment) and the **speech worker** (Whisper + NLLB for Redub, a
-child process of the engine with the engine's interpreter). RVC **training** is run by the engine
+(a child process of the engine in a second virtual environment) and the **speech worker** (Whisper + NLLB for Redub and
+Hybrid Demucs for removing background music from media files, a child process of the engine with the engine's
+interpreter). RVC **training** is run by the engine
 as a job in the second environment (Applio's CLI).
 
 ## Overview
@@ -24,7 +25,7 @@ flowchart LR
         TTS["Speech backend<br/>OmniVoice client"]
         TRN["Training driver"]
         OVW["OmniVoice worker<br/>persistent, model kept loaded"]
-        SPW["Speech worker<br/>Whisper + NLLB"]
+        SPW["Speech worker<br/>Whisper + NLLB + Demucs"]
         SRV --- DS
         SRV --- TTS
         SRV --- TRN
@@ -57,7 +58,7 @@ flowchart LR
 - **Two Python environments.** The engine environment (OmniVoice, Whisper, NLLB) runs Python 3.11 with torch 2.8 and
   transformers 5; Applio runs Python 3.12 with torch 2.11. They cannot share one environment, so RVC lives in its own,
   behind a worker process.
-- **Models in worker processes.** OmniVoice, RVC and Whisper/NLLB each run in a persistent worker: a native crash cannot
+- **Models in worker processes.** OmniVoice, RVC and Whisper/NLLB/Demucs each run in a persistent worker: a native crash cannot
   take the engine down, and handing the GPU to a training is ending the processes (all their VRAM and host RAM back at
   once).
 - **A persistent engine.** Loading the models is the slow part. The engine starts once with the app and keeps OmniVoice
@@ -159,6 +160,24 @@ about four times faster and needs less than half the memory ([performance.md](pe
   the index holds only sounds of the recorded language and garbles others at full rate.
 - The seam is `backends/__init__.py` (`TtsBackend`); another model would be one more module registered there.
 
+## Media references and music removal
+
+`voices.reference_from_media` (a job) and `media.combine` (Record's multi-file import, a request) share one per-file
+pipeline in `dataset/media_ref.py`: decode to mono 44.1 kHz on the IO pool, optionally keep only the **vocals**, then
+trim, shorten pauses and normalise on the IO pool. The vocals come from the speech worker's `separate_vocals` op:
+torchaudio's Hybrid Demucs (`hdemucs_high`, the `HDEMUCS_HIGH_MUSDB_PLUS` weights that setup puts in
+`runtime/models/demucs`; the engine never downloads them). The decoded file goes to the worker as an `.npy` under
+`<data>/tmp`, the worker runs the model over 10 s segments that overlap by 25 % and are cross-faded (memory does not
+grow with the length; cancel is checked per segment; progress per segment), and writes the vocals back as an `.npy`.
+
+- `remove_music` decides per file: `true` (every file), `false`, or `"auto"` (a video file whose SNR is under 35 dB,
+  when the engine runs on CUDA and no training holds the GPU). The app sends the Voices checkbox (remembered in
+  `settings.json`, ticked by default on CUDA); Record sends the remembered choice or nothing.
+- It never fails a job: without the weights, or when the worker fails, the files are used as decoded, and the done event
+  says why (`music_removed`, `music_reason`).
+- On the GPU it is fast (45 s of audio in 0.6 s, 0.76 GB peak VRAM on an RTX 4070), so it fits next to OmniVoice and
+  RVC; with less than 1.2 GB free it runs on the CPU. `release_gpu` drops it like Whisper and NLLB.
+
 ## Training path
 
 1. `train.start` picks the voice's dataset (`dataset/part<N>.wav`).
@@ -183,7 +202,8 @@ The engine owns the data folder; the app reads only the files the engine names. 
 <data>/voices/<voice_id>/rvc/model.pth       trained RVC model (after training)
 <data>/voices/<voice_id>/rvc/model.index
 <data>/outputs/<timestamp>.<ext>             generated speech and redubs, one file each in the chosen format
-<data>/tmp/                                  scratch (incl. tmp/play: playback WAVs of non-WAV results), safe to delete
+<data>/tmp/                                  scratch (incl. tmp/play: playback WAVs of non-WAV results, tmp/separate-<job>:
+                                             the file being separated), safe to delete
 ```
 
 The runtime (the two Python environments, the Applio checkout, the models) is created by setup under `runtime/` and
@@ -223,6 +243,7 @@ exchange absolute file paths.
 | Recording and dataset | `recording.check`, `dataset.add`, `dataset.remove`, `dataset.summary` |
 | Training | `train.start`, `train.cancel`; events `train.progress`, `train.done`, `train.error` |
 | Generation | `tts.generate`, `tts.cancel`; events `tts.chunk`, `tts.done`, `tts.error` |
+| Media references | `voices.reference_from_media` (`remove_music`), `voices.media_cancel`, `voices.clear_media`, `media.combine`; events `voices.media.progress` (stages `decode`, `separate`, `combine`, `analyse`, `apply`), `voices.media.done`, `voices.media.error` |
 
 The full parameters and results are in [contract/engine-protocol.md](../contract/engine-protocol.md). That file is the
 single source of truth: change it first, then the Rust and the Python side.

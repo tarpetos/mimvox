@@ -207,6 +207,14 @@ def probe(path: str) -> dict[str, Any]:
             "format": out_fmt, "codec": str(audio.get("codec_name", "")) if audio else "", "has_video": has_video}
 
 
+def is_video(path: str) -> bool:
+    """True for the video containers listed for import (mp4, mkv, mov, webm, avi and their aliases), by extension:
+    cheap, no process."""
+    ext = os.path.splitext(str(path))[1].lower().lstrip(".")
+    ext = _IMPORT_ALIASES.get(ext, ext)
+    return ext in _IMPORT and _IMPORT[ext][0] == "video"
+
+
 def _float(v: Any) -> float:
     try:
         return float(v)

@@ -2,8 +2,8 @@
 
 It installs the toolchains the app is built with (Rust, a C/C++ toolchain), then builds the ML runtime under
 ``<data dir>/runtime/``: the engine environment (OmniVoice, the speech model for every language, plus Whisper and NLLB
-for Redub) and Applio (RVC, at a pinned commit), each in its own uv virtual environment, plus every model they need,
-and writes ``<data dir>/runtime.toml`` for the app (see contract/engine-protocol.md).
+for Redub, Hybrid Demucs for removing background music from media files) and Applio (RVC, at a pinned commit), each
+in its own uv virtual environment, plus every model they need, and writes ``<data dir>/runtime.toml`` for the app (see contract/engine-protocol.md).
 
 Every step checks what is already there and skips it, a step interrupted by Ctrl-C or a lost connection resumes
 where it stopped (git fetches, uv and Hugging Face downloads are resumable), so running it again is always safe.
@@ -18,6 +18,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -62,6 +63,14 @@ NLLB_FILES = ("config.json", "generation_config.json", "pytorch_model.bin", "sen
               "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json")
 NLLB_REQUIRED = ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")
 WHISPER_MODEL = "turbo"
+# "Remove background music" (reference from media, Record's multi-file import): torchaudio's HDEMUCS_HIGH_MUSDB_PLUS
+# weights, the very file that bundle downloads (download.pytorch.org/torchaudio/<its _model_path>), kept in
+# <data>/runtime/models/demucs; the speech worker loads them from there with torchaudio.models.hdemucs_high.
+DEMUCS_URL = "https://download.pytorch.org/torchaudio/models/hdemucs_high_trained.pt"
+DEMUCS_DIR = "demucs"
+DEMUCS_FILE = "hdemucs_high_trained.pt"
+DEMUCS_SIZE = 334_697_255
+DEMUCS_SHA256 = "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816"
 # The engine environment, <runtime>/engine/.venv: the engine itself, the OmniVoice worker (k2-fsa/OmniVoice, zero-shot
 # TTS in ~60 languages) and the speech worker (Whisper + NLLB for Redub).
 ENGINE_DIR = "engine"
@@ -80,6 +89,7 @@ RUNTIME_GB = 28
 ENGINE_GB = 11    # engine venv (torch 2.8 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + the OmniVoice model (3.3 GB)
 APPLIO_GB = 12
 SPEECH_GB = 4.5   # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
+SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 32
 UV_HTTP_TIMEOUT = "600"
@@ -404,6 +414,8 @@ class Setup:
             say("Existing runtime found, nothing big to download (setup only fills in what is missing).")
             if not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED) and not self.skip_models:
                 say(f"Missing Redub models will be downloaded now (about {SPEECH_GB} GB: translation and Whisper turbo).")
+            if not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() and not self.skip_models:
+                say(f"The music-removal model will be downloaded now (about {SEPARATION_GB} GB: Hybrid Demucs).")
             if not self._has(self.omnivoice_model, OMNIVOICE_REQUIRED) and not self.skip_models:
                 say(f"The OmniVoice speech model (every language, Ukrainian included) will be installed now: about "
                     f"{ENGINE_GB} GB (the engine environment in <data>/runtime/engine, the model in "
@@ -413,12 +425,15 @@ class Setup:
                     "at the end.")
         else:
             say(f"This will download and install about {RUNTIME_GB} GB (engine + OmniVoice ~{ENGINE_GB} GB, "
-                f"Applio/RVC ~{APPLIO_GB} GB, Redub models ~{SPEECH_GB} GB) plus ~0.1 GB per voice.")
+                f"Applio/RVC ~{APPLIO_GB} GB, Redub models ~{SPEECH_GB} GB, music removal ~{SEPARATION_GB} GB) plus "
+                "~0.1 GB per voice.")
             say("OmniVoice speaks every language (Ukrainian, English and about 60 more): the engine environment in "
                 "<data>/runtime/engine and the model (3.3 GB) in <data>/runtime/models/omnivoice.")
             say(f"Redub (dubbing a file) uses two models, about {SPEECH_GB} GB: Whisper turbo (transcription, 1.6 GB, "
                 "<data>/runtime/models/whisper) and NLLB-200 (translation, 2.5 GB, "
                 "<data>/runtime/models/nllb-200-distilled-600M).")
+            say(f"Removing background music from media files uses Hybrid Demucs (about {SEPARATION_GB} GB, "
+                "<data>/runtime/models/demucs).")
             if self.skip_models:
                 say("--skip-models: the model files (most of that size) are left out for now.")
         say("=" * 78)
@@ -730,6 +745,15 @@ class Setup:
         self.must([py, "-c", script, WHISPER_MODEL, whisper_dir], "Downloading the Whisper turbo checkpoint",
                   cwd=self.runtime)
 
+    def separation_model(self) -> None:
+        """Hybrid Demucs weights for "Remove background music" (torchaudio HDEMUCS_HIGH_MUSDB_PLUS, 335 MB)."""
+        target = self.models_dir / DEMUCS_DIR / DEMUCS_FILE
+        if target.is_file() and target.stat().st_size == DEMUCS_SIZE:
+            say("Music-removal model (Hybrid Demucs): present.")
+            return
+        say(f"Music-removal model: downloading Hybrid Demucs (about {DEMUCS_SIZE / 1e6:.0f} MB, resumable)...")
+        fetch_demucs(self.models_dir)
+
     def engine_env(self) -> None:
         """The engine environment (Python 3.11, torch 2.8, transformers 5): the engine, the OmniVoice worker
         (omnivoice, num2words for the text front-end) and the speech worker (Whisper, NLLB via transformers +
@@ -941,6 +965,12 @@ class Setup:
             say("Translation model (NLLB-200 distilled 600M): all files present.")
         if not (self.models_dir / "whisper" / "large-v3-turbo.pt").is_file():
             say("Whisper turbo checkpoint: not downloaded yet (setup fetches it; otherwise the first Redub does).")
+        demucs = self.models_dir / DEMUCS_DIR / DEMUCS_FILE
+        if demucs.is_file() and demucs.stat().st_size == DEMUCS_SIZE:
+            say("Music-removal model (Hybrid Demucs): present.")
+        else:
+            say(f"Music-removal model: not downloaded yet ({demucs}); media files are used with their music until "
+                "setup fetches it.")
         return problems
 
     def _check_torch(self, label: str, py: Path) -> list[str]:
@@ -979,6 +1009,47 @@ class Setup:
         else:
             lines.append(f"  cd {shlex_quote(str(app))} && cargo run --release")
         return lines
+
+
+def fetch_demucs(models_dir: Path) -> Path:
+    """Download the Hybrid Demucs weights to ``<models_dir>/demucs/hdemucs_high_trained.pt``: into a ``.part`` file that
+    a later run continues (an HTTP range request), checked against the pinned SHA-256, then renamed into place."""
+    folder = models_dir / DEMUCS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / DEMUCS_FILE
+    part = folder / (DEMUCS_FILE + ".part")
+    have = part.stat().st_size if part.is_file() else 0
+    if have > DEMUCS_SIZE:
+        part.unlink()
+        have = 0
+    if have < DEMUCS_SIZE:
+        request = urllib.request.Request(DEMUCS_URL, headers={"Range": f"bytes={have}-"} if have else {})
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+                resumed = have > 0 and response.status == 206
+                done = have if resumed else 0
+                step = DEMUCS_SIZE // 10
+                next_note = (done // step + 1) * step
+                with open(part, "ab" if resumed else "wb") as handle:
+                    for block in iter(lambda: response.read(1 << 20), b""):
+                        handle.write(block)
+                        done += len(block)
+                        if done >= next_note and done < DEMUCS_SIZE:
+                            say(f"  {100 * done // DEMUCS_SIZE}% of {DEMUCS_SIZE / 1e6:.0f} MB")
+                            next_note = (done // step + 1) * step
+        except OSError as error:
+            raise SetupError(f"Downloading the music-removal model failed ({error}); run setup again to resume."
+                             ) from error
+    digest = hashlib.sha256()
+    with open(part, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    if digest.hexdigest() != DEMUCS_SHA256:
+        part.unlink()
+        raise SetupError("The music-removal model download is corrupt (checksum mismatch); run setup again.")
+    os.replace(part, target)
+    say(f"Music-removal model: saved to {target}.")
+    return target
 
 
 def shlex_quote(text: str) -> str:
@@ -1166,6 +1237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if attempt(setup.engine_env) and not args.skip_models:
         if attempt(setup.omnivoice_models):
             attempt(setup.speech_models)
+        attempt(setup.separation_model)
     if applio_cloned and attempt(setup.applio_venv) and not args.skip_models:
         attempt(setup.applio_models)
     attempt(setup.write_runtime_toml)

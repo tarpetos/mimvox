@@ -10,7 +10,8 @@ the upstream Hugging Face and crates.io pages, checked 2026-11-11). Where someth
 
 **Summary of what limits you:** the OmniVoice model weights (CC BY-NC 4.0, because of their training data) are the
 reason this project is for **personal, non-commercial use only**; its audio tokenizer adds the Boson Higgs Audio 2
-Community License (attribution below). Everything else below is permissive (MIT, Apache-2.0, BSD).
+Community License (attribution below). The NLLB-200 weights are CC BY-NC 4.0 too, and the Hybrid Demucs weights state no
+licence but come from non-commercial training data (below). The rest is permissive (MIT, Apache-2.0, BSD).
 
 ## Speech models and engine
 
@@ -32,7 +33,7 @@ Community License (attribution below). Everything else below is permissive (MIT,
   Reserved." / "Boson Higgs Audio 2 is licensed under the Boson Community License, Copyright © Boson AI USA, Inc. All
   Rights Reserved." Its acceptable-use policy applies, and its outputs may not be used to improve another large
   language model.
-- Python dependencies installed into the engine environment with it: PyTorch and torchaudio (BSD-3-Clause),
+- Python dependencies installed into the engine environment with it: PyTorch (BSD-3-Clause), torchaudio (BSD-2-Clause),
   transformers and accelerate (Apache-2.0), librosa (ISC), soundfile, NumPy and SciPy (BSD-3-Clause), num2words (LGPL-2.1,
   used unmodified as a library for number spelling), gradio (Apache-2.0, a dependency of the package, not used), and
   others (**verify** with `pip-licenses` in the installed environment).
@@ -44,6 +45,22 @@ Community License (attribution below). Everything else below is permissive (MIT,
 - **NLLB-200 distilled 600M** (`facebook/nllb-200-distilled-600M`, Meta): **CC BY-NC 4.0** (model card). Used for Redub
   translation. Non-commercial only.
 - **g2p_en** (Apache-2.0) with NLTK data (CMUdict, BSD-style), for the English recording-text analysis.
+
+### Hybrid Demucs (Remove background music)
+
+- **Model code:** `torchaudio.models.hdemucs_high` in torchaudio (BSD-2-Clause, the `LICENSE` of `pytorch/audio`), a port
+  of Hybrid Demucs from `facebookresearch/demucs` (MIT, Copyright (c) Meta Platforms, Inc. and affiliates). Paper:
+  Défossez, "Hybrid Spectrogram and Waveform Source Separation", arXiv:2111.03600.
+- **Weights:** torchaudio's `HDEMUCS_HIGH_MUSDB_PLUS` bundle, the file `hdemucs_high_trained.pt` from
+  `download.pytorch.org/torchaudio/models/` (335 MB), which setup downloads into `<data>/runtime/models/demucs` (checked
+  by SHA-256; this project does not redistribute it). Neither the torchaudio documentation of the bundle nor the
+  download states a licence for the weights. The torchaudio README says that its pre-trained models "may have their own
+  licenses or terms and conditions derived from the dataset used for training" and that it is the user's
+  responsibility to determine whether they may use them. Per the torchaudio documentation the weights were trained on
+  the training and test sets of **MUSDB18-HQ** plus 150 songs from an internal database produced for Meta. MUSDB18-HQ is
+  provided for educational and research purposes only, without commercial use unless the copyright holders allow it
+  (its record on Zenodo; part of it is CC BY-NC-SA 4.0). Treat the weights as **non-commercial**, which matches the
+  rest of this project (**verify** before any other use).
 
 ### IndexTTS and IndexTTS-2.5 (legacy: used by earlier versions, no longer installed)
 
