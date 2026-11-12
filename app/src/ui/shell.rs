@@ -800,17 +800,61 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
         .motion(motion::UI)
         .child(status_dot(p, tone, pulse))
         .children((!tight).then(|| text(label.clone()).font(ty::LABEL).color(p.text).a11y_hidden()));
-    if tight {
-        pill = pill.help(label.clone());
-    }
+    pill = pill.help(engine_help(&s.shell.engine));
     if retry {
-        pill = pill.hover(p.glass_hover).focusable(true).help("Restart the engine")
+        pill = pill.hover(p.glass_hover).focusable(true)
             .on_press(|s: &mut AppState| restart_engine(s))
             .child(icon_el(&icons::REFRESH, 14.0, p.text_dim));
-    } else if let EngineStatus::Ready { device: Some(d), .. } = &s.shell.engine {
-        pill = pill.help(d.clone());
     }
     pill
+}
+
+/// The status pill's tooltip: what the state means, the device, and each model's state.
+fn engine_help(engine: &EngineStatus) -> String {
+    let model = |m: &Option<String>| match m.as_deref() {
+        Some("ready") => "ready".to_owned(),
+        Some("loading") => "loading…".to_owned(),
+        Some("paused") => "paused while a voice trains".to_owned(),
+        Some("missing") => "not installed".to_owned(),
+        Some(other) => other.to_owned(),
+        None => "not loaded yet".to_owned(),
+    };
+    match engine {
+        EngineStatus::Idle | EngineStatus::Starting { .. } => {
+            "Starting the speech engine. Speak and Redub are available in a few seconds.".to_owned()
+        }
+        EngineStatus::Ready { device, tts, rvc } => {
+            let any = |want: &str| [tts, rvc].iter().any(|m| m.as_deref() == Some(want));
+            let summary = if any("missing") {
+                "Some models are not installed: run setup again."
+            } else if any("paused") {
+                "A voice is training: the speech models are paused so training has the GPU. They come back when training ends or pauses."
+            } else if any("loading") {
+                "Loading the speech models into memory. The first start takes up to about half a minute."
+            } else {
+                "Ready: the speech models are loaded."
+            };
+            let mut t = summary.to_owned();
+            if let Some(d) = device {
+                t.push_str(&format!("\nDevice: {d}"));
+            }
+            t.push_str(&format!("\nSpeech model: {}\nVoice conversion: {}", model(tts), model(rvc)));
+            t
+        }
+        EngineStatus::Stopped { code, detail } => {
+            let mut t = match code {
+                Some(c) => format!("The engine stopped (exit code {c})."),
+                None => "The engine stopped.".to_owned(),
+            };
+            let last = detail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+            if !last.is_empty() {
+                t.push_str(&format!("\n{last}"));
+            }
+            t.push_str("\nClick to restart it. Details are in logs/engine.log in the data folder.");
+            t
+        }
+        EngineStatus::Unavailable { reason } => format!("The engine cannot run: {reason}"),
+    }
 }
 
 fn voice_pill(s: &AppState, p: Palette) -> El {
