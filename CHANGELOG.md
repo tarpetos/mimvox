@@ -1,11 +1,26 @@
 # Changelog
 
+## 0.1.2
+
+* **Native accent without training:** an untrained voice can speak English with an American accent. OmniVoice speaks
+  the text from a native US reference and a zero-shot voice converter (Seed-VC, installed by setup, GPL-3.0, never
+  bundled) gives it the timbre of the voice's reference clip. Native is the default for English from a clip in another
+  language; trained voices keep using their RVC model. The converter uses 12 diffusion steps (8 with Quality Fast).
+* **Reference language:** the engine detects the real language of each reference clip. Voices shows it, warns when it
+  differs from the voice's language, and offers "Set the voice to <language>"; the Accent choice appears whenever
+  English would carry another language's accent, also in Re-speak.
+* **Redub timing:** "Keep original timing" in Translate & dub and Re-speak (on for videos, off for audio files): off
+  speaks at a natural pace, one phrase after the other. When fitting, speech is never squeezed below 0.85 of its natural
+  length (lower factors swallowed short words), and Speed no longer compounds with the fitting.
+* **AMD GPUs on Linux:** setup finds a Radeon card and installs the ROCm builds of PyTorch; the app shows the ROCm
+  backend. Setup also always reinstalls torch when it builds an environment, so a CPU build no longer stays after a
+  switch to a GPU (contributed by Mykola Bezrukyi, #1).
+* **Toasts:** long messages wrap instead of being cut off, and stay longer.
+
 ## 0.1.1
 
 * **Native accent (American):** English from a voice recorded in another language can be spoken by a native US
   reference voice and turned into your timbre by your trained voice model (Speak, and Translate & dub to English).
-  Untrained voices get it too, with no training: a zero-shot voice converter (Seed-VC, installed by setup) takes the
-  timbre from the reference clip. Native is the default for English from a clip in another language.
 * **Better translation:** NLLB-200 1.3B on GPUs (600M stays as the fallback), sentences split by the transcription are
   translated whole, and a small Ukrainian glossary for slang and clock times ("пів на восьму" is 7:30).
 * **Word stress (Ukrainian):** type `+` before the stressed vowel (`співак+ом`) to fix a wrong stress; the engine passes
@@ -13,11 +28,6 @@
 * **Speak:** a sentence cut to fit a generation chunk no longer leaves a word or two on their own.
 * **Redub:** cleaner timing with ffmpeg time-stretch (no more metallic phase-vocoder sound) and use of the pause after
   each phrase.
-* **Redub timing:** "Keep original timing" in Translate & dub and Re-speak (on for videos, off for audio files): off
-  speaks at a natural pace, one phrase after the other. When fitting, the speech is never squeezed below 0.85 of its
-  natural length any more (lower factors swallowed short words), and Speed no longer compounds with the fitting.
-* **Native accent, faster:** the zero-shot converter uses 12 diffusion steps (8 with Quality Fast) instead of 25, with
-  the same measured similarity; the time it adds to each Re-speak segment is about halved.
 * **Reference from media:** optional removal of background music (Hybrid Demucs).
 * **Results:** one saved file per result, in a format you choose (WAV, MP3, FLAC, OGG, Opus, M4A, AIFF).
 
@@ -39,7 +49,5 @@ Early version: expect bugs.
   first), Convert voice and Re-speak, for audio and video files.
 * **Voices:** several voices, reference clip choice, a reference picked from many media files, per-language reference
   clips.
-* **AMD GPUs on Linux:** setup finds a Radeon card and installs the ROCm builds of PyTorch, and the app shows it
-  with the ROCm backend.
 * **Setup and build:** one-click setup scripts (`setup.sh`, `setup.cmd`) that install the engine and the models, and
   installer builds for Windows, Linux and macOS (`scripts/build/`).

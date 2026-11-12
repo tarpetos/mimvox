@@ -43,7 +43,7 @@
 
 name = "mimvox"
 product-name = "Mimvox"
-version = "0.1.1" # keep equal to app/Cargo.toml (the build scripts check it)
+version = "0.1.2" # keep equal to app/Cargo.toml (the build scripts check it)
 identifier = "io.github.tarpetos.mimvox"
 description = "Clone your own voice and speak any text with it"
 long-description = """\
