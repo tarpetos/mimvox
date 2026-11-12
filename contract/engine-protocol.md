@@ -97,7 +97,14 @@ omnivoice_model = "/abs/path/runtime/models/omnivoice" # k2-fsa/OmniVoice snapsh
 
 [device]
 backend = "cuda"   # cuda | mps | cpu (detected by setup)
+vendor  = "nvidia" # nvidia | amd, with the cuda backend (optional)
+# With vendor "amd" setup also writes the card's name and VRAM:
+# name    = "AMD Radeon RX 9070 XT"
+# vram_gb = 15.9
 ```
+
+An AMD GPU (Linux only) uses the `cuda` backend: the ROCm build of PyTorch uses the `torch.cuda` API and the `cuda`
+device, so every `cuda` check in the engine and the app applies to it too.
 
 `[python] omnivoice` (optional) runs the OmniVoice worker with another interpreter; by default it is the engine's. When
 `omnivoice_model` is absent the engine looks in `<runtime>/models/omnivoice` (next to the Applio folder) and reports
@@ -201,7 +208,7 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 ## Methods
 
 ### `hello` -> engine info
-`{}` -> `{"version":"0.1.0","device":{"backend":"cuda|mps|cpu","name":"NVIDIA GeForce RTX 4070","vram_gb":12.0},
+`{}` -> `{"version":"0.1.0","device":{"backend":"cuda|mps|cpu","name":"NVIDIA GeForce RTX 4070","vram_gb":12.0,"vendor":"nvidia"},
 "models":{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"},
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
 "native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"]}`
@@ -209,7 +216,10 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
   `tts.languages {}` -> `{"languages":[...]}`.
-- `device.name` is read from `nvidia-smi` for CUDA (`"NVIDIA GPU"` when that fails), `"Apple Silicon GPU"` for MPS and
+- `device.vendor` is `[device] vendor` from runtime.toml, left out when it is not set. The app shows the backend as
+  ROCm for `amd`.
+- `device.name` is read from `nvidia-smi` for CUDA on NVIDIA (`"NVIDIA GPU"` when that fails), from runtime.toml for
+  AMD (`"AMD GPU"` when it is missing), `"Apple Silicon GPU"` for MPS and
   `"CPU"` for CPU. `vram_gb` is the total VRAM rounded to 0.1 and is `0.0` for MPS and CPU.
 - `models`: `loading` until the model is loaded and warmed up, `missing` when it could not be loaded.
 - `translators`: the Redub translation models installed, best first: `nllb-1.3b` (NLLB-200 distilled 1.3B, "better")

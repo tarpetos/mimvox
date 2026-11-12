@@ -10,7 +10,7 @@ where it stopped (git fetches, uv and Hugging Face downloads are resumable), so 
 Standard library only: it runs before anything else is installed.
 
 Examples:
-    ./setup.sh                                   full setup (about 28 GB on disk, 31 GB with an NVIDIA GPU)
+    ./setup.sh                                   full setup (about 28 GB on disk, 31 GB with a GPU)
     ./setup.sh --skip-toolchain --yes            no Rust / compiler install, no questions
     ./setup.sh --quick-check                     verify an existing setup, download nothing
 """
@@ -43,6 +43,12 @@ BIN_NAME = "mimvox"
 APPLIO_URL = "https://github.com/IAHispano/Applio.git"
 APPLIO_COMMIT = "6d5d9511b7e719b1f613362bc767e841ad72fa72"
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
+# AMD GPUs on Linux: the two environments pin different torch versions, and each has wheels for another ROCm.
+ENGINE_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.4"
+APPLIO_ROCM_INDEX = "https://download.pytorch.org/whl/rocm7.2"
+AMD_PCI_VENDOR = "0x1002"
+# Integrated Radeon GPUs report a small VRAM carve-out; below this the card is not used.
+AMD_MIN_VRAM_GB = 4.0
 APPLIO_PYTHON = "3.12"
 
 # Files that prove a download finished (relative to the repo they belong to).
@@ -62,7 +68,7 @@ NLLB_DIR = "nllb-200-distilled-600M"
 NLLB_FILES = ("config.json", "generation_config.json", "pytorch_model.bin", "sentencepiece.bpe.model",
               "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json")
 NLLB_REQUIRED = ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")
-# "Better translation" (optional; a default with an NVIDIA GPU): NLLB-200 distilled 1.3B. The repo only has fp32
+# "Better translation" (optional; a default with a GPU): NLLB-200 distilled 1.3B. The repo only has fp32
 # weights (pytorch_model.bin, 5.5 GB), so they are downloaded, stored as fp16 safetensors (2.7 GB) and the .bin deleted.
 NLLB_BIG_REPO = "facebook/nllb-200-distilled-1.3B"
 NLLB_BIG_DIR = "nllb-200-distilled-1.3B"
@@ -104,7 +110,7 @@ RUNTIME_GB = 28
 ENGINE_GB = 11    # engine venv (torch 2.8 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + the OmniVoice model (3.3 GB)
 APPLIO_GB = 12
 SPEECH_GB = 4.5   # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
-BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with an NVIDIA GPU or --better-translation yes
+BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with a GPU or --better-translation yes
 SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 32
@@ -263,9 +269,55 @@ def toml_str(value: object) -> str:
 
 @dataclass
 class Gpu:
-    backend: str  # cuda | mps | cpu
+    backend: str  # cuda | mps | cpu; an AMD GPU is "cuda" too, because ROCm torch uses the torch.cuda API
     name: str = ""
     vram_gb: float = 0.0
+    vendor: str = ""  # nvidia | amd, for a cuda backend
+
+    @property
+    def build(self) -> str:
+        """The torch build: cuda | rocm | mps | cpu."""
+        return "rocm" if self.vendor == "amd" else self.backend
+
+
+def amd_gpu() -> Gpu | None:
+    """The AMD GPU with the most VRAM, from sysfs (no ROCm install needed: the torch wheels bring their own)."""
+    best: tuple[float, Path] | None = None
+    for dev in Path("/sys/class/drm").glob("card[0-9]*/device"):
+        try:
+            if (dev / "vendor").read_text().strip() != AMD_PCI_VENDOR:
+                continue
+            vram = int((dev / "mem_info_vram_total").read_text()) / 2**30
+        except (OSError, ValueError):
+            continue
+        if vram >= AMD_MIN_VRAM_GB and (best is None or vram > best[0]):
+            best = (vram, dev)
+    if best is None:
+        return None
+    return Gpu("cuda", amd_gpu_name(best[1]), round(best[0], 1), "amd")
+
+
+def amd_gpu_name(dev: Path) -> str:
+    """The marketing name from rocminfo when ROCm is installed, else the bracket part of the lspci name."""
+    rocminfo = shutil.which("rocminfo") or "/opt/rocm/bin/rocminfo"
+    try:
+        out = subprocess.run([rocminfo], capture_output=True, text=True, timeout=10, check=False).stdout
+        names = re.findall(r"Marketing Name:\s*(.*(?:Radeon|Instinct).*)", out)
+        if names:
+            return names[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        slot = dev.resolve().name
+        out = subprocess.run(["lspci", "-mm", "-s", slot], capture_output=True, text=True, timeout=10,
+                             check=False).stdout
+        fields = re.findall(r'"([^"]*)"', out)
+        match = re.search(r"\[(.+)\]", fields[2]) if len(fields) > 2 else None
+        if match:
+            return f"AMD {match.group(1)}"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "AMD GPU"
 
 
 @dataclass
@@ -283,7 +335,7 @@ class Setup:
     force: bool = False
     gpu: Gpu = field(default_factory=lambda: Gpu("cpu"))
     uv_path: str = ""
-    better_translation: str = "auto"   # auto (with an NVIDIA GPU) | yes | no
+    better_translation: str = "auto"   # auto (with a GPU) | yes | no
 
     # ---- paths -----------------------------------------------------------------------------------------------
 
@@ -382,7 +434,12 @@ class Setup:
     def detect(self) -> None:
         say(f"Platform: {self.plat} {self.arch} ({platform.platform()})")
         self.gpu = self._detect_gpu()
-        if self.gpu.backend == "cuda":
+        if self.gpu.build == "rocm":
+            say(f"GPU backend: rocm ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB; AMD support is new, see the README)")
+            if not os.access("/dev/kfd", os.R_OK | os.W_OK):
+                warn("/dev/kfd is not accessible, so PyTorch cannot use the AMD GPU. Add your user to the 'render' "
+                     "and 'video' groups (sudo usermod -aG render,video $USER), log in again and run setup again.")
+        elif self.gpu.backend == "cuda":
             say(f"GPU backend: cuda ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB)")
         elif self.gpu.backend == "mps":
             say("GPU backend: mps (Apple Silicon; best effort, parts of the engine may fall back to the CPU)")
@@ -413,7 +470,9 @@ class Setup:
                     vram = float(first[1]) / 1024
                 except (IndexError, ValueError):
                     vram = 0.0
-                return Gpu("cuda", first[0].strip(), vram)
+                return Gpu("cuda", first[0].strip(), vram, "nvidia")
+        if self.plat == "linux":
+            return amd_gpu() or Gpu("cpu")
         return Gpu("cpu")
 
     def free_gb(self) -> float:
@@ -455,7 +514,7 @@ class Setup:
                 "<data>/runtime/models/whisper) and NLLB-200 (translation, 2.5 GB, "
                 "<data>/runtime/models/nllb-200-distilled-600M).")
             if better:
-                say(f"With an NVIDIA GPU Redub also gets the better translation model, NLLB-200 1.3B (a "
+                say(f"With a GPU Redub also gets the better translation model, NLLB-200 1.3B (a "
                     f"{NLLB_BIG_DOWNLOAD_GB} GB download kept as {BETTER_TRANSLATION_GB} GB in fp16, "
                     "<data>/runtime/models/nllb-200-distilled-1.3B; --better-translation no leaves it out).")
             say(f"Removing background music from media files uses Hybrid Demucs (about {SEPARATION_GB} GB, "
@@ -704,7 +763,22 @@ class Setup:
         return venv_dir / ".mimvox-setup-ok"
 
     def _stamp_value(self, commit: str) -> str:
-        return f"{commit} {self.gpu.backend} {self.plat}"
+        return f"{commit} {self.gpu.build} {self.plat}"
+
+    def _build_note(self) -> str:
+        return {"cuda": "CUDA 12.8 build; a few GB", "rocm": "ROCm build; a few GB"}.get(self.gpu.build, "")
+
+    def _torch_args(self, rocm_index: str) -> list[str]:
+        """uv arguments that pick the torch build. unsafe-best-match: the PyTorch index also lists other packages
+        (requests, numpy...), older than the pins. The reinstall replaces a torch of another build: a pin such as
+        torch==2.8.0 also matches an installed 2.8.0+cpu, so uv would keep it."""
+        args = ["--reinstall-package", "torch", "--reinstall-package", "torchaudio"]
+        if self.gpu.build in ("cuda", "rocm"):
+            index = rocm_index if self.gpu.build == "rocm" else TORCH_CUDA_INDEX
+            return [*args, "--extra-index-url", index, "--index-strategy", "unsafe-best-match"]
+        if self.gpu.backend == "cpu" and self.plat != "macos":
+            return [*args, "--torch-backend", "cpu"]
+        return args
 
     def _venv_ready(self, repo: Path, commit: str) -> bool:
         stamp = self._stamp(repo / ".venv")
@@ -722,14 +796,10 @@ class Setup:
             say(f"Applio environment: creating the Python {APPLIO_PYTHON} venv...")
             self.must(self.uv("venv", "--python", APPLIO_PYTHON, "--allow-existing", venv), "Creating the Applio venv",
                       cwd=self.applio)
-        say("Applio environment: installing requirements (torch 2.11"
-            + (" CUDA 12.8 build; a few GB" if self.gpu.backend == "cuda" else "") + ")...")
+        note = self._build_note()
+        say(f"Applio environment: installing requirements (torch 2.11{' ' + note if note else ''})...")
         command = self.uv("pip", "install", "--python", py, "-r", "requirements.txt")
-        if self.gpu.backend == "cuda":
-            # unsafe-best-match: the PyTorch index also lists other packages (requests, numpy...), older than the pins
-            command += ["--extra-index-url", TORCH_CUDA_INDEX, "--index-strategy", "unsafe-best-match"]
-        elif self.gpu.backend == "cpu" and self.plat != "macos":
-            command += ["--torch-backend", "cpu"]
+        command += self._torch_args(APPLIO_ROCM_INDEX)
         self.must(command, "Installing the Applio requirements", cwd=self.applio)
         self._stamp(venv).write_text(self._stamp_value(APPLIO_COMMIT), encoding="utf-8")
 
@@ -773,7 +843,7 @@ class Setup:
                   cwd=self.runtime)
 
     def wants_better_translation(self) -> bool:
-        """The optional NLLB-200 1.3B: by default only with an NVIDIA GPU (it runs on the GPU; without one Redub uses
+        """The optional NLLB-200 1.3B: by default only with a CUDA or ROCm GPU (it runs on the GPU; without one Redub uses
         the 600M, which is about 3x faster on a CPU)."""
         if self.better_translation in ("yes", "no"):
             return self.better_translation == "yes"
@@ -835,7 +905,7 @@ class Setup:
         """The engine environment (Python 3.11, torch 2.8, transformers 5): the engine, the OmniVoice worker
         (omnivoice, num2words for the text front-end) and the speech worker (Whisper, NLLB via transformers +
         sentencepiece), g2p_en for the recording-text analysis."""
-        stamp_value = f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {self.gpu.backend} {self.plat}"
+        stamp_value = f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {self.gpu.build} {self.plat}"
         stamp = self._stamp(self.engine_venv)
         py = self.engine_python()
         if py.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
@@ -846,13 +916,10 @@ class Setup:
             self.engine_venv.parent.mkdir(parents=True, exist_ok=True)
             self.must(self.uv("venv", "--python", ENGINE_PYTHON, "--allow-existing", self.engine_venv),
                       "Creating the engine venv", cwd=self.runtime)
-        say("Engine environment: installing torch 2.8"
-            + (" (CUDA 12.8 build; a few GB)" if self.gpu.backend == "cuda" else "") + ", OmniVoice, Whisper...")
+        note = self._build_note()
+        say(f"Engine environment: installing torch 2.8{f' ({note})' if note else ''}, OmniVoice, Whisper...")
         command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *ENGINE_PACKAGES)
-        if self.gpu.backend == "cuda":
-            command += ["--extra-index-url", TORCH_CUDA_INDEX, "--index-strategy", "unsafe-best-match"]
-        elif self.gpu.backend == "cpu" and self.plat != "macos":
-            command += ["--torch-backend", "cpu"]
+        command += self._torch_args(ENGINE_ROCM_INDEX)
         self.must(command, "Installing the engine environment", cwd=self.runtime)
         # g2p_en fetches its NLTK data (CMUdict, tagger; a few MB) on first import: do it now, not in the app.
         if self.run([py, "-I", "-c", "import g2p_en"], cwd=self.runtime) != 0:
@@ -914,6 +981,10 @@ class Setup:
             "\n[device]\n"
             f'backend = "{self.gpu.backend}"\n'
         )
+        if self.gpu.vendor:
+            text += f'vendor = "{self.gpu.vendor}"\n'
+        if self.gpu.vendor == "amd":
+            text += f"name = {toml_str(self.gpu.name)}\nvram_gb = {self.gpu.vram_gb}\n"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.runtime_toml.with_suffix(".toml.tmp")
         tmp.write_text(text, encoding="utf-8", newline="\n")
@@ -1063,7 +1134,8 @@ class Setup:
             "cuda = torch.cuda.is_available()\n"
             "mps = bool(getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available())\n"
             "name = torch.cuda.get_device_name(0) if cuda else ''\n"
-            "print(json.dumps({'torch': torch.__version__, 'cuda': cuda, 'mps': mps, 'name': name}))\n"
+            "hip = bool(getattr(torch.version, 'hip', None))\n"
+            "print(json.dumps({'torch': torch.__version__, 'cuda': cuda, 'mps': mps, 'name': name, 'hip': hip}))\n"
         )
         out = self.read([py, "-c", script]).strip().splitlines()
         if not out:
@@ -1072,6 +1144,11 @@ class Setup:
         wanted = {"cuda": info["cuda"], "mps": info["mps"], "cpu": True}[self.gpu.backend]
         detail = info["name"] if info["cuda"] else ("mps" if info["mps"] else "cpu")
         say(f"{label}: torch {info['torch']}, device {detail}.")
+        if self.gpu.build == "rocm" and not info["hip"]:
+            return [f"{label}: torch {info['torch']} is not the ROCm build; run setup again to reinstall it."]
+        if not wanted and self.gpu.build == "rocm":
+            return [f"{label}: the ROCm build of torch cannot use {self.gpu.name}. The card may be too old for these "
+                    "ROCm wheels, or /dev/kfd may be inaccessible; run setup with --cpu to use the CPU."]
         if not wanted:
             return [f"{label}: torch {info['torch']} cannot use the {self.gpu.backend} backend."]
         return []
@@ -1165,7 +1242,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--no-check", action="store_true", help="with --move-to: skip the quick check (testing)")
     parser.add_argument("--better-translation", choices=("auto", "yes", "no"), default="auto",
                         help="the optional better translation model for Redub (NLLB-200 1.3B, a 5.5 GB download kept "
-                             "as 2.7 GB): auto = only with an NVIDIA GPU (default), yes = also without one, no = never")
+                             "as 2.7 GB): auto = only with a CUDA or ROCm GPU (default), yes = also without one, no = never")
     parser.add_argument("--remove-indextts", action="store_true",
                         help="delete <data>/runtime/index-tts (the IndexTTS-2.5 runtime of earlier versions, about 19 GB) "
                              "without asking; without this flag setup only offers it in an interactive terminal")
@@ -1247,13 +1324,14 @@ def run_move(args: argparse.Namespace) -> int:
         mv.out(f"Updated {len(fixer.fixed)} file(s) that held the old path")
         for path in fixer.unfixed:
             mv.out(f"warning: could not update {path}; it still points to the old place (reinstall that package to refresh it)")
-        backend = "cuda"
+        device: dict = {}
         try:
-            backend = tomllib.loads((new / "runtime.toml").read_text(encoding="utf-8")).get("device", {}).get("backend", backend)
+            device = tomllib.loads((new / "runtime.toml").read_text(encoding="utf-8")).get("device", {})
         except (OSError, ValueError):
             pass
-        setup = Setup(root=Path(__file__).resolve().parents[2], plat=plat, arch=host_arch(), data_dir=new,
-                      gpu=Gpu(str(backend)))
+        gpu = Gpu(str(device.get("backend", "cuda")), str(device.get("name", "")), float(device.get("vram_gb", 0.0)),
+                  str(device.get("vendor", "")))
+        setup = Setup(root=Path(__file__).resolve().parents[2], plat=plat, arch=host_arch(), data_dir=new, gpu=gpu)
         setup.write_runtime_toml()  # also writes (or removes) location.toml
         mv.out("Rewrote runtime.toml and the location pointer")
         if not args.no_check:

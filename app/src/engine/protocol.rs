@@ -162,6 +162,9 @@ pub struct Device {
     pub name: String,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub vram_gb: f32,
+    /// `nvidia` or `amd` for the `cuda` backend; empty for older engines and other backends.
+    #[serde(default)]
+    pub vendor: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

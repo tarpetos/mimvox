@@ -135,6 +135,7 @@ pub struct DeviceInfo {
     pub name: Option<String>,
     pub vram_gb: Option<f32>,
     pub version: Option<String>,
+    pub vendor: Option<String>,
 }
 
 impl DeviceInfo {
@@ -145,6 +146,7 @@ impl DeviceInfo {
             name: some(&h.device.name),
             vram_gb: (h.device.vram_gb > 0.0).then_some(h.device.vram_gb),
             version: some(&h.version),
+            vendor: some(&h.device.vendor),
         }
     }
 }
@@ -584,7 +586,10 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
     // Device
     if let Some(d) = &o.device {
         card = card.child(el().w_full().h(1.0).fill(p.rim_bottom));
-        let backend = d.backend.clone().unwrap_or_else(|| "unknown".into()).to_uppercase();
+        let backend = match (d.backend.as_deref(), d.vendor.as_deref()) {
+            (Some("cuda"), Some("amd")) => "ROCm".to_string(),
+            (b, _) => b.unwrap_or("unknown").to_uppercase(),
+        };
         let mut rows = col().gap(6.0);
         rows = rows.child(kv(p, "Device", d.name.clone().unwrap_or_else(|| "Unknown".into())));
         if let Some(v) = d.vram_gb {
@@ -604,7 +609,7 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
                 card = card.child(kit::notice(
                     p,
                     Tone::Warning,
-                    "Apple GPU (MPS) is supported on a best-effort basis. Training will be noticeably slower than on an NVIDIA GPU.",
+                    "Apple GPU (MPS) is supported on a best-effort basis. Training will be noticeably slower than on an NVIDIA or AMD GPU.",
                 ))
             }
             _ => {
@@ -646,7 +651,7 @@ fn base(s: &mut AppState) {
 }
 
 fn device(backend: &str, name: &str, vram: f32) -> Option<DeviceInfo> {
-    Some(DeviceInfo { backend: Some(backend.into()), name: Some(name.into()), vram_gb: Some(vram), version: Some("0.1.0".into()) })
+    Some(DeviceInfo { backend: Some(backend.into()), name: Some(name.into()), vram_gb: Some(vram), version: Some("0.1.0".into()), vendor: None })
 }
 
 fn scene_welcome(s: &mut AppState) {
