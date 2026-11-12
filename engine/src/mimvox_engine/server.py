@@ -211,9 +211,9 @@ class Server:
 
 
 async def _stop_workers() -> None:
-    from . import backends, rvc, speech  # noqa: PLC0415
+    from . import backends, rvc, speech, zsvc  # noqa: PLC0415
     from .training import proc  # noqa: PLC0415
-    results = await asyncio.gather(rvc.shutdown(), speech.shutdown(), proc.kill_all(),
+    results = await asyncio.gather(rvc.shutdown(), speech.shutdown(), zsvc.shutdown(), proc.kill_all(),
                                    *(b.close() for b in backends.all_backends()), return_exceptions=True)
     for r in results:
         if isinstance(r, BaseException):
@@ -260,9 +260,15 @@ def _translators(ctx: Server) -> list[str]:
     return langs.installed_translators(os.path.join(ctx.data_dir, "runtime", "models"))
 
 
+def _zero_shot_vc(ctx: Server) -> bool:
+    """Whether setup installed the zero-shot converter (the native accent of untrained voices; zsvc.py)."""
+    from . import zsvc  # noqa: PLC0415
+    return zsvc.installed(ctx.runtime, ctx.data_dir)
+
+
 def hello_info(ctx: Server) -> dict[str, Any]:
     return {"version": __version__, "device": ctx.device, "models": _models(), "languages": speech_languages(),
-            "translators": _translators(ctx)}
+            "translators": _translators(ctx), "zero_shot_vc": _zero_shot_vc(ctx)}
 
 
 @method("hello")

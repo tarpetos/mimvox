@@ -31,7 +31,7 @@ see [architecture.md](architecture.md) and [performance.md](performance.md); for
 - An **NVIDIA GPU with 8 GB of video memory or more** is recommended (Windows or Linux). Apple Silicon works on a
   best-effort basis through MPS. Without a supported GPU the app still runs on the CPU, but training a voice takes many
   hours and speech is generated several times slower than real time. Intel Macs are not supported.
-- About **32 GB of free disk space** on the drive you install to (the runtime itself is about 28 GB).
+- About **32 GB of free disk space** on the drive you install to (the runtime itself is about 30 GB).
 - A microphone, and an internet connection for the one-time setup. After setup the app works offline.
 
 ### Run the one-click setup
@@ -347,7 +347,7 @@ each can be played or removed. A clip needs 3 to 40 seconds of speech; about 10 
 for example *Ukrainian speech* (the engine transcribes the clip the first time the voice is prepared or speaks; until
 then it reads *not checked yet*). This matters more than the language the voice was created with: a voice set to
 English whose clip is Ukrainian speech speaks English with a Ukrainian accent. In that case a note says so: *English
-will carry this clip's accent. Add an English clip under Other languages, or train the voice for a native accent.*
+will carry this clip's accent. Add an English clip under Other languages, or choose Native accent when it speaks.*
 
 ![Per-language reference clips](screenshots/usage-voices-languages.png)
 
@@ -500,42 +500,48 @@ for the lossy formats (for example MP3 at 320, 192 or 128 kbps). Your last choic
 
 The speech model copies the accent of the clip it clones, so English spoken from a clip of Ukrainian speech has a
 Ukrainian accent. What counts is the language actually spoken in the clip (shown in Voices, see above), not the
-language the voice was created with. For English, a **trained** voice can instead speak with a native American accent:
-a native US English speaker (shipped with the app, from the public CMU ARCTIC corpus) says the text, and your trained
-voice model then turns it into your timbre, moved to your own pitch.
+language the voice was created with. For English, any voice can instead speak with a native American accent: a native
+US English speaker (shipped with the app, from the public CMU ARCTIC corpus) says the text, and a voice converter then
+gives it your timbre.
 
-**Zero-shot or trained.** A voice you have only recorded is *zero-shot*: the speech model imitates your reference clip
-directly, timbre and accent together, so the only way to English without your clip's accent is an English clip of
-yours (**Add an English clip**, which opens the Other languages panel in Voices). A *trained* voice also has its own
-voice model, which can put your timbre on someone else's speech; that is what makes the native accent possible.
+**Zero-shot or trained.** A voice you have only recorded is *zero-shot*: the converter is a zero-shot voice converter
+(Seed-VC, installed by setup) that takes your timbre straight from your reference clip, with no training. A *trained*
+voice uses its own voice model instead, moved to your own pitch: that is closer to you, so training still pays off.
+Without the zero-shot converter (an install that left it out with `--no-zero-shot-vc`, or from before it existed: run
+setup again) only trained voices get the native accent.
 
 **Accent** appears in the Style panel when the output language is English and the voice has no English clip: no
 English clip under Other languages, and its main clip is in another language (or, while that is not checked yet, the
 voice was created with another language):
 
-- **Native (American)** (the default for a trained voice): a native speaker says it, your timbre is kept. With it,
-  **Speaker** picks the native speaker: **Auto** (the one whose pitch is closest to yours), **Male** or **Female**.
+- **Native (American)** (the default): a native speaker says it, your timbre is kept. The caption says how: *Native
+  accent from your reference clip (no training needed); training makes it closer to you* for an untrained voice, or
+  *your trained voice model keeps your timbre*. With it, **Speaker** picks the native speaker: **Auto** (the one whose
+  pitch is closest to yours), **Male** or **Female**.
 - **Like my recordings**: your own reference clip speaks, with its accent. The caption names it (*English gets the
   accent of your Ukrainian reference clip*), and **Add an English clip** is right below.
 
-For an untrained voice the choice is shown but off, with *Train this voice to speak English without an accent (Native
-accent), or add an English reference clip in Voices* and the **Add an English clip** button. The choice is remembered
-and also applies to **Translate & dub** into English and to **Re-speak** when the transcript is English (see Redub).
+When the zero-shot converter is missing, an untrained voice shows the choice but off, with *Run setup to install the
+zero-shot voice converter, or train this voice, ...* and the **Add an English clip** button. Native stays the default
+until you change it; then your choice is remembered and also applies to **Translate & dub** into English and to
+**Re-speak** when the transcript is English (see Redub).
 
 When a result is spoken from a clip in another language than the text anyway, a warning says so, for example *The
 reference clip is Ukrainian speech, so the English carries a Ukrainian accent.*
 
-Example: a Ukrainian voice speaking English with an American accent.
+Example: a Ukrainian voice speaking English with an American accent, no training.
 
-1. Pick a voice recorded in Ukrainian and trained (the header badge reads *Trained*).
+1. Pick a voice recorded in Ukrainian (the header badge may read *Zero-shot*: a reference clip is enough).
 2. Open **Speak**, set **Language** to **English** and leave **Accent** on **Native (American)**.
 3. Paste: *The weather was clear this morning, so we walked along the river and talked about our plans for the
    summer.*
-4. Press **Generate**. The words come out with native American vowels and rhythm, in your voice. Switch to **Like my
+4. Press **Generate**. The words come out with native American vowels and rhythm, in your timbre. Switch to **Like my
    recordings** and generate again to hear the difference.
 
-The native speaker's delivery (calm, read speech) replaces the manner of your own clip, and Voice match is kept low
-(at most 0.2) so your recordings do not pull the vowels back to your accent.
+The native speaker's delivery (calm, read speech) replaces the manner of your own clip. With a trained voice, Voice
+match is kept low (at most 0.2) so your recordings do not pull the vowels back to your accent; for an untrained voice
+Voice match does not apply. The first native result of a session takes about 10 s longer while the converter loads
+(selecting the voice prepares it in the background).
 
 ---
 
@@ -644,7 +650,7 @@ Redub uses the GPU like Speak: only one job runs at a time, and Redub is unavail
   better here: clean and natural is what counts.
 - **Accent across languages.** The voice keeps the accent of its reference clip, in whatever language that clip is
   spoken (Voices shows it). For the most natural result in another language, add a per-language reference clip in
-  that language; for English, a trained voice can also use the native accent. For trained voices, Voice match is
+  that language; for English, any voice can also use the native accent. For trained voices, Voice match is
   capped at 0.3 in other languages so the words stay clear.
 - **Quality beats quantity.** Six clean minutes are better than twenty noisy ones. Re-record a part as soon as the check
   says *Please record again*, not after training.
@@ -697,7 +703,7 @@ Everything the app makes lives in one folder (the one you chose during setup; se
   logs/engine.log                the engine log
   tmp/                           scratch files, emptied at every engine start
   settings.json                  your app settings (microphone, last choices, "Save as" format, "Remove background music")
-  runtime/, runtime.toml         the installed engine and models (about 28 GB)
+  runtime/, runtime.toml         the installed engine and models (about 30 GB)
 ```
 
 The id of a voice folder is made from its name: lower case, with letters of other scripts transliterated (for example

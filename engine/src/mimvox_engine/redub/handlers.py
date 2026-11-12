@@ -16,7 +16,7 @@ import shutil
 import time
 from typing import Any
 
-from .. import accent, aio, backends, config, media, reflang, rvc, speech, tts, voices
+from .. import accent, aio, backends, config, media, reflang, rvc, speech, tts, voices, zsvc
 from .. import audio_util as au
 from ..registry import Context, EngineError, method
 from . import render, transcribe
@@ -323,14 +323,18 @@ class _Voice:
         self.ctx = ctx
         self.accent = accent.parse(params)              # respeak / dub only
         self.native_voice = accent.parse_voice(params)
+        # The native accent of an untrained voice (or voice_match 0) uses the zero-shot converter, when installed.
+        self.zs_worker = zsvc.get(ctx.runtime, data.root) if self.accent == "native-us" else None
 
     def index_rate_for(self, lang: str) -> float:
         """RVC index rate for speech in ``lang``: capped for languages the voice was not recorded in (rvc.py)."""
         return rvc.index_rate_for(self.index_rate, lang, self.language)
 
     def accent_for(self, lang: str) -> accent.Choice:
-        """The accent speech in ``lang`` gets (``native-us`` needs English and RVC, else ``own``; accent.py)."""
-        return accent.choose(self.accent, self.native_voice, lang, self.trained, self.index_rate)
+        """The accent speech in ``lang`` gets (``native-us`` needs English and RVC or the zero-shot converter, else
+        ``own``; accent.py)."""
+        return accent.choose(self.accent, self.native_voice, lang, self.trained, self.index_rate,
+                             self.zs_worker is not None)
 
     async def ref_fields(self, choice: accent.Choice, lang: str) -> dict[str, Any]:
         """``reference_language`` / ``reference_foreign`` / ``reference_note`` of speech in ``lang`` (reflang.py)."""
@@ -338,16 +342,19 @@ class _Voice:
 
     async def speak_setup(self, choice: accent.Choice, lang: str) -> tuple[dict[str, Any], dict[str, Any]]:
         """(extra ``redub.done`` fields, ``render.respeak`` keyword arguments) for speech in ``lang``: the voice's
-        own reference, or the native clip with its transcript, RVC pitch and index rate."""
+        own reference, or the native clip with its transcript, RVC pitch and index rate (or the zero-shot converter,
+        ``zs``, bound to the voice's reference)."""
         native = (await aio.run_io(accent.prepare, choice, self.ref, self.index_rate)
                   if choice.accent == "native-us" else None)
         if native is None:
             if choice.accent == "native-us":
                 choice = accent.Choice("own", choice.native_voice, "unavailable")
             return choice.fields(), {"ref": self.ref, "index_rate": self.index_rate_for(lang)}
-        return ({**choice.fields(), **native.fields()},
-                {"ref": native.ref.path, "ref_text": native.ref.text, "pitch": native.pitch,
-                 "index_rate": native.index_rate})
+        how: dict[str, Any] = {"ref": native.ref.path, "ref_text": native.ref.text, "pitch": native.pitch,
+                               "index_rate": native.index_rate}
+        if native.converter == "zero-shot":
+            how["zs"] = tts.zero_shot(self.ctx, choice, self.zs_worker, self.ref)
+        return {**choice.fields(), **native.fields()}, how
 
     def respeak_worker(self, lang: str = "en") -> rvc.RvcWorker | None:
         """Checks that a respeak can start (``not_found`` / ``not_ready``) and returns the RVC worker it needs, if any."""
@@ -423,7 +430,8 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             track, stats = await render.respeak(speak_segs, float(res["duration_s"]), how["ref"], voice.temperature,
                                                 voice.quality, worker, voice.pth, voice.idx, how["index_rate"],
                                                 workdir, progress, voice.speed, lang=target,
-                                                ref_text=how.get("ref_text"), pitch=how.get("pitch", 0))
+                                                ref_text=how.get("ref_text"), pitch=how.get("pitch", 0),
+                                                zs=how.get("zs"))
             accent_fields.update(await voice.ref_fields(accent.Choice(accent_fields["accent"]), target))
             emit.stage("save", 0)
             saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
@@ -493,7 +501,7 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                 track, stats = await render.respeak(segs, total_s, how["ref"], voice.temperature, voice.quality,
                                                     worker, pth, idx, how["index_rate"], workdir, progress,
                                                     voice.speed, lang=lang, ref_text=how.get("ref_text"),
-                                                    pitch=how.get("pitch", 0))
+                                                    pitch=how.get("pitch", 0), zs=how.get("zs"))
                 extra = {k: stats[k] for k in ("stretched", "overrun", "pushed", "drift_s", "max_push_s")}
                 extra["language"] = lang
                 extra.update(accent_fields)

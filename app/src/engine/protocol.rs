@@ -202,6 +202,10 @@ pub struct Hello {
     /// Redub translators installed, best first (`"nllb-1.3b"`, `"nllb-600m"`; empty for an engine that does not say).
     #[serde(default)]
     pub translators: Vec<String>,
+    /// The zero-shot voice converter is installed: an untrained voice can use the native accent too (`false` for an
+    /// engine that does not say).
+    #[serde(default)]
+    pub zero_shot_vc: bool,
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -4,6 +4,8 @@
 
 * **Native accent (American):** English from a voice recorded in another language can be spoken by a native US
   reference voice and turned into your timbre by your trained voice model (Speak, and Translate & dub to English).
+  Untrained voices get it too, with no training: a zero-shot voice converter (Seed-VC, installed by setup) takes the
+  timbre from the reference clip. Native is the default for English from a clip in another language.
 * **Better translation:** NLLB-200 1.3B on GPUs (600M stays as the fallback), sentences split by the transcription are
   translated whole, and a small Ukrainian glossary for slang and clock times ("пів на восьму" is 7:30).
 * **Word stress (Ukrainian):** type `+` before the stressed vowel (`співак+ом`) to fix a wrong stress; the engine passes

@@ -144,6 +144,28 @@ The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth
   transformers (Apache-2.0), onnxruntime (MIT) and others listed in Applio's `requirements-engine.txt`; each under its
   own licence (**verify** the exact versions with `pip-licenses` in the installed environment).
 
+### Seed-VC (GPL-3.0; zero-shot native accent)
+
+- <https://github.com/Plachtaa/seed-vc>, pinned to commit `51383efd921027683c89e5348211d93ff12ac2a8`. Copyright (c)
+  Plachtaa and contributors. **GNU General Public License v3.0** (the repository's `LICENSE`). The model weights
+  `Plachta/Seed-VC` on Hugging Face (`DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth` and its config,
+  revision `257283f9f41585055e8f858fba4fd044e5caed6e`) are also marked GPL-3.0.
+- Used for the native accent of untrained voices: OmniVoice speaks the English from the native clip and Seed-VC gives
+  it the timbre of the voice's reference clip (engine `zsvc.py`, worker `zsvc_worker.py`). **Not part of this
+  repository and not shipped with it**: setup fetches the source checkout into `<data>/runtime/seed-vc` from its own
+  repository and the weights into `<data>/runtime/models/seed-vc` on the user's computer, as an optional runtime
+  component (`setup --no-zero-shot-vc` leaves it out; the app then offers the native accent to trained voices only).
+  Mimvox's worker imports Seed-VC's modules at run time in a separate process. The GPL applies to whoever conveys
+  Seed-VC (or a work based on it): anyone who distributes a bundle that contains Seed-VC must do so under the GPL-3.0,
+  which also covers the parts of Mimvox combined with it in that bundle; this project's PolyForm Noncommercial licence
+  is not compatible with that, so a Mimvox package must not include Seed-VC (or its weights). Downloading and running
+  it on your own computer is private use, which the GPL permits without conditions.
+- Weights it uses, downloaded by setup from their own repositories at pinned revisions: **BigVGAN v2** 22 kHz vocoder
+  (`nvidia/bigvgan_v2_22khz_80band_256x`, MIT, revision `633ff708ed5b74903e86ff1298cf4a98e921c513`), the
+  **Whisper-small** encoder (`openai/whisper-small`, Apache-2.0, revision `973afd24965f72e36ca33b3055d56a652f456b4d`),
+  and **CAM++** (`campplus_cn_common.bin` from `funasr/campplus`, Apache-2.0, shipped inside the Seed-VC checkout).
+- Python packages setup adds to the engine environment for it: `munch` 4.0.0 (MIT) and `einops` 0.8.0 (MIT).
+
 ### RVC (Retrieval-based Voice Conversion) project (MIT)
 
 - <https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI>, MIT License. The method, the model code that

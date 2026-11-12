@@ -137,6 +137,9 @@ pub struct ShellState {
     pub languages: Vec<crate::engine::protocol::SpeechLanguage>,
     /// Redub translators installed (`hello` -> `translators`: `"nllb-1.3b"`, `"nllb-600m"`; empty until the engine says).
     pub translators: Vec<String>,
+    /// The engine has the zero-shot voice converter (`hello` -> `zero_shot_vc`): the native accent works for an
+    /// untrained voice too.
+    pub zero_shot_vc: bool,
     /// The voice used by Speak and shown in the header pill.
     pub active_voice: Option<String>,
     pub voice_menu_open: bool,
@@ -214,6 +217,7 @@ impl Default for ShellState {
             voices: Vec::new(),
             languages: Vec::new(),
             translators: Vec::new(),
+            zero_shot_vc: false,
             active_voice: None,
             voice_menu_open: false,
             caption_preview: None,
@@ -510,6 +514,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 s.shell.languages = hello.languages.clone();
             }
             s.shell.translators = hello.translators.clone();
+            s.shell.zero_shot_vc = hello.zero_shot_vc;
             reset_warm(s);
             refresh_voices(s);
         }
@@ -598,7 +603,8 @@ fn ensure_warm(s: &mut AppState) -> bool {
         return false;
     }
     s.shell.warm_for = Some(id.clone());
-    // A trained voice recorded in another language than English also gets the native-accent clip ready.
+    // A voice whose clip is in another language than English also gets the native-accent clip ready (and, untrained,
+    // the zero-shot converter).
     let mut params = json!({ "id": id });
     if let Some(v) = super::speak::warm_accent(s) {
         params["accent"] = json!("native-us");

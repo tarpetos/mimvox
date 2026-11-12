@@ -1,22 +1,29 @@
-"""Native accent: English spoken from a native American reference voice, then turned into the user's timbre by RVC.
+"""Native accent: English spoken from a native American reference voice, then turned into the user's timbre.
 
 OmniVoice copies the accent of its reference clip, so a voice recorded in Ukrainian speaks English with a Ukrainian
-accent, and RVC only changes the timbre of what it is given. With ``accent: "native-us"`` (``tts.generate``, Redub
-``dub`` / ``respeak`` into English) the pipeline speaks from a shipped native reference instead of the user's clip and
-lets the voice's RVC model put the user's timbre on it:
+accent, and voice conversion only changes the timbre of what it is given. With ``accent: "native-us"``
+(``tts.generate``, Redub ``dub`` / ``respeak`` into English) the pipeline speaks from a shipped native reference instead
+of the user's clip and lets a voice converter put the user's timbre on it:
 
 1. OmniVoice synthesizes with ``assets/native/en-us-{male,female}.wav`` (CMU ARCTIC speakers ``bdl`` and ``slt``,
    US English; the transcript ships next to each clip, so no Whisper pass and no sidecar are needed). The voice is
    picked from the user's median F0: the native speaker whose median is closer on a log scale (smallest pitch shift),
    unless ``native_voice`` overrides it.
-2. RVC converts the result with the voice's model, transposed by ``round(12 * log2(user F0 / native F0))`` semitones
-   so the model gets a pitch in the user's own range, at a low index rate (``NATIVE_INDEX_RATE``): the retrieval index
-   holds the user's own phoneme features, and a high rate pulls the native vowels back towards them (the accent this
-   is meant to remove); the timbre comes mostly from the model itself.
+2. The converter (``Choice.converter``):
 
-Without a trained voice (or with ``voice_match`` 0, which skips RVC) the native reference would replace the user's
-timbre, so the request falls back to the voice's own reference and says so (``accent: "own"``,
-``accent_fallback``). See contract/engine-protocol.md, "Native accent".
+   - ``rvc``, a trained voice with ``voice_match`` above 0: the voice's RVC model, transposed by
+     ``round(12 * log2(user F0 / native F0))`` semitones so the model gets a pitch in the user's own range, at a low
+     index rate (``NATIVE_INDEX_RATE``): the retrieval index holds the user's own phoneme features, and a high rate
+     pulls the native vowels back towards them (the accent this is meant to remove); the timbre comes mostly from the
+     model itself. The closest match to the user.
+   - ``zero-shot``, any other voice (untrained, or ``voice_match`` 0): Seed-VC (``zsvc.py``) converts to the timbre
+     of the voice's ``reference.wav`` with no training. It generates the pitch of the reference itself, so no
+     transpose (measured: a 116 Hz native source came out at 121-128 Hz with a 126 Hz reference, 106-113 Hz with a
+     115 Hz one).
+
+Only without a converter (an untrained voice and Seed-VC not installed) would the native reference replace the user's
+timbre: the request then falls back to the voice's own reference and says so (``accent: "own"``,
+``accent_fallback: "no_converter"``). See contract/engine-protocol.md, "Native accent".
 """
 from __future__ import annotations
 
@@ -52,10 +59,9 @@ F0_MAX_S = 30.0          # the median is taken over at most this much of the cli
 F0_MIN_VOICED = 25       # frames (20 ms each): less voiced speech than 0.5 s gives no F0
 
 FALLBACK_TEXT = {
-    "untrained": "This voice is not trained, so a native accent would replace its timbre: it spoke with its own "
-                 "reference instead. Train the voice to use a native accent.",
-    "voice_match_off": "Voice match is 0 (no voice conversion), so a native accent would replace the timbre: it spoke "
-                       "with the voice's own reference instead.",
+    "no_converter": "The native accent of a voice that is not trained needs the zero-shot voice converter, which is "
+                    "not installed: it spoke with its own reference instead. Run setup to install it, or train the "
+                    "voice.",
     "not_english": "The native accent is for English output only: it spoke with the voice's own reference.",
     "unavailable": "The native reference clips are missing from this install: it spoke with the voice's own reference.",
 }
@@ -214,37 +220,45 @@ class Choice:
     accent: str                    # effective: "own" | "native-us"
     native_voice: str = "auto"     # the request's override
     fallback: str | None = None    # why "native-us" became "own" (a FALLBACK_TEXT key)
+    converter: str | None = None   # "native-us" only: "rvc" | "zero-shot"
 
     def fields(self) -> dict[str, Any]:
-        """``accent`` (+ ``accent_fallback`` / ``accent_note``) for responses and end events."""
+        """``accent`` (+ ``accent_converter``, or ``accent_fallback`` / ``accent_note``) for responses and end events."""
         out: dict[str, Any] = {"accent": self.accent}
+        if self.converter:
+            out["accent_converter"] = self.converter
         if self.fallback:
             out["accent_fallback"] = self.fallback
             out["accent_note"] = FALLBACK_TEXT[self.fallback]
         return out
 
 
-def choose(requested: str, native_voice: str, lang: str, trained: bool, voice_match: float) -> Choice:
-    """Decide the accent of a request speaking ``lang`` with a voice that is ``trained`` (has an RVC model)."""
+def choose(requested: str, native_voice: str, lang: str, trained: bool, voice_match: float,
+           zero_shot: bool = False) -> Choice:
+    """Decide the accent of a request speaking ``lang`` with a voice that is ``trained`` (has an RVC model), given
+    whether the zero-shot converter is installed (``zsvc.installed``): RVC for a trained voice with ``voice_match``
+    above 0, else the zero-shot converter."""
     if requested != "native-us":
         return Choice("own")
+    converter = "rvc" if trained and voice_match > 0 else "zero-shot" if zero_shot else None
     reason = ("not_english" if (lang or "").lower() != NATIVE_LANG
-              else "untrained" if not trained
-              else "voice_match_off" if voice_match <= 0
               else "unavailable" if not available()
+              else "no_converter" if converter is None
               else None)
     if reason:
         return Choice("own", native_voice, reason)
-    return Choice("native-us", native_voice)
+    return Choice("native-us", native_voice, converter=converter)
 
 
 @dataclass(frozen=True)
 class Native:
-    """How a native-accent job speaks: the clip OmniVoice clones and the RVC settings that bring the user back."""
+    """How a native-accent job speaks: the clip OmniVoice clones and the converter settings that bring the user back
+    (``pitch`` and ``index_rate`` are RVC's; the zero-shot converter gets pitch 0 and ignores the index rate)."""
     ref: NativeRef
     pitch: int            # RVC transpose (semitones)
     index_rate: float
     user_f0: float | None
+    converter: str = "rvc"
 
     def fields(self) -> dict[str, Any]:
         return {"native_voice": self.ref.gender, "pitch": self.pitch}
@@ -252,13 +266,18 @@ class Native:
 
 def prepare(choice: Choice, user_reference: str, voice_match: float) -> Native | None:
     """The native setup of a ``native-us`` choice (None for ``own``): measures the user's pitch (cached) and picks
-    the native clip. IO thread."""
+    the native clip; the RVC transpose and index rate, or none for the zero-shot converter. IO thread."""
     if choice.accent != "native-us":
         return None
     user_f0 = clip_f0(user_reference)
     ref = pick_native(user_f0, choice.native_voice)
     if ref is None:  # vanished since choose(); not worth a failure
         return None
+    if choice.converter == "zero-shot":
+        n = Native(ref, 0, 0.0, user_f0, "zero-shot")
+        log.info("native accent: %s (%s, %.0f Hz) for a voice at %s Hz, zero-shot conversion", ref.gender,
+                 ref.speaker, ref.f0, f"{user_f0:.0f}" if user_f0 else "?")
+        return n
     n = Native(ref, transpose(user_f0, ref.f0), min(voice_match, NATIVE_INDEX_RATE), user_f0)
     log.info("native accent: %s (%s, %.0f Hz) for a voice at %s Hz: RVC pitch %+d, index %.2f", ref.gender,
              ref.speaker, ref.f0, f"{user_f0:.0f}" if user_f0 else "?", n.pitch, n.index_rate)

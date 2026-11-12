@@ -188,7 +188,7 @@ def note(clip_lang: str, lang: str) -> str:
             f"The reference clip is {clip} speech, so the {out} carries a {clip} accent. Add a {out} reference ")
     text += "clip in Voices"
     if lang == "en":
-        text += ", or train the voice and use the native accent"
+        text += ", or choose the native accent"
     return text + "."
 
 

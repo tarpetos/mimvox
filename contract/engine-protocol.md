@@ -94,6 +94,8 @@ rvc    = "/abs/path/runtime/applio/.venv/bin/python"   # runs the RVC worker and
 [paths]
 applio          = "/abs/path/runtime/applio"           # Applio repo with prerequisites downloaded
 omnivoice_model = "/abs/path/runtime/models/omnivoice" # k2-fsa/OmniVoice snapshot (3.3 GB)
+seed_vc         = "/abs/path/runtime/seed-vc"          # Seed-VC source checkout (zero-shot native accent)
+seed_vc_models  = "/abs/path/runtime/models/seed-vc"   # its weights (dit/, bigvgan/, whisper-small/, 1.8 GB)
 
 [device]
 backend = "cuda"   # cuda | mps | cpu (detected by setup)
@@ -101,12 +103,14 @@ backend = "cuda"   # cuda | mps | cpu (detected by setup)
 
 `[python] omnivoice` (optional) runs the OmniVoice worker with another interpreter; by default it is the engine's. When
 `omnivoice_model` is absent the engine looks in `<runtime>/models/omnivoice` (next to the Applio folder) and reports
-`tts: missing` when nothing is there. Runtimes of earlier versions had `engine` in `runtime/index-tts/.venv` and an
+`tts: missing` when nothing is there. Without `seed_vc` / `seed_vc_models` the engine looks in `<runtime>/seed-vc` and
+`<runtime>/models/seed-vc`; the converter counts as installed only with every file and setup's `.mimvox-setup-ok`
+stamp in the weights folder (`hello` -> `zero_shot_vc`). Runtimes of earlier versions had `engine` in `runtime/index-tts/.venv` and an
 `indextts` path; setup rewrites the file (the old `runtime/index-tts` is not used any more).
 
 ## Where the data directory is
 
-The runtime alone is about 28 GB, so it can live on any drive. Setup asks where (default below) and the app finds it
+The runtime alone is about 30 GB, so it can live on any drive. Setup asks where (default below) and the app finds it
 in this order:
 
 1. `MIMVOX_DATA` environment variable (an absolute path);
@@ -126,9 +130,10 @@ existing runtime in the chosen directory reuses it and only fills in what is mis
 ### Setup and moving the install (subprocess interface)
 
 `setup.cmd` / `./setup.sh` take `--data-dir DIR`, `--yes`, `--force` and others (`--help`). Before anything is
-downloaded setup prints the install location, the free space there and the size (about 28 GB: engine + OmniVoice ~11 GB,
-Applio/RVC ~12 GB, Redub models ~4.5 GB, music removal ~0.3 GB, plus ~0.1 GB per voice), or "Existing runtime found, nothing big to download". It
-refuses when the drive has under 32 GB free unless `--force`. An existing `runtime/index-tts` (IndexTTS-2.5 of earlier
+downloaded setup prints the install location, the free space there and the size (about 30 GB: engine + OmniVoice ~11 GB,
+Applio/RVC ~12 GB, Redub models ~4.5 GB, music removal ~0.3 GB, zero-shot native accent ~2 GB, plus ~0.1 GB per voice), or "Existing runtime found, nothing big to download". It
+refuses when the drive has under 34 GB free unless `--force`. `--no-zero-shot-vc` leaves out Seed-VC (see
+[Native accent](#native-accent-accent)). An existing `runtime/index-tts` (IndexTTS-2.5 of earlier
 versions, ~19 GB) is deleted only with `--remove-indextts` or a "y" at the prompt in an interactive terminal; with `--yes`
 setup only prints a hint. Without `--yes` it asks (interactive; the app opens a terminal running plain
 `setup.cmd`/`setup.sh`, so this prompt is what the user sees); with `--yes` it needs `--data-dir` (or
@@ -205,7 +210,7 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 `{}` -> `{"version":"0.1.0","device":{"backend":"cuda|mps|cpu","name":"NVIDIA GeForce RTX 4070","vram_gb":12.0},
 "models":{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"},
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
-"native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"]}`
+"native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"],"zero_shot_vc":true}`
 - `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
@@ -216,6 +221,8 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 - `translators`: the Redub translation models installed, best first: `nllb-1.3b` (NLLB-200 distilled 1.3B, "better")
   and/or `nllb-600m` (NLLB-200 distilled 600M, "faster"); `[]` when none is. Read at engine start (setup runs while the
   app is closed). See [Translation](#redubtranscribe--redubcancel).
+- `zero_shot_vc`: setup installed the zero-shot voice converter (Seed-VC), so `accent: "native-us"` also works for an
+  untrained voice (see [Native accent](#native-accent-accent)). Read at engine start.
 
 ### `voices.list`
 `{}` -> `{"voices":[{"id","name","created","preset","language":"en","dataset_minutes":6.4,"parts":5,"trained":true,
@@ -699,17 +706,21 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
 
 ### Native accent (`accent`)
 
-OmniVoice carries the accent of the reference clip into the target language, and RVC keeps the pronunciation it is
-given. `accent: "native-us"` makes English come out with a native American accent in the user's timbre: OmniVoice speaks
-from a shipped native reference instead of the voice's clip, then the voice's RVC model converts it (`accent.py`).
+OmniVoice carries the accent of the reference clip into the target language, and voice conversion keeps the
+pronunciation it is given. `accent: "native-us"` makes English come out with a native American accent in the user's
+timbre: OmniVoice speaks from a shipped native reference instead of the voice's clip, then a voice converter gives the
+result the user's timbre (`accent.py`): the voice's RVC model when it is trained, else the zero-shot converter
+(Seed-VC, `zsvc.py`), which takes the timbre from the voice's `reference.wav` with no training.
 
 - **Parameters** (optional) of `tts.generate`, `redub.dub` and `redub.render` (`respeak` only; ignored by `convert`):
   `"accent": "own" | "native-us"` (default `own`: the voice's own reference, as before) and `"native_voice": "auto" |
   "male" | "female"` (default `auto`). Other values are `bad_request`.
 - **When it applies**: the speech is English (`language` of `tts.generate`, `target_language` of `redub.dub`, the
-  spoken language of a respeak), the voice is trained (`rvc/model.pth`) and `voice_match > 0`. Otherwise the request
-  is **not refused**: it speaks with the voice's own reference and says why (see below). It works for a voice of any
-  recording language (the app offers it when the voice has no English clip, see App side).
+  spoken language of a respeak). The converter is RVC for a trained voice (`rvc/model.pth`) with `voice_match > 0`,
+  the zero-shot converter for any other voice (untrained, or `voice_match` 0) when setup installed it (`hello` ->
+  `zero_shot_vc`). Otherwise the request is **not refused**: it speaks with the voice's own reference and says why
+  (see below). It works for a voice of any recording language (the app offers it when the voice has no English clip,
+  see App side).
 - **Native references**: `engine/src/mimvox_engine/assets/native/` (shipped inside the engine package, so every install
   has them): `en-us-male.wav` (CMU ARCTIC `bdl`) and `en-us-female.wav` (`slt`), US English, about 11.5 s, mono 24 kHz;
   `en-us-<gender>.txt` is the transcript (sent to the worker as `ref_text`, so no Whisper pass and no
@@ -718,34 +729,53 @@ from a shipped native reference instead of the voice's clip, then the voice's RV
 - **Speaker**: `auto` picks the native speaker whose median F0 is closest on a log scale to the median F0 of the voice's
   `reference.wav` (pYIN 60-500 Hz over at most 30 s, measured once per clip state per engine run, a few seconds of CPU;
   unknown pitch: male). `male` / `female` force one.
-- **RVC**: `pitch = round(12 * log2(voice F0 / native F0))` semitones (within +-12; 0 when the voice's pitch is
-  unknown), so the timbre model gets a pitch in the user's own range; index rate `min(voice_match, 0.2)`
+- **RVC** (trained voice): `pitch = round(12 * log2(voice F0 / native F0))` semitones (within +-12; 0 when the voice's
+  pitch is unknown), so the timbre model gets a pitch in the user's own range; index rate `min(voice_match, 0.2)`
   (`MIMVOX_RVC_NATIVE_INDEX` overrides 0.2): the retrieval index holds the user's own phoneme features, and a high rate
   pulls the native vowels back towards the user's accent; the timbre comes mostly from the model itself. RVC worker
   `convert` takes `"pitch"` (int semitones, default 0).
+- **Zero-shot converter** (untrained voice): Seed-VC v1 (DiT with a Whisper-small content encoder, CAM++ speaker style,
+  BigVGAN 22.05 kHz), 25 diffusion steps, CFG 0.7, the voice's `reference.wav` as the target (its first 20 s). It
+  generates the reference's pitch itself, so no transpose (`pitch` 0); `voice_match` does not apply. Each segment is
+  converted as it is produced, like RVC (streaming unchanged). Worker `zsvc_worker.py`, run with the engine
+  interpreter (`python -I zsvc_worker.py --seed-vc <dir> --models <dir> --device cuda|cpu|mps`; wire format
+  `worker_kit.py`): ops `load {}` -> `{"load_s","device","vram_gb"}`, `convert {"in","out","ref","steps"?:25,
+  "cfg"?:0.7}` -> `{"elapsed","duration_s","sr"}` (`out` a 22.05 kHz mono WAV of the input's length; the
+  reference prompt is cached per clip state, 2 clips), `warm {"ref"}` -> `{"elapsed_s"}`, `release {}` -> `{}`,
+  `status {}` -> `{"loaded","vram_gb"}`; event `{"event":"unloaded","reason":"idle"}` after 10 idle minutes
+  (`MIMVOX_ZSVC_UNLOAD_S`). About 1.6 GB of VRAM, about 1 s per 8 s of speech on an RTX 4070 (docs/performance.md).
+  **GPU hand-over**: on a GPU with less than 10 GB (`hello` `device.vram_gb`) OmniVoice and the converter take turns
+  (one shared lock around each synthesis and each conversion) instead of overlapping; a training stops the worker with
+  the others (`release_gpu`), and `speech.yield_gpu` still runs before the job.
 - **Results**: the `tts.generate` answer, the `redub.dub` answer (`review:false`) and the `redub.render` answer
-  (`respeak`) carry `"accent"` (what the job does: `own` | `native-us`); `tts.done` and `redub.done` carry it too, plus
-  `"native_voice"` (`male` | `female`) and `"pitch"` when it is `native-us`. When `native-us` was asked but cannot be
-  used they add `"accent_fallback"`: `not_english`, `untrained`, `voice_match_off` or `unavailable` (the clips are
-  missing), and `"accent_note"`, a sentence for the user. A `redub.dub` with `review:true` speaks nothing: send
-  `accent` again with the `redub.render` that finishes it.
-- **Warm-up**: `voices.warm {"id","accent"?:"native-us","native_voice"?}` with a trained voice also measures the voice's
-  pitch and builds the native clip's voice-clone prompt (included in the `voice.warm` it ends with; `already_warm`
-  only when that is done too). The OmniVoice worker keeps the voice-clone prompts of the last 3 clips
-  (`--prompt-cache`, least recently used out), so the user's reference and the native clips stay warm side by side
-  and switching between `own` and `native-us` rebuilds nothing.
+  (`respeak`) carry `"accent"` (what the job does: `own` | `native-us`); with `native-us` also `"accent_converter"`:
+  `rvc` | `zero-shot`. `tts.done` and `redub.done` carry them too, plus `"native_voice"` (`male` | `female`) and
+  `"pitch"` (the RVC transpose; 0 with the zero-shot converter) when it is `native-us`. When `native-us` was asked but
+  cannot be used they add `"accent_fallback"`: `not_english`, `no_converter` (an untrained voice, or `voice_match` 0,
+  and the zero-shot converter is not installed) or `unavailable` (the native clips are missing), and
+  `"accent_note"`, a sentence for the user. (`untrained` and `voice_match_off` of earlier versions are now
+  `no_converter`, or no fallback at all with the converter installed.) A `redub.dub` with `review:true` speaks
+  nothing: send `accent` again with the `redub.render` that finishes it.
+- **Warm-up**: `voices.warm {"id","accent"?:"native-us","native_voice"?}` also measures the voice's pitch and builds the
+  native clip's voice-clone prompt, and for a voice that uses the zero-shot converter it starts the converter and
+  builds the prompt of `reference.wav` (all included in the `voice.warm` it ends with; `already_warm` only when that
+  is done too). The OmniVoice worker keeps the voice-clone prompts of the last 3 clips (`--prompt-cache`, least
+  recently used out), so the user's reference and the native clips stay warm side by side and switching between
+  `own` and `native-us` rebuilds nothing.
 - **App side**: Speak's Style panel shows "Accent" (Native (American) | Like my recordings, with Speaker Auto | Male |
   Female under Native) when the output language is English and the voice has **no English clip**: no
   `reference_en.wav`, and `reference.wav` is not English (its detected `reference_language`, or while that is `null`
   the voice's `language`; see [Reference language](#reference-language)). Redub shows the same in Translate & dub
   when "To" is English (sent with `redub.dub` and with the `redub.render` of a reviewed dub) and in Re-speak when the
   text is English (the transcript's language, the "Translate the transcript" target, or the spoken language; sent with
-  its `redub.render`). For an untrained voice it is shown disabled, with "Train this voice to speak English without
-  an accent (Native accent), or add an English reference clip in Voices" and an "Add an English clip" button that
-  opens Voices with the Other languages panel set to English; with "Like my recordings" on a trained voice the button
-  is there too. Default Native, remembered in `settings.json` (`accent`: `native-us` | `own`, `native_voice`).
-  `voices.warm` is sent with the accent for a trained voice without an English clip. An `accent_note` is shown as a
-  warning toast.
+  its `redub.render`). Native is the default; the choice is remembered in `settings.json` (`accent`: `native-us` |
+  `own`, `native_voice`) only once the user changes it. A trained voice says "A native American speaker says it; your
+  trained voice model keeps your timbre."; an untrained one, with `zero_shot_vc`, "Native accent from your reference
+  clip (no training needed); training makes it closer to you.". An untrained voice without `zero_shot_vc` shows the
+  choice disabled, with "Run setup to install the zero-shot voice converter, or train this voice, ..." and an "Add an
+  English clip" button that opens Voices with the Other languages panel set to English; with "Like my recordings" the
+  button is there too. `voices.warm` is sent with the accent whenever Native is possible and chosen for a voice
+  without an English clip. An `accent_note` is shown as a warning toast.
 
 ### Reference language
 
@@ -778,8 +808,7 @@ clip with `accent:"native-us"`, see below). The answers of `tts.generate`, `redu
   `reference.wav`, `"en"` for the native clip; `null` while unknown);
 - `"reference_foreign"`: `true` when that clip is known to be in another language than L (its accent carries over);
 - `"reference_note"` (only when foreign): a sentence for the user, e.g. "The reference clip is Ukrainian speech, so the
-  English carries a Ukrainian accent. Add an English reference clip in Voices, or train the voice and use the native
-  accent." It is separate from `accent_note` (which says why `native-us` was not used): both can apply at once.
+  English carries a Ukrainian accent. Add an English reference clip in Voices, or choose the native accent." It is separate from `accent_note` (which says why `native-us` was not used): both can apply at once.
 
 The end event reads the sidecar again, so a clip transcribed for the first time by that job is reported correctly
 there even when the answer still said `null`. `voice.json` `language` is never rewritten from the detection.

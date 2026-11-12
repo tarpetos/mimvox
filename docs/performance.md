@@ -58,6 +58,66 @@ Real server process, a real data directory with two test voices, quality *best*:
 The engine environment is one venv (`runtime/engine`, ~7.6 GB) plus the OmniVoice model (3.3 GB); the whole runtime is
 about 28 GB instead of 36 GB with IndexTTS.
 
+## Zero-shot native accent (Seed-VC)
+
+The native accent of an **untrained** voice: OmniVoice speaks the English from the shipped native clip
+(`en-us-male.wav`, CMU ARCTIC `bdl`), then a zero-shot voice converter gives it the timbre of the voice's reference
+clip. Three converters were measured on the owner's voice (only Ukrainian recordings: an 11 s clip `reference_uk.wav`,
+the 17.7 s `reference.wav`, 43 s of dataset audio), RTX 4070 next to the running app, three English test sentences of
+7-8 s each, every number the mean over the three:
+
+- **ECAPA hold-out**: cosine similarity (speechbrain `spkrec-ecapa-voxceleb`) to 25 s of the owner's dataset audio that
+  is in neither reference clip; the main speaker-similarity score. **ECAPA uk**: to the 11 s Ukrainian clip.
+  **WavLM-SV**: `microsoft/wavlm-base-plus-sv` to the dataset audio (it favours kNN-VC, which is built on WavLM features,
+  and conversions from `reference.wav`, a crop of that audio).
+- **WER**: Whisper large-v3-turbo / Whisper base (the weaker model is more sensitive), language forced to English.
+- **non-EN %**: 100 x (1 - Whisper turbo's English language probability), an accent proxy: the non-English mass of
+  the accented speech goes mostly to Russian.
+- **UTMOS**: predicted naturalness (UTMOS22 strong). The owner's own clips score 1.5-2.2 (phone-like recordings), so
+  matching the timbre closely also lowers it.
+
+| System | Target clip | ECAPA hold-out | ECAPA uk | WavLM-SV | WER % | non-EN % | UTMOS | RTF | VRAM peak |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| OmniVoice from the Ukrainian clip (accented baseline) | uk 11 s | 0.630 | 0.777 | 0.953 | 0 / 2.4 | 1.68 | 3.10 | - | - |
+| OmniVoice from `reference.wav` (accented baseline) | main 17.7 s | 0.650 | 0.642 | 0.973 | 0 / 0 | 3.07 | 3.13 | - | - |
+| Native clip, no conversion | - | 0.041 | 0.008 | 0.606 | 0 / 0 | 0.05 | 4.47 | - | - |
+| **Seed-VC v1, 25 steps** | main 17.7 s | **0.438** | 0.401 | 0.855 | 0 / 0 | 0.26 | 3.72 | 0.15 | 1.5 GB |
+| Seed-VC v1, 25 steps | uk 11 s | 0.349 | 0.539 | 0.742 | 0 / 0 | 0.05 | 3.60 | 0.13 | 1.5 GB |
+| Seed-VC v1, 10 steps | main 17.7 s | 0.364 | 0.318 | 0.837 | 0 / 0 | 0.11 | 3.74 | 0.09 | 1.5 GB |
+| kNN-VC (WavLM-Large, prematched HiFi-GAN) | uk 11 s | 0.390 | 0.567 | 0.895 | 0 / 4.9 | 0.04 | 3.03 | 0.02 | 1.5 GB |
+| kNN-VC | main 17.7 s | 0.358 | 0.303 | 0.893 | 0 / 4.1 | 0.01 | 3.13 | 0.01 | 1.7 GB |
+| kNN-VC | uk + 43 s dataset* | 0.323 | 0.312 | 0.916 | 0 / 2.4 | 0.02 | 3.21 | 0.03 | 2.2 GB |
+| OpenVoice V2 tone colour converter (tau 0.3) | uk 11 s | 0.192 | 0.211 | 0.751 | 2.5 / 0 | 0.01 | 3.91 | 0.03 | 0.4 GB |
+| OpenVoice V2 | main 17.7 s | 0.117 | 0.083 | 0.771 | 0 / 0 | 0.01 | 3.80 | 0.01 | 0.4 GB |
+
+\* that target contains the hold-out audio, so its hold-out score is not independent (and still lower).
+
+**Choice: Seed-VC v1** (`DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned`, 25 diffusion steps, CFG 0.7, the
+voice's `reference.wav` up to 20 s). The best independent speaker similarity (hold-out ECAPA 0.44, about two thirds of
+the accented OmniVoice clone's 0.63-0.65 and ten times the unconverted native clip's 0.04), no word errors even for
+Whisper base, about 10x less non-English mass than the accented baseline (0.05-0.26 % against 1.7-3.1 %), the most
+natural output of the two converters that change the timbre, 1.5 GB of VRAM, RTF 0.15. kNN-VC matches it on the
+Ukrainian clip's own ECAPA but generalizes worse to other recordings (hold-out 0.36-0.39), sounds rougher (UTMOS
+3.0-3.2) and loses words for Whisper base (4-5 % WER), as expected with 11-60 s of target audio; OpenVoice V2 barely
+moves the timbre (0.12-0.19). The longer `reference.wav` beat the 11 s clip on the hold-out (0.44 against 0.35), so the
+converter uses the voice's main clip. Pitch needs no transpose: the model generates the reference's pitch (a 116 Hz
+source came out at 121-128 Hz with the 126 Hz clip, 106-113 Hz with the 115 Hz one).
+
+**End to end** (engine modules on Windows, `tts.generate` with `accent: "native-us"` for the untrained voice, one
+3-sentence paragraph, 12.9 s of speech, 3 segments converted one by one while the next is synthesized):
+
+| Run | First chunk | Total | Hold-out ECAPA | WER | non-EN % | UTMOS |
+| --- | --- | --- | --- | --- | --- | --- |
+| `accent: "own"` (OmniVoice from the Ukrainian `reference.wav`) | 9.0 s (first transcription of the clip) | 11.9 s | 0.69 | 0 | 0.74 | 2.77 |
+| Native clip, conversion skipped | 3.6 s | 6.6 s | 0.05 | 0 | 0.02 | 4.41 |
+| Native + Seed-VC, converter cold (process start 1.6 s + load 8.1 s) | 12.5 s | 14.8 s | - | 0 | 0.09 | - |
+| Native + Seed-VC, warm | **2.8 s** | **6.6 s** | 0.36 | 0 | 1.08 | 3.12 |
+
+One paragraph is a single sample: the accent proxy of the two converted runs (0.09 % and 1.08 %) shows the spread of
+the sampling. `voices.warm` with `accent: "native-us"` loads the converter and the reference prompt in advance, so the
+cold start does not reach the first chunk. The converter's worker holds 1.6 GB of VRAM while loaded (dropped after 10
+idle minutes); with the converter busy, an OmniVoice segment took 2.5 s instead of 1.5 s on the shared GPU.
+
 ## Redub translation (NLLB-200 1.3B and 600M)
 
 RTX 4070 (12 GB), Windows, the speech worker alone (`translate` op), fp16 on CUDA, beam search 5, five Ukrainian
@@ -171,8 +231,11 @@ the clearest symptom), which is why the app does not use them.
 
 ## Disk and memory
 
-- About 28 GB for the runtime and the models: the engine environment with OmniVoice ~11 GB, Applio/RVC ~12 GB (two
+- About 30 GB for the runtime and the models: the engine environment with OmniVoice ~11 GB, Applio/RVC ~12 GB (two
   Python environments with their own PyTorch), Whisper and NLLB 600M for Redub ~4.5 GB, Hybrid Demucs for music removal
-  ~0.3 GB. With an NVIDIA GPU setup adds NLLB 1.3B (2.7 GB in fp16, a 5.5 GB download): about 31 GB.
-- OmniVoice needs about 4-5 GB of VRAM with the 7-12 s reference cut; the RVC worker adds ~1-2 GB. 8 GB or more is
+  ~0.3 GB, Seed-VC for the native accent of untrained voices ~2 GB. With an NVIDIA GPU setup adds NLLB 1.3B (2.7 GB in
+  fp16, a 5.5 GB download): about 33 GB.
+- OmniVoice needs about 4-5 GB of VRAM with the 7-12 s reference cut; the RVC worker adds ~1-2 GB, the zero-shot
+  converter (Seed-VC, only while an untrained voice uses the native accent) ~1.6 GB. Below 10 GB of VRAM OmniVoice and
+  the converter take turns instead of overlapping. 8 GB or more is
   recommended and 12 GB was used in testing.
