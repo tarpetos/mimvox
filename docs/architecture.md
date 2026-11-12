@@ -115,8 +115,10 @@ SynthParams(out_path, temperature=0.8, quality="best", duration_factor=1.0, firs
 
 - `reference` is the voice's `reference.wav`; the WAV may have any sample rate. RVC, 44.1 kHz resampling, pauses and
   Redub slot fitting happen afterwards, the same for every backend.
-- Redub slot fitting (`redub/render.py`): `plan_factor` picks `duration_factor` before synthesis (a clip first uses the
-  silence after its slot, then the factor goes down to 0.85, then the stretch is planned, and only then down to 0.8);
+- Redub slot fitting (`redub/render.py`, `timing: "keep"`): `segment_factor` picks `duration_factor` before synthesis
+  from the user's pace (`1 / speed`): a clip first uses the silence after its slot, then the factor goes down to
+  `FIT_FLOOR` (0.85; never below the user's own pace either); `timing: "natural"` uses the user's pace alone
+  (`natural_factor`) and places the clips one after the other, keeping the original pauses where the speech fits;
   after synthesis `stretch_rate` decides the speed-up (at most 1.15x), done by `media.time_stretch`: one ffmpeg run on
   the IO pool, raw samples through pipes, with the `rubberband` filter when the build has it (e.g. Ubuntu's ffmpeg on
   Linux usually does) and `atempo` (WSOLA) otherwise (the Applio ffmpeg on Windows). Without either the clip overruns.

@@ -427,7 +427,7 @@ The same recovery applies after a crash or a power cut.
 | **Speed** | 0.8x (*Slower*) to 1.3x (*Faster*), default 1.00x. Relative to the pace of the reference clip. |
 | **Expressiveness** | *Steady* to *Lively*, default 0.80. Lower is flatter and steadier, higher varies phrasing and pauses more. |
 | **Voice match** | *Natural* to *Closest to me*, default 1.00. How strongly the trained timbre model pulls the sound towards your recordings. Applies only to a trained voice. In a language the voice was not recorded in it is capped at 0.3 so the words stay clear. |
-| **Quality** | **Best** (32 steps per sentence, the richest detail) or **Fast** (16 steps, about twice as fast, slightly less clean). |
+| **Quality** | **Best** (32 steps per sentence, the richest detail) or **Fast** (16 steps, about twice as fast, slightly less clean). With the native accent of an untrained voice it also sets the voice converter's steps (12 or 8). |
 
 The defaults are the validated settings; you do not need to change them.
 
@@ -583,9 +583,23 @@ translation is then shared out over those lines, so each line keeps its own time
 "перс" or "спавнюється" and spoken times such as "чверть на десяту" (9:15) are rewritten before translating, because
 both models got them wrong. Other slang can still come out wrong: use **Review text before dubbing** to fix it.
 
-How the timing works: each translated sentence is fitted into the time of the original sentence. A longer sentence
-first uses the pause after it, at its natural pace; if that is not enough, it is spoken a bit faster and then sped up
-slightly; if it still does not fit, later sentences move a little. Speech is never cut off and sentences never overlap.
+### Keep original timing
+
+Translate & dub and Re-speak both have **Keep original timing**:
+
+- **On** (the default for a video): *fits each phrase into the original timing; may speed up speech.* A longer
+  sentence first uses the pause after it, at your pace; if that is not enough, it is spoken a bit faster, but never
+  shorter than 85 % of its natural length (beyond that the speech model starts to swallow short words and the ends of
+  phrases; a higher Speed still applies), then sped up slightly by ffmpeg (at most 1.15x, which keeps every sound); if it still does not fit,
+  later sentences move a little. Use it for a video: Redub saves audio only, and this keeps the new speech in sync when
+  you lay it back over the picture.
+- **Off** (the default for an audio file): *natural pace; the result can be longer.* Every sentence is spoken at your
+  pace with nothing squeezed. It starts at its original time when the previous one has finished; otherwise right after
+  it, with the original pause between them (up to half a second). The result card says how much longer the result is.
+
+The choice is remembered separately for video and audio files once you change it. **Speed** in the Style panel is
+your pace in both cases: at 1.3x the speech is that fast on its own, and fitting the timing does not squeeze it
+further. Speech is never cut off and sentences never overlap.
 
 ### The same, with "Review text before dubbing"
 
@@ -615,6 +629,9 @@ recording of speech. With an untrained voice the mode offers **Go to Train** or 
    another language.
 3. Press **Transcribe**. The transcript appears as editable lines with their times.
 4. Fix the words, delete lines you do not want, then press **Render**. Transcribing again replaces your edits.
+
+**Keep original timing** works as in Translate & dub (see [Keep original timing](#keep-original-timing)): on, each
+line is fitted into its original time; off, the lines are spoken at your natural pace one after the other.
 
 When the text is English (spoken or translated) and the voice has no English clip, the options show the same
 **Accent** choice as Speak (see [Native accent](#native-accent-english-with-an-american-accent)), and the render uses

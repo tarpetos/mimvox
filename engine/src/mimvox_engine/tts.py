@@ -402,7 +402,7 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     zs_worker = await aio.run_io(zsvc.get, ctx.runtime, data.root) if requested == "native-us" else None
     # native-us: RVC for a trained voice, else the zero-shot converter; without either the voice's own reference
     choice = accent.choose(requested, native_voice, lang, has_pth, index_rate, zs_worker is not None)
-    zs = zero_shot(ctx, choice, zs_worker, ref)
+    zs = zero_shot(ctx, choice, zs_worker, ref, quality)
     # The clip that will speak and its real language (a foreign one carries its accent into `lang`; reflang.py).
     ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")
     segs = segment_text(text, backend.count_tokens)
@@ -417,13 +417,14 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             **ref_fields}
 
 
-def zero_shot(ctx: Context, choice: accent.Choice, worker: zsvc.ZsvcWorker | None, ref: str) -> zsvc.Bound | None:
+def zero_shot(ctx: Context, choice: accent.Choice, worker: zsvc.ZsvcWorker | None, ref: str,
+              quality: str = "best") -> zsvc.Bound | None:
     """The zero-shot converter of a native-accent job whose ``choice`` uses it, bound to the voice's ``ref`` (the
-    timbre it gives), with the GPU turn of a tight GPU; None otherwise."""
+    timbre it gives) and the diffusion steps of ``quality``, with the GPU turn of a tight GPU; None otherwise."""
     if choice.converter != "zero-shot" or worker is None:
         return None
     vram = float((getattr(ctx, "device", None) or {}).get("vram_gb") or 0.0)
-    return zsvc.Bound(worker, ref, zsvc.turn_lock(vram))
+    return zsvc.Bound(worker, ref, zsvc.turn_lock(vram), quality)
 
 
 @method("tts.cancel")

@@ -13,6 +13,11 @@
 * **Speak:** a sentence cut to fit a generation chunk no longer leaves a word or two on their own.
 * **Redub:** cleaner timing with ffmpeg time-stretch (no more metallic phase-vocoder sound) and use of the pause after
   each phrase.
+* **Redub timing:** "Keep original timing" in Translate & dub and Re-speak (on for videos, off for audio files): off
+  speaks at a natural pace, one phrase after the other. When fitting, the speech is never squeezed below 0.85 of its
+  natural length any more (lower factors swallowed short words), and Speed no longer compounds with the fitting.
+* **Native accent, faster:** the zero-shot converter uses 12 diffusion steps (8 with Quality Fast) instead of 25, with
+  the same measured similarity; the time it adds to each Re-speak segment is about halved.
 * **Reference from media:** optional removal of background music (Hybrid Demucs).
 * **Results:** one saved file per result, in a format you choose (WAV, MP3, FLAC, OGG, Opus, M4A, AIFF).
 

@@ -92,7 +92,8 @@ the 17.7 s `reference.wav`, 43 s of dataset audio), RTX 4070 next to the running
 
 \* that target contains the hold-out audio, so its hold-out score is not independent (and still lower).
 
-**Choice: Seed-VC v1** (`DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned`, 25 diffusion steps, CFG 0.7, the
+**Choice: Seed-VC v1** (`DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned`, 25 diffusion steps (12 since, see
+below), CFG 0.7, the
 voice's `reference.wav` up to 20 s). The best independent speaker similarity (hold-out ECAPA 0.44, about two thirds of
 the accented OmniVoice clone's 0.63-0.65 and ten times the unconverted native clip's 0.04), no word errors even for
 Whisper base, about 10x less non-English mass than the accented baseline (0.05-0.26 % against 1.7-3.1 %), the most
@@ -117,6 +118,82 @@ One paragraph is a single sample: the accent proxy of the two converted runs (0.
 the sampling. `voices.warm` with `accent: "native-us"` loads the converter and the reference prompt in advance, so the
 cold start does not reach the first chunk. The converter's worker holds 1.6 GB of VRAM while loaded (dropped after 10
 idle minutes); with the converter busy, an OmniVoice segment took 2.5 s instead of 1.5 s on the shared GPU.
+
+**Diffusion steps (12 since, 25 before).** The same machine and tooling, measured again with Re-speak in mind: Seed-VC
+worker driven directly, the owner's `reference.wav` as the target, sources are OmniVoice English from the native male
+clip. Speaker similarity is ECAPA (`spkrec-ecapa-voxceleb`) to two stretches of the owner's dataset audio outside
+`reference.wav` (hold-out A: 17 s, B: 12 s); WER is Whisper turbo / Whisper base, language forced to English.
+
+| Steps | Convert time, 4.1 s segment alone | Hold-out A, 8 clips (3-4.6 s) | Hold-out A, 28 clips | Hold-out A / B, 6 clips of 4-4.4 s, two runs | WER turbo / base |
+| --- | --- | --- | --- | --- | --- |
+| 25 | 0.89 s (RTF 0.22) | 0.346 | 0.314 | 0.362, 0.359 / 0.369, 0.384 | 0 / 0 |
+| 16 | 0.61 s | 0.346 | - | 0.360 / 0.386 | 0 / 0 |
+| **12** | **0.49 s** (RTF 0.12) | 0.329 | **0.338** | **0.390, 0.388 / 0.393, 0.390** | 0 / 0 |
+| 10 | 0.43 s | 0.345 | - | 0.374 / 0.375 | 0 / 0 |
+| 8 | 0.37 s (RTF 0.09) | 0.324 | - | - | 0 / 0 |
+
+Fewer steps did not lower the similarity: every difference is within the spread of the diffusion sampling (standard
+error about 0.01 on 28 clips, where 12 steps came out *above* 25). The earlier 10-against-25 gap (0.36 against 0.44)
+was three sentences. The time matters most in Redub, where a conversion overlaps the synthesis of the next segment and
+both slow down on the shared GPU. Re-speak pattern, OmniVoice 32 steps at factor 0.85 next to the converter, six
+segments of about 4.2 s, per segment in the steady state:
+
+| Converter | OmniVoice synthesis | Conversion | 6 segments |
+| --- | --- | --- | --- |
+| none (`accent: "own"`) | 1.53-1.64 s | - | 9.4 s |
+| 25 steps | 2.5-2.6 s | 2.3 s | 15.3-16.7 s |
+| 16 steps | 2.3 s | 1.5-1.6 s | 13.8 s |
+| **12 steps** | **2.05-2.1 s** | **1.2-1.3 s** | **12.3-12.7 s** |
+| 10 steps | 2.0 s | 1.1 s | 12.1 s |
+
+So `quality: "best"` now converts with 12 steps (the native accent's extra time per segment goes from about 1.05 s to
+0.5 s) and `fast` with 8. The first conversion after a load cost 0.2 s more alone and 0.8 s more next to OmniVoice;
+`warm` now runs one short throw-away conversion so a real segment never pays for it.
+
+**The slow first segments of the owner's Re-speak** (engine log: 27.2 s and 25.5 s for the first two OmniVoice
+segments, about 2.9 s for the other 21; Seed-VC at 1.7-2.3 s per diffusion step instead of about 0.08 s while segment 1 was
+converted). Measured and ruled out: model load (both workers were loaded and warm since `voices.warm` seven minutes
+earlier; no reload in the log), the native clip's prompt (warm; 0.45 s when built), a CUDA warm-up or compile of
+either model (the first 32-step synthesis after a 16-step warm-up took 1.45 s, the first conversion 1.05 s), and GPU
+turn-taking (no lock on a 12 GB card, and segment 1 was synthesized while the converter was idle, still at 27 s).
+Replaying the same pattern with both workers warm never came close (first segment 1.5 s, first conversion 3.1 s next
+to OmniVoice). What the owner's run had in addition is the Whisper turbo transcription that ended 3 s before the
+render (`redub.transcribe`, then `redub.render`), with OmniVoice, the converter and the RVC worker resident: the most
+likely cause is that this pass pushed the idle workers' memory out (VRAM to shared memory, and on a host with little
+free RAM their working sets to the page file) and the first segments paid to bring it back. That was not reproduced
+here (it needs the card and the host RAM filled next to the running app). `accent: "own"` runs nothing of the
+converter: no worker start, no warm-up, no conversion (`_Voice` only looks up the worker for `native-us`, and a respeak
+without `zs` takes neither the GPU turn nor the conversion); its segments stay at about 1.55 s.
+
+## Redub pace (slot fitting and the speech model's speed)
+
+Re-speak and Translate & dub fit each phrase into the original timing by asking OmniVoice for shorter speech
+(`duration_factor` < 1). How far that can go before words get lost: OmniVoice 32 steps, the native US male clip, four
+sentences (54 words, short function words and weak final consonants), three takes per factor, every sentence
+synthesized on its own like a Redub segment, Whisper turbo and Whisper base with the language forced to English.
+
+| Factor | WER turbo | WER base | Speech length vs factor 1.0 | After Seed-VC (12 / 25 steps), WER turbo |
+| --- | --- | --- | --- | --- |
+| 1.0 | 0 % | 0.5 % | 1.00 | 0 / 0 % |
+| 0.9 | 0 % | 0 % | 0.91 | 0 / 0 % |
+| **0.85** | **0 %** | **0 %** | 0.86 | 0 / 0 % |
+| 0.8 | 0 % | 0 % | 0.81 | 0 / 0 % |
+| 0.75 | 2.0 % | 1.5 % | 0.77 | 0 / 0 % |
+| 0.7 | 6.0 % | 6.0 % | 0.72 | 3 / 3 % |
+| 0.65 | 19.9 % | 22.4 % | 0.66 | 24 / 24 % |
+
+The model follows the factor closely (the length ratio tracks it), and when it has too little time it does not speak
+faster everywhere: it drops the end of the phrase ("we took it at dusk" -> "we took it", "step around them" -> "step
+around", "a hot meal and a good night's sleep" -> "a meal and a good night's"). The first lost words appear at 0.75;
+at 0.65, a factor the old fitting used (its floor with the user's speed was 0.65), one word in five is gone. The
+owner's 1.3x speed made every factor 0.77 x the fit, so most segments landed at 0.65-0.77.
+
+**Floor: 0.85.** Slot fitting never asks for less than 0.85; the last clean factor was 0.80, and the margin covers the
+length estimate (it is a running seconds-per-character average) and what Whisper does not count (weakened consonants
+inside words). The user's speed is a pace preference applied first: 1.3x gives 0.77 on its own and fitting adds nothing
+below that; at 1.0x fitting may go down to 0.85. Whatever still does not fit runs into the following silence, then
+gets the ffmpeg stretch (at most 1.15x, which keeps every sound), then overruns and pushes the next segments later.
+With "Keep original timing" off (`timing: "natural"`) nothing is fitted at all.
 
 ## Redub translation (NLLB-200 1.3B and 600M)
 

@@ -18,11 +18,13 @@ by its file path. Wire format: see ``worker_kit.py``.
 
 Ops (one at a time, on the op thread):
   load     {}                                     -> {"load_s","device","vram_gb"}   (no-op when loaded)
-  convert  {"in","out","ref","steps":25,"cfg":0.7} -> {"elapsed","duration_s","sr"}
+  convert  {"in","out","ref","steps":12,"cfg":0.7} -> {"elapsed","duration_s","sr"}
            ``in`` speech (any rate) converted to the timbre of ``ref``; ``out`` a 22.05 kHz mono WAV of the same
            length. The reference is used up to REF_MAX_S; its prompt (content, mel, speaker style) is cached per file
            state. Pitch follows the reference (the model generates it; no transpose needed).
-  warm     {"ref"}                                -> {"elapsed_s"}   (loads the models and the reference prompt)
+  warm     {"ref"}                                -> {"elapsed_s"}   (loads the models, builds the reference prompt and
+                                                                     runs one short conversion, so the first real one
+                                                                     does not pay for the first DiT / vocoder run)
   release  {}                                     -> {}   (drops the models and frees the GPU; the next op reloads)
   status   {}                                     -> {"loaded","vram_gb"}
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"}.
@@ -62,7 +64,9 @@ HOP = 256
 REF_MAX_S = 20.0          # reference used (Seed-VC allows 25 s, but prompt + source share a 30 s context)
 CONTEXT_FRAMES = SR // HOP * 30
 OVERLAP_FRAMES = 16       # crossfade between windows of a long source
-STEPS = 25                # diffusion steps: 10 -> 25 raised held-out speaker similarity (ECAPA 0.36 -> 0.44)
+STEPS = 12                # diffusion steps (the engine sends 12 for Best, 8 for Fast): 12 to 25 gave the same held-out
+                          # speaker similarity and WER, at half the time (docs/performance.md, "Zero-shot native accent")
+WARM_STEPS = 4            # the warm-up conversion (its output is thrown away)
 CFG = 0.7                 # inference_cfg_rate (upstream default)
 PROMPT_CACHE = 2
 
@@ -97,7 +101,7 @@ import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 import torchaudio  # noqa: E402
 
-_state = {"model": None}
+_state = {"model": None, "ran": False}   # ran: one conversion has run since the models were loaded
 _prompts = collections.OrderedDict()   # (path, mtime, size) -> (prompt_condition, mel2, style)
 
 
@@ -237,23 +241,11 @@ def _crossfade(a, b, n):
     return b
 
 
-@torch.no_grad()
-def op_convert(req):
-    t0 = time.time()
-    src, out, ref = req.get("in"), req.get("out"), req.get("ref")
-    if not (src and out and ref):
-        raise kit.OpError("bad_request", "'in', 'out' and 'ref' are required")
-    for p in (src, ref):
-        if not os.path.isfile(p):
-            raise kit.OpError("bad_request", f"{p} does not exist")
-    steps = int(req.get("steps") or STEPS)
-    cfg = float(req.get("cfg", CFG))
-    op_load()
-    m = _state["model"]
+def _convert(m, x, prompt, steps, cfg):
+    """``x`` (22.05 kHz float32 numpy) in the timbre of ``prompt`` (``_prompt``): float32 numpy of the same length."""
     dev = m["device"]
-    pc, mel2, style = _prompt(m, ref)
-    worker.check_cancel()
-    x = torch.tensor(_load(src))[None].to(dev)
+    pc, mel2, style = prompt
+    x = torch.tensor(x)[None].to(dev)
     s_alt = _semantic_long(m, torchaudio.functional.resample(x, SR, 16000))
     n_frames = m["mel"](x.float()).size(2)
     cond = m["dit"].length_regulator(s_alt, ylens=torch.LongTensor([n_frames]).to(dev), n_quantizers=3, f0=None)[0]
@@ -282,7 +274,26 @@ def op_convert(req):
             pieces.append(_crossfade(prev, w[:-overlap], overlap))
         prev = w[-overlap:]
         done += vm.size(2) - OVERLAP_FRAMES
-    y = np.clip(np.concatenate(pieces), -1.0, 1.0).astype(np.float32)
+    _state["ran"] = True
+    return np.clip(np.concatenate(pieces), -1.0, 1.0).astype(np.float32)
+
+
+@torch.no_grad()
+def op_convert(req):
+    t0 = time.time()
+    src, out, ref = req.get("in"), req.get("out"), req.get("ref")
+    if not (src and out and ref):
+        raise kit.OpError("bad_request", "'in', 'out' and 'ref' are required")
+    for p in (src, ref):
+        if not os.path.isfile(p):
+            raise kit.OpError("bad_request", f"{p} does not exist")
+    steps = int(req.get("steps") or STEPS)
+    cfg = float(req.get("cfg", CFG))
+    op_load()
+    m = _state["model"]
+    prompt = _prompt(m, ref)
+    worker.check_cancel()
+    y = _convert(m, _load(src), prompt, steps, cfg)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     sf.write(out, y, SR, subtype="PCM_16")
     return {"elapsed": round(time.time() - t0, 3), "duration_s": round(len(y) / SR, 3), "sr": SR}
@@ -303,13 +314,17 @@ def op_warm(req):
     if not ref or not os.path.isfile(ref):
         raise kit.OpError("bad_request", "'ref' must be an existing file")
     op_load()
-    _prompt(_state["model"], ref)
+    m = _state["model"]
+    prompt = _prompt(m, ref)
+    if not _state["ran"]:  # the first DiT and vocoder run costs more (measured: +0.2 s alone, +0.8 s next to OmniVoice)
+        _convert(m, _load(ref, 1.5), prompt, WARM_STEPS, CFG)
     return {"elapsed_s": round(time.time() - t0, 2)}
 
 
 def op_release(_req=None):
     had = _state["model"] is not None
     _state["model"] = None
+    _state["ran"] = False
     _prompts.clear()
     gc.collect()
     if torch.cuda.is_available():

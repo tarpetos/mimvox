@@ -14,6 +14,8 @@
 //! review choice and target language are remembered in `settings.json` (`redub_mode`, `redub_language`, `redub_review`,
 //! `redub_target`), and so is "Translation quality" (`redub_translator`: `nllb-1.3b` | `nllb-600m`), offered when the
 //! engine has both translators (`hello` -> `translators`). The language lists come from the engine (`ui::lang`).
+//! Translate & dub and Re-speak have "Keep original timing" (`timing`: `keep` | `natural`), on by default for a video
+//! and off for an audio file, remembered per kind once changed (`redub_timing`); Redub saves audio only.
 //! Dubbing into English, or re-speaking English, with a voice that has no English reference clip shows Speak's
 //! "Accent" choice (`speak::accent_block`, the same setting), sent as `accent` with `redub.dub`, with the
 //! `redub.render` that finishes a reviewed dub and with a Re-speak's `redub.render`. A job spoken from a clip in another
@@ -34,7 +36,7 @@ use super::speak;
 use super::theme::{self, Palette, motion, radius, ty};
 use super::voices::kit;
 use crate::engine::EngineMsg;
-use crate::engine::protocol::{self, EngineEvent, JobStarted, RedubDone, RedubDubParams, RedubMode, RedubProbe, RedubReview, RedubSegmentIn, RedubTranscript, TextLanguage};
+use crate::engine::protocol::{self, EngineEvent, JobStarted, RedubDone, RedubDubParams, RedubMode, RedubProbe, RedubReview, RedubSegmentIn, RedubTiming, RedubTranscript, TextLanguage};
 use crate::state::{AppState, Screen};
 use rune::{Cx, El, ScrollSpec, TextEdit, col, edit_access, el, row, text, text_input};
 use serde_json::json;
@@ -181,6 +183,9 @@ pub struct RedubState {
     review_first: bool,
     /// "Translation quality: Faster" (NLLB-200 600M) instead of Better (1.3B); only asked when both are installed.
     faster_translation: bool,
+    /// "Keep original timing" as the user set it for audio files (`[0]`) and video files (`[1]`); `None` until they
+    /// change it (then it is on for video and off for audio).
+    keep_timing: [Option<bool>; 2],
     segments: Vec<Seg>,
     /// The segments are a dub's translation waiting for the user's edits (shown as the two-column review).
     reviewing: bool,
@@ -213,6 +218,7 @@ impl Default for RedubState {
             translate: false,
             review_first: false,
             faster_translation: false,
+            keep_timing: [None, None],
             segments: Vec::new(),
             reviewing: false,
             transcript_lang: None,
@@ -271,6 +277,76 @@ impl RedubState {
     fn persist(&mut self) {
         self.prefs_dirty = true;
     }
+}
+
+/// Extensions taken for video until `redub.probe` says whether the file has a picture track.
+const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "webm", "avi", "m4v"];
+
+/// The chosen file is a video (the probe's `has_video`, else its extension). Without a file: true (fitting the timing
+/// is what a video needs, and it was the only behaviour before the switch).
+fn source_is_video(r: &RedubState) -> bool {
+    let Some(f) = r.file.as_ref() else { return true };
+    if let Probe::Ready(RedubProbe { has_video: Some(v), .. }) = &f.probe {
+        return *v;
+    }
+    f.path.extension().and_then(|e| e.to_str()).is_some_and(|e| VIDEO_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+}
+
+/// "Keep original timing": the user's choice for this kind of file, else on for a video and off for audio.
+fn keep_timing(r: &RedubState) -> bool {
+    let video = source_is_video(r);
+    r.keep_timing[usize::from(video)].unwrap_or(video)
+}
+
+fn timing(r: &RedubState) -> RedubTiming {
+    if keep_timing(r) { RedubTiming::Keep } else { RedubTiming::Natural }
+}
+
+fn toggle_keep_timing(s: &mut AppState) {
+    let r = &mut s.redub;
+    if r.busy() {
+        return;
+    }
+    let (video, on) = (source_is_video(r), keep_timing(r));
+    r.keep_timing[usize::from(video)] = Some(!on);
+    r.persist();
+}
+
+/// The saved `redub_timing` setting: `{"audio": "keep"|"natural", "video": ...}`, each only once the user chose.
+fn parse_timing_pref(v: Option<serde_json::Value>) -> [Option<bool>; 2] {
+    let get = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(|x| x.as_str()).and_then(|x| match x {
+        "keep" => Some(true),
+        "natural" => Some(false),
+        _ => None,
+    });
+    [get("audio"), get("video")]
+}
+
+fn timing_pref(t: [Option<bool>; 2]) -> serde_json::Value {
+    let mut v = json!({});
+    for (k, on) in ["audio", "video"].into_iter().zip(t) {
+        if let Some(on) = on {
+            v[k] = json!(if on { "keep" } else { "natural" });
+        }
+    }
+    v
+}
+
+/// "Keep original timing" with the hint for its current state (Translate & dub and Re-speak).
+fn timing_block(s: &AppState, p: Palette, key: &str) -> El {
+    let r = &s.redub;
+    let on = keep_timing(r);
+    // Redub saves audio only (nothing is muxed back into a video), so for a video the hint says what the choice means
+    // for laying the result back over the picture.
+    let hint = match (on, source_is_video(r)) {
+        (true, true) => "Fits each phrase into the original timing; may speed up speech. Stays in sync with the video (the result is audio only).",
+        (true, false) => "Fits each phrase into the original timing; may speed up speech.",
+        (false, true) => "Natural pace; the result can be longer, so it drifts out of sync with the video.",
+        (false, false) => "Natural pace; the result can be longer.",
+    };
+    col().key(key.to_owned()).w_full().gap(3.0)
+        .child(kit::checkbox(&p, on, "Keep original timing", toggle_keep_timing))
+        .child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
 }
 
 const TRANSLATOR_BETTER: &str = "nllb-1.3b";
@@ -488,6 +564,7 @@ fn start_dub(s: &mut AppState) {
         speed: s.speak.speed,
         output_format: &out,
         accent: speak::accent_param(s, &s.redub.to),
+        timing: timing(&s.redub),
     });
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -535,6 +612,7 @@ fn start_render(s: &mut AppState) {
         s.speak.speed,
         &out,
         accent,
+        timing(&s.redub),
     );
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -803,12 +881,16 @@ pub fn settle(s: &mut AppState) -> bool {
             if let Some(t) = super::onboarding::setting("redub_translator") {
                 s.redub.faster_translation = t.as_str() == Some(TRANSLATOR_FASTER);
             }
+            s.redub.keep_timing = parse_timing_pref(super::onboarding::setting("redub_timing"));
             changed = true;
         } else if s.redub.prefs_dirty {
             s.redub.prefs_dirty = false;
             super::onboarding::save_redub_prefs(mode_key(s.redub.mode), &s.redub.from, s.redub.review_first, &s.redub.to);
             let t = if s.redub.faster_translation { TRANSLATOR_FASTER } else { TRANSLATOR_BETTER };
             super::onboarding::save_setting("redub_translator", json!(t));
+            if s.redub.keep_timing.iter().any(Option::is_some) {
+                super::onboarding::save_setting("redub_timing", timing_pref(s.redub.keep_timing));
+            }
         }
     }
 
@@ -1090,6 +1172,7 @@ fn dub_block(s: &AppState, p: Palette) -> El {
     if translator_choice(s) {
         options = options.child(translation_quality(r, p));
     }
+    options = options.child(timing_block(s, p, "dub-timing"));
     options = options.child(col().w_full().gap(3.0).child(review)
         .child(text(format!("Stops after the translation so you can fix the {to_name} before it is spoken.")).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
     let mut c = col().key("dub-block").w_full().gap(12.0);
@@ -1187,7 +1270,7 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
     if respeak_lang(r).is_some_and(|l| speak::accent_applies(s, &l)) {
         options = options.child(el().w_full().max_w(420.0).child(speak::accent_block(s, p, "respeak-accent")));
     }
-    let options = options.child(transcribe_row(s, p));
+    let options = options.child(timing_block(s, p, "respeak-timing")).child(transcribe_row(s, p));
     let mut c = col().key("respeak-block").w_full().gap(12.0)
         .child(text("Transcribes the speech so you can fix or translate the words, then says them again in your voice's own delivery.").font(ty::CAPTION).color(p.text_dim).wrap())
         .child(options);
@@ -1476,7 +1559,7 @@ fn demo_file(s: &mut AppState) {
     s.redub.file = Some(Source {
         path: SAMPLE_PATH.into(),
         name: "interview-take-2.mp3".into(),
-        probe: Probe::Ready(RedubProbe { duration_s: 161.0, sample_rate: 44100, channels: 2, has_audio: true, format: "mp3".into(), preview_path: Some("/tmp/interview-take-2-preview.wav".into()) }),
+        probe: Probe::Ready(RedubProbe { duration_s: 161.0, sample_rate: 44100, channels: 2, has_audio: true, has_video: Some(false), format: "mp3".into(), preview_path: Some("/tmp/interview-take-2-preview.wav".into()) }),
         prepared: true,
     });
 }
@@ -1612,6 +1695,36 @@ fn demo_dub_file(s: &mut AppState) {
 fn scene_dub_ready(s: &mut AppState) {
     demo_dub_file(s);
     demo_history(s);
+}
+
+/// A video file instead of the demo's MP3.
+fn demo_video(s: &mut AppState) {
+    if let Some(f) = s.redub.file.as_mut() {
+        f.path = "/tmp/game-tour.mp4".into();
+        f.name = "game-tour.mp4".into();
+        if let Probe::Ready(p) = &mut f.probe {
+            p.has_video = Some(true);
+            p.format = "mp4".into();
+        }
+    }
+}
+
+/// Translate & dub of a video: "Keep original timing" is on by default, with the video hint.
+fn scene_dub_timing_video(s: &mut AppState) {
+    scene_dub_ready(s);
+    demo_video(s);
+}
+
+/// The same with the switch turned off for videos: natural pace, the hint warns about the sync.
+fn scene_dub_timing_video_off(s: &mut AppState) {
+    scene_dub_timing_video(s);
+    s.redub.keep_timing = [None, Some(false)];
+}
+
+/// Re-speak of an audio file with the switch turned on (it is off by default for audio).
+fn scene_respeak_timing_keep(s: &mut AppState) {
+    scene_transcript(s);
+    s.redub.keep_timing = [Some(true), None];
 }
 
 /// Translate & dub with both translators installed: "Translation quality" is offered (Better chosen).
@@ -1768,6 +1881,9 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("redub_respeak_accent_untrained", scene_respeak_accent_untrained),
         ("redub_respeak_accent_zero_shot", scene_respeak_accent_zero_shot),
         ("redub_dub_ready", scene_dub_ready),
+        ("redub_dub_timing_video", scene_dub_timing_video),
+        ("redub_dub_timing_video_off", scene_dub_timing_video_off),
+        ("redub_respeak_timing_keep", scene_respeak_timing_keep),
         ("redub_dub_accent", scene_dub_accent),
         ("redub_dub_accent_untrained", scene_dub_accent_untrained),
         ("redub_dub_accent_zero_shot", scene_dub_accent_zero_shot),

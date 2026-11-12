@@ -4,7 +4,8 @@ The native accent of an **untrained** voice (``accent.py``): OmniVoice speaks En
 this worker gives the result the timbre of the voice's own reference clip, with no training. A trained voice keeps
 RVC (closer to the user). Measured on the owner's voice (11-18 s Ukrainian reference, RTX 4070): held-out ECAPA
 speaker similarity 0.44 (native clip without conversion: 0.04; OmniVoice cloning the Ukrainian clip, with its accent:
-0.63), Whisper WER 0 %, about 1 s per 8 s of speech, 1.5 GB of VRAM (docs/performance.md, "Zero-shot native accent").
+0.63), Whisper WER 0 %, 1.5 GB of VRAM (docs/performance.md, "Zero-shot native accent"). Diffusion steps follow the
+job's quality (``STEPS``): 12 matched 25 in similarity and WER at about 0.5 s per 4 s segment.
 
 Installed by setup (optional runtime component, not part of this repository: Seed-VC is GPL-3.0):
 the source checkout in ``<runtime>/seed-vc`` and the weights in ``<runtime>/models/seed-vc`` (``runtime.toml``
@@ -41,6 +42,7 @@ REQUIRED = (os.path.join("dit", "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_
             os.path.join("whisper-small", "preprocessor_config.json"))
 TIGHT_VRAM_GB = 10.0   # below this the speech model and the converter do not run at the same time
 CONVERT_TIMEOUT_S = 180.0
+STEPS = {"best": 12, "fast": 8}   # diffusion steps per quality: 12 matched 25 (docs/performance.md, "Zero-shot native accent")
 
 
 class ZsvcError(RuntimeError):
@@ -81,10 +83,11 @@ class ZsvcWorker:
             self.warm_refs.clear()
             raise ZsvcError(str(exc) or type(exc).__name__) from exc
 
-    async def convert(self, src: str, dst: str, ref: str, timeout: float = CONVERT_TIMEOUT_S) -> float:
-        """Convert ``src`` (wav) to the timbre of ``ref``; ``dst`` is a 22.05 kHz WAV of the same length. Returns the
-        worker's elapsed seconds."""
-        res = await self._call("convert", {"in": src, "out": dst, "ref": ref}, timeout)
+    async def convert(self, src: str, dst: str, ref: str, timeout: float = CONVERT_TIMEOUT_S,
+                      steps: int = STEPS["best"]) -> float:
+        """Convert ``src`` (wav) to the timbre of ``ref`` with ``steps`` diffusion steps; ``dst`` is a 22.05 kHz WAV of
+        the same length. Returns the worker's elapsed seconds."""
+        res = await self._call("convert", {"in": src, "out": dst, "ref": ref, "steps": int(steps)}, timeout)
         sig = ref_sig(ref)
         if sig:
             self.warm_refs.add(sig)
@@ -125,16 +128,18 @@ def ref_sig(path: str) -> tuple | None:
 
 class Bound:
     """The converter of one job: the worker plus the reference clip whose timbre it gives (``tts`` / Redub call
-    ``convert(src, dst)`` per segment, like RVC), and the GPU turn to take on a tight GPU."""
+    ``convert(src, dst)`` per segment, like RVC), the diffusion steps of the job's quality (``STEPS``), and the GPU
+    turn to take on a tight GPU."""
 
-    def __init__(self, worker: ZsvcWorker, ref: str, turn: asyncio.Lock | None) -> None:
+    def __init__(self, worker: ZsvcWorker, ref: str, turn: asyncio.Lock | None, quality: str = "best") -> None:
         self.worker = worker
         self.ref = ref
         self.turn = turn
+        self.steps = STEPS.get(quality, STEPS["best"])
 
     async def convert(self, src: str, dst: str, timeout: float = CONVERT_TIMEOUT_S) -> float:
         async with gpu_turn(self.turn):
-            return await self.worker.convert(src, dst, self.ref, timeout)
+            return await self.worker.convert(src, dst, self.ref, timeout, self.steps)
 
 
 _WORKER: ZsvcWorker | None = None

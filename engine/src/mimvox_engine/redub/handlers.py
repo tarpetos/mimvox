@@ -87,7 +87,7 @@ def _reg_job(ctx: Context, fn: Any, error_event: str = "redub.error", speech_job
 def redub_probe(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     path = _path(params)
     info = media.probe(path)
-    out = {k: info[k] for k in ("duration_s", "sample_rate", "channels", "has_audio", "format")}
+    out = {k: info[k] for k in ("duration_s", "sample_rate", "channels", "has_audio", "has_video", "format")}
     out["preview_path"] = _preview(config.data_dir(ctx), path) if info["has_audio"] else None
     return out
 
@@ -304,6 +304,9 @@ def _speak_language(params: dict[str, Any], segs: list[dict[str, Any]]) -> str:
     return code
 
 
+_STATS = ("timing", "stretched", "overrun", "pushed", "drift_s", "max_push_s")   # respeak stats in redub.done
+
+
 class _Voice:
     """The voice-side settings shared by ``redub.render`` and ``redub.dub``."""
 
@@ -316,6 +319,9 @@ class _Voice:
         self.temperature = _num(params, "expressiveness", 0.8, 0.1, 1.5)
         self.index_rate = _num(params, "voice_match", 1.0, 0.0, 1.0)
         self.speed = _num(params, "speed", 1.0, tts.SPEED_MIN, tts.SPEED_MAX)  # respeak only
+        self.timing = params.get("timing") or "keep"                             # respeak / dub only
+        if self.timing not in render.TIMINGS:
+            raise EngineError("bad_request", "'timing' must be \"keep\" or \"natural\"")
         self.pth, self.idx = data.rvc_model(self.voice_id)
         self.trained = os.path.isfile(self.pth)
         self.ref = data.reference(self.voice_id)
@@ -353,7 +359,7 @@ class _Voice:
         how: dict[str, Any] = {"ref": native.ref.path, "ref_text": native.ref.text, "pitch": native.pitch,
                                "index_rate": native.index_rate}
         if native.converter == "zero-shot":
-            how["zs"] = tts.zero_shot(self.ctx, choice, self.zs_worker, self.ref)
+            how["zs"] = tts.zero_shot(self.ctx, choice, self.zs_worker, self.ref, self.quality)
         return {**choice.fields(), **native.fields()}, how
 
     def respeak_worker(self, lang: str = "en") -> rvc.RvcWorker | None:
@@ -431,7 +437,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                                                 voice.quality, worker, voice.pth, voice.idx, how["index_rate"],
                                                 workdir, progress, voice.speed, lang=target,
                                                 ref_text=how.get("ref_text"), pitch=how.get("pitch", 0),
-                                                zs=how.get("zs"))
+                                                zs=how.get("zs"), timing=voice.timing)
             accent_fields.update(await voice.ref_fields(accent.Choice(accent_fields["accent"]), target))
             emit.stage("save", 0)
             saved = await aio.run_io(media.save_result, data, track, render.SR, "redub_", out_fmt)
@@ -443,7 +449,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                                   "elapsed_s": elapsed, "mode": "dub", "language": res["language"],
                                   "target_language": target, "translated": res["translated"], "segments": segs,
                                   "timings_s": timings, **accent_fields,
-                                  **{k: stats[k] for k in ("stretched", "overrun", "pushed", "drift_s", "max_push_s")}})
+                                  **{k: stats[k] for k in _STATS}})
         finally:
             await aio.run_io(shutil.rmtree, workdir, ignore_errors=True)
 
@@ -501,8 +507,8 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                 track, stats = await render.respeak(segs, total_s, how["ref"], voice.temperature, voice.quality,
                                                     worker, pth, idx, how["index_rate"], workdir, progress,
                                                     voice.speed, lang=lang, ref_text=how.get("ref_text"),
-                                                    pitch=how.get("pitch", 0), zs=how.get("zs"))
-                extra = {k: stats[k] for k in ("stretched", "overrun", "pushed", "drift_s", "max_push_s")}
+                                                    pitch=how.get("pitch", 0), zs=how.get("zs"), timing=voice.timing)
+                extra = {k: stats[k] for k in _STATS}
                 extra["language"] = lang
                 extra.update(accent_fields)
                 extra.update(await voice.ref_fields(accent.Choice(accent_fields["accent"]), lang))

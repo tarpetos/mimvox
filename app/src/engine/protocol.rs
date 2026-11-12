@@ -460,6 +460,9 @@ pub struct RedubProbe {
     pub channels: u32,
     #[serde(default)]
     pub has_audio: bool,
+    /// The file has a picture track (a video; cover art does not count). Absent from older engines.
+    #[serde(default)]
+    pub has_video: Option<bool>,
     #[serde(default)]
     pub format: String,
     /// Optional: a WAV copy the app can play as "the original" (set when the file itself is not a WAV).
@@ -609,6 +612,25 @@ impl RedubMode {
             Self::Dub => "dub",
             Self::Convert => "convert",
             Self::Respeak => "respeak",
+        }
+    }
+}
+
+/// How a re-spoken or dubbed text is timed (`timing` of `redub.dub` and `redub.render` in `respeak` mode).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RedubTiming {
+    /// Fit each phrase into the original timing (may speed the speech up, never below the engine's floor).
+    #[default]
+    Keep,
+    /// Speak at the natural pace, one phrase after the other; the result can be longer than the source.
+    Natural,
+}
+
+impl RedubTiming {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Natural => "natural",
         }
     }
 }
@@ -1006,6 +1028,8 @@ pub struct RedubDubParams<'a> {
     pub output_format: &'a str,
     /// The native accent for an English target (see [`NativeVoice`]).
     pub accent: Option<NativeVoice>,
+    /// Keep the original timing or speak at the natural pace.
+    pub timing: RedubTiming,
 }
 
 /// `redub.dub {path, voice_id, source_language, target_language, translator, review, voice_match, expressiveness, quality, speed,
@@ -1027,6 +1051,7 @@ pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
             "quality": p.quality.as_str(),
             "speed": p.speed,
             "output_format": p.output_format,
+            "timing": p.timing.as_str(),
         }), p.accent),
     )
 }
@@ -1058,6 +1083,7 @@ pub fn redub_render(
     speed: f32,
     output_format: &str,
     accent: Option<NativeVoice>,
+    timing: RedubTiming,
 ) -> Request {
     let mut params = json!({
         "voice_id": voice_id,
@@ -1071,6 +1097,7 @@ pub fn redub_render(
     });
     if let Some(segs) = segments {
         params["segments"] = json!(segs);
+        params["timing"] = json!(timing.as_str());
         match text_language {
             TextLanguage::Unknown => {}
             TextLanguage::Spoken(l) => params["language"] = json!(l),

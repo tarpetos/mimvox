@@ -615,7 +615,7 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   uses the same value. The tempo copied from `reference.wav` is the baseline, so `speed` is relative to that clip (see
   `voices.reference_candidates`).
 - `quality`: `best` (default, 32 OmniVoice decoding steps) or `fast` (16 steps, about twice as fast per segment,
-  slightly less clean). The first segment always uses 16 steps for a quicker first sound.
+  slightly less clean). With the zero-shot converter of the native accent it also sets its diffusion steps (12 / 8). The first segment always uses 16 steps for a quicker first sound.
 - `language` (optional, default `"en"`): the language of `text`, an ISO 639-1 code from the list in
   [Speech model and languages](#speech-model-and-languages-omnivoice); another code is `bad_request`. It selects
   OmniVoice's language and the text normalization (numbers, units, abbreviations spelled out in that language).
@@ -735,15 +735,20 @@ result the user's timbre (`accent.py`): the voice's RVC model when it is trained
   pulls the native vowels back towards the user's accent; the timbre comes mostly from the model itself. RVC worker
   `convert` takes `"pitch"` (int semitones, default 0).
 - **Zero-shot converter** (untrained voice): Seed-VC v1 (DiT with a Whisper-small content encoder, CAM++ speaker style,
-  BigVGAN 22.05 kHz), 25 diffusion steps, CFG 0.7, the voice's `reference.wav` as the target (its first 20 s). It
+  BigVGAN 22.05 kHz), CFG 0.7, the voice's `reference.wav` as the target (its first 20 s). Diffusion steps follow the
+  job's `quality`: **12** for `best`, **8** for `fast` (`zsvc.STEPS`; 25 before: 12 gave the same held-out speaker
+  similarity and Whisper WER at half the conversion time, see docs/performance.md, "Zero-shot native accent"). It
   generates the reference's pitch itself, so no transpose (`pitch` 0); `voice_match` does not apply. Each segment is
   converted as it is produced, like RVC (streaming unchanged). Worker `zsvc_worker.py`, run with the engine
   interpreter (`python -I zsvc_worker.py --seed-vc <dir> --models <dir> --device cuda|cpu|mps`; wire format
-  `worker_kit.py`): ops `load {}` -> `{"load_s","device","vram_gb"}`, `convert {"in","out","ref","steps"?:25,
+  `worker_kit.py`): ops `load {}` -> `{"load_s","device","vram_gb"}`, `convert {"in","out","ref","steps"?:12,
   "cfg"?:0.7}` -> `{"elapsed","duration_s","sr"}` (`out` a 22.05 kHz mono WAV of the input's length; the
-  reference prompt is cached per clip state, 2 clips), `warm {"ref"}` -> `{"elapsed_s"}`, `release {}` -> `{}`,
+  reference prompt is cached per clip state, 2 clips), `warm {"ref"}` -> `{"elapsed_s"}` (also runs one short
+  throw-away conversion the first time after a load, so the first real segment does not pay for the first DiT and
+  vocoder run), `release {}` -> `{}`,
   `status {}` -> `{"loaded","vram_gb"}`; event `{"event":"unloaded","reason":"idle"}` after 10 idle minutes
-  (`MIMVOX_ZSVC_UNLOAD_S`). About 1.6 GB of VRAM, about 1 s per 8 s of speech on an RTX 4070 (docs/performance.md).
+  (`MIMVOX_ZSVC_UNLOAD_S`). About 1.6 GB of VRAM; on an RTX 4070 a 4.5 s segment converts in about 0.5 s at 12 steps
+  alone, about 1.25 s while OmniVoice synthesizes the next one (docs/performance.md).
   **GPU hand-over**: on a GPU with less than 10 GB (`hello` `device.vram_gb`) OmniVoice and the converter take turns
   (one shared lock around each synthesis and each conversion) instead of overlapping; a training stops the worker with
   the others (`release_gpu`), and `speech.yield_gpu` still runs before the job.
@@ -886,11 +891,12 @@ number from 0 to 100 (overall for that job, never decreasing); the terminal even
 importable format, also video) and convert it themselves: the app never has to.
 
 ### `redub.probe`
-`{"path"}` -> `{"duration_s":69.68,"sample_rate":44100,"channels":1,"has_audio":true,"format":"wav",
+`{"path"}` -> `{"duration_s":69.68,"sample_rate":44100,"channels":1,"has_audio":true,"has_video":false,"format":"wav",
 "preview_path":"<data>/tmp/redub_preview_<id>.wav"}`
 - Any file ffprobe understands (see [Audio formats](#audio-formats-import-and-export)). `format` is the file's
   extension-style name (`wav`, `mp3`, `m4a`, `mp4`, ...). `has_audio: false` (and `sample_rate`/`channels` 0) for e.g. a
-  silent video; `duration_s` is then the container's. A container without a duration header (some webm) is measured by
+  silent video; `duration_s` is then the container's. `has_video`: the file has a picture track (cover art in an audio
+  file does not count); the app uses it for the default of "Keep original timing". A container without a duration header (some webm) is measured by
   decoding it. `preview_path` is the absolute path of the source decoded to a
   mono 16-bit **44.1 kHz WAV** in `<data>/tmp` (`null` when there is no audio track): the app plays only WAV, so use it for
   "play original" and A/B against the result. It is cached per file state and deleted at the next engine start. The call
@@ -981,10 +987,12 @@ importable format, also video) and convert it themselves: the app never has to.
 
 ### `redub.dub` (the whole pipeline in one job)
 `{"path","voice_id","source_language":"auto","target_language":"en","translator":null,"review":false,"voice_match":1.0,"expressiveness":0.8,
-"quality":"best","speed":1.0,"output_format"?:"wav"}` -> `{"job"}`
+"quality":"best","speed":1.0,"timing":"keep","output_format"?:"wav"}` -> `{"job"}`
 - Decode -> transcribe in the source language -> translate every segment to `target_language` -> **speak** in that
   language (the same respeak render as `redub.render`, see below, with the translated segments at their original times)
   -> save. One job, one GPU slot for the whole run; the speech worker releases the GPU before the speak stage starts.
+  `timing` (`keep` | `natural`, default `keep`) as for `redub.render` (a review stop ignores it: send it again with the
+  `redub.render` that finishes the dub).
 - `source_language`: `"auto"` (detected) or a code; `target_language` (default `"en"`): any language the speech model
   speaks (as `translate_to` of `redub.transcribe`; another code is `bad_request`); `translator` as for
   `redub.transcribe`. A source that already is in the target
@@ -999,7 +1007,7 @@ importable format, also video) and convert it themselves: the app never has to.
   (No separate `redub.review` event exists: the transcript event is the review.)
 - `review: false` (default): continues straight into speaking and ends with `redub.done {"path","path_play","format",
   "duration_s","elapsed_s","mode":"dub","language":"uk","target_language":"en","translated":true,"segments":[...as in the transcript...],
-  "stretched","overrun","pushed","drift_s","max_push_s","timings_s":{"decode":..,"load_model":..,"transcribe":..,
+  "timing","stretched","overrun","pushed","drift_s","max_push_s","timings_s":{"decode":..,"load_model":..,"transcribe":..,
   "translate":..,"speak":..,"save":..}}` (seconds per stage). The result is saved as one file in `output_format`, see
   [Saved results](#saved-results-output_format) (a review stop saves nothing; send `output_format` again with the
   `redub.render` that finishes it).
@@ -1014,7 +1022,7 @@ importable format, also video) and convert it themselves: the app never has to.
 
 ### `redub.render`
 `{"voice_id","path","mode":"convert|respeak","segments"?:[{"start","end","text"}],"language"?:"uk","translated"?:false,
-"voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"output_format"?:"wav"}` -> `{"job"}`
+"voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"timing"?:"keep","output_format"?:"wav"}` -> `{"job"}`
 - `convert`: the voice's RVC model is run over the **whole source** (voice, noise and music alike; background/music
   separation is not implemented) in chunks of about 15-30 s cut at the quietest point (a pause), then joined. The result
   has exactly the source's length, so the original timing is kept. Silent stretches are copied. The voice must be
@@ -1023,26 +1031,36 @@ importable format, also video) and convert it themselves: the app never has to.
 - `respeak`: needs `segments` (`bad_request` when missing or empty; `text` is whitespace-normalised, an emptied segment
   stays silent, unsorted input is sorted by `start`; at most 5000). Each segment is spoken with the normal speech
   pipeline (OmniVoice, then RVC when the voice is trained and `voice_match > 0`; an untrained voice answers zero-shot
-  output) and placed at its `start` on a silent track of the source duration. A clip's room is the time from its start to
-  the next segment's start minus a 0.12 s gap (the last segment's room ends at the source end), so its own slot plus
-  the silence after it. Fitting, gentle first and hard last:
+  output) and placed on a silent track of the source duration (it grows when the speech runs past the end). How the
+  clips are timed is `timing`: `keep` (default) or `natural`; another value is `bad_request`. `convert` ignores it.
+  The user's `speed` is the pace in both: `duration_factor` `1 / speed` is the length the user wants relative to the
+  natural speech.
+  **`timing: "keep"`** fits every clip into the original timing. A clip's room is the time from its start to the next
+  segment's start minus a 0.12 s gap (the last segment's room ends at the source end), so its own slot plus the silence
+  after it. Fitting, gentle first and hard last:
   1. the speech length factor (`duration_factor`) is planned from the clip's estimated natural length (the estimate
-     calibrates itself from the clips already spoken): a clip shorter than its segment (`end - start`) is slowed toward
-     that length (up to 1.25); a longer one that fits the room keeps its natural pace and runs into the following
-     silence; otherwise the factor goes down to 0.85, then the stretch of step 2 is planned up to its cap, and only past
-     that does the factor go down to 0.8. The user's `speed` multiplies it by `1 / speed` (a slower voice gets longer
-     clips); when a slower pace no longer fits the room it is lowered to fit (the slot wins). The combined factor stays
-     within 0.65-1.4;
+     calibrates itself from the clips already spoken), at the user's pace: a clip shorter than its segment
+     (`end - start`) is slowed toward that length (up to 1.25 x the user's pace); a longer one that fits the room keeps
+     the user's pace and runs into the following silence; otherwise the speech model speaks faster, but **never below
+     a factor of 0.85** (`render.FIT_FLOOR`; below about 0.8 OmniVoice drops short words and the ends of phrases, see
+     docs/performance.md, "Redub pace"). When the user's own pace is already faster than that (`speed` above 1.18),
+     fitting adds nothing: the factor stays at `1 / speed`. The combined factor stays within 0.65-1.4;
   2. if the clip is still longer than the room, it is time-stretched with ffmpeg (pitch kept; the `rubberband` filter
      when the ffmpeg build has it, else `atempo`) by at most 1.15x. Without either filter there is no stretch;
   3. if it is still longer, it overruns. Two clips never overlap: a clip that would start before the previous one ended
      is pushed later (`pushed`), and the next room shrinks accordingly. The output is longer than the source only when
      the last clip overruns the end.
-  Leading/trailing silence of each clip is trimmed, so speech starts at the segment's `start`.
+  **`timing: "natural"`** speaks every clip at the user's pace (`1 / speed`, no slot fitting, no stretch) and places it
+  at its segment's `start`, or, when the previous clip is still speaking then, right after it with the original pause
+  between the two segments (at most 0.5 s): the original gaps are kept where the speech fits, nothing is cut or
+  squeezed, and the result can be longer than the source (`drift_s`).
+  Leading/trailing silence of each clip is trimmed, so speech starts at the segment's `start` (or where it was pushed).
   This is also how translated text fits (English is often shorter or longer than the original); speech is never cut and
-  clips never overlap. The result reports `stretched` (clips time-stretched), `overrun` (clips still longer than their
-  room), `drift_s` (how much longer the output is than the source, 0 when it ends with the source) and `max_push_s`
-  (the largest delay of any segment's start).
+  clips never overlap. The result reports `timing` (the mode used), `stretched` (clips time-stretched), `overrun`
+  (clips still longer than their room; always 0 with `natural`), `drift_s` (how much longer the output is than the
+  source, 0 when it ends with the source) and `max_push_s` (the largest delay of any segment's start).
+  The result is **audio only**: Redub never muxes it back into a video. For a video, `keep` is what keeps the speech in
+  sync when the user lays the audio back over the picture.
 - **Language guard.** The guard accepts every language the speech model speaks (see
   [Speech model and languages](#speech-model-and-languages-omnivoice); the message lists them). `language` is the transcript's language and
   `translated: true` says the segment texts are translations into `target_language` (default `"en"`; what
@@ -1059,7 +1077,7 @@ importable format, also video) and convert it themselves: the app never has to.
   decode 0-5, convert/speak 5-95, save 95-100; `segment` is the 0-based index of the chunk (`convert`) or transcript
   segment (`speak`) that just finished, `segments` the total; `decode` and `save` carry neither), then
   `redub.done {"path","path_play","format","duration_s","elapsed_s","mode"}` plus, for `respeak`, `"language"` (the language
-  spoken) and `"stretched":n,"overrun":n,"pushed":n,"drift_s":s,"max_push_s":s` (informational), or `redub.error {"code","message"}` (`cancelled` after
+  spoken) and `"timing":"keep|natural","stretched":n,"overrun":n,"pushed":n,"drift_s":s,"max_push_s":s` (informational), or `redub.error {"code","message"}` (`cancelled` after
   `redub.cancel`; `bad_request` for a file without audio; `internal`). The result is one file
   `<data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext>` in `output_format` (default `wav`; 44.1 kHz mono; `_2`, `_3` on a clash),
   plus a playback WAV for other formats, see [Saved results](#saved-results-output_format). The job slot is free again
@@ -1078,5 +1096,11 @@ importable format, also video) and convert it themselves: the app never has to.
   the engine's `languages`; Re-speak has "Spoken language" and "Translate the transcript" with "To". With both
   translators installed (`hello` `translators`) Translate & dub also offers "Translation quality: Better (1.3B) /
   Faster (600M)", sent as `translator` with `redub.dub` and with a translating `redub.transcribe` (without the choice the
-  app sends `null`). The choices are remembered in `settings.json` (`redub_language`, `redub_target`, `redub_translator`). Badges read "Ukrainian · from English"; a render of a
+  app sends `null`). Both Translate & dub and Re-speak have "Keep original timing" (sent as `timing`: `keep` when ticked,
+  `natural` when not), with the hint "Fits each phrase into the original timing; may speed up speech." or "Natural
+  pace; the result can be longer." (for a video it adds that the result is audio only and stays in sync, or drifts
+  out of sync). It is ticked by default for a video (`redub.probe` `has_video`; by the file extension until the probe
+  answers; with no file yet) and unticked for an audio file; once the user changes it, the choice is remembered per
+  kind of file in `settings.json` (`redub_timing`: `{"audio":"keep|natural","video":"keep|natural"}`, only the kinds
+  the user set). The choices are remembered in `settings.json` (`redub_language`, `redub_target`, `redub_translator`). Badges read "Ukrainian · from English"; a render of a
   translated text sends `translated:true` and `target_language`, a same-language one `language`.
