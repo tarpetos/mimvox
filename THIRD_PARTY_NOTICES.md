@@ -10,8 +10,9 @@ the upstream Hugging Face and crates.io pages, checked 2026-11-11). Where someth
 
 **Summary of what limits you:** the OmniVoice model weights (CC BY-NC 4.0, because of their training data) are the
 reason this project is for **personal, non-commercial use only**; its audio tokenizer adds the Boson Higgs Audio 2
-Community License (attribution below). The NLLB-200 weights are CC BY-NC 4.0 too, and the Hybrid Demucs weights state no
-licence but come from non-commercial training data (below). The rest is permissive (MIT, Apache-2.0, BSD).
+Community License (attribution below). The NLLB-200 weights (600M and 1.3B) are CC BY-NC 4.0 too, and the Hybrid
+Demucs weights state no licence but come from non-commercial training data (below). The rest is permissive (MIT,
+Apache-2.0, BSD).
 
 ## Speech models and engine
 
@@ -44,6 +45,10 @@ licence but come from non-commercial training data (below). The rest is permissi
   and once per reference clip to cut it at sentence boundaries for OmniVoice.
 - **NLLB-200 distilled 600M** (`facebook/nllb-200-distilled-600M`, Meta): **CC BY-NC 4.0** (model card). Used for Redub
   translation. Non-commercial only.
+- **NLLB-200 distilled 1.3B** (`facebook/nllb-200-distilled-1.3B`, Meta): **CC BY-NC 4.0** (model card and the licence
+  field of the Hugging Face repo, checked 2026-11-12). The optional "better translation" model of Redub, downloaded by
+  setup (by default only with an NVIDIA GPU). Setup stores the weights in half precision (fp16 safetensors) on your
+  computer; this changes only the number format, and the project does not redistribute them. Non-commercial only.
 - **g2p_en** (Apache-2.0) with NLTK data (CMUdict, BSD-style), for the English recording-text analysis.
 
 ### Hybrid Demucs (Remove background music)

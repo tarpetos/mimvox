@@ -178,6 +178,8 @@ the quick check, and only then delete the old directory.
                                              #  only; same name as the saved file; gone at the next engine start)
 <data>/runtime/models/whisper/               # Whisper turbo (large-v3-turbo.pt, 1.6 GB), fetched by setup (else on the first Redub)
 <data>/runtime/models/nllb-200-distilled-600M/  # NLLB-200 translation model (2.5 GB), fetched by setup with `hf download`; never auto-downloaded
+<data>/runtime/models/nllb-200-distilled-1.3B/  # optional better translation model (fp16 model.safetensors, 2.7 GB; a 5.5 GB fp32
+                                             #  download that setup converts), by default only with an NVIDIA GPU; never auto-downloaded
 <data>/runtime/models/demucs/hdemucs_high_trained.pt  # Hybrid Demucs (torchaudio HDEMUCS_HIGH_MUSDB_PLUS, 335 MB, SHA-256
                                              #  a004b279...7816) for remove_music; fetched by setup over HTTPS (resumable
                                              #  .part file next to it); never auto-downloaded, missing -> music not removed
@@ -202,7 +204,7 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 `{}` -> `{"version":"0.1.0","device":{"backend":"cuda|mps|cpu","name":"NVIDIA GeForce RTX 4070","vram_gb":12.0},
 "models":{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"},
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
-"native":"Українська","common":true},...]}`
+"native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"]}`
 - `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
@@ -210,6 +212,9 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 - `device.name` is read from `nvidia-smi` for CUDA (`"NVIDIA GPU"` when that fails), `"Apple Silicon GPU"` for MPS and
   `"CPU"` for CPU. `vram_gb` is the total VRAM rounded to 0.1 and is `0.0` for MPS and CPU.
 - `models`: `loading` until the model is loaded and warmed up, `missing` when it could not be loaded.
+- `translators`: the Redub translation models installed, best first: `nllb-1.3b` (NLLB-200 distilled 1.3B, "better")
+  and/or `nllb-600m` (NLLB-200 distilled 600M, "faster"); `[]` when none is. Read at engine start (setup runs while the
+  app is closed). See [Translation](#redubtranscribe--redubcancel).
 
 ### `voices.list`
 `{}` -> `{"voices":[{"id","name","created","preset","language":"en","dataset_minutes":6.4,"parts":5,"trained":true,
@@ -804,13 +809,16 @@ importable format, also video) and convert it themselves: the app never has to.
 - Errors: `not_found` (file), `bad_request`.
 
 ### `redub.transcribe` / `redub.cancel`
-`{"path","language":"auto","translate_to":null}` -> `{"job"}`; `redub.cancel {"job"}` -> `{}`
+`{"path","language":"auto","translate_to":null,"translator":null}` -> `{"job"}`; `redub.cancel {"job"}` -> `{}`
 - `language`: `"auto"` (Whisper detects it from the first 30 s) or a two/three letter code (`"en"`, `"uk"`, `"de"`, ...).
   Anything else is `bad_request`. The speech is always transcribed **in its own language** (Whisper turbo). `translate_to`:
   a language code additionally translates every segment to that language (skipped when the speech already is in it),
   `null` does not translate. Any language the speech model speaks is a target (all of them are NLLB languages; see
   [Speech model and languages](#speech-model-and-languages-omnivoice)); another code is `bad_request` (the message lists
   the targets). `translate_to_en: true` is the old spelling of `translate_to: "en"` and still accepted. (The earlier Whisper `medium` translate mode is gone: it dropped and paraphrased speech.)
+  `translator`: `"nllb-1.3b"` (better), `"nllb-600m"` (faster) or `null` / absent (the best one installed, see
+  `hello` `translators`); another value is `bad_request`. A translator that is not installed is not an error: the other
+  one is used, and the transcript's `translation_model` says which one translated.
 - **Speech worker.** Transcription, translation and vocal separation run in one persistent child process of the engine
   (`speech_worker.py`, engine interpreter, JSON lines on stdin/stdout like the RVC worker), started lazily by the first
   of `redub.prepare` / `redub.transcribe` / `redub.dub`, restarted automatically (and the request retried once) when it
@@ -820,7 +828,8 @@ importable format, also video) and convert it themselves: the app never has to.
   `redub.render`, the speak stage of `redub.dub`) the engine tells it to release its GPU memory (the models are dropped
   and load again from the disk cache in a few seconds, no download), and a training stops it altogether. Whisper turbo
   runs on the GPU with fp16 weights (about 1.6 GB) when about 2.6 GB of VRAM are free (OmniVoice and RVC
-  hold about 7 GB of a 12 GB card); NLLB (fp16, 1.2 GB, needs 2 GB) is never loaded next to Whisper unless both fit,
+  hold about 7 GB of a 12 GB card); NLLB (fp16: the 600M 1.3 GB, needs 2 GB; the 1.3B 2.7 GB, needs 3.4 GB,
+  `MIMVOX_NLLB_NEED_GB` / `MIMVOX_NLLB_BIG_NEED_GB`) is never loaded next to Whisper unless both fit,
   otherwise Whisper is dropped from the GPU first; with too little VRAM, or without CUDA, the model runs on the CPU
   (correct, slower; at most one model is then resident). The separator (Hybrid Demucs, fp32, 335 MB file) goes on the
   GPU when 1.2 GB are free (`MIMVOX_DEMUCS_NEED_GB`; Whisper and NLLB are dropped from the GPU first when that makes
@@ -829,19 +838,31 @@ importable format, also video) and convert it themselves: the app never has to.
   "allow_cuda"}` -> `{"device","seconds","elapsed_s","peak_vram_gb"}`, progress stages `load_model` then `separate`
   (per 10 s segment; segments overlap by 25 % and are cross-faded, so memory does not grow with the length; cancel is
   checked before every segment). A `release_gpu` that arrives during a separation waits for that one file. Expect the worker at about 2-4 GB of host RAM while a model is
-  loaded (peak while loading the 2.5 GB NLLB checkpoint), about 1-1.5 GB with no model, plus a CUDA context (about
+  loaded (peak 5.4 GB measured while loading the 600M's fp32 checkpoint; loading the 1.3B's fp16 safetensors afterwards did not raise it),
+  about 1-1.5 GB with no model, plus a CUDA context (about
   0.4 GB VRAM) while the process lives.
-- **Translation.** NLLB-200 distilled 600M (`facebook/nllb-200-distilled-600M`, via transformers, local files only) in
-  `<data>/runtime/models/nllb-200-distilled-600M/`; if the files are missing the call answers `not_ready` ("The
-  translation model is not installed ... Run setup"). It translates **per segment** (the segment count and order never
-  change; a text longer than 160 characters is translated sentence by sentence and re-joined; a segment the model
-  returns empty keeps its source text), batched, beam search 4, no length penalty, no profanity filter. The source
+- **Translation.** NLLB-200 via transformers, local files only: distilled **1.3B** (`facebook/nllb-200-distilled-1.3B`,
+  `<data>/runtime/models/nllb-200-distilled-1.3B/`, fp16 `model.safetensors`; optional, setup's default with an NVIDIA
+  GPU) and/or distilled **600M** (`facebook/nllb-200-distilled-600M`, `<data>/runtime/models/nllb-200-distilled-600M/`);
+  with neither the call answers `not_ready` ("The translation model is not installed ... Run setup"). The 1.3B runs on
+  the GPU in fp16; when it does not fit in the free VRAM (or there is no CUDA) the 600M is used instead, and the 1.3B
+  runs on the CPU (fp32) only when the 600M is missing. Both are dropped by `release_gpu` and idleness like Whisper.
+  The **segment count, order and times never change**: segments that split one sentence (a segment that does not end
+  with `. ! ? …` or another script's sentence mark, followed by the next one less than 2.5 s later; at most 4 segments
+  and 320 characters) are translated **as one sentence**, and the translation is cut back into those segments in
+  proportion to their source lengths, at punctuation where it is near, else at a word boundary that does not follow a
+  short word (a character boundary for scripts without spaces); when it cannot be cut into enough parts, those segments
+  are translated one by one. A text longer than 160 characters is translated sentence by sentence and re-joined; a
+  segment the model returns empty keeps its source text. Batched, beam search 5, at most `2 x input + 16` new tokens
+  (400 at most), no length penalty, no profanity filter. Source text in Ukrainian first goes through a small glossary
+  (`engine/src/mimvox_engine/glossary/ukr_Cyrl.json`: gaming slang such as `перс`, `спавнюється`, and spoken times
+  such as `чверть на десяту` -> `9:15`, `пів на восьму` -> `7:30`, which both models got wrong). The source
   language is Whisper's code (or `language`) mapped to NLLB: `uk`->`ukr_Cyrl`, `ru`->`rus_Cyrl`, `de`->`deu_Latn`,
   `fr`->`fra_Latn`, `es`->`spa_Latn`, `pl`->`pol_Latn`, `it`->`ita_Latn`, `pt`->`por_Latn`, `en`->`eng_Latn`, `zh`->`zho_Hans`,
   `ja`->`jpn_Jpan`, `ar`->`arb_Arab`, ... (about 95 languages; a language NLLB lacks gives `bad_request`); the target
   `translate_to` is mapped the same way (`en`->`eng_Latn`, `uk`->`ukr_Cyrl`, `ne`->`npi_Deva`, `fa`->`pes_Arab`,
   `yue`->`yue_Hant`, ...; table in `redub/langs.py`).
-- Models: Whisper turbo (1.6 GB) and NLLB (2.5 GB) are downloaded by setup; a missing Whisper checkpoint is still
+- Models: Whisper turbo (1.6 GB) and NLLB 600M (2.5 GB), plus NLLB 1.3B (2.7 GB) with an NVIDIA GPU, are downloaded by setup; a missing Whisper checkpoint is still
   fetched on first use into `<data>/runtime/models/whisper/` (never the user's home cache), with `load_model` progress.
   Segment timestamps only, no word timestamps. A transcript is not saved by the engine: the app keeps it.
 - Events: `redub.progress {"stage":"decode|load_model|transcribe|translate","pct":0-100}` (`pct` is **overall**,
@@ -850,8 +871,8 @@ importable format, also video) and convert it themselves: the app never has to.
   `load_model`), then
   `redub.transcript {"language":"uk","source_language":"uk","duration_s":44.1,"segments":[{"index":0,"start":0.0,"end":6.4,"text":"..."}],
   "model":"turbo","translated":false}` - with a translation `"translated":true,"target_language":"en",
-  "translation_model":"nllb-200-distilled-600M"` and each segment also has `"source_text"` (`text` is then the
-  translation into `target_language`).
+  "translation_model":"nllb-200-distilled-1.3B"` (or `"nllb-200-distilled-600M"`: the model that translated) and each
+  segment also has `"source_text"` (`text` is then the translation into `target_language`).
   `language` / `source_language` is the detected (or given) language of the speech, also when translated. `segments` may
   be empty for a file without speech; times in seconds, 2 decimals. Or `redub.error {"code","message"}` (`cancelled`,
   `bad_request` for a file with no usable audio or an untranslatable language, `not_ready`, `internal`).
@@ -860,13 +881,14 @@ importable format, also video) and convert it themselves: the app never has to.
 - Timing (RTX 4070, 44 s Ukrainian clip, 11 segments): see "Measured" at the end of this section.
 
 ### `redub.dub` (the whole pipeline in one job)
-`{"path","voice_id","source_language":"auto","target_language":"en","review":false,"voice_match":1.0,"expressiveness":0.8,
+`{"path","voice_id","source_language":"auto","target_language":"en","translator":null,"review":false,"voice_match":1.0,"expressiveness":0.8,
 "quality":"best","speed":1.0,"output_format"?:"wav"}` -> `{"job"}`
 - Decode -> transcribe in the source language -> translate every segment to `target_language` -> **speak** in that
   language (the same respeak render as `redub.render`, see below, with the translated segments at their original times)
   -> save. One job, one GPU slot for the whole run; the speech worker releases the GPU before the speak stage starts.
 - `source_language`: `"auto"` (detected) or a code; `target_language` (default `"en"`): any language the speech model
-  speaks (as `translate_to` of `redub.transcribe`; another code is `bad_request`). A source that already is in the target
+  speaks (as `translate_to` of `redub.transcribe`; another code is `bad_request`); `translator` as for
+  `redub.transcribe`. A source that already is in the target
   language is not translated. The voice's RVC index rate is capped for a target the voice was not recorded in (as for
   `tts.generate`), and `reference_<target>.wav` is used when the voice has one.
 - `review: true`: **stop after the translation** and let the user edit it. The job ends with the normal terminal event
@@ -954,6 +976,8 @@ importable format, also video) and convert it themselves: the app never has to.
      any language the speech model speaks);
   4. `redub.render` with `mode: "convert"` straight away.
 - **App side.** Translate & dub has "From" (Auto-detect or a language) and "To" (default English) language pickers with
-  the engine's `languages`; Re-speak has "Spoken language" and "Translate the transcript" with "To". The choices are
-  remembered in `settings.json` (`redub_language`, `redub_target`). Badges read "Ukrainian · from English"; a render of a
+  the engine's `languages`; Re-speak has "Spoken language" and "Translate the transcript" with "To". With both
+  translators installed (`hello` `translators`) Translate & dub also offers "Translation quality: Better (1.3B) /
+  Faster (600M)", sent as `translator` with `redub.dub` and with a translating `redub.transcribe` (without the choice the
+  app sends `null`). The choices are remembered in `settings.json` (`redub_language`, `redub_target`, `redub_translator`). Badges read "Ukrainian · from English"; a render of a
   translated text sends `translated:true` and `target_language`, a same-language one `language`.

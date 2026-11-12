@@ -1,5 +1,7 @@
 """Transcription and translation steps of Redub, run by the persistent speech worker (``speech.py``): Whisper turbo
-transcribes the file in its own language, NLLB-200 translates every segment (one by one, never merged or dropped)."""
+transcribes the file in its own language, NLLB-200 (1.3B or 600M) translates the segments. Segments that split one
+sentence are translated together and the translation is cut back into them, so every segment keeps its own text and
+times (never merged or dropped)."""
 from __future__ import annotations
 
 import logging
@@ -16,7 +18,7 @@ from . import langs
 log = logging.getLogger("mimvox.redub.transcribe")
 
 MODEL_TRANSCRIBE = speech.ASR_MODEL   # large-v3-turbo
-MODEL_TRANSLATE = "nllb-200-distilled-600M"
+MODEL_TRANSLATE = langs.NLLB_DIR_NAME   # the fallback; the result names the model that translated
 
 Cancelled = speech.Cancelled
 
@@ -86,8 +88,9 @@ def clean_segments(raw: list[dict[str, Any]], duration: float) -> list[dict[str,
 
 
 async def translate(worker: speech.SpeechWorker, segments: list[dict[str, Any]], source_language: str,
-                    emit: Emit, target_language: str = "en") -> list[str]:
-    """The text of every segment in ``target_language``, in order (``len(result) == len(segments)``)."""
+                    emit: Emit, target_language: str = "en", translator: str | None = None) -> tuple[list[str], str]:
+    """The text of every segment in ``target_language``, in order (``len(result) == len(segments)``), and the model
+    that translated it. ``translator``: ``nllb-1.3b`` | ``nllb-600m`` | None (the best installed)."""
     src = langs.nllb_code(source_language)
     if src is None:
         raise EngineError("bad_request", f"Translation from the language {source_language!r} is not supported "
@@ -96,8 +99,10 @@ async def translate(worker: speech.SpeechWorker, segments: list[dict[str, Any]],
     if tgt is None:
         raise EngineError("bad_request", f"Translation to the language {target_language!r} is not supported.")
     t0 = time.time()
+    gaps = [max(0.0, float(b["start"]) - float(a["end"])) for a, b in zip(segments, segments[1:])]
     try:
-        res = await worker.translate([s["text"] for s in segments], src, lambda st, pct: emit.stage(st, pct), tgt)
+        res = await worker.translate([s["text"] for s in segments], src, lambda st, pct: emit.stage(st, pct), tgt,
+                                     translator, gaps)
     except speech.SpeechError as exc:
         raise exc.engine_error() from exc
     out = [str(t) for t in res["texts"]]
@@ -106,14 +111,17 @@ async def translate(worker: speech.SpeechWorker, segments: list[dict[str, Any]],
     if res.get("untranslated"):
         log.warning("segment(s) %s came back empty from the translation model: the source text is kept",
                     res["untranslated"])
-    log.info("nllb %s->%s on %s: %d segment(s) in %.1fs", src, tgt, res.get("device"), len(out), time.time() - t0)
-    return out
+    model = str(res.get("model") or MODEL_TRANSLATE)
+    log.info("%s %s->%s on %s: %d segment(s), %d joined sentence(s), in %.1fs", model, src, tgt, res.get("device"),
+             len(out), len(res.get("joined") or []), time.time() - t0)
+    return out, model
 
 
 async def run(path: str, language: str | None, translate_to: str | None, workdir: str, emit: Emit,
-              worker: speech.SpeechWorker) -> dict[str, Any]:
-    """Decode ``path``, transcribe it and (``translate_to`` set) translate every segment to that language. Cancel by
-    cancelling the awaiting task (a running worker op is told to stop).
+              worker: speech.SpeechWorker, translator: str | None = None) -> dict[str, Any]:
+    """Decode ``path``, transcribe it and (``translate_to`` set) translate every segment to that language with
+    ``translator`` (None: the best installed). Cancel by cancelling the awaiting task (a running worker op is told to
+    stop).
 
     Returns ``{language, duration_s, segments, model, translated}``; with a translation each segment has ``text`` (in
     ``translate_to``) and ``source_text``, and the result also carries ``source_language`` and ``target_language``."""
@@ -126,11 +134,11 @@ async def run(path: str, language: str | None, translate_to: str | None, workdir
     out: dict[str, Any] = {"language": detected, "duration_s": round(duration, 3), "segments": segments,
                            "model": MODEL_TRANSCRIBE, "translated": False, "source_language": detected}
     if translate_to and detected != translate_to and segments:
-        texts = await translate(worker, segments, detected, emit, translate_to)
+        texts, model = await translate(worker, segments, detected, emit, translate_to, translator)
         for seg, text in zip(segments, texts):
             seg["source_text"] = seg["text"]
             seg["text"] = text
-        out.update(translated=True, target_language=translate_to, translation_model=MODEL_TRANSLATE)
+        out.update(translated=True, target_language=translate_to, translation_model=model)
     if "translate" in emit.ranges:
         emit.stage("translate", 100)
     return out

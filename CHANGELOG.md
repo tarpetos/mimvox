@@ -13,8 +13,9 @@ Early version: expect bugs.
   restarts).
 * **Speak:** OmniVoice speech in English, Ukrainian and about 60 more languages, streamed sentence by sentence, with
   speed, expressiveness, voice match and quality controls; export to common audio formats.
-* **Redub:** Translate & dub (Whisper transcription, NLLB translation, speech in your voice, optional review of the
-  text first), Convert voice and Re-speak, for audio and video files.
+* **Redub:** Translate & dub (Whisper transcription, NLLB-200 translation with whole sentences kept together and a
+  "Translation quality" choice between the 1.3B and 600M models, speech in your voice, optional review of the text
+  first), Convert voice and Re-speak, for audio and video files.
 * **Voices:** several voices, reference clip choice, a reference picked from many media files, per-language reference
   clips.
 * **Setup and build:** one-click setup scripts (`setup.sh`, `setup.cmd`) that install the engine and the models, and

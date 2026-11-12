@@ -12,9 +12,11 @@
 //!
 //! `redub.prepare` is sent as soon as a file is chosen, so the first click starts at once. The last mode, spoken language,
 //! review choice and target language are remembered in `settings.json` (`redub_mode`, `redub_language`, `redub_review`,
-//! `redub_target`). The language lists come from the engine (`ui::lang`). Dubbing into English with a voice recorded in
-//! another language shows Speak's "Accent" choice (`speak::accent_block`, the same setting), sent as `accent` with
-//! `redub.dub` and with the `redub.render` that finishes a reviewed dub.
+//! `redub_target`), and so is "Translation quality" (`redub_translator`: `nllb-1.3b` | `nllb-600m`), offered when the
+//! engine has both translators (`hello` -> `translators`). The language lists come from the engine (`ui::lang`).
+//! Dubbing into English with a voice recorded in another language shows Speak's "Accent" choice
+//! (`speak::accent_block`, the same setting), sent as `accent` with `redub.dub` and with the `redub.render` that
+//! finishes a reviewed dub.
 //!
 //! The file comes from a drop anywhere on the window (see `formats::window_drops`) or "Choose file..." (rfd on its
 //! own thread). The voice is the header's active voice; Voice match, Expressiveness and Quality are the Speak
@@ -22,7 +24,7 @@
 //! "Export as..." control. Requests and events follow `contract/engine-protocol.md` (`redub.*`).
 
 use super::components::{
-    Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel, status_dot, well,
+    Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel, segmented_help, status_dot, well,
 };
 use super::formats;
 use super::lang;
@@ -156,6 +158,8 @@ pub struct RedubState {
     translate: bool,
     /// "Review text before dubbing" (Translate & dub).
     review_first: bool,
+    /// "Translation quality: Faster" (NLLB-200 600M) instead of Better (1.3B); only asked when both are installed.
+    faster_translation: bool,
     segments: Vec<Seg>,
     /// The segments are a dub's translation waiting for the user's edits (shown as the two-column review).
     reviewing: bool,
@@ -187,6 +191,7 @@ impl Default for RedubState {
             to: "en".into(),
             translate: false,
             review_first: false,
+            faster_translation: false,
             segments: Vec::new(),
             reviewing: false,
             transcript_lang: None,
@@ -245,6 +250,20 @@ impl RedubState {
     fn persist(&mut self) {
         self.prefs_dirty = true;
     }
+}
+
+const TRANSLATOR_BETTER: &str = "nllb-1.3b";
+const TRANSLATOR_FASTER: &str = "nllb-600m";
+
+/// The engine has both translators, so "Translation quality" is a choice.
+fn translator_choice(s: &AppState) -> bool {
+    let has = |t: &str| s.shell.translators.iter().any(|x| x == t);
+    has(TRANSLATOR_BETTER) && has(TRANSLATOR_FASTER)
+}
+
+/// The `translator` to send: the user's choice when there is one, else the engine picks the best one installed.
+fn translator(s: &AppState) -> Option<&'static str> {
+    translator_choice(s).then_some(if s.redub.faster_translation { TRANSLATOR_FASTER } else { TRANSLATOR_BETTER })
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -406,7 +425,7 @@ fn start_transcribe(s: &mut AppState) {
     }
     let Some(path) = s.redub.file.as_ref().map(|f| f.path.clone()) else { return };
     let to = s.redub.to.clone();
-    let (method, params) = protocol::redub_transcribe(&path, &s.redub.from, s.redub.translate.then_some(to.as_str()));
+    let (method, params) = protocol::redub_transcribe(&path, &s.redub.from, s.redub.translate.then_some(to.as_str()), translator(s));
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
         return;
@@ -440,6 +459,7 @@ fn start_dub(s: &mut AppState) {
         voice_id: &voice.id,
         source_language: &s.redub.from,
         target_language: &s.redub.to,
+        translator: translator(s),
         review: s.redub.review_first,
         voice_match: s.speak.voice_match,
         expressiveness: s.speak.expressiveness,
@@ -747,10 +767,15 @@ pub fn settle(s: &mut AppState) -> bool {
             if let Some(l) = to.filter(|l| lang::is_spoken(s, l)) {
                 s.redub.to = l.to_ascii_lowercase();
             }
+            if let Some(t) = super::onboarding::setting("redub_translator") {
+                s.redub.faster_translation = t.as_str() == Some(TRANSLATOR_FASTER);
+            }
             changed = true;
         } else if s.redub.prefs_dirty {
             s.redub.prefs_dirty = false;
             super::onboarding::save_redub_prefs(mode_key(s.redub.mode), &s.redub.from, s.redub.review_first, &s.redub.to);
+            let t = if s.redub.faster_translation { TRANSLATOR_FASTER } else { TRANSLATOR_BETTER };
+            super::onboarding::save_setting("redub_translator", json!(t));
         }
     }
 
@@ -1029,6 +1054,9 @@ fn dub_block(s: &AppState, p: Palette) -> El {
     if speak::accent_applies(s, &r.to) {
         options = options.child(el().w_full().max_w(420.0).child(speak::accent_block(s, p, "dub-accent")));
     }
+    if translator_choice(s) {
+        options = options.child(translation_quality(r, p));
+    }
     options = options.child(col().w_full().gap(3.0).child(review)
         .child(text(format!("Stops after the translation so you can fix the {to_name} before it is spoken.")).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
     let mut c = col().key("dub-block").w_full().gap(12.0);
@@ -1045,6 +1073,28 @@ fn dub_block(s: &AppState, p: Palette) -> El {
         c = c.child(review_table(s, p));
     }
     c
+}
+
+/// "Translation quality: Better (1.3B) / Faster (600M)" (shown when both translators are installed).
+fn translation_quality(r: &RedubState, p: Palette) -> El {
+    let caption = if r.faster_translation { "NLLB-200 600M · the smaller model, about 1.5× faster" } else { "NLLB-200 1.3B · the larger, generally more accurate model" };
+    row().key("translation-quality").w_full().center_y().justify_between().gap(10.0)
+        .child(col().grow(1.0).min_w(0.0).gap(1.0)
+            .child(text("Translation quality").font(ty::LABEL).color(p.text))
+            .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap()))
+        .child(segmented_help(
+            p,
+            "translator-pick",
+            &["Better (1.3B)", "Faster (600M)"],
+            &["The larger translation model, generally more accurate (about 3 GB of GPU memory)", "The smaller translation model: quicker, about 1.5 GB of GPU memory"],
+            usize::from(r.faster_translation),
+            |s, i| {
+                if !s.redub.busy() && !s.redub.reviewing {
+                    s.redub.faster_translation = i == 1;
+                    s.redub.persist();
+                }
+            },
+        ))
 }
 
 fn review_table(s: &AppState, p: Palette) -> El {
@@ -1527,6 +1577,18 @@ fn scene_dub_ready(s: &mut AppState) {
     demo_history(s);
 }
 
+/// Translate & dub with both translators installed: "Translation quality" is offered (Better chosen).
+fn scene_dub_translator(s: &mut AppState) {
+    scene_dub_ready(s);
+    s.shell.translators = vec![TRANSLATOR_BETTER.into(), TRANSLATOR_FASTER.into()];
+}
+
+/// The same with Faster chosen.
+fn scene_dub_translator_faster(s: &mut AppState) {
+    scene_dub_translator(s);
+    s.redub.faster_translation = true;
+}
+
 fn scene_dub_running(s: &mut AppState) {
     demo_dub_file(s);
     let mut run = Run::new(3, -21.0);
@@ -1631,6 +1693,8 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("redub_dub_ready", scene_dub_ready),
         ("redub_dub_accent", scene_dub_accent),
         ("redub_dub_accent_untrained", scene_dub_accent_untrained),
+        ("redub_dub_translator", scene_dub_translator),
+        ("redub_dub_translator_faster", scene_dub_translator_faster),
         ("redub_dub_to_uk", scene_dub_to_uk),
         ("redub_dub_to_uk_picker", scene_dub_to_uk_picker),
         ("redub_dub_review_uk", scene_dub_review_uk),

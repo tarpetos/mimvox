@@ -199,6 +199,9 @@ pub struct Hello {
     /// Languages the speech model speaks, the common ones first (empty for an engine that does not say).
     #[serde(default)]
     pub languages: Vec<SpeechLanguage>,
+    /// Redub translators installed, best first (`"nllb-1.3b"`, `"nllb-600m"`; empty for an engine that does not say).
+    #[serde(default)]
+    pub translators: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -935,9 +938,10 @@ pub fn redub_probe(path: &std::path::Path) -> Request {
 }
 
 /// `language`: `"auto"` or an ISO code (`"en"`, `"uk"`, ...). `translate_to`: a language code to translate every segment
-/// into (any language the speech model speaks), or `None` to keep the speech's own language.
-pub fn redub_transcribe(path: &std::path::Path, language: &str, translate_to: Option<&str>) -> Request {
-    ("redub.transcribe", json!({ "path": path, "language": language, "translate_to": translate_to }))
+/// into (any language the speech model speaks), or `None` to keep the speech's own language. `translator`:
+/// `"nllb-1.3b"` | `"nllb-600m"`, or `None` for the best one installed.
+pub fn redub_transcribe(path: &std::path::Path, language: &str, translate_to: Option<&str>, translator: Option<&str>) -> Request {
+    ("redub.transcribe", json!({ "path": path, "language": language, "translate_to": translate_to, "translator": translator }))
 }
 
 /// `redub.prepare`: preloads the speech models for `path` so the first transcribe/dub starts at once. Answers `{}`;
@@ -955,6 +959,8 @@ pub struct RedubDubParams<'a> {
     pub source_language: &'a str,
     /// The language to translate to and speak (any language the speech model speaks).
     pub target_language: &'a str,
+    /// `"nllb-1.3b"` (better) | `"nllb-600m"` (faster), or `None` for the best one installed.
+    pub translator: Option<&'a str>,
     /// Stop after the translation and send `redub.review` instead of speaking.
     pub review: bool,
     pub voice_match: f32,
@@ -967,7 +973,7 @@ pub struct RedubDubParams<'a> {
     pub accent: Option<NativeVoice>,
 }
 
-/// `redub.dub {path, voice_id, source_language, target_language, review, voice_match, expressiveness, quality, speed,
+/// `redub.dub {path, voice_id, source_language, target_language, translator, review, voice_match, expressiveness, quality, speed,
 /// output_format}`
 /// -> `{job}`; events `redub.progress` (stages `decode`, `load_model`, `transcribe`, `translate`, `speak`, `save`),
 /// then `redub.review` (when `review`) or `redub.done`, or `redub.error`.
@@ -979,6 +985,7 @@ pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
             "voice_id": p.voice_id,
             "source_language": p.source_language,
             "target_language": p.target_language,
+            "translator": p.translator,
             "review": p.review,
             "voice_match": p.voice_match,
             "expressiveness": p.expressiveness,

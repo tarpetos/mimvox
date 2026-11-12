@@ -33,7 +33,7 @@ on your computer: your recordings, your voice models and the generated speech ar
   speech, say that it is synthetic where the law or common decency expects it.
 - **Non-commercial use only.** The OmniVoice model weights the app speaks with are licensed
   [CC BY-NC 4.0](THIRD_PARTY_NOTICES.md#omnivoice-code-apache-20-model-weights-cc-by-nc-40) (because of their training
-  data), and so is the NLLB-200 translation model used by Redub. This project is therefore for personal,
+  data), and so are the NLLB-200 translation models used by Redub. This project is therefore for personal,
   non-commercial use.
 - **Follow your local law.** Rules on biometric data, voice rights, deepfakes and synthetic media differ by country and
   state. You alone decide how you use the app and you are responsible for complying with them.
@@ -116,7 +116,7 @@ More: [docs/architecture.md](docs/architecture.md).
 | --- | --- |
 | **GPU** | **NVIDIA GPU with 8 GB of VRAM or more recommended** (Windows and Linux). It was developed and measured on an RTX 4070 with 12 GB. OmniVoice needs about 4-5 GB of VRAM, and the RVC worker is loaded beside it. |
 | **macOS** | Best effort: Apple Silicon through MPS. It has not been validated; expect it to be slower. |
-| **Disk space** | About **28 GB** for the runtime (engine with OmniVoice ~11 GB, Applio/RVC ~12 GB: two Python environments with their own PyTorch, plus Whisper and the translation model for Redub ~4.5 GB and the music-removal model ~0.3 GB), plus ~0.1 GB per voice. Setup asks where to install (default: the local app data folder), shows the free space and refuses below 32 GB unless `--force`; `setup --move-to <dir>` moves an existing install. An older install's `runtime/index-tts` (IndexTTS, ~19 GB) is no longer used: setup offers to delete it (`--remove-indextts`). |
+| **Disk space** | About **28 GB** for the runtime (engine with OmniVoice ~11 GB, Applio/RVC ~12 GB: two Python environments with their own PyTorch, plus Whisper and the translation model for Redub ~4.5 GB and the music-removal model ~0.3 GB), plus ~0.1 GB per voice. With an NVIDIA GPU setup also adds the better translation model for Redub (NLLB-200 1.3B, a 5.5 GB download kept as 2.7 GB; `--better-translation no` leaves it out), about **31 GB** in all. Setup asks where to install (default: the local app data folder), shows the free space and refuses below 32 GB (38 GB with the better translation model, which needs room for the download while it is converted) unless `--force`; `setup --move-to <dir>` moves an existing install. An older install's `runtime/index-tts` (IndexTTS, ~19 GB) is no longer used: setup offers to delete it (`--remove-indextts`). |
 | **Microphone** | Any decent microphone; a headset or a desk microphone 15-20 cm from your mouth works. See the [recording guide](docs/recording-guide.md). |
 | **Network** | Needed once, during setup, to download the toolchains, the runtime and the models (several GB from Hugging Face). |
 | **Language** | Speech in English, Ukrainian and about 60 more languages (the language of the text is a setting). You can record in English; for the most natural accent in another language, a short reference clip in that language helps. |

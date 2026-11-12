@@ -1,5 +1,5 @@
-"""Persistent speech worker: Whisper (transcription), NLLB (translation) and Hybrid Demucs (vocal separation) in one
-child process of the engine.
+"""Persistent speech worker: Whisper (transcription), NLLB-200 1.3B or 600M (translation) and Hybrid Demucs (vocal
+separation) in one child process of the engine.
 
 Started lazily by ``speech.py`` as ``python -I speech_worker.py --models-root <data>/runtime/models`` with the engine
 interpreter (the engine venv). Standalone on purpose: it imports nothing from ``mimvox_engine``.
@@ -16,14 +16,17 @@ Ops (all params optional unless stated):
   load_asr    {"model":"turbo","allow_cuda":true}                              -> {"device","half","model","load_s"}
   transcribe  {"audio":"<.npy 16 kHz mono float32>"(required),"language":null|"uk","model":"turbo","allow_cuda":true}
                                                                                -> {"language","device","segments":[{start,end,text}]}
-  translate   {"texts":[...](required),"src":"ukr_Cyrl"(required),"tgt":"eng_Latn","allow_cuda":true,"num_beams":4}
-                                                                               -> {"texts":[...],"device","untranslated":[i]}
+  translate   {"texts":[...](required),"src":"ukr_Cyrl"(required),"tgt":"eng_Latn","allow_cuda":true,"num_beams":4,
+               "translator":null|"nllb-1.3b"|"nllb-600m","join":false,"gaps":[s],"glossary":true}
+                                                                               -> {"texts":[...],"device","untranslated":[i],
+                                                                                   "translator","model","joined":[[i]],
+                                                                                   "elapsed_s","peak_vram_gb"}
   separate_vocals {"audio":"<.npy 44.1 kHz mono float32>"(required),"out":"<.npy to write>"(required),
                    "allow_cuda":true}                                          -> {"device","seconds","elapsed_s",
                                                                                    "peak_vram_gb"} (vocals in "out")
   release_gpu / unload                                                         -> {"free_gb"}
-  status                                                                       -> {"asr","mt","sep","rss_gb","peak_rss_gb",
-                                                                                   "free_gb"}
+  status                                                                       -> {"asr","mt","sep","translators",
+                                                                                   "rss_gb","peak_rss_gb","free_gb"}
 Progress replies: {"id":N,"progress":{"stage":"load_model|transcribe|translate|separate","pct":0-100}}.
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"} (models dropped after UNLOAD_S idle),
 {"event":"exit","reason":"idle"} (the process exits after EXIT_S idle).
@@ -57,8 +60,14 @@ UNLOAD_S = float(os.environ.get("MIMVOX_SPEECH_UNLOAD_S", "180"))   # models are
 EXIT_S = float(os.environ.get("MIMVOX_SPEECH_EXIT_S", "600"))       # the process exits after this much idleness
 ASR_NEED_HALF_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))   # fp16 weights (1.6 GB) + decoding activations
 ASR_NEED_FP32_GB = 4.0
-MT_NEED_GB = float(os.environ.get("MIMVOX_NLLB_NEED_GB", "2.0"))            # fp16 weights (1.2 GB) + beam search
-NLLB_DIR = os.path.join(args.models_root, "nllb-200-distilled-600M")
+# Translators (NLLB-200), best first: id -> (folder under the models root, VRAM needed for fp16 weights + beam search).
+# The 1.3B runs on the GPU only while the 600M is there to fall back to (on a CPU it is about 3x slower, 2x the RAM).
+MT_MODELS = {
+    "nllb-1.3b": ("nllb-200-distilled-1.3B", float(os.environ.get("MIMVOX_NLLB_BIG_NEED_GB", "3.4"))),   # 2.6 GB weights
+    "nllb-600m": ("nllb-200-distilled-600M", float(os.environ.get("MIMVOX_NLLB_NEED_GB", "2.0"))),       # 1.2 GB weights
+}
+MT_FILES = ("config.json", "sentencepiece.bpe.model", "tokenizer_config.json")   # + model.safetensors or pytorch_model.bin
+GLOSSARY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glossary")   # <nllb source code>.json
 WHISPER_DIR = os.path.join(args.models_root, "whisper")
 # Vocal separation: torchaudio's HDEMUCS_HIGH_MUSDB_PLUS weights (setup downloads them; never fetched from here).
 SEP_PATH = os.path.join(args.models_root, "demucs", "hdemucs_high_trained.pt")
@@ -70,6 +79,9 @@ SEP_SEGMENT_S = 10.0     # audio per forward pass: bounds the memory whatever th
 SEP_OVERLAP = 0.25       # neighbouring segments overlap by this share and are cross-faded (as Demucs' apply does)
 SPLIT_OVER_CHARS = 160   # a longer text is translated sentence by sentence (NLLB drops content of long inputs)
 MERGE_MIN_CHARS = 50     # ... but a sentence shorter than this is joined to the next one
+JOIN_MAX_TEXTS = 4       # "join": at most this many texts (segments) are translated as one sentence
+JOIN_MAX_CHARS = 320     # ... and at most this many characters
+JOIN_MAX_GAP_S = 2.5     # ... and never across a pause this long ("gaps")
 
 Cancelled = kit.Cancelled
 OpError = kit.OpError
@@ -359,39 +371,80 @@ def _transformers_major():
         return 4
 
 
-def ensure_mt(allow_cuda, force_cpu=False):
-    slot = MT[0]
-    if slot is not None and (not force_cpu or slot.device == "cpu"):
-        return slot
-    unload(MT)
-    need = ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")
-    missing = [n for n in need if not os.path.isfile(os.path.join(NLLB_DIR, n))
-               and not (n == "pytorch_model.bin" and os.path.isfile(os.path.join(NLLB_DIR, "model.safetensors")))]
-    if missing:
-        raise OpError("model_missing", f"the translation model is not installed ({', '.join(missing)} missing in "
-                                       f"{NLLB_DIR}); run setup to download it")
+def mt_folder(name):
+    return os.path.join(args.models_root, MT_MODELS[name][0])
+
+
+def mt_installed(name):
+    folder = mt_folder(name)
+    return (all(os.path.isfile(os.path.join(folder, n)) for n in MT_FILES)
+            and any(os.path.isfile(os.path.join(folder, n)) for n in ("model.safetensors", "pytorch_model.bin")))
+
+
+def mt_candidates(want):
+    """The installed translators to try for ``want`` (``nllb-1.3b`` | ``nllb-600m`` | None = the best), in order."""
+    if want not in (None, "", *MT_MODELS):
+        raise OpError("bad_request", f"unknown translator {want!r} (one of {', '.join(MT_MODELS)})")
+    order = list(MT_MODELS)
+    if want:
+        order.remove(want)
+        order.insert(0, want)
+    have = [n for n in order if mt_installed(n)]
+    if not have:
+        raise OpError("model_missing", f"the translation model is not installed (nothing in "
+                                       f"{mt_folder('nllb-600m')}); run setup to download it")
+    return have
+
+
+def ensure_mt(want, allow_cuda, force_cpu=False):
+    """The translator to use for ``want``, loaded: the wanted (or best) one on the GPU in fp16; the 1.3B falls back to
+    the 600M when it does not fit in the free VRAM (or there is no GPU), the last one installed runs wherever it can."""
     torch = _torch()
+    have = mt_candidates(want)
+    cuda = bool(allow_cuda) and not force_cpu and torch.cuda.is_available()
+    slot = MT[0]
+    if slot is not None and not (force_cpu and slot.device == "cuda"):
+        if slot.key == have[0] or (not cuda and slot.key == "nllb-600m" and "nllb-600m" in have):
+            return slot
+    unload(MT)
+    name, device = have[-1], "cpu"
+    for k, cand in enumerate(have):
+        dev = pick_device(MT_MODELS[cand][1], cuda, ASR, SEP)
+        if dev == "cuda" or cand != "nllb-1.3b" or k == len(have) - 1:
+            name, device = cand, dev
+            break
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
     progress("translate", 0)
     t0 = time.time()
-    device = "cpu" if force_cpu else pick_device(MT_NEED_GB, allow_cuda, ASR, SEP)
-    tok = AutoTokenizer.from_pretrained(NLLB_DIR, local_files_only=True)
+    folder = mt_folder(name)
+    tok = AutoTokenizer.from_pretrained(folder, local_files_only=True)
     kw = {"local_files_only": True, "low_cpu_mem_usage": True}
     kw["dtype" if _transformers_major() >= 5 else "torch_dtype"] = torch.float16 if device == "cuda" else torch.float32
-    model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_DIR, **kw)
+    model = AutoModelForSeq2SeqLM.from_pretrained(folder, **kw)
     model = model.to(device).eval()
     collect()
-    log(f"nllb-200-distilled-600M loaded on {device} in {time.time() - t0:.1f}s; {free_vram_gb():.1f} GB VRAM free")
-    MT[0] = Slot("nllb", model, device, aux=tok)
+    log(f"{MT_MODELS[name][0]} loaded on {device} in {time.time() - t0:.1f}s; {free_vram_gb():.1f} GB VRAM free")
+    MT[0] = Slot(name, model, device, aux=tok)
     return MT[0]
 
 
 _SENT = re.compile(r"(?<=[.!?…])\s+")
+# A text that ends a sentence: final punctuation, optionally followed by closing quotes or brackets.
+_SENT_END = re.compile(r"[.!?…。！？؟।]['\"»”’)\]]*$")
+# Where a translation is best cut back into segments (after these, then at any word boundary).
+_CUT_STRONG = set(".!?…。！？;；")
+_CUT_WEAK = set(",:，、：—–-)»”\"'")
+# Scripts written without spaces between words (Thai, Lao, Tibetan, Myanmar, Khmer, Chinese, Japanese).
+_NO_SPACES = re.compile("[\u0e00-\u0fff\u1000-\u109f\u1780-\u17ff\u2e80-\u9fff\uf900-\ufaff]")
+
+
+def _clean(text):
+    return re.sub(r"\s+", " ", str(text)).strip()
 
 
 def split_pieces(text):
     """One text -> pieces translated separately and joined with a space (short texts stay whole)."""
-    text = re.sub(r"\s+", " ", text).strip()
+    text = _clean(text)
     if len(text) <= SPLIT_OVER_CHARS:
         return [text]
     out, buf = [], ""
@@ -408,6 +461,101 @@ def split_pieces(text):
     return out or [text]
 
 
+def join_groups(texts, gaps=None):
+    """Consecutive texts that form one sentence, as lists of indices: a text that does not end with sentence
+    punctuation is joined with the next one (at most JOIN_MAX_TEXTS / JOIN_MAX_CHARS, never across an empty text or a
+    pause of JOIN_MAX_GAP_S; ``gaps[i]`` is the silence in seconds between text i and i+1)."""
+    clean = [_clean(t) for t in texts]
+    groups, cur, size = [], [], 0
+    for i, t in enumerate(clean):
+        cur.append(i)
+        size += len(t)
+        nxt = clean[i + 1] if i + 1 < len(clean) else ""
+        try:
+            gap = float(gaps[i]) if gaps is not None and i < len(gaps) else 0.0
+        except (TypeError, ValueError):
+            gap = 0.0
+        if (not t or not nxt or _SENT_END.search(t) or len(cur) >= JOIN_MAX_TEXTS
+                or size + 1 + len(nxt) > JOIN_MAX_CHARS or gap >= JOIN_MAX_GAP_S):
+            groups.append(cur)
+            cur, size = [], 0
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def split_translation(text, weights):
+    """``text`` cut into ``len(weights)`` non-empty parts whose lengths follow ``weights`` (the source texts' lengths),
+    each cut moved to a nearby punctuation mark or else the nearest word boundary that does not follow a short word
+    (any character for a script written without spaces). None when the text has too few words for that many parts."""
+    text = _clean(text)
+    k = len(weights)
+    if k == 1:
+        return [text] if text else None
+    if " " in text:
+        cands = [m.end() for m in re.finditer(r" ", text)]   # where the next word starts
+    elif _NO_SPACES.search(text):
+        cands = list(range(1, len(text)))
+    else:
+        return None
+    if len(cands) < k - 1:
+        return None
+    total = float(sum(max(w, 1) for w in weights))
+    length = float(len(text))
+    cuts, acc, lo = [], 0.0, 0
+    for j in range(k - 1):
+        acc += max(weights[j], 1)
+        ideal = length * acc / total
+        best = None
+        for ci in range(lo, len(cands) - (k - 2 - j)):
+            pos = cands[ci]
+            word = text[:pos].rstrip().rsplit(" ", 1)[-1]
+            score = abs(pos - ideal) / length
+            if word[-1:] in _CUT_STRONG:
+                score -= 0.15
+            elif word[-1:] in _CUT_WEAK:
+                score -= 0.10
+            elif word.isalpha() and len(word) <= 3:
+                score += 0.20   # not after "the", "at", "his", "a": such a word belongs to the next part
+            if best is None or score < best[0]:
+                best = (score, ci)
+        cuts.append(cands[best[1]])
+        lo = best[1] + 1
+    parts = [text[a:b].strip() for a, b in zip([0, *cuts], [*cuts, len(text)])]
+    return parts if all(parts) else None
+
+
+_GLOSSARIES = {}
+
+
+def glossary(src):
+    """Source-side replacements for language ``src`` (``glossary/<src>.json``: ``{"replace":[[regex, text], ...]}``,
+    applied in order, case-insensitive; slang the model does not know becomes words it does). [] when none."""
+    if src not in _GLOSSARIES:
+        rules = []
+        path = os.path.join(GLOSSARY_DIR, f"{src}.json")
+        if os.path.isfile(path):
+            import json
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    rules = [(re.compile(p, re.IGNORECASE), r) for p, r in json.load(fh).get("replace", [])]
+            except (OSError, ValueError, re.error) as exc:
+                log(f"glossary {path} not used: {exc}")
+                rules = []
+        _GLOSSARIES[src] = rules
+    return _GLOSSARIES[src]
+
+
+def apply_glossary(text, rules):
+    for pat, rep in rules:
+        text = pat.sub(lambda m, rep=rep: _keep_case(m.group(0), m.expand(rep)), text)
+    return text
+
+
+def _keep_case(found, rep):
+    return rep[:1].upper() + rep[1:] if found[:1].isupper() and rep[:1].islower() else rep
+
+
 def _translate_batch(slot, batch, src, bos, beams):
     torch = _torch()
     tok, model = slot.aux, slot.obj
@@ -416,7 +564,7 @@ def _translate_batch(slot, batch, src, bos, beams):
     n_in = int(enc["input_ids"].shape[1])
     with torch.inference_mode():
         gen = model.generate(**enc, forced_bos_token_id=bos, num_beams=beams, do_sample=False,
-                             max_new_tokens=min(512, int(n_in * 2.5) + 24))
+                             max_new_tokens=min(400, 2 * n_in + 16))
     return [t.strip() for t in tok.batch_decode(gen, skip_special_tokens=True)]
 
 
@@ -448,44 +596,72 @@ def _translate_all(slot, pieces, src, tgt, beams):
     return result
 
 
-def op_translate(req):
-    texts = req["texts"]
-    src, tgt = req["src"], req.get("tgt", "eng_Latn")
-    beams = int(req.get("num_beams", 4))
-    allow = req.get("allow_cuda", True)
+def _translate_texts(slot, texts, src, tgt, beams, rules):
+    """Every text translated (long ones piece by piece); "" for an empty text."""
     owners, pieces = [], []
     for i, t in enumerate(texts):
-        for p in split_pieces(str(t)):
+        for p in split_pieces(apply_glossary(_clean(t), rules)):
             if p:
                 owners.append(i)
                 pieces.append(p)
+    out = _translate_all(slot, pieces, src, tgt, beams) if pieces else []
+    joined = [[] for _ in texts]
+    for o, t in zip(owners, out):
+        if t:
+            joined[o].append(t)
+    return [" ".join(parts).strip() for parts in joined]
+
+
+def op_translate(req):
+    torch = _torch()
+    texts = [str(t) for t in req["texts"]]
+    src, tgt = req["src"], req.get("tgt", "eng_Latn")
+    beams = int(req.get("num_beams", 4))
+    allow = req.get("allow_cuda", True)
+    rules = glossary(src) if req.get("glossary", True) else []
+    groups = join_groups(texts, req.get("gaps")) if req.get("join", False) else [[i] for i in range(len(texts))]
+    units = [" ".join(_clean(texts[i]) for i in g) for g in groups]
     force_cpu = False
     for attempt in (1, 2):
-        slot = ensure_mt(allow, force_cpu)
+        slot = ensure_mt(req.get("translator"), allow, force_cpu)
         progress("translate", 0)
+        if slot.device == "cuda":
+            torch.cuda.reset_peak_memory_stats()
         t1 = time.time()
         try:
-            out = _translate_all(slot, pieces, src, tgt, beams)
+            out = _translate_texts(slot, units, src, tgt, beams, rules)
+            result = [""] * len(texts)
+            alone = []   # texts of a joined group whose translation could not be cut back: translated one by one
+            for g, unit in zip(groups, out):
+                parts = split_translation(unit, [len(_clean(texts[i])) for i in g]) if len(g) > 1 else [unit]
+                if parts is None:
+                    alone.extend(g)
+                    continue
+                for i, part in zip(g, parts):
+                    result[i] = part
+            if alone:
+                for i, t in zip(alone, _translate_texts(slot, [texts[i] for i in alone], src, tgt, beams, rules)):
+                    result[i] = t
             break
-        except _torch().cuda.OutOfMemoryError:
+        except torch.cuda.OutOfMemoryError:
             if attempt == 2:
                 raise
             log("out of VRAM while translating: retrying on the CPU")
             unload(MT)
             force_cpu = True
-    log(f"translated {len(pieces)} piece(s) of {len(texts)} text(s) on {slot.device} in {time.time() - t1:.1f}s")
-    joined = [[] for _ in texts]
-    for o, t in zip(owners, out):
-        if t:
-            joined[o].append(t)
-    result, untranslated = [], []
-    for i, parts in enumerate(joined):
-        text = " ".join(parts).strip()
-        if not text and str(texts[i]).strip():
+    elapsed = time.time() - t1
+    peak = torch.cuda.max_memory_allocated() / 2**30 if slot.device == "cuda" else 0.0
+    joined = [g for g in groups if len(g) > 1 and not set(g) & set(alone)]
+    log(f"{slot.key} translated {len(texts)} text(s) as {len(groups)} unit(s) on {slot.device} in {elapsed:.1f}s"
+        + (f" (peak {peak:.2f} GB VRAM)" if peak else ""))
+    untranslated = []
+    for i, t in enumerate(result):
+        if not t and texts[i].strip():
             untranslated.append(i)
-            text = str(texts[i]).strip()  # never drop a segment: keep the source text
-        result.append(text)
-    return {"texts": result, "device": slot.device, "untranslated": untranslated}
+            result[i] = _clean(texts[i])  # never drop a segment: keep the source text
+    return {"texts": result, "device": slot.device, "untranslated": untranslated, "translator": slot.key,
+            "model": MT_MODELS[slot.key][0], "joined": joined, "elapsed_s": round(elapsed, 2),
+            "peak_vram_gb": round(peak, 2)}
 
 
 # ------------------------------------------------------------------------------------------------ Hybrid Demucs
@@ -601,7 +777,8 @@ def op_separate_vocals(req):
 def op_status(_req):
     cur, peak = rss_gb()
     return {"asr": None if ASR[0] is None else {"model": ASR[0].key, "device": ASR[0].device, "half": ASR[0].half},
-            "mt": None if MT[0] is None else {"device": MT[0].device},
+            "mt": None if MT[0] is None else {"translator": MT[0].key, "device": MT[0].device},
+            "translators": [n for n in MT_MODELS if mt_installed(n)],
             "sep": None if SEP[0] is None else {"device": SEP[0].device},
             "rss_gb": round(cur, 2), "peak_rss_gb": round(peak, 2), "free_gb": round(free_vram_gb(), 2)}
 
