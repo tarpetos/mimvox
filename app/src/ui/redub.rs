@@ -15,7 +15,12 @@
 //! `redub_target`), and so is "Translation quality" (`redub_translator`: `nllb-1.3b` | `nllb-600m`), offered when the
 //! engine has both translators (`hello` -> `translators`). The language lists come from the engine (`ui::lang`).
 //! Translate & dub and Re-speak have "Keep original timing" (`timing`: `keep` | `natural`), on by default for a video
-//! and off for an audio file, remembered per kind once changed (`redub_timing`); Redub saves audio only.
+//! and off for an audio file, remembered per kind once changed (`redub_timing`).
+//! For a video source every mode offers "Output: Video with new voice / Audio only" (`output`, default video,
+//! remembered as `redub_output`) and "Keep background music and sounds" (`keep_background`, default on, remembered as
+//! `redub_keep_background`): the engine separates the voice from the music, mixes the new voice over the background
+//! and muxes it into a copy of the video (the picture is not re-encoded). A video output always keeps the original
+//! timing. The result plays its audio in the app and opens the video in the system player ("Open video").
 //! Dubbing into English, or re-speaking English, with a voice that has no English reference clip shows Speak's
 //! "Accent" choice (`speak::accent_block`, the same setting), sent as `accent` with `redub.dub`, with the
 //! `redub.render` that finishes a reviewed dub and with a Re-speak's `redub.render`. A job spoken from a clip in another
@@ -38,7 +43,9 @@ use super::trash;
 use super::playbar;
 use super::voices::kit;
 use crate::engine::EngineMsg;
-use crate::engine::protocol::{self, EngineEvent, JobStarted, RedubDone, RedubDubParams, RedubMode, RedubProbe, RedubReview, RedubSegmentIn, RedubTiming, RedubTranscript, TextLanguage};
+use crate::engine::protocol::{
+    self, EngineEvent, JobStarted, RedubDone, RedubDubParams, RedubMode, RedubOutput, RedubProbe, RedubReview, RedubSegmentIn, RedubTiming, RedubTranscript, TextLanguage,
+};
 use crate::state::{AppState, Screen};
 use rune::{Cx, El, ScrollSpec, TextEdit, col, edit_access, el, row, text, text_input};
 use serde_json::json;
@@ -171,6 +178,8 @@ pub struct Redub {
     pub drift_s: Option<f32>,
     /// The language a dub was spoken in.
     pub to: Option<String>,
+    /// The video with the new voice (a video output), next to `path`.
+    pub video: Option<PathBuf>,
 }
 
 pub struct RedubState {
@@ -188,6 +197,10 @@ pub struct RedubState {
     /// "Keep original timing" as the user set it for audio files (`[0]`) and video files (`[1]`); `None` until they
     /// change it (then it is on for video and off for audio).
     keep_timing: [Option<bool>; 2],
+    /// "Output: Video with new voice" (else "Audio only") for a video source.
+    video_out: bool,
+    /// "Keep background music and sounds" for a video source.
+    keep_bg: bool,
     segments: Vec<Seg>,
     /// The segments are a dub's translation waiting for the user's edits (shown as the two-column review).
     reviewing: bool,
@@ -220,6 +233,8 @@ impl Default for RedubState {
             review_first: false,
             faster_translation: false,
             keep_timing: [None, None],
+            video_out: true,
+            keep_bg: true,
             segments: Vec::new(),
             reviewing: false,
             transcript_lang: None,
@@ -292,10 +307,31 @@ fn source_is_video(r: &RedubState) -> bool {
     f.path.extension().and_then(|e| e.to_str()).is_some_and(|e| VIDEO_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-/// "Keep original timing": the user's choice for this kind of file, else on for a video and off for audio.
+/// What the job writes: for a video source the user's choices, for an audio file its audio alone (no separation).
+fn output(r: &RedubState) -> RedubOutput {
+    if source_is_video(r) { RedubOutput { video: r.video_out, keep_background: r.keep_bg } } else { RedubOutput::default() }
+}
+
+/// The timing is fixed to "keep": a video output keeps the picture's timing.
+fn timing_forced(r: &RedubState) -> bool {
+    output(r).video
+}
+
+/// "Keep original timing": always for a video output, else the user's choice for this kind of file, else on for a
+/// video and off for audio.
 fn keep_timing(r: &RedubState) -> bool {
+    if timing_forced(r) {
+        return true;
+    }
     let video = source_is_video(r);
     r.keep_timing[usize::from(video)].unwrap_or(video)
+}
+
+/// `redub.prepare` also separates the voice from the background: the job will need it (a kept background, or a
+/// converted video, whose voice is converted alone).
+fn wants_separation(r: &RedubState) -> bool {
+    let o = output(r);
+    o.keep_background || (o.video && r.mode == RedubMode::Convert)
 }
 
 fn timing(r: &RedubState) -> RedubTiming {
@@ -304,7 +340,7 @@ fn timing(r: &RedubState) -> RedubTiming {
 
 fn toggle_keep_timing(s: &mut AppState) {
     let r = &mut s.redub;
-    if r.busy() {
+    if r.busy() || timing_forced(r) {
         return;
     }
     let (video, on) = (source_is_video(r), keep_timing(r));
@@ -336,17 +372,60 @@ fn timing_pref(t: [Option<bool>; 2]) -> serde_json::Value {
 fn timing_block(s: &AppState, p: Palette, key: &str) -> El {
     let r = &s.redub;
     let on = keep_timing(r);
-    // Redub saves audio only (nothing is muxed back into a video), so for a video the hint says what the choice means
-    // for laying the result back over the picture.
+    let forced = timing_forced(r);
+    // For an audio-only result of a video, the hint says what the choice means for laying it back over the picture.
     let hint = match (on, source_is_video(r)) {
-        (true, true) => "Fits each phrase into the original timing; may speed up speech. Stays in sync with the video (the result is audio only).",
+        _ if forced => "A video result always keeps the original timing, so your voice stays in sync with the picture. Fits each phrase into its time; may speed up speech.",
+        (true, true) => "Fits each phrase into the original timing; may speed up speech. Stays in sync with the video.",
         (true, false) => "Fits each phrase into the original timing; may speed up speech.",
         (false, true) => "Natural pace; the result can be longer, so it drifts out of sync with the video.",
         (false, false) => "Natural pace; the result can be longer.",
     };
     col().key(key.to_owned()).w_full().gap(3.0)
-        .child(kit::checkbox(&p, on, "Keep original timing", toggle_keep_timing))
+        .child(kit::checkbox(&p, on, "Keep original timing", toggle_keep_timing).opacity(if forced { 0.55 } else { 1.0 }))
         .child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
+}
+
+/// "Output: Video with new voice / Audio only" and "Keep background music and sounds" (video sources, every mode).
+fn output_block(s: &AppState, p: Palette, key: &str) -> El {
+    let r = &s.redub;
+    let caption = match (r.video_out, r.keep_bg) {
+        (true, true) => "A copy of the video with your voice over the original music and sounds. The picture is copied as it is.",
+        (true, false) => "A copy of the video with your voice alone. The picture is copied as it is.",
+        (false, true) => "The new audio only, with the original music and sounds, saved as set in Results.",
+        (false, false) => "The new audio only, your voice alone, saved as set in Results.",
+    };
+    let pick = segmented_help(
+        p,
+        &format!("{key}-pick"),
+        &["Video with new voice", "Audio only"],
+        &["Save a copy of the video with the new voice (also keeps the audio)", "Save the new audio only"],
+        usize::from(!r.video_out),
+        |s, i| {
+            if !s.redub.busy() && !s.redub.reviewing {
+                s.redub.video_out = i == 0;
+                s.redub.persist();
+            }
+        },
+    );
+    let bg_hint = if r.keep_bg {
+        "The voice is separated from the music and effects; yours is mixed in at the original voice's loudness."
+    } else {
+        "Your voice alone, on silence."
+    };
+    let keep = kit::checkbox(&p, r.keep_bg, "Keep background music and sounds", |s| {
+        if !s.redub.busy() && !s.redub.reviewing {
+            s.redub.keep_bg = !s.redub.keep_bg;
+            s.redub.persist();
+        }
+    });
+    col().key(key.to_owned()).w_full().gap(10.0)
+        .child(row().w_full().center_y().justify_between().gap(10.0)
+            .child(col().grow(1.0).min_w(0.0).gap(1.0)
+                .child(text("Output").font(ty::LABEL).color(p.text))
+                .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap()))
+            .child(pick))
+        .child(col().w_full().gap(3.0).child(keep).child(text(bg_hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)))
 }
 
 const TRANSLATOR_BETTER: &str = "nllb-1.3b";
@@ -565,6 +644,7 @@ fn start_dub(s: &mut AppState) {
         output_format: &out,
         accent: speak::accent_param(s, &s.redub.to),
         timing: timing(&s.redub),
+        output: output(&s.redub),
     });
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -613,6 +693,7 @@ fn start_render(s: &mut AppState) {
         &out,
         accent,
         timing(&s.redub),
+        output(&s.redub),
     );
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -850,12 +931,16 @@ fn on_done(s: &mut AppState, done: RedubDone) {
         // The dub (or the reviewed one) is finished: the review text is no longer needed.
         s.redub.clear_text();
     }
+    if let Some(n) = done.background_note.clone().filter(|n| !n.is_empty()) {
+        shell::toast(s, Tone::Warning, n);
+    }
+    let video = done.video_path.clone().filter(|v| !v.as_os_str().is_empty());
     let (path, play) = (done.path.clone(), done.play_path());
     let preview = s.redub.file.as_ref().filter(|f| f.name == source).and_then(Source::preview);
     s.redub.next_id += 1;
     let id = s.redub.next_id;
     let elapsed = if done.elapsed_s > 0.0 { done.elapsed_s } else { (s.shell.now - run.started) as f32 };
-    s.redub.history.insert(0, Redub { id, name: source, voice, mode, path, play, preview, duration_s: done.duration_s, elapsed_s: elapsed, drift_s: done.drift_s.filter(|d| d.abs() >= 0.5), to });
+    s.redub.history.insert(0, Redub { id, name: source, voice, mode, path, play, preview, duration_s: done.duration_s, elapsed_s: elapsed, drift_s: done.drift_s.filter(|d| d.abs() >= 0.5), to, video });
     s.redub.history.truncate(50);
     s.redub.result = Some(id);
 }
@@ -885,6 +970,12 @@ pub fn settle(s: &mut AppState) -> bool {
                 s.redub.faster_translation = t.as_str() == Some(TRANSLATOR_FASTER);
             }
             s.redub.keep_timing = parse_timing_pref(super::onboarding::setting("redub_timing"));
+            if let Some(o) = super::onboarding::setting("redub_output") {
+                s.redub.video_out = o.as_str() != Some("audio");
+            }
+            if let Some(k) = super::onboarding::setting("redub_keep_background").and_then(|v| v.as_bool()) {
+                s.redub.keep_bg = k;
+            }
             changed = true;
         } else if s.redub.prefs_dirty {
             s.redub.prefs_dirty = false;
@@ -894,6 +985,8 @@ pub fn settle(s: &mut AppState) -> bool {
             if s.redub.keep_timing.iter().any(Option::is_some) {
                 super::onboarding::save_setting("redub_timing", timing_pref(s.redub.keep_timing));
             }
+            super::onboarding::save_setting("redub_output", json!(if s.redub.video_out { "video" } else { "audio" }));
+            super::onboarding::save_setting("redub_keep_background", json!(s.redub.keep_bg));
         }
     }
 
@@ -914,7 +1007,7 @@ pub fn settle(s: &mut AppState) -> bool {
     let want_prepare = s.redub.file.as_ref().is_some_and(|f| !f.prepared && !matches!(f.probe, Probe::Failed(_)));
     if want_prepare && shell::engine_ready(s) && !s.shell.scripted() && !s.redub.busy() && !super::train::is_training(s) && !s.speak.is_generating() {
         let path = s.redub.file.as_ref().map(|f| f.path.clone()).unwrap_or_default();
-        let (method, params) = protocol::redub_prepare(&path);
+        let (method, params) = protocol::redub_prepare(&path, wants_separation(&s.redub));
         if shell::request(s, method, params).is_some() {
             if let Some(f) = s.redub.file.as_mut() {
                 f.prepared = true;
@@ -1110,6 +1203,9 @@ fn convert_block(s: &AppState, p: Palette) -> El {
                 .child(voice_chip(p, v))
                 .child(el().grow(1.0))
                 .child(text(format!("{} epochs", v.trained_epochs)).font(ty::CAPTION).color(p.text_faint))));
+            if source_is_video(&s.redub) {
+                c = c.child(glass_card(p).key("convert-options").w_full().padding(14.0).opacity(if s.redub.busy() { 0.6 } else { 1.0 }).child(output_block(s, p, "convert-output")));
+            }
         }
     }
     c
@@ -1170,6 +1266,9 @@ fn dub_block(s: &AppState, p: Palette) -> El {
     }
     if translator_choice(s) {
         options = options.child(translation_quality(r, p));
+    }
+    if source_is_video(r) {
+        options = options.child(output_block(s, p, "dub-output"));
     }
     options = options.child(timing_block(s, p, "dub-timing"));
     options = options.child(col().w_full().gap(3.0).child(review)
@@ -1269,6 +1368,9 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
     if respeak_lang(r).is_some_and(|l| speak::accent_applies(s, &l)) {
         options = options.child(el().w_full().max_w(420.0).child(speak::accent_block(s, p, "respeak-accent")));
     }
+    if source_is_video(r) {
+        options = options.child(output_block(s, p, "respeak-output"));
+    }
     let options = options.child(timing_block(s, p, "respeak-timing")).child(transcribe_row(s, p));
     let mut c = col().key("respeak-block").w_full().gap(12.0)
         .child(text("Transcribes the speech so you can fix or translate the words, then says them again in your voice's own delivery.").font(ty::CAPTION).color(p.text_dim).wrap())
@@ -1359,14 +1461,17 @@ fn segment_row(p: Palette, i: usize, g: &Seg, busy: bool, with_source: bool) -> 
 
 // ---- result and actions ----
 
-fn open_reveal(p: Palette, id: u64, tag: &str, path: &Path) -> (El, El) {
+/// "Show in folder" and "Open file" of a result: of its video when it has one ("Open video" plays it in the system
+/// player; the audio sits next to it under the same name), else of the audio file.
+fn open_reveal(p: Palette, id: u64, tag: &str, r: &Redub) -> (El, El) {
+    let path = r.video.as_deref().unwrap_or(&r.path);
     let (a, b) = (path.to_path_buf(), path.to_path_buf());
     let reveal = icon_button(p, &format!("reveal-{tag}{id}"), &icons::FOLDER, "Show in folder", move |s| {
         if let Err(e) = speak::reveal_file(&a) {
             shell::toast(s, Tone::Danger, e);
         }
     });
-    let open = icon_button(p, &format!("open-{tag}{id}"), &icons::OPEN, "Open file", move |s| {
+    let open = icon_button(p, &format!("open-{tag}{id}"), &icons::OPEN, if r.video.is_some() { "Open video" } else { "Open file" }, move |s| {
         if let Err(e) = speak::open_file(&b) {
             shell::toast(s, Tone::Danger, e);
         }
@@ -1409,20 +1514,28 @@ fn capitalize(s: &str) -> String {
 }
 
 fn result_card(s: &AppState, p: Palette, r: &Redub) -> El {
-    let (reveal, open) = open_reveal(p, r.id, "main", &r.path);
+    let (reveal, open) = open_reveal(p, r.id, "main", r);
     let mut meta = format!("{} · made in {:.1} s · {}", fmt_time(r.duration_s), r.elapsed_s, mode_past(r));
     if let Some(d) = r.drift_s {
         meta = format!("{meta} · {d:.1} s longer than the original");
     }
+    let mut head = row().w_full().gap(10.0).center_y()
+        .child(badge(p, "Done", Tone::Success))
+        .child(col().grow(1.0).min_w(0.0).gap(1.0)
+            .child(text(format!("Your redub of {} is ready", r.name)).font(ty::LABEL).color(p.text).truncate())
+            .child(text(meta).font(ty::CAPTION).color(p.text_faint)));
+    if let Some(v) = r.video.clone() {
+        head = head.child(Button::new("Open video").small().icon(&icons::OPEN).key(format!("open-video-main{}", r.id)).on_press(move |s| {
+            if let Err(e) = speak::open_file(&v) {
+                shell::toast(s, Tone::Danger, e);
+            }
+        }).build(p));
+    }
     glass_card(p).key("result-card").w_full().padding(12.0).gap(10.0)
-        .child(row().w_full().gap(10.0).center_y()
-            .child(badge(p, "Done", Tone::Success))
-            .child(col().grow(1.0).min_w(0.0).gap(1.0)
-                .child(text(format!("Your redub of {} is ready", r.name)).font(ty::LABEL).color(p.text).truncate())
-                .child(text(meta).font(ty::CAPTION).color(p.text_faint)))
+        .child(head
             .child(formats::export_button(p, format!("export-main{}", r.id), &r.path, &r.play, false))
             .child(reveal)
-            .child(open))
+            .children(r.video.is_none().then_some(open)))
         .child(ab_buttons(s, p, r, "main"))
 }
 
@@ -1435,6 +1548,9 @@ fn stage_label(run: &Run, mode: RedubMode) -> (String, Option<f32>) {
         "transcribe" => (format!("Transcribing… {:.0}%", run.pct), frac),
         "translate" => ("Translating…".to_owned(), frac),
         "save" => ("Saving…".to_owned(), frac),
+        "separate" => (format!("Separating the voice from the music… {:.0}%", run.pct), frac),
+        "mix" => ("Mixing your voice with the background…".to_owned(), frac),
+        "mux" => ("Writing the video…".to_owned(), frac),
         "convert" => (format!("Converting the voice… {:.0}%", run.pct), frac),
         _ => match run.segment {
             Some((k, n)) => {
@@ -1506,11 +1622,13 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
 }
 
 fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
-    let (reveal, open) = open_reveal(p, r.id, "h", &r.path);
+    let (reveal, open) = open_reveal(p, r.id, "h", r);
     let meta = format!("{} · {} · {:.0} s", capitalize(&mode_past(r)), fmt_time(r.duration_s), r.elapsed_s);
     glass_card(p).key(format!("redub{}", r.id)).w_full().padding(10.0).gap(8.0)
         .child(col().w_full().gap(1.0)
-            .child(text(r.name.clone()).font(ty::LABEL).color(p.text).truncate())
+            .child(row().w_full().gap(8.0).center_y()
+                .child(text(r.name.clone()).font(ty::LABEL).color(p.text).truncate().grow(1.0).min_w(0.0))
+                .children(r.video.is_some().then(|| badge(p, "Video", Tone::Accent))))
             .child(text(format!("{meta} · {}", r.voice)).font(ty::CAPTION).color(p.text_faint).truncate()))
         .child(ab_buttons(s, p, r, "h"))
         .child(if trash::confirming(s, trash::Kind::Redub, r.id) {
@@ -1586,7 +1704,7 @@ fn demo_segments(s: &mut AppState) {
 }
 
 fn demo_history(s: &mut AppState) {
-    let mk = |id, name: &str, mode, d, e| Redub { id, name: name.into(), voice: "My voice".into(), mode, path: format!("/tmp/redub{id}.wav").into(), play: format!("/tmp/redub{id}.wav").into(), preview: Some(format!("/tmp/orig{id}.wav").into()), duration_s: d, elapsed_s: e, drift_s: None, to: None };
+    let mk = |id, name: &str, mode, d, e| Redub { id, name: name.into(), voice: "My voice".into(), mode, path: format!("/tmp/redub{id}.wav").into(), play: format!("/tmp/redub{id}.wav").into(), preview: Some(format!("/tmp/orig{id}.wav").into()), duration_s: d, elapsed_s: e, drift_s: None, to: None, video: None };
     s.redub.history = vec![
         mk(2, "podcast-intro.wav", RedubMode::Respeak, 48.0, 31.0),
         mk(1, "interview-take-1.mp3", RedubMode::Convert, 161.0, 74.0),
@@ -1642,7 +1760,7 @@ fn scene_done(s: &mut AppState) {
     demo_file(s);
     s.redub.mode = RedubMode::Convert;
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Convert, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 161.0, elapsed_s: 68.4, drift_s: None, to: None });
+    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Convert, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 161.0, elapsed_s: 68.4, drift_s: None, to: None, video: None });
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1720,10 +1838,68 @@ fn scene_dub_timing_video(s: &mut AppState) {
     demo_video(s);
 }
 
-/// The same with the switch turned off for videos: natural pace, the hint warns about the sync.
+/// The same with "Audio only" and the timing switch turned off for videos: natural pace, the hint warns about the sync.
 fn scene_dub_timing_video_off(s: &mut AppState) {
     scene_dub_timing_video(s);
+    s.redub.video_out = false;
     s.redub.keep_timing = [None, Some(false)];
+}
+
+/// Translate & dub of a video with "Keep background music and sounds" off: the new voice alone in the video.
+fn scene_dub_video_voice_only(s: &mut AppState) {
+    scene_dub_timing_video(s);
+    s.redub.keep_bg = false;
+}
+
+/// Convert voice of a video: the output choice under the trained voice.
+fn scene_convert_video(s: &mut AppState) {
+    demo(s, true);
+    demo_file(s);
+    demo_video(s);
+    s.redub.mode = RedubMode::Convert;
+    demo_history(s);
+}
+
+/// Re-speak of a video with "Audio only" chosen.
+fn scene_respeak_video_audio(s: &mut AppState) {
+    scene_transcript(s);
+    demo_video(s);
+    s.redub.video_out = false;
+}
+
+/// A video dub at the separation stage.
+fn scene_dub_separating(s: &mut AppState) {
+    demo_dub_file(s);
+    demo_video(s);
+    let mut run = Run::new(3, -18.0);
+    run.job = Some("job3".into());
+    run.stage = "separate".into();
+    run.pct = 36.0;
+    s.redub.job = Job::Rendering { run, mode: RedubMode::Dub, source: "game-tour.mp4".into(), voice: "My voice".into() };
+    demo_history(s);
+}
+
+/// A finished video dub: the Done card with "Open video", and the history row with the Video badge.
+fn scene_dub_done_video(s: &mut AppState) {
+    demo_dub_file(s);
+    demo_video(s);
+    demo_history(s);
+    s.redub.history.insert(0, Redub {
+        id: 3,
+        name: "game-tour.mp4".into(),
+        voice: "My voice".into(),
+        mode: RedubMode::Dub,
+        path: "/tmp/redub3.mp3".into(),
+        play: "/tmp/redub3.wav".into(),
+        preview: Some("/tmp/game-tour-preview.wav".into()),
+        duration_s: 119.4,
+        elapsed_s: 96.0,
+        drift_s: None,
+        to: Some("en".into()),
+        video: Some("/tmp/redub3.mp4".into()),
+    });
+    s.redub.next_id = 3;
+    s.redub.result = Some(3);
 }
 
 /// Re-speak of an audio file with the switch turned on (it is off by default for audio).
@@ -1773,7 +1949,7 @@ fn scene_dub_review(s: &mut AppState) {
 fn scene_dub_done(s: &mut AppState) {
     demo_dub_file(s);
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 163.2, elapsed_s: 92.0, drift_s: Some(2.2), to: Some("en".into()) });
+    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 163.2, elapsed_s: 92.0, drift_s: Some(2.2), to: Some("en".into()), video: None });
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1786,7 +1962,7 @@ fn scene_dub_to_uk(s: &mut AppState) {
     s.redub.from = "en".into();
     s.redub.to = "uk".into();
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "podcast-intro.wav".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/orig3.wav".into()), duration_s: 49.5, elapsed_s: 41.0, drift_s: None, to: Some("uk".into()) });
+    s.redub.history.insert(0, Redub { id: 3, name: "podcast-intro.wav".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/orig3.wav".into()), duration_s: 49.5, elapsed_s: 41.0, drift_s: None, to: Some("uk".into()), video: None });
     s.redub.next_id = 3;
 }
 
@@ -1898,6 +2074,11 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("redub_dub_ready", scene_dub_ready),
         ("redub_dub_timing_video", scene_dub_timing_video),
         ("redub_dub_timing_video_off", scene_dub_timing_video_off),
+        ("redub_dub_video_voice_only", scene_dub_video_voice_only),
+        ("redub_convert_video", scene_convert_video),
+        ("redub_respeak_video_audio", scene_respeak_video_audio),
+        ("redub_dub_separating", scene_dub_separating),
+        ("redub_dub_done_video", scene_dub_done_video),
         ("redub_respeak_timing_keep", scene_respeak_timing_keep),
         ("redub_dub_accent", scene_dub_accent),
         ("redub_dub_accent_untrained", scene_dub_accent_untrained),

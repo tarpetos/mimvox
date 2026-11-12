@@ -21,9 +21,11 @@ Ops (all params optional unless stated):
                                                                                -> {"texts":[...],"device","untranslated":[i],
                                                                                    "translator","model","joined":[[i]],
                                                                                    "elapsed_s","peak_vram_gb"}
-  separate_vocals {"audio":"<.npy 44.1 kHz mono float32>"(required),"out":"<.npy to write>"(required),
-                   "allow_cuda":true}                                          -> {"device","seconds","elapsed_s",
-                                                                                   "peak_vram_gb"} (vocals in "out")
+  separate_vocals {"audio":"<.npy 44.1 kHz float32, mono (n,) or (channels, n)>"(required),"out":"<.npy to write>"
+                   (required),"background_out":null|"<.npy>","allow_cuda":true}
+                                                                               -> {"device","seconds","channels",
+                                                                                   "elapsed_s","peak_vram_gb"}
+                   (vocals in "out", drums + bass + other in "background_out", both shaped like "audio")
   release_gpu / unload                                                         -> {"free_gb"}
   status                                                                       -> {"asr","mt","sep","translators",
                                                                                    "rss_gb","peak_rss_gb","free_gb"}
@@ -695,56 +697,96 @@ def ensure_sep(allow_cuda, force_cpu=False):
     return SEP[0]
 
 
-def _separate(slot, mix):
-    """Vocals of mono ``mix`` (float32 at SEP_SR) as a float32 numpy array of the same length.
+def _separate(slot, mix, vocals_out, rest_out=None):
+    """Hybrid Demucs over ``mix`` (float32, ``(channels, n)`` at SEP_SR, one or two channels; may be memory-mapped).
+    The vocals are written to ``vocals_out`` and, when given, the sum of the other stems (drums + bass + other: the
+    accompaniment) to ``rest_out``; both are zero-filled arrays of the same shape (memory-mapped ``.npy`` files, so
+    a long file does not have to fit in RAM).
 
-    The model takes stereo: the mono signal is fed on both channels and the two vocal channels are averaged. The
-    signal is normalised once for the whole file and cut into SEP_SEGMENT_S segments that overlap by SEP_OVERLAP;
-    each segment's output is weighted with a triangle and the overlaps are summed and divided by the summed weights
-    (Demucs' ``apply_model`` with ``segment`` / ``overlap``), so memory stays bounded for any length."""
+    The model takes stereo: a mono signal is fed on both channels and the two output channels are averaged. The
+    signal is normalised once for the whole file (by its mono mean and deviation, as Demucs does) and cut into
+    SEP_SEGMENT_S segments that overlap by SEP_OVERLAP; each segment's output is weighted with a triangle and the
+    overlaps are summed and divided by the summed weights (Demucs' ``apply_model`` with ``segment`` / ``overlap``)."""
     import math
+    import numpy as np
     torch = _torch()
     model, dev = slot.obj, slot.device
-    vocals = SEP_SOURCES.index("vocals")
-    x = torch.from_numpy(mix)
-    mean, std = float(x.mean()), float(x.std())
+    vi = SEP_SOURCES.index("vocals")
+    others = [i for i in range(len(SEP_SOURCES)) if i != vi]
+    chans, n = int(mix.shape[0]), int(mix.shape[1])
+    mean, std = 0.0, 0.0
+    step = SEP_SR * 60   # the statistics in one-minute blocks (a memory-mapped input stays on disk)
+    total_sq = 0.0
+    for a in range(0, n, step):
+        ref = np.asarray(mix[:, a:a + step], dtype=np.float64).mean(0)
+        mean += float(ref.sum())
+        total_sq += float((ref ** 2).sum())
+    mean /= max(n, 1)
+    std = math.sqrt(max(total_sq / max(n, 1) - mean ** 2, 0.0))
     std = std if std > 1e-8 else 1.0
-    x = (x - mean) / std
-    n = int(x.shape[0])
     seg = int(SEP_SEGMENT_S * SEP_SR)
     stride = max(int(seg * (1.0 - SEP_OVERLAP)), 1)
     half = seg // 2
-    weight = torch.cat([torch.arange(1, half + 1), torch.arange(seg - half, 0, -1)]).float()
+    weight = np.concatenate([np.arange(1, half + 1), np.arange(seg - half, 0, -1)]).astype(np.float32)
     weight /= weight.max()
     starts = [i * stride for i in range(max(math.ceil((n - seg) / stride), 0) + 1)]
-    out = torch.zeros(n)
-    total = torch.zeros(n)
+    total = np.zeros(n, dtype=np.float32)
     progress("separate", 0)
     with torch.inference_mode():
         for i, s in enumerate(starts):
             check_cancel()
-            piece = x[s:s + seg]
-            length = int(piece.shape[0])
+            piece = (np.asarray(mix[:, s:s + seg], dtype=np.float32) - mean) / std
+            length = int(piece.shape[1])
+            x = torch.from_numpy(np.ascontiguousarray(piece))
             if length < seg:
-                piece = torch.nn.functional.pad(piece, (0, seg - length))
-            inp = piece.to(dev).view(1, 1, seg).expand(1, 2, seg).contiguous()
-            voc = model(inp)[0, vocals].mean(0)[:length].float().cpu()
-            del inp
+                x = torch.nn.functional.pad(x, (0, seg - length))
+            x = x.expand(2, seg) if chans == 1 else x
+            out = model(x.to(dev).view(1, 2, seg).contiguous())[0]   # (sources, 2, seg)
+            voc = out[vi]
+            rest = out[others].sum(0) if rest_out is not None else None
+            if chans == 1:
+                voc = voc.mean(0, keepdim=True)
+                rest = rest.mean(0, keepdim=True) if rest is not None else None
             w = weight[:length]
-            out[s:s + length] += voc * w
+            vocals_out[:, s:s + length] += voc[:, :length].float().cpu().numpy() * (w * std)
+            if rest is not None:
+                rest_out[:, s:s + length] += rest[:, :length].float().cpu().numpy() * (w * std)
             total[s:s + length] += w
+            del x, out, voc, rest
             progress("separate", 100.0 * (i + 1) / len(starts))
-    y = out / total.clamp_min(1e-8) * std
-    return y.numpy().astype("float32", copy=False)
+    np.maximum(total, 1e-8, out=total)
+    for a in range(0, n, step):
+        vocals_out[:, a:a + step] /= total[a:a + step]
+        if rest_out is not None:
+            rest_out[:, a:a + step] /= total[a:a + step]
+
+
+def _open_out(path, shape):
+    """A zero-filled float32 ``.npy`` of ``shape`` mapped into memory, at ``<path>.part.npy`` (renamed when done)."""
+    import numpy as np
+    return np.lib.format.open_memmap(path + ".part.npy", mode="w+", dtype=np.float32, shape=shape)
+
+
+def _release_outs(outs):
+    """Unmap the output files in ``outs`` (emptied) and return their paths (Windows cannot rename or delete a mapped
+    file)."""
+    for arr in outs:
+        arr.flush()
+    names = [arr.filename for arr in outs]
+    outs.clear()
+    collect()
+    return names
 
 
 def op_separate_vocals(req):
+    import traceback
     import numpy as np
     torch = _torch()
-    audio = np.load(req["audio"])
-    if audio.ndim != 1:
-        raise OpError("bad_request", "'audio' must hold mono samples")
-    audio = np.ascontiguousarray(audio, dtype=np.float32)
+    audio = np.load(req["audio"], mmap_mode="r")
+    if audio.ndim not in (1, 2) or (audio.ndim == 2 and audio.shape[0] not in (1, 2)):
+        raise OpError("bad_request", "'audio' must hold mono samples or (channels, samples) with 1 or 2 channels")
+    mix = audio.reshape(1, -1) if audio.ndim == 1 else audio
+    dests = [req["out"]] + ([req["background_out"]] if req.get("background_out") else [])
     allow = req.get("allow_cuda", True)
     force_cpu = False
     for attempt in (1, 2):
@@ -753,23 +795,32 @@ def op_separate_vocals(req):
         if slot.device == "cuda":
             torch.cuda.reset_peak_memory_stats()
         t1 = time.time()
+        outs = [_open_out(d, audio.shape) for d in dests]
         try:
-            y = _separate(slot, audio)
+            _separate(slot, mix, *[o.reshape(mix.shape) for o in outs])
             break
-        except torch.cuda.OutOfMemoryError:
-            if attempt == 2 or slot.device != "cuda":
+        except BaseException as exc:
+            traceback.clear_frames(exc.__traceback__)   # the frames hold views of the mapped files
+            for name in _release_outs(outs):
+                try:
+                    os.remove(name)
+                except OSError:
+                    pass
+            if attempt == 2 or slot.device != "cuda" or not isinstance(exc, torch.cuda.OutOfMemoryError):
                 raise
             log("out of VRAM while separating: retrying on the CPU")
             unload(SEP)
             force_cpu = True
     elapsed = time.time() - t1
     peak = torch.cuda.max_memory_allocated() / 2**30 if slot.device == "cuda" else 0.0
-    np.save(req["out"], y)
-    log(f"separated the vocals of {len(audio) / SEP_SR:.1f}s of audio in {elapsed:.1f}s on {slot.device}"
+    for tmp, dest in zip(_release_outs(outs), dests):
+        os.replace(tmp, dest)
+    seconds = mix.shape[1] / SEP_SR
+    log(f"separated {seconds:.1f}s of {mix.shape[0]}-channel audio in {elapsed:.1f}s on {slot.device}"
         + (f" (peak {peak:.2f} GB VRAM)" if peak else ""))
     progress("separate", 100)
-    return {"device": slot.device, "seconds": round(len(audio) / SEP_SR, 2), "elapsed_s": round(elapsed, 2),
-            "peak_vram_gb": round(peak, 2)}
+    return {"device": slot.device, "seconds": round(seconds, 2), "channels": int(mix.shape[0]),
+            "elapsed_s": round(elapsed, 2), "peak_vram_gb": round(peak, 2)}
 
 
 # ------------------------------------------------------------------------------------------------ main

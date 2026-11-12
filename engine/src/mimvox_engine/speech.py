@@ -62,6 +62,8 @@ class SpeechWorker:
         # -I: do not put the script directory (engine modules such as config.py) on sys.path.
         self.client = WorkerClient("speech", [sys.executable, "-I", WORKER, "--models-root", models_root], env,
                                    start_timeout=START_TIMEOUT_S)
+        # Tags of background separations (a Redub preload): release_gpu stops one that is running.
+        self.background_tags: set[str] = set()
 
     @property
     def last_error(self) -> str | None:
@@ -108,20 +110,29 @@ class SpeechWorker:
         return await self.request("translate", params, progress)
 
     async def separate_vocals(self, audio_npy: str, out_npy: str, seconds: float, progress: Progress | None,
-                              allow_cuda: bool | None = None) -> dict[str, Any]:
-        """Vocals only of a 44.1 kHz mono ``.npy`` of ``seconds``, written to ``out_npy``. The timeout grows with the
-        length (the CPU fallback can be slower than real time)."""
+                              allow_cuda: bool | None = None, background_out: str | None = None,
+                              tag: str | None = None) -> dict[str, Any]:
+        """Vocals of a 44.1 kHz ``.npy`` of ``seconds`` (mono ``(n,)`` or ``(channels, n)``), written to ``out_npy``
+        in the same shape; with ``background_out`` the accompaniment (drums + bass + other) too. ``tag``: a background
+        run that ``release_gpu`` may stop while its tag is in ``background_tags``. The timeout grows with the length
+        (the CPU fallback can be slower than real time)."""
         params: dict[str, Any] = {"audio": audio_npy, "out": out_npy}
+        if background_out:
+            params["background_out"] = background_out
+        if tag:
+            params["tag"] = tag
         if allow_cuda is not None:
             params["allow_cuda"] = bool(allow_cuda) and self.allow_cuda
         return await self.request("separate_vocals", params, progress, timeout=OP_TIMEOUT_S + 3.0 * seconds)
 
     async def release_gpu(self) -> None:
         """Hand the GPU memory back (models are dropped; they reload on the next request). No-op when not running.
-        A background preload that is running is asked to stop first, so the caller does not wait for a whole load."""
+        A background preload that is running (a Whisper load, or a Redub preload's separation) is asked to stop
+        first, so the caller does not wait for it."""
         if not self.alive():
             return
         self.client.cancel_current("load_asr")
+        self.client.cancel_current("separate_vocals", lambda msg: msg.get("tag") in self.background_tags)
         try:
             await self.request("release_gpu", timeout=120.0, start=False)
         except (SpeechError, Cancelled):

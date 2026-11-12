@@ -224,18 +224,21 @@ def _float(v: Any) -> float:
 
 # ---------------------------------------------------------------------------------------------------- decode
 
-def decode_pcm(path: str, sr: int, max_s: float | None = None) -> np.ndarray:
-    """ffmpeg decode of the first audio track to mono float32 at ``sr`` (only the first ``max_s`` seconds if given)."""
+def decode_pcm(path: str, sr: int, max_s: float | None = None, channels: int = 1) -> np.ndarray:
+    """ffmpeg decode of the first audio track to float32 at ``sr`` (only the first ``max_s`` seconds if given): mono
+    ``(n,)``, or ``(channels, n)`` with ``channels`` above 1 (ffmpeg up- or down-mixes)."""
     exe = require_ffmpeg()
     limit = ["-t", f"{float(max_s):.3f}"] if max_s else []
-    res = _run([exe, "-nostdin", "-v", "error", "-i", path, "-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(int(sr)),
-                *limit, "-f", "f32le", "pipe:1"])
+    res = _run([exe, "-nostdin", "-v", "error", "-i", path, "-vn", "-map", "0:a:0", "-ac", str(int(channels)),
+                "-ar", str(int(sr)), *limit, "-f", "f32le", "pipe:1"])
     if res.returncode != 0 or not res.stdout:
         msg = _tail(res.stderr)
         if _no_audio(res.stderr):
             raise EngineError("bad_request", "This file has no audio track.")
         raise EngineError("bad_request", f"Cannot read this audio file ({msg}).")
     y = np.frombuffer(res.stdout, dtype="<f4")
+    if channels > 1:
+        y = y[:len(y) - len(y) % channels].reshape(-1, channels).T
     y = np.ascontiguousarray(y, dtype=np.float32)
     if not np.all(np.isfinite(y)):
         y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
@@ -514,8 +517,11 @@ def output_format(params: dict[str, Any], key: str = "output_format") -> str:
     return fmt
 
 
-def save_result(data: config.DataDir, track: np.ndarray, sr: int, prefix: str, fmt: str) -> dict[str, str]:
-    """Save a finished result as ONE file ``<data>/outputs/<prefix><stamp>.<ext>`` in ``fmt``.
+def save_result(data: config.DataDir, track: np.ndarray, sr: int, prefix: str, fmt: str,
+                also_free: tuple[str, ...] = ()) -> dict[str, str]:
+    """Save a finished result as ONE file ``<data>/outputs/<prefix><stamp>.<ext>`` in ``fmt``. ``track`` is mono
+    ``(n,)`` or ``(channels, n)``; ``also_free`` are other extensions the name must be free for (a Redub video saved
+    next to its audio under the same name).
 
     The app plays WAV only, so another format also gets a 16-bit playback WAV in ``<data>/tmp/play/`` (the same name),
     from which the saved file is encoded (``export``: ffmpeg, else libsndfile). ``track`` is mono float32 at ``sr``
@@ -529,7 +535,7 @@ def save_result(data: config.DataDir, track: np.ndarray, sr: int, prefix: str, f
     name, n = f"{prefix}{stamp}", 1
 
     def taken(nm: str) -> bool:
-        return (os.path.exists(os.path.join(data.outputs, f"{nm}.{ext}"))
+        return (any(os.path.exists(os.path.join(data.outputs, f"{nm}.{e}")) for e in (ext, *also_free))
                 or os.path.exists(os.path.join(play_dir, f"{nm}.wav")))
 
     while taken(name):  # a free name, not a wait
@@ -580,6 +586,17 @@ def delete_outputs(data: config.DataDir, paths: list[Any]) -> dict[str, Any]:
         if os.path.isdir(real):
             raise EngineError("bad_request", "'path' must be a file, not a folder")
         checked.append(real)
+        # A result in outputs may have siblings with the same name: a Redub of a video saves the audio and the video
+        # side by side (redub_<stamp>.mp3 + redub_<stamp>.mp4). They are one result and go together.
+        if _inside(real, data.outputs):
+            folder, stem = os.path.dirname(real), os.path.splitext(os.path.basename(real))[0]
+            try:
+                for name in os.listdir(folder):
+                    sib = os.path.join(folder, name)
+                    if os.path.splitext(name)[0] == stem and os.path.isfile(sib) and _inside(os.path.realpath(sib), data.outputs):
+                        checked.append(os.path.realpath(sib))
+            except OSError:
+                pass
     deleted: list[str] = []
     for real in dict.fromkeys(checked):
         try:

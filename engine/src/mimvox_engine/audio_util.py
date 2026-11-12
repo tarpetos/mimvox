@@ -47,9 +47,12 @@ def concat(parts: list[np.ndarray], gap_ms: float = 0.0, sr: int = OUT_SR) -> np
 
 
 def write_wav(path: str, data: np.ndarray, sr: int = OUT_SR) -> None:
+    """16-bit WAV of mono ``(n,)`` or multichannel ``(channels, n)`` samples."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    sf.write(path, np.clip(data, -1.0, 1.0), sr, subtype="PCM_16", format="WAV")
+    frames = data.T if data.ndim == 2 else data
+    sf.write(path, np.clip(frames, -1.0, 1.0), sr, subtype="PCM_16", format="WAV")
 
 
 def duration_s(data: np.ndarray, sr: int = OUT_SR) -> float:
-    return round(len(data) / float(sr), 3)
+    """Length of mono ``(n,)`` or ``(channels, n)`` samples."""
+    return round(data.shape[-1] / float(sr), 3)
