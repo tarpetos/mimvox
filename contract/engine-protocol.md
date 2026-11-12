@@ -106,7 +106,7 @@ backend = "cuda"   # cuda | mps | cpu (detected by setup)
 
 ## Where the data directory is
 
-The runtime alone is about 31 GB, so it can live on any drive. Setup asks where (default below) and the app finds it
+The runtime alone is about 28 GB, so it can live on any drive. Setup asks where (default below) and the app finds it
 in this order:
 
 1. `MIMVOX_DATA` environment variable (an absolute path);

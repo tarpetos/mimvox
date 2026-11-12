@@ -151,7 +151,7 @@ def host_arch() -> str:
 
 
 def platform_data_dir(plat: str) -> Path:
-    """Where the data directory goes by default. The runtime is about 36 GB, so on Windows this is the *local*
+    """Where the data directory goes by default. The runtime is about 28 GB, so on Windows this is the *local*
     app data (never the roaming profile, which can be synced or copied)."""
     home = Path.home()
     if plat == "windows":
