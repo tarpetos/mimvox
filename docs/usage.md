@@ -591,8 +591,9 @@ Translate & dub and Re-speak both have **Keep original timing**:
   sentence first uses the pause after it, at your pace; if that is not enough, it is spoken a bit faster, but never
   shorter than 85 % of its natural length (beyond that the speech model starts to swallow short words and the ends of
   phrases; a higher Speed still applies), then sped up slightly by ffmpeg (at most 1.15x, which keeps every sound); if it still does not fit,
-  later sentences move a little. Use it for a video: Redub saves audio only, and this keeps the new speech in sync when
-  you lay it back over the picture.
+  later sentences move a little. Use it for a video: it keeps the new speech in sync with the picture. When the
+  output is a video (see [Dub a video and keep its music](#dub-a-video-and-keep-its-music)), it is always on: the box
+  is ticked and locked.
 - **Off** (the default for an audio file): *natural pace; the result can be longer.* Every sentence is spoken at your
   pace with nothing squeezed. It starts at its original time when the previous one has finished; otherwise right after
   it, with the original pause between them (up to half a second). The result card says how much longer the result is.
@@ -600,6 +601,52 @@ Translate & dub and Re-speak both have **Keep original timing**:
 The choice is remembered separately for video and audio files once you change it. **Speed** in the Style panel is
 your pace in both cases: at 1.3x the speech is that fast on its own, and fitting the timing does not squeeze it
 further. Speech is never cut off and sentences never overlap.
+
+### Dub a video and keep its music
+
+When the file is a video, every mode shows two more choices:
+
+- **Output: Video with new voice / Audio only.** *Video with new voice* (the default for a video, remembered) saves a
+  copy of the video with your voice; the picture is copied as it is, not re-encoded, so it keeps its full quality
+  and takes only a second or two to write, even for 4K. The audio is saved too, as usual, in the **Save as** format.
+  *Audio only* saves just the audio, as before.
+- **Keep background music and sounds** (on by default, remembered). Redub splits the original sound into the voice
+  and the background (music and sound effects) with the music-removal model, puts your voice over the background at
+  the loudness of the original voice, and avoids clipping. If the original turned the music down under the speech,
+  the music is also turned down where your voice runs past the original speech; otherwise the background is left as
+  it is. Off: your voice alone, on silence.
+
+A video result always keeps the original timing (a natural pace would drift away from the picture and from the
+music), so **Keep original timing** is ticked and locked while *Video with new voice* is chosen.
+
+Example: a Ukrainian video into English, keeping the music.
+
+1. Open **Redub** and drop `walkthrough.mp4` (you talking Ukrainian over game music). The app splits it into voice
+   and music right away, in the background, while you choose the options; on a GPU this takes about 2 seconds for
+   2 minutes of video.
+2. Keep **Translate & dub**, **From** Auto-detect (or Ukrainian), **To** English.
+3. Keep **Output: Video with new voice** and **Keep background music and sounds** ticked.
+4. Press **Translate & dub**. After the speaking, the progress shows *Mixing your voice with the background* and
+   *Writing the video*.
+5. The Done card has **Open video** (it opens in your system's video player), **Result** to hear the audio in the
+   app, **Original** to compare, and **Show in folder**. The result is `outputs/redub_<date>_<time>.mp4`, next to the
+   audio file of the same name. In **Results** the row has a **Video** badge.
+
+The video keeps its container (MP4, MOV, MKV, WebM, AVI), its subtitles, chapters and metadata; its sound track is
+replaced by the new one (AAC for MP4 and MOV, Opus for MKV and WebM, tagged with the spoken language).
+
+**How well it separates.** Measured on a 2-minute 4K MP4 with an English voice over quiet music: the voice left in
+the background was about 49 dB under the original voice, which is inaudible under the new voice; separating took
+2 seconds on an RTX 4070 (about 11 seconds per 45 seconds of audio on the CPU), mixing 0.6 s and writing the video
+1.7 s. Separating the voice did not help the transcription (Whisper made no fewer mistakes on the voice alone, even
+with the music 10 dB louder than the voice), so Redub transcribes the original sound.
+
+**What is lost.** Everything the model counts as voice goes with the original speaker: laughs, shouts, singing and
+other people's voices are not kept, only music and sound effects. Loud effects that sound like speech can lose a
+little too. Without the music-removal model (setup installs it) the video has your voice only, and a notice says why.
+
+**Convert voice** of a video uses the separation too: your trained voice model runs over the separated voice only,
+so the music is no longer garbled by it, and the background is mixed back in.
 
 ### The same, with "Review text before dubbing"
 
@@ -618,9 +665,11 @@ Machine translation is not perfect, and names are easy to get wrong. To check th
 1. Choose a file and select **Convert voice**.
 2. Press **Render**.
 
-Your trained timbre model runs over the whole file, so the result has exactly the original length and timing. Music
-and background noise are converted along with the voice (they are not separated), so this works best on a clean
-recording of speech. With an untrained voice the mode offers **Go to Train** or **Use Translate & dub** instead.
+Your trained timbre model runs over the whole file, so the result has exactly the original length and timing. For
+an audio file, music and background noise are converted along with the voice (they are not separated), so this works
+best on a clean recording of speech; for a video, the voice is separated first and the music is kept (see
+[Dub a video and keep its music](#dub-a-video-and-keep-its-music)). With an untrained voice the mode offers
+**Go to Train** or **Use Translate & dub** instead.
 
 ### Re-speak
 
@@ -641,13 +690,12 @@ it.
 
 - **Input:** WAV, MP3, M4A, AAC, FLAC, OGG, Opus, AIFF, WMA (when your ffmpeg can decode it), and the video formats
   MP4, MKV, MOV, WebM and AVI. From a video, the first audio track is used.
-- **Output:** audio only, mono 44.1 kHz. The video picture is not put back. Each result is saved automatically as one
-  file, `outputs/redub_<date>_<time>.wav`, or in the format chosen with **Save as** in the Results header (shared with
-  Speak, see [Results and export](#results-and-export)).
-- **Export as…** on a result saves it as WAV, MP3, FLAC, OGG, Opus, M4A or AIFF, as on Speak.
-
-To put the new audio back into your video, use a video editor and replace the original sound track with the exported
-file.
+- **Output:** 44.1 kHz audio (mono, or stereo with a kept stereo background), saved automatically as one file,
+  `outputs/redub_<date>_<time>.wav`, or in the format chosen with **Save as** in the Results header (shared with
+  Speak, see [Results and export](#results-and-export)). For a video with **Output: Video with new voice**, also
+  `outputs/redub_<date>_<time>.mp4` (or the source's container) next to it.
+- **Export as…** on a result converts its audio to WAV, MP3, FLAC, OGG, Opus, M4A or AIFF, as on Speak. For the video
+  use **Show in folder** and copy the file.
 
 Redub uses the GPU like Speak: only one job runs at a time, and Redub is unavailable while a voice trains.
 

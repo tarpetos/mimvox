@@ -185,7 +185,10 @@ the quick check, and only then delete the old directory.
 <data>/voices/<voice_id>/rvc/model.index
 <data>/outputs/<YYYYMMDD_HHMMSS>.<ext>       # generated speech: ONE file per result in the job's `output_format` (default
                                              #  wav; 44.1 kHz mono, opus 48 kHz; a `_2`, `_3` suffix on a name clash)
-<data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext> # Redub results (same rules)
+<data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext> # Redub results (same rules); a video output adds
+                                             #  redub_<same stamp>.<mp4|mov|m4v|mkv|webm|avi> next to it
+<data>/tmp/redub_sep_<key>/                  # Redub's voice / background stems of one source (vocals.npy, background.npy:
+                                             #  float32 (channels, n) at 44.1 kHz); only the latest file is kept
 <data>/tmp/play/<name>.wav                   # playback WAV of a result saved in another format than wav (the app plays WAV
                                              #  only; same name as the saved file; gone at the next engine start)
 <data>/runtime/models/whisper/               # Whisper turbo (large-v3-turbo.pt, 1.6 GB), fetched by setup (else on the first Redub)
@@ -889,7 +892,9 @@ anything needing ffmpeg answers `not_ready`.
 
 The user drops an audio or video file. It is either **converted** (the same recording, timing untouched, in a voice) or
 **re-spoken** (transcribed, optionally edited by the user, then spoken again in a voice, each sentence at its original
-time). Everything is `mono 44.1 kHz`; the result is audio only (video is not muxed back in).
+time). The voice work is `mono 44.1 kHz`. For a video source the result can also be **a copy of the video with the new voice**
+(`output: "video"`), keeping the original music and sound effects under it (`keep_background`): see
+[Video output](#video-output-output-keep_background).
 
 All Redub jobs that use the GPU take the same single slot as `tts.generate`: while one runs, `tts.generate`, another
 Redub job and `train.start` answer `busy`; during a training (models `loading`) every Redub job answers `not_ready`.
@@ -914,10 +919,16 @@ importable format, also video) and convert it themselves: the app never has to.
 - Errors: `not_found`, `bad_request` (not a readable media file), `not_ready` (no ffprobe).
 
 ### `redub.prepare`
-`{"path"}` -> `{"warming":true}` or `{"warming":false,"reason":"unavailable|paused|busy"}`
+`{"path","separate"?:bool}` -> `{"warming":true,"separating":bool}` or
+`{"warming":false,"separating":false,"reason":"unavailable|paused|busy"}`
 - Call it when the user drops a file. It starts the **speech worker** (see below) and loads Whisper turbo in the
   background so the following `redub.transcribe` / `redub.dub` starts at once; it answers immediately and later emits
-  `redub.prepared`. A no-op when Whisper is already loaded. While the speech model is still loading at engine start it waits
+  `redub.prepared`. A no-op when Whisper is already loaded. With `separate` (default: the file has a picture track, and
+  the music-removal model is installed) it first splits the file into voice and background and caches the stems (see
+  [Video output](#video-output-output-keep_background)), so a job that keeps the background does not wait for it
+  (`separating:true`); a second file's prepare only adds its separation while a Whisper preload is still running.
+  `redub.prepared` then also carries `"separated":true,"separation_s","separation_device"`, or
+  `"separated":false,"separation_note"` (the model failed, or the separation gave way to another GPU job). While the speech model is still loading at engine start it waits
   (up to 3 minutes) instead of competing for the GPU. A job that arrives meanwhile simply queues behind the load.
   `redub.prepared` always follows a `warming:true` answer: `ok:false` also when a training took the GPU meanwhile, or
   when a GPU job (`tts.generate`, `redub.render`) asked the preload to stop.
@@ -952,7 +963,12 @@ importable format, also video) and convert it themselves: the app never has to.
   idleness like the others. Its op: `separate_vocals {"audio":"<.npy 44.1 kHz mono float32>","out":"<.npy>",
   "allow_cuda"}` -> `{"device","seconds","elapsed_s","peak_vram_gb"}`, progress stages `load_model` then `separate`
   (per 10 s segment; segments overlap by 25 % and are cross-faded, so memory does not grow with the length; cancel is
-  checked before every segment). A `release_gpu` that arrives during a separation waits for that one file. Expect the worker at about 2-4 GB of host RAM while a model is
+  checked before every segment). `audio` may also be `(channels, n)` with 1 or 2 channels (stereo is separated as
+  stereo, the model's native input); `out` then has the same shape, and `"background_out":"<.npy>"` also writes the
+  accompaniment (drums + bass + other) there. The outputs are memory-mapped files written as `<name>.part.npy` and
+  renamed when done; the reply adds `"channels"`. A `release_gpu` that arrives during a separation waits for that one
+  file, except for a Redub preload's separation (request field `"tag"` in the client's background set), which it
+  stops. Expect the worker at about 2-4 GB of host RAM while a model is
   loaded (peak 5.4 GB measured while loading the 600M's fp32 checkpoint; loading the 1.3B's fp16 safetensors afterwards did not raise it),
   about 1-1.5 GB with no model, plus a CUDA context (about
   0.4 GB VRAM) while the process lives.
@@ -997,7 +1013,7 @@ importable format, also video) and convert it themselves: the app never has to.
 
 ### `redub.dub` (the whole pipeline in one job)
 `{"path","voice_id","source_language":"auto","target_language":"en","translator":null,"review":false,"voice_match":1.0,"expressiveness":0.8,
-"quality":"best","speed":1.0,"timing":"keep","output_format"?:"wav"}` -> `{"job"}`
+"quality":"best","speed":1.0,"timing":"keep","output_format"?:"wav","output"?:"audio","keep_background"?:false}` -> `{"job"}`
 - Decode -> transcribe in the source language -> translate every segment to `target_language` -> **speak** in that
   language (the same respeak render as `redub.render`, see below, with the translated segments at their original times)
   -> save. One job, one GPU slot for the whole run; the speech worker releases the GPU before the speak stage starts.
@@ -1018,12 +1034,17 @@ importable format, also video) and convert it themselves: the app never has to.
 - `review: false` (default): continues straight into speaking and ends with `redub.done {"path","path_play","format",
   "duration_s","elapsed_s","mode":"dub","language":"uk","target_language":"en","translated":true,"segments":[...as in the transcript...],
   "timing","stretched","overrun","pushed","drift_s","max_push_s","timings_s":{"decode":..,"load_model":..,"transcribe":..,
-  "translate":..,"speak":..,"save":..}}` (seconds per stage). The result is saved as one file in `output_format`, see
+  "translate":..,"speak":..,"save":..}}` (seconds per stage), plus the video output fields (`output`, `video_path`,
+  `keep_background`, ..., see [Video output](#video-output-output-keep_background)) and `"timing_forced"` (true when
+  a video output overrode `timing:"natural"`). The result is saved as one file in `output_format`, see
   [Saved results](#saved-results-output_format) (a review stop saves nothing; send `output_format` again with the
   `redub.render` that finishes it).
-- Events: `redub.progress {"stage":"decode|load_model|transcribe|translate|speak|save","pct":0-100,"segment"?,"segments"?}`
-  with one **monotonic** overall `pct` across the whole pipeline. `review:false`: decode 0-3, load_model 3-8, transcribe
-  8-24, translate 24-30, speak 30-95 (`segment` / `segments` as in `redub.render`), save 95-100. `review:true`: decode 0-5,
+- Events: `redub.progress {"stage":"decode|load_model|transcribe|translate|separate|speak|mix|save|mux","pct":0-100,"segment"?,"segments"?}`
+  with one **monotonic** overall `pct` across the whole pipeline. `review:false`: the stages in that order share
+  0-100 by weight, each only when it runs: decode 3, load_model 5, transcribe 16, translate 6, separate 7 (a kept
+  background), speak 58 (`segment` / `segments` as in `redub.render`), mix 2 (a video or a kept background), save 2,
+  mux 4 (a video); audio only that is decode 0-3.3, load_model -8.9, transcribe -26.7, translate -33.3, speak -97.8,
+  save -100. `review:true`: decode 0-5,
   load_model 5-25, transcribe 25-80, translate 80-100.
 - Errors at start: `bad_request` (parameters, `target_language`), `not_found` (file, voice, `reference.wav`), `not_ready`
   (speech model / RVC not ready for `review:false`; Whisper, translation model missing; `output_format` not writable),
@@ -1032,9 +1053,13 @@ importable format, also video) and convert it themselves: the app never has to.
 
 ### `redub.render`
 `{"voice_id","path","mode":"convert|respeak","segments"?:[{"start","end","text"}],"language"?:"uk","translated"?:false,
-"voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"timing"?:"keep","output_format"?:"wav"}` -> `{"job"}`
-- `convert`: the voice's RVC model is run over the **whole source** (voice, noise and music alike; background/music
-  separation is not implemented) in chunks of about 15-30 s cut at the quietest point (a pause), then joined. The result
+"voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"timing"?:"keep","output_format"?:"wav",
+"output"?:"audio","keep_background"?:false}` -> `{"job"}`
+- `convert`: the voice's RVC model is run over the **whole source** (voice, noise and music alike) in chunks of about
+  15-30 s cut at the quietest point (a pause), then joined. With `output:"video"` or `keep_background:true` it runs
+  over the **separated voice** instead and the background is mixed back in (or left out), see
+  [Video output](#video-output-output-keep_background); without the music-removal model it falls back to the whole
+  track and `background_note` says so. The result
   has exactly the source's length, so the original timing is kept. Silent stretches are copied. The voice must be
   trained: otherwise `bad_request` ("This voice has no trained voice-conversion model ..."). Uses `voice_match` (RVC
   index rate, 0-1, `0` = no index); `expressiveness` and `segments` are ignored.
@@ -1069,8 +1094,9 @@ importable format, also video) and convert it themselves: the app never has to.
   clips never overlap. The result reports `timing` (the mode used), `stretched` (clips time-stretched), `overrun`
   (clips still longer than their room; always 0 with `natural`), `drift_s` (how much longer the output is than the
   source, 0 when it ends with the source) and `max_push_s` (the largest delay of any segment's start).
-  The result is **audio only**: Redub never muxes it back into a video. For a video, `keep` is what keeps the speech in
-  sync when the user lays the audio back over the picture.
+  With `output:"video"` the timing is always `keep` (`timing:"natural"` is overridden, `timing_forced:true`): a
+  natural-pace voice drifts away from the picture and from the kept background. For an audio-only result of a video,
+  `keep` is what keeps the speech in sync when the user lays it back over the picture.
 - **Language guard.** The guard accepts every language the speech model speaks (see
   [Speech model and languages](#speech-model-and-languages-omnivoice); the message lists them). `language` is the transcript's language and
   `translated: true` says the segment texts are translations into `target_language` (default `"en"`; what
@@ -1083,13 +1109,18 @@ importable format, also video) and convert it themselves: the app never has to.
 - `voice_match` (0-1, default 1.0), `expressiveness` (0.1-1.5, default 0.8), `quality` (`best` | `fast`) as in
   `tts.generate` (out-of-range numbers are clamped, non-numbers `bad_request`). `expressiveness`, `quality` and
   `speed` (0.8-1.3, default 1.0, see `tts.generate`) apply to `respeak` only; `convert` keeps the original pace.
-- Events: `redub.progress {"stage":"decode|convert|speak|save","pct":0-100,"segment"?:i,"segments"?:n}` (`pct` overall:
-  decode 0-5, convert/speak 5-95, save 95-100; `segment` is the 0-based index of the chunk (`convert`) or transcript
-  segment (`speak`) that just finished, `segments` the total; `decode` and `save` carry neither), then
-  `redub.done {"path","path_play","format","duration_s","elapsed_s","mode"}` plus, for `respeak`, `"language"` (the language
-  spoken) and `"timing":"keep|natural","stretched":n,"overrun":n,"pushed":n,"drift_s":s,"max_push_s":s` (informational), or `redub.error {"code","message"}` (`cancelled` after
+- Events: `redub.progress {"stage":"decode|separate|convert|speak|mix|save|mux","pct":0-100,"segment"?:i,"segments"?:n}`
+  (`pct` overall and monotonic; shares by weight: decode 3, separate 7 (when the stems are needed), convert/speak 80,
+  mix 2 (when mixing), save 2, mux 4 (a video); audio only that is decode 0-3.5, convert/speak 3.5-97.6, save
+  97.6-100; `segment` is the 0-based index of the chunk (`convert`) or transcript segment (`speak`) that just
+  finished, `segments` the total; the other stages carry neither), then
+  `redub.done {"path","path_play","format","duration_s","elapsed_s","mode","timings_s"}` plus the video output fields
+  (see [Video output](#video-output-output-keep_background)) and, for `respeak`, `"language"` (the language spoken),
+  `"timing_forced"` and `"timing":"keep|natural","stretched":n,"overrun":n,"pushed":n,"drift_s":s,"max_push_s":s`
+  (informational), or `redub.error {"code","message"}` (`cancelled` after
   `redub.cancel`; `bad_request` for a file without audio; `internal`). The result is one file
-  `<data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext>` in `output_format` (default `wav`; 44.1 kHz mono; `_2`, `_3` on a clash),
+  `<data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext>` in `output_format` (default `wav`; 44.1 kHz, mono, or stereo when a
+  stereo background is kept; `_2`, `_3` on a clash), and for a video output the video next to it,
   plus a playback WAV for other formats, see [Saved results](#saved-results-output_format). The job slot is free again
   when the end event arrives. Export to other formats with `audio.export`.
 - Errors at start: `bad_request` (mode, quality, numbers, untrained voice for `convert`, bad `segments`, unknown
@@ -1114,3 +1145,60 @@ importable format, also video) and convert it themselves: the app never has to.
   kind of file in `settings.json` (`redub_timing`: `{"audio":"keep|natural","video":"keep|natural"}`, only the kinds
   the user set). The choices are remembered in `settings.json` (`redub_language`, `redub_target`, `redub_translator`). Badges read "Ukrainian · from English"; a render of a
   translated text sends `translated:true` and `target_language`, a same-language one `language`.
+  For a video source (`has_video`, else the extension) all three modes show **"Output: Video with new voice / Audio
+  only"** (default video; `redub_output: "video"|"audio"`) and **"Keep background music and sounds"** (default on;
+  `redub_keep_background`), sent as `output` and `keep_background` with `redub.dub` / `redub.render` (an audio source
+  sends `output:"audio"`, `keep_background:false`); `redub.prepare` gets `separate:true` when the job will need the
+  stems. With the video output "Keep original timing" is shown ticked and locked ("A video result always keeps the
+  original timing ..."). The Done card and the history rows play the audio result (`path_play`) with the player,
+  "Open video" opens `video_path` in the system player, "Show in folder" selects the video (the audio sits next to it
+  under the same name), "Export as..." converts the audio; a history row of a video result has a "Video" badge. A
+  `background_note` is shown as a warning toast.
+
+### Video output (`output`, `keep_background`)
+
+`redub.dub` and `redub.render` take `output` (`"audio"` default, or `"video"`: needs a source with a picture track,
+else `bad_request`) and `keep_background` (default `true` with `output:"video"`, else `false`; any source, a podcast
+with a music bed too). The pipeline:
+
+1. **Separate** the source's first audio track (decoded at 44.1 kHz, stereo kept, more channels mixed down to two)
+   with Hybrid Demucs in the speech worker (`separate_vocals` with `background_out`) into the **vocals** and the
+   **background** = drums + bass + other (the sum of the accompaniment stems; it holds about 5 dB less voice than
+   mixture minus vocals). Once per file: the stems are cached in `<data>/tmp/redub_sep_<key>/` (key = path, mtime and
+   size; only the latest file is kept; tmp is wiped at engine start), and `redub.prepare` usually made them already.
+   A job joins a preload in flight; a preload is stopped by another GPU job, and a job that was waiting for it runs it
+   itself. Needed for `keep_background`, and for `convert` with a video output (RVC over the voice alone). Without
+   the model (or when it fails) the job goes on without the background and says so in `background_note`.
+   Transcription keeps using the original mix: Whisper turbo made no fewer errors on the vocals stem, even with the
+   music 10 dB louder than the voice (measured, see docs/usage.md).
+2. **Voice**: the re-spoken / dubbed track (timing `keep`) or, for `convert`, RVC over the vocals stem.
+3. **Mix** (`dubmix.py`, numpy): the new voice is set to the integrated loudness (BS.1770-4, gated) of the original
+   vocals stem, so the original voice-to-background balance is kept (at most +/-24 dB). The original counts as ducked
+   when its background is at least 3 dB quieter (median) while the original voice speaks than in its pauses; then
+   the background is lowered by that much (at most 10 dB, 0.1 s attack, 0.4 s release) where the new voice speaks and
+   the original did not (where both speak the ducking is already in the stem); otherwise it is left alone. A
+   look-ahead limiter (50 ms ramps, one gain for both channels) keeps the peaks under -1 dBFS. Without
+   `keep_background` the voice is alone (mono), at the original vocals' loudness when the stems exist.
+   Non-speech vocals of the original (laughs, singing, shouts) are in the vocals stem and are therefore lost with the
+   original voice; the background keeps the music and effects only.
+4. **Save** the mix as the audio result in `output_format` (`path`, `path_play`: the audio plays in the app) and, for
+   `output:"video"`, **mux** it with ffmpeg into `<data>/outputs/redub_<same stamp>.<ext>` in the source's container
+   (mp4 / m4v / mov: AAC 192 kbps; mkv: Opus 160 kbps, else AAC; webm: Opus 160 kbps, else Vorbis q6; avi: MP3
+   192 kbps, else AAC; another container is written as mkv; always 48 kHz): every video stream is **copied**
+   (`-c copy`, never re-encoded), subtitles, attachments, chapters and the global metadata are kept (when the
+   container refuses one of them, the picture alone is tried), the original audio tracks are replaced by the one new
+   track (tagged with the spoken language, ISO 639-2, default), offset by the original audio's start time, and
+   mp4 / mov get `+faststart`.
+
+Fields of `redub.done`: `"output":"video|audio"`, `"video_path"` (null for audio), `"keep_background"` (whether the
+background is in the result), `"background_note"?`, `"separation_s"` (how long the job waited for the stems: 0 when
+they were ready), `"separation_cached"`, `"separation_device"`, `"mix_s"`, `"mix":{"voice_lufs","target_lufs",
+"voice_gain_db","background_lufs","duck_db","duck_measured_db","limited_db"}`, `"mux_s"`, `"video_audio_codec"`.
+
+Measured (RTX 4070, `let-me-solo-it-tour-4k.mp4`: 1:59, H.264 3840x2160 12.8 Mb/s, AAC stereo 48 kHz, English voice
+over quiet music): separation 1.8-2.1 s of GPU time for the whole 1:59 (0.7 s for a 45 s cut; 0.76 GB peak VRAM;
+2.8 s in a job with decoding and a cold model, 0 when the preload had finished), on the CPU 11.4 s for 45 s;
+mix 0.6 s, save (MP3) 1.5 s, mux 1.7 s for the 196 MB file. The video stream of the result is bit-identical to the
+source's (same MD5, 3582 frames, 12.84 Mb/s). Voice left in the background (a second separation pass over it):
+-65.6 LUFS, about 49 dB under the original voice (-16.1 LUFS); background -35.9 LUFS. No ducking was found in that
+video (none applied).

@@ -114,11 +114,12 @@ class WorkerClient:
                 self._write({"op": "cancel", "id": req.id})
             raise
 
-    def cancel_current(self, op: str | None = None) -> None:
-        """Ask the worker to stop the op it is running (only if it is ``op``, when given). Its caller gets
-        ``WorkerCancelled`` (or the result, if the op cannot stop any more)."""
+    def cancel_current(self, op: str | None = None, when: Callable[[dict[str, Any]], bool] | None = None) -> None:
+        """Ask the worker to stop the op it is running (only if it is ``op``, when given, and ``when(request)`` holds,
+        when given). Its caller gets ``WorkerCancelled`` (or the result, if the op cannot stop any more)."""
         cur = self.current
-        if cur is not None and (op is None or cur.msg.get("op") == op) and self.alive():
+        if (cur is not None and (op is None or cur.msg.get("op") == op) and (when is None or when(cur.msg))
+                and self.alive()):
             self._write({"op": "cancel", "id": cur.id})
 
     def _ensure_owner(self) -> None:

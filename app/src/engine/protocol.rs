@@ -583,6 +583,12 @@ pub struct RedubDone {
     /// `respeak`: the language spoken.
     #[serde(default)]
     pub language: Option<String>,
+    /// The video with the new voice (`output: "video"`), next to the audio result with the same name.
+    #[serde(default)]
+    pub video_path: Option<PathBuf>,
+    /// Why the background could not be kept (no music-removal model, the separation failed), when it was asked for.
+    #[serde(default)]
+    pub background_note: Option<String>,
     /// The clip that spoke and its language (speech jobs; empty for `convert`).
     #[serde(flatten)]
     pub reference: ReferenceUse,
@@ -635,6 +641,22 @@ impl RedubTiming {
             Self::Keep => "keep",
             Self::Natural => "natural",
         }
+    }
+}
+
+/// What a Redub job writes for a video source (`output` and `keep_background` of `redub.dub` / `redub.render`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RedubOutput {
+    /// A copy of the video with the new voice (`output: "video"`), else audio only.
+    pub video: bool,
+    /// Keep the original music and sound effects under the new voice.
+    pub keep_background: bool,
+}
+
+impl RedubOutput {
+    fn apply(self, params: &mut Value) {
+        params["output"] = json!(if self.video { "video" } else { "audio" });
+        params["keep_background"] = json!(self.keep_background);
     }
 }
 
@@ -1004,10 +1026,11 @@ pub fn redub_transcribe(path: &std::path::Path, language: &str, translate_to: Op
     ("redub.transcribe", json!({ "path": path, "language": language, "translate_to": translate_to, "translator": translator }))
 }
 
-/// `redub.prepare`: preloads the speech models for `path` so the first transcribe/dub starts at once. Answers `{}`;
-/// failures (busy, not ready) are harmless and ignored.
-pub fn redub_prepare(path: &std::path::Path) -> Request {
-    ("redub.prepare", json!({ "path": path }))
+/// `redub.prepare`: preloads the speech models for `path` so the first transcribe/dub starts at once, and with
+/// `separate` splits the file into voice and background in the background (for a video whose music is kept).
+/// Failures (busy, not ready) are harmless and ignored.
+pub fn redub_prepare(path: &std::path::Path, separate: bool) -> Request {
+    ("redub.prepare", json!({ "path": path, "separate": separate }))
 }
 
 /// Parameters of `redub.dub` (transcribe, translate to `target_language`, speak in the voice).
@@ -1031,32 +1054,33 @@ pub struct RedubDubParams<'a> {
     pub output_format: &'a str,
     /// The native accent for an English target (see [`NativeVoice`]).
     pub accent: Option<NativeVoice>,
-    /// Keep the original timing or speak at the natural pace.
+    /// Keep the original timing or speak at the natural pace (a video output always keeps it).
     pub timing: RedubTiming,
+    /// Video or audio, with or without the original background.
+    pub output: RedubOutput,
 }
 
 /// `redub.dub {path, voice_id, source_language, target_language, translator, review, voice_match, expressiveness, quality, speed,
-/// output_format}`
+/// output_format, timing, output, keep_background}`
 /// -> `{job}`; events `redub.progress` (stages `decode`, `load_model`, `transcribe`, `translate`, `speak`, `save`),
 /// then `redub.review` (when `review`) or `redub.done`, or `redub.error`.
 pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
-    (
-        "redub.dub",
-        with_accent(json!({
-            "path": p.path,
-            "voice_id": p.voice_id,
-            "source_language": p.source_language,
-            "target_language": p.target_language,
-            "translator": p.translator,
-            "review": p.review,
-            "voice_match": p.voice_match,
-            "expressiveness": p.expressiveness,
-            "quality": p.quality.as_str(),
-            "speed": p.speed,
-            "output_format": p.output_format,
-            "timing": p.timing.as_str(),
-        }), p.accent),
-    )
+    let mut params = json!({
+        "path": p.path,
+        "voice_id": p.voice_id,
+        "source_language": p.source_language,
+        "target_language": p.target_language,
+        "translator": p.translator,
+        "review": p.review,
+        "voice_match": p.voice_match,
+        "expressiveness": p.expressiveness,
+        "quality": p.quality.as_str(),
+        "speed": p.speed,
+        "output_format": p.output_format,
+        "timing": p.timing.as_str(),
+    });
+    p.output.apply(&mut params);
+    ("redub.dub", with_accent(params, p.accent))
 }
 
 /// The language of the segment texts of a `respeak` render: the transcript's own language, or a translation.
@@ -1087,6 +1111,7 @@ pub fn redub_render(
     output_format: &str,
     accent: Option<NativeVoice>,
     timing: RedubTiming,
+    output: RedubOutput,
 ) -> Request {
     let mut params = json!({
         "voice_id": voice_id,
@@ -1098,6 +1123,7 @@ pub fn redub_render(
         "speed": speed,
         "output_format": output_format,
     });
+    output.apply(&mut params);
     if let Some(segs) = segments {
         params["segments"] = json!(segs);
         params["timing"] = json!(timing.as_str());
