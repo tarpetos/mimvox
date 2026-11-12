@@ -422,6 +422,23 @@ The same recovery applies after a crash or a power cut.
 
 The defaults are the validated settings; you do not need to change them.
 
+### Word stress (Ukrainian)
+
+The speech model guesses where the stress goes in each word. In Ukrainian it sometimes guesses wrong, most often on
+words stressed on the last syllable (for example *співаком* read as співАком instead of співакОм). You can tell it:
+
+- Type **+** before the stressed vowel: `співак+ом`, `з+амок` (зАмок, a castle), `зам+ок` (замОк, a lock).
+- Or write the stressed vowel in capitals inside the word: `співакОм`. An acute accent after the vowel (`співако́м`,
+  `співако´м`) is accepted too.
+
+The mark is not read aloud: Mimvox turns it into a capital vowel, the hint the model follows best. The Speak
+screen shows this as a one-line hint when the language is Ukrainian. Marks work the same way in Russian and Belarusian
+text; in other languages they are removed.
+
+A mark is a strong hint, not a guarantee: the model was not trained on stress-marked text and follows the mark most
+of the time, not always. If a word stays wrong, generate the phrase again. Mark only the words that come out wrong:
+the model gets most words right by itself, and marking every word did not make whole sentences better.
+
 ### Streaming playback
 
 Long text is split into segments: the first sentence alone, then growing groups of sentences. Each segment is played

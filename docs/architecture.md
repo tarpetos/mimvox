@@ -155,7 +155,8 @@ about four times faster and needs less than half the memory ([performance.md](pe
   once and `reference.omnivoice.json` caches the cut and its transcript) or from `reference_<lang>.wav` when the voice
   has one for that language (OmniVoice carries the accent of the reference into the target language).
 - Its text front-end (`omnivoice_text.py`) spells out numbers, units and abbreviations (Ukrainian with cases and
-  agreement).
+  agreement), and passes the user's stress marks (`+` or an acute, in Ukrainian, Russian and Belarusian) as an
+  upper-case vowel (`omnivoice_stress.py`; dictionary stress for unmarked Ukrainian words is there but off by default).
 - The RVC index rate is capped at 0.3 for languages other than the one the voice was recorded in (`rvc.index_rate_for`):
   the index holds only sounds of the recorded language and garbles others at full rate.
 - The seam is `backends/__init__.py` (`TtsBackend`); another model would be one more module registered there.

@@ -7,7 +7,8 @@
 //!
 //! The output language (a chip in the Style panel, any language the engine speaks) defaults to the language the active
 //! voice was recorded in and is remembered per voice (`speak_languages` in `settings.json`); `tts.generate` sends it as
-//! `language`. Another language than the voice's own shows a hint about per-language reference clips.
+//! `language`. Another language than the voice's own shows a hint about per-language reference clips; Ukrainian
+//! shows how to fix a wrong word stress ("+" before the vowel, see `backends/omnivoice_stress.py`).
 //!
 //! Playback is pre-buffered: a single-segment job plays at once; for longer text the finished segments are held
 //! back until, by the engine's real-time factor, the segments still to come will arrive before the buffered audio
@@ -700,6 +701,10 @@ fn language_row(s: &AppState, p: Palette) -> El {
             .child(text("What the text is written in").font(ty::CAPTION).color(p.text_faint)))
         .child(lang::chip(&p, "speak-lang-chip", &lang::label(&code), lang::Target::Speak, voice.is_some()));
     let mut c = col().w_full().gap(8.0).child(head);
+    // The engine turns "+" before a vowel into an upper-case vowel, the stress hint the speech model follows.
+    if code == "uk" {
+        c = c.child(text("Wrong stress? Type + before the stressed vowel: співак+ом.").font(ty::CAPTION).color(p.text_faint).wrap());
+    }
     if let Some(v) = voice.filter(|v| v.lang() != code) {
         let (rec, target) = (lang::name(v.lang()), lang::name(&code));
         let has_ref = v.references.iter().any(|r| *r == code);

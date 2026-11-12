@@ -45,6 +45,9 @@ licence but come from non-commercial training data (below). The rest is permissi
 - **NLLB-200 distilled 600M** (`facebook/nllb-200-distilled-600M`, Meta): **CC BY-NC 4.0** (model card). Used for Redub
   translation. Non-commercial only.
 - **g2p_en** (Apache-2.0) with NLTK data (CMUdict, BSD-style), for the English recording-text analysis.
+- **ukrainian-word-stress** (lang-uk, MIT) with the stress dictionary in its package, and **marisa-trie** (MIT; the
+  bundled libmarisa is BSD-2-Clause or LGPL-2.1-or-later), for the optional automatic Ukrainian word stress in the
+  OmniVoice text front-end. Installed without its optional Stanza dependency.
 
 ### Hybrid Demucs (Remove background music)
 

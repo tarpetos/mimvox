@@ -6,21 +6,41 @@ dates, decimals, percent and currency with plural agreement, abbreviations); Eng
 percent and currency; every other language gets bare integers and decimals through ``num2words`` when it knows the
 language, else the text is left as it is.
 
+Word stress (``omnivoice_stress.py``): the user's marks in Ukrainian, Russian and Belarusian text ("+" before the vowel,
+or U+0301 / "´" after it) reach the model as an upper-case vowel (співак+ом -> співакОм), the form it follows best.
+Automatic stress for unmarked Ukrainian words from a stress dictionary is there but off by default. In other
+languages the marks are removed. The text is NFC-composed first, so "é" typed as "e" + U+0301 stays "é".
+
 Standalone on purpose: the OmniVoice worker loads this file by its path (it runs in its own interpreter and imports
-nothing else from ``mimvox_engine``). Needs only ``re`` and ``num2words`` (installed in the OmniVoice venv).
+nothing else from ``mimvox_engine``); ``omnivoice_stress.py`` next to it is loaded the same way. Needs ``re`` and
+``num2words`` (installed in the OmniVoice venv); the optional automatic Ukrainian stress also needs
+``ukrainian-word-stress`` and ``marisa-trie``.
 
     normalize(text, lang) -> text
 """
+import importlib.util
+import os
 import re
+import unicodedata
 
 try:
     from num2words import num2words as _n2w
 except ImportError:  # pragma: no cover - the worker venv has it; without it digits stay digits
     _n2w = None
 
+
+def _load_stress():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "omnivoice_stress.py")
+    spec = importlib.util.spec_from_file_location("mimvox_omnivoice_stress", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_stress = _load_stress()
+
 # ------------------------------------------------------------------------------------------------- shared helpers
 
-_STRESS = re.compile("[́̀]")
 _SPACES = re.compile(r"[ \t  ]+")
 # 1 000 000 / 1,000,000 / 1 000,5 -> plain digits (a thin or normal space between groups of three)
 _GROUPED = re.compile(r"(?<![\d,.])(\d{1,3})((?:[   ]\d{3})+)(?![\d])")
@@ -55,10 +75,10 @@ def _n2w_lang(lang):
 def normalize(text, lang):
     """Spell out what OmniVoice would misread. ``lang``: ISO 639-1 code of the text."""
     lang = (lang or "").lower()
-    text = _STRESS.sub("", text)
+    text = _stress.user_marks(unicodedata.normalize("NFC", text), lang)
     text = _SPACES.sub(" ", text)
     if lang == "uk":
-        return _uk(text)
+        return _stress.auto(_uk(text), lang)
     if lang == "en":
         return _en(text)
     code = _n2w_lang(lang)
@@ -264,7 +284,7 @@ def _uk(text):
     text = re.sub(r"(\b\w+\s+)?" + r"(\d+)(?:,(\d+))?", plain, text)
     text = re.sub(r"(\d+)\.(\d+)", lambda m: _uk_decimal(m.group(1), m.group(2)), text)
     text = re.sub(r"\bодна тисяча\b", "тисяча", text)
-    text = re.sub(r"\+(?=\w)|(?<=\w)\+", "", text)  # "+" stress marks used by other Ukrainian TTS front-ends
+    text = re.sub(r"\+(?=\w)|(?<=\w)\+", "", text)  # a "+" left over (after the vowel, or next to a digit)
     return _SPACES.sub(" ", text).strip()
 
 
