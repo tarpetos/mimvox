@@ -251,8 +251,18 @@ def speech_languages() -> list[dict[str, Any]]:
     return names.describe(backends.languages())
 
 
+def _translators(ctx: Server) -> list[str]:
+    """The Redub translators installed (``nllb-1.3b``, ``nllb-600m``), best first; [] without the redub module."""
+    try:
+        from .redub import langs  # noqa: PLC0415
+    except ImportError:
+        return []
+    return langs.installed_translators(os.path.join(ctx.data_dir, "runtime", "models"))
+
+
 def hello_info(ctx: Server) -> dict[str, Any]:
-    return {"version": __version__, "device": ctx.device, "models": _models(), "languages": speech_languages()}
+    return {"version": __version__, "device": ctx.device, "models": _models(), "languages": speech_languages(),
+            "translators": _translators(ctx)}
 
 
 @method("hello")

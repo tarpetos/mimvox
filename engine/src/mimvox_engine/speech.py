@@ -1,4 +1,4 @@
-"""Client of the persistent speech worker (``speech_worker.py``: Whisper + NLLB + Hybrid Demucs, run with the engine
+"""Client of the persistent speech worker (``speech_worker.py``: Whisper + NLLB-200 + Hybrid Demucs, run with the engine
 interpreter).
 
 Async, on the engine loop (see ``workerproc.py``): one owner task per worker serializes the requests through a queue,
@@ -25,6 +25,7 @@ log = logging.getLogger("mimvox.speech")
 
 WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech_worker.py")
 ASR_MODEL = "turbo"   # large-v3-turbo
+TRANSLATE_BEAMS = 5   # 4 -> 5 costs about 5 % more time (measured); a little more search for the same VRAM
 START_TIMEOUT_S = 120.0
 OP_TIMEOUT_S = 900.0
 SEPARATOR_FILE = os.path.join("demucs", "hdemucs_high_trained.pt")   # under <data>/runtime/models (setup fetches it)
@@ -95,9 +96,16 @@ class SpeechWorker:
         return await self.request("transcribe", {"audio": audio_npy, "language": language, "model": ASR_MODEL},
                                   progress)
 
-    async def translate(self, texts: list[str], src: str, progress: Progress | None,
-                        tgt: str = "eng_Latn") -> dict[str, Any]:
-        return await self.request("translate", {"texts": texts, "src": src, "tgt": tgt, "num_beams": 4}, progress)
+    async def translate(self, texts: list[str], src: str, progress: Progress | None, tgt: str = "eng_Latn",
+                        translator: str | None = None, gaps: list[float] | None = None) -> dict[str, Any]:
+        """Translate ``texts`` (consecutive segments, in order). ``translator``: ``nllb-1.3b`` | ``nllb-600m`` | None
+        (the best installed). With ``gaps`` (seconds of silence between text i and i+1) the segments of one sentence
+        are translated together and the translation is cut back into them."""
+        params: dict[str, Any] = {"texts": texts, "src": src, "tgt": tgt, "num_beams": TRANSLATE_BEAMS,
+                                  "translator": translator}
+        if gaps is not None:
+            params.update(join=True, gaps=gaps)
+        return await self.request("translate", params, progress)
 
     async def separate_vocals(self, audio_npy: str, out_npy: str, seconds: float, progress: Progress | None,
                               allow_cuda: bool | None = None) -> dict[str, Any]:

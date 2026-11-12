@@ -58,6 +58,39 @@ Real server process, a real data directory with two test voices, quality *best*:
 The engine environment is one venv (`runtime/engine`, ~7.6 GB) plus the OmniVoice model (3.3 GB); the whole runtime is
 about 28 GB instead of 36 GB with IndexTTS.
 
+## Redub translation (NLLB-200 1.3B and 600M)
+
+RTX 4070 (12 GB), Windows, the speech worker alone (`translate` op), fp16 on CUDA, beam search 5, five Ukrainian
+sentences (the owner's real phrases) to English:
+
+| | 600M | 1.3B |
+| --- | --- | --- |
+| Download / on disk | 2.5 GB / 2.5 GB (fp32 `.bin`) | 5.5 GB / **2.7 GB** (stored as fp16 safetensors; download 218 s, conversion 19 s) |
+| Load (warm disk cache) | 4.5-5.8 s | 3.7-4.2 s |
+| VRAM: weights / peak allocated while translating | 1.35 GB / 1.31-1.39 GB | 2.73 GB / 2.72-2.89 GB (about 3.3 GB for the process with the CUDA context) |
+| Five sentences, warm | 0.40 s | 0.63 s |
+| Beam 4 instead of 5 | same text, 0.40 s | same text, 0.61 s |
+
+Worker host RAM peaked at 5.4 GB while the 600M's fp32 checkpoint loaded; loading the 1.3B after it did not raise the
+peak.
+
+What changed the translations most was not the model size but the context and the glossary (both models):
+
+| Source | 600M before | 1.3B before | Now (glossary; 600M / 1.3B) |
+| --- | --- | --- | --- |
+| Цей перс спавнюється біля замку кожні п'ять хвилин. | This Persian sleeps at the castle every five minutes. | This Persian breeds at the castle every five minutes. | This character appears / shows up at the castle every five minutes. |
+| Зустрінемось о чверть на десяту біля вокзалу. | I'll meet you at 4:00 at the train station. | Meet me at 10:15 at the station. | I'll meet you at 9:15 at the train station. / Meet me at the station at 9:15. |
+| Поїзд прибуває о пів на восьму. | The train arrives at half past eight. | The train arrives at half past eight. | The train arrives at 7:30. |
+| Я сьогодні цілий день гриндив цей рейд, але так і не випав лут. | I've been grinding this raid all day today, but I've never been out of the woods. | I've been laughing at this raid all day, but it's never happened. | unchanged (not in the glossary: no replacement measured better for both models) |
+| Короче, він передумав, і ми пішли назад. | In short, he changed his mind, and we went back. | Anyway, he changed his mind and we went back. | unchanged |
+
+Whisper often ends a segment in the middle of a sentence. The same sentences cut into nine such fragments, translated
+one by one, lost their meaning ("This Persian is falling asleep." / "I'm at the castle every five minutes."); translated
+as whole sentences and cut back into the fragments they read "This Persian sleeps" / "at the castle every five
+minutes." (600M, without the glossary) and "This character shows" / "up at the castle every five minutes." (1.3B, with the glossary).
+German and French work the same way (for example "Wir treffen uns um 9:15 Uhr am Bahnhof.", "Le train arrive à
+7h30.").
+
 ## Training
 
 | Dataset | Setup | Time |
@@ -139,6 +172,7 @@ the clearest symptom), which is why the app does not use them.
 ## Disk and memory
 
 - About 28 GB for the runtime and the models: the engine environment with OmniVoice ~11 GB, Applio/RVC ~12 GB (two
-  Python environments with their own PyTorch), Whisper and NLLB for Redub ~4.5 GB, Hybrid Demucs for music removal ~0.3 GB.
+  Python environments with their own PyTorch), Whisper and NLLB 600M for Redub ~4.5 GB, Hybrid Demucs for music removal
+  ~0.3 GB. With an NVIDIA GPU setup adds NLLB 1.3B (2.7 GB in fp16, a 5.5 GB download): about 31 GB.
 - OmniVoice needs about 4-5 GB of VRAM with the 7-12 s reference cut; the RVC worker adds ~1-2 GB. 8 GB or more is
   recommended and 12 GB was used in testing.

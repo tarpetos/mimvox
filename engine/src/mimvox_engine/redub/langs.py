@@ -1,8 +1,25 @@
 """Language tables: Whisper codes -> NLLB-200 codes. (The languages the voice can speak: ``backends.languages()``.)"""
 from __future__ import annotations
 
+import os
+
 NLLB_DIR_NAME = "nllb-200-distilled-600M"
 NLLB_REPO = "facebook/nllb-200-distilled-600M"
+
+# Translators (NLLB-200), best first: id -> folder under <data>/runtime/models (setup downloads them; the 1.3B is
+# optional and stored as fp16 safetensors).
+TRANSLATORS = {"nllb-1.3b": "nllb-200-distilled-1.3B", "nllb-600m": NLLB_DIR_NAME}
+
+
+def installed_translators(models_root: str) -> list[str]:
+    """The translators whose files are in ``models_root``, best first (``hello`` -> ``translators``)."""
+    out = []
+    for name, folder in TRANSLATORS.items():
+        d = os.path.join(models_root, folder)
+        if (all(os.path.isfile(os.path.join(d, f)) for f in ("config.json", "sentencepiece.bpe.model"))
+                and any(os.path.isfile(os.path.join(d, f)) for f in ("model.safetensors", "pytorch_model.bin"))):
+            out.append(name)
+    return out
 
 # Whisper language code -> NLLB-200 language code (languages NLLB does not have are absent).
 NLLB = {

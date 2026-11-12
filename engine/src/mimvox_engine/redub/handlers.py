@@ -155,13 +155,25 @@ def _translate_to(params: dict[str, Any]) -> str | None:
     return target_language(to, "translate_to")
 
 
+def _translator(params: dict[str, Any]) -> str | None:
+    """``translator``: ``"nllb-1.3b"`` (better), ``"nllb-600m"`` (faster) or absent / null (the best installed). A
+    translator that is not installed falls back to the other one."""
+    t = params.get("translator")
+    if t in (None, ""):
+        return None
+    if t not in langs.TRANSLATORS:
+        raise EngineError("bad_request", f"'translator' must be one of {', '.join(langs.TRANSLATORS)}")
+    return str(t)
+
+
 def _check_speech_ready(data: config.DataDir, translate: bool) -> None:
     _models_not_loading()
     if importlib.util.find_spec("whisper") is None:
         raise EngineError("not_ready", "openai-whisper is not installed in the engine environment")
     if translate:
-        folder = os.path.join(data.root, "runtime", "models", langs.NLLB_DIR_NAME)
-        if not os.path.isfile(os.path.join(folder, "config.json")):
+        models = os.path.join(data.root, "runtime", "models")
+        if not langs.installed_translators(models):
+            folder = os.path.join(models, langs.NLLB_DIR_NAME)
             raise EngineError("not_ready", f"The translation model is not installed ({folder}). {_MODE_NOTE}")
         for mod in ("transformers", "sentencepiece"):
             if importlib.util.find_spec(mod) is None:
@@ -214,6 +226,7 @@ async def redub_transcribe(ctx: Context, params: dict[str, Any]) -> dict[str, An
     path = await aio.run_io(_path, params)
     lang = _language(params, "language")
     translate_to = _translate_to(params)
+    translator = _translator(params)
     if translate_to and lang == translate_to:
         translate_to = None  # already in that language
     data = config.data_dir(ctx)
@@ -226,7 +239,8 @@ async def redub_transcribe(ctx: Context, params: dict[str, Any]) -> dict[str, An
         t0 = time.time()
         workdir = os.path.join(data.tmp, job)
         try:
-            result = await transcribe.run(path, lang, translate_to, workdir, emit, speech.get(ctx.runtime, data.root))
+            result = await transcribe.run(path, lang, translate_to, workdir, emit, speech.get(ctx.runtime, data.root),
+                                          translator)
         finally:
             await aio.run_io(shutil.rmtree, workdir, ignore_errors=True)
         log.info("job %s: transcript with %d segment(s) in %.1fs", job, len(result["segments"]), time.time() - t0)
@@ -344,6 +358,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     review = params.get("review", False)
     if not isinstance(review, bool):
         raise EngineError("bad_request", "'review' must be true or false")
+    translator = _translator(params)
     voice = await aio.run_io(_Voice, ctx, data, params)
     out_fmt = await aio.run_io(media.output_format, params)
     worker = None if review else voice.respeak_worker(target)  # a review stop needs no voice models yet
@@ -359,7 +374,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         workdir = os.path.join(data.tmp, job)
         await aio.run_io(os.makedirs, workdir, exist_ok=True)
         try:
-            res = await transcribe.run(path, lang, target, workdir, emit, sp)
+            res = await transcribe.run(path, lang, target, workdir, emit, sp, translator)
             segs = res["segments"]
             if not segs:
                 raise EngineError("bad_request", "No speech was found in this file.")

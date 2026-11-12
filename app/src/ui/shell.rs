@@ -114,6 +114,8 @@ pub struct ShellState {
     pub voices: Vec<VoiceInfo>,
     /// Languages the speech model speaks (`hello` -> `languages`; empty until the engine says, see `ui::lang`).
     pub languages: Vec<crate::engine::protocol::SpeechLanguage>,
+    /// Redub translators installed (`hello` -> `translators`: `"nllb-1.3b"`, `"nllb-600m"`; empty until the engine says).
+    pub translators: Vec<String>,
     /// The voice used by Speak and shown in the header pill.
     pub active_voice: Option<String>,
     pub voice_menu_open: bool,
@@ -190,6 +192,7 @@ impl Default for ShellState {
             engine: EngineStatus::Idle,
             voices: Vec::new(),
             languages: Vec::new(),
+            translators: Vec::new(),
             active_voice: None,
             voice_menu_open: false,
             caption_preview: None,
@@ -482,6 +485,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             if !hello.languages.is_empty() {
                 s.shell.languages = hello.languages.clone();
             }
+            s.shell.translators = hello.translators.clone();
             reset_warm(s);
             refresh_voices(s);
         }

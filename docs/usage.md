@@ -60,7 +60,8 @@ The script installs `uv` if it is missing, then runs `tools/setup/setup.py`. Thi
    other than the default is remembered in a small pointer file, `location.toml`, so the app finds it later.
 2. **The size warning.** Before anything is downloaded, setup shows the install location, the free space there and
    what it is about to download, then asks `Continue? [Y/n, or type another folder]`. Answer `n` or type another
-   path to install elsewhere. If the drive has less than 32 GB free, setup stops (`--force` overrides this).
+   path to install elsewhere. If the drive has less than 32 GB free (38 GB when the better translation model is part of
+   the install), setup stops (`--force` overrides this).
 3. **GPU or CPU.** Setup detects the hardware by itself and prints the backend it will use: `cuda` (an NVIDIA GPU,
    found with `nvidia-smi`), `mps` (Apple Silicon) or `cpu` with a warning. Pass `--cpu` to ignore a GPU on purpose.
 4. **Toolchains.** It installs what is missing to build the app: Rust, a C/C++ toolchain (Visual Studio Build Tools
@@ -72,6 +73,7 @@ The script installs `uv` if it is missing, then runs `tools/setup/setup.py`. Thi
    | Engine environment with PyTorch, plus the OmniVoice speech model (3.3 GB) | 11 GB | Speaking text in about 60 languages |
    | Applio environment (RVC) with its pretrained models (about 1.5 GB) | 12 GB | Training your voice and converting speech to it |
    | Whisper turbo (1.6 GB) and the NLLB-200 translation model (2.5 GB) | 4.5 GB | Redub: transcription and translation |
+   | With an NVIDIA GPU: the better translation model, NLLB-200 1.3B (a 5.5 GB download, kept as fp16) | 2.7 GB | Redub: fewer mistranslations |
    | Hybrid Demucs (`runtime/models/demucs`) | 0.3 GB | Removing background music from media files |
    | Each voice you make | 0.1 GB | Your recordings and trained model |
 
@@ -89,6 +91,7 @@ Useful options (all of them: `./setup.sh --help`):
 | `--cpu` | Set up the CPU backend even when a GPU is present. |
 | `--quick-check` | Verify an existing install, download nothing. |
 | `--move-to DIR` | Move an existing install to `DIR` (see below). |
+| `--better-translation no` | Leave out the better translation model (NLLB-200 1.3B); `yes` adds it also without an NVIDIA GPU (it then runs on the CPU only when the 600M is missing). |
 
 ### Start the app
 
@@ -501,6 +504,14 @@ sentence and saves the result. You can use other tabs meanwhile; **Cancel** stop
 **Original** and **Result** buttons so you can compare them.
 
 ![A finished dub](screenshots/usage-redub-done.png)
+
+**Translation quality.** When setup installed both translation models (the default with an NVIDIA GPU), the options
+show **Translation quality**: **Better (1.3B)** (the default) is the larger, generally more accurate model, and
+**Faster (600M)** translates about 1.5 times faster with half the GPU memory. The choice is remembered. Without a GPU only the 600M is installed and the
+choice is hidden. Either way, a sentence that Whisper split over several lines is translated as one sentence and the
+translation is then shared out over those lines, so each line keeps its own time. Ukrainian gaming slang such as
+"перс" or "спавнюється" and spoken times such as "чверть на десяту" (9:15) are rewritten before translating, because
+both models got them wrong. Other slang can still come out wrong: use **Review text before dubbing** to fix it.
 
 How the timing works: each translated sentence is fitted into the time of the original sentence. A longer sentence
 first uses the pause after it, at its natural pace; if that is not enough, it is spoken a bit faster and then sped up

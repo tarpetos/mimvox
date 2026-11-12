@@ -10,7 +10,7 @@ where it stopped (git fetches, uv and Hugging Face downloads are resumable), so 
 Standard library only: it runs before anything else is installed.
 
 Examples:
-    ./setup.sh                                   full setup (about 28 GB on disk)
+    ./setup.sh                                   full setup (about 28 GB on disk, 31 GB with an NVIDIA GPU)
     ./setup.sh --skip-toolchain --yes            no Rust / compiler install, no questions
     ./setup.sh --quick-check                     verify an existing setup, download nothing
 """
@@ -62,6 +62,21 @@ NLLB_DIR = "nllb-200-distilled-600M"
 NLLB_FILES = ("config.json", "generation_config.json", "pytorch_model.bin", "sentencepiece.bpe.model",
               "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json")
 NLLB_REQUIRED = ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")
+# "Better translation" (optional; a default with an NVIDIA GPU): NLLB-200 distilled 1.3B. The repo only has fp32
+# weights (pytorch_model.bin, 5.5 GB), so they are downloaded, stored as fp16 safetensors (2.7 GB) and the .bin deleted.
+NLLB_BIG_REPO = "facebook/nllb-200-distilled-1.3B"
+NLLB_BIG_DIR = "nllb-200-distilled-1.3B"
+NLLB_BIG_REQUIRED = ("config.json", "model.safetensors", "sentencepiece.bpe.model", "tokenizer_config.json")
+NLLB_BIG_DOWNLOAD_GB = 5.5
+# fp32 checkpoint -> fp16 model.safetensors in another folder (the tied embeddings are stored once). Engine interpreter.
+NLLB_FP16_SCRIPT = (
+    "import sys, torch, transformers\n"
+    "from transformers import AutoModelForSeq2SeqLM\n"
+    "key = 'dtype' if int(transformers.__version__.split('.')[0]) >= 5 else 'torch_dtype'\n"
+    "model = AutoModelForSeq2SeqLM.from_pretrained(sys.argv[1], local_files_only=True, low_cpu_mem_usage=True,\n"
+    "                                              **{key: torch.float16})\n"
+    "model.save_pretrained(sys.argv[2], max_shard_size='20GB')\n"
+)
 WHISPER_MODEL = "turbo"
 # "Remove background music" (reference from media, Record's multi-file import): torchaudio's HDEMUCS_HIGH_MUSDB_PLUS
 # weights, the very file that bundle downloads (download.pytorch.org/torchaudio/<its _model_path>), kept in
@@ -89,6 +104,7 @@ RUNTIME_GB = 28
 ENGINE_GB = 11    # engine venv (torch 2.8 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + the OmniVoice model (3.3 GB)
 APPLIO_GB = 12
 SPEECH_GB = 4.5   # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
+BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with an NVIDIA GPU or --better-translation yes
 SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 32
@@ -267,6 +283,7 @@ class Setup:
     force: bool = False
     gpu: Gpu = field(default_factory=lambda: Gpu("cpu"))
     uv_path: str = ""
+    better_translation: str = "auto"   # auto (with an NVIDIA GPU) | yes | no
 
     # ---- paths -----------------------------------------------------------------------------------------------
 
@@ -414,6 +431,9 @@ class Setup:
             say("Existing runtime found, nothing big to download (setup only fills in what is missing).")
             if not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED) and not self.skip_models:
                 say(f"Missing Redub models will be downloaded now (about {SPEECH_GB} GB: translation and Whisper turbo).")
+            if self.wants_better_translation() and not self.has_better_translation() and not self.skip_models:
+                say(f"The better translation model (NLLB-200 1.3B) will be downloaded now: about "
+                    f"{NLLB_BIG_DOWNLOAD_GB} GB, kept as {BETTER_TRANSLATION_GB} GB.")
             if not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() and not self.skip_models:
                 say(f"The music-removal model will be downloaded now (about {SEPARATION_GB} GB: Hybrid Demucs).")
             if not self._has(self.omnivoice_model, OMNIVOICE_REQUIRED) and not self.skip_models:
@@ -424,24 +444,31 @@ class Setup:
                 say(f"{self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used; setup offers to delete it "
                     "at the end.")
         else:
-            say(f"This will download and install about {RUNTIME_GB} GB (engine + OmniVoice ~{ENGINE_GB} GB, "
-                f"Applio/RVC ~{APPLIO_GB} GB, Redub models ~{SPEECH_GB} GB, music removal ~{SEPARATION_GB} GB) plus "
-                "~0.1 GB per voice.")
+            better = self.wants_better_translation()
+            total = RUNTIME_GB + (round(BETTER_TRANSLATION_GB) if better else 0)
+            say(f"This will download and install about {total} GB (engine + OmniVoice ~{ENGINE_GB} GB, "
+                f"Applio/RVC ~{APPLIO_GB} GB, Redub models ~{SPEECH_GB} GB, music removal ~{SEPARATION_GB} GB"
+                + (f", better translation ~{BETTER_TRANSLATION_GB} GB" if better else "") + ") plus ~0.1 GB per voice.")
             say("OmniVoice speaks every language (Ukrainian, English and about 60 more): the engine environment in "
                 "<data>/runtime/engine and the model (3.3 GB) in <data>/runtime/models/omnivoice.")
             say(f"Redub (dubbing a file) uses two models, about {SPEECH_GB} GB: Whisper turbo (transcription, 1.6 GB, "
                 "<data>/runtime/models/whisper) and NLLB-200 (translation, 2.5 GB, "
                 "<data>/runtime/models/nllb-200-distilled-600M).")
+            if better:
+                say(f"With an NVIDIA GPU Redub also gets the better translation model, NLLB-200 1.3B (a "
+                    f"{NLLB_BIG_DOWNLOAD_GB} GB download kept as {BETTER_TRANSLATION_GB} GB in fp16, "
+                    "<data>/runtime/models/nllb-200-distilled-1.3B; --better-translation no leaves it out).")
             say(f"Removing background music from media files uses Hybrid Demucs (about {SEPARATION_GB} GB, "
                 "<data>/runtime/models/demucs).")
             if self.skip_models:
                 say("--skip-models: the model files (most of that size) are left out for now.")
         say("=" * 78)
-        if not existing and free < DISK_NEEDED_GB:
+        needed = DISK_NEEDED_GB + (round(NLLB_BIG_DOWNLOAD_GB) if self.wants_better_translation() else 0)
+        if not existing and free < needed:
             if self.force:
-                warn(f"Only {free:.0f} GB free, less than the {DISK_NEEDED_GB} GB needed; continuing because of --force.")
+                warn(f"Only {free:.0f} GB free, less than the {needed} GB needed; continuing because of --force.")
             else:
-                raise SetupError(f"Only {free:.0f} GB free in {self.data_dir}; at least {DISK_NEEDED_GB} GB are needed. "
+                raise SetupError(f"Only {free:.0f} GB free in {self.data_dir}; at least {needed} GB are needed. "
                                  f"Free up space, choose another place with --data-dir, or pass --force.")
         return not existing
 
@@ -745,6 +772,56 @@ class Setup:
         self.must([py, "-c", script, WHISPER_MODEL, whisper_dir], "Downloading the Whisper turbo checkpoint",
                   cwd=self.runtime)
 
+    def wants_better_translation(self) -> bool:
+        """The optional NLLB-200 1.3B: by default only with an NVIDIA GPU (it runs on the GPU; without one Redub uses
+        the 600M, which is about 3x faster on a CPU)."""
+        if self.better_translation in ("yes", "no"):
+            return self.better_translation == "yes"
+        return self.gpu.backend == "cuda"
+
+    def has_better_translation(self) -> bool:
+        return self._has(self.models_dir / NLLB_BIG_DIR, NLLB_BIG_REQUIRED)
+
+    def better_translation_model(self) -> None:
+        """Redub's "better translation": NLLB-200 distilled 1.3B. ``hf download`` of the fp32 checkpoint (resumable,
+        like the 600M), then stored as fp16 ``model.safetensors`` (half the disk) and the fp32 file deleted."""
+        target = self.models_dir / NLLB_BIG_DIR
+        fp32 = target / "pytorch_model.bin"
+        if self.has_better_translation():
+            if fp32.is_file():  # a conversion that was interrupted after the new file was in place
+                fp32.unlink()
+            say("Better translation model (NLLB-200 distilled 1.3B): present.")
+            return
+        py = self.engine_python()
+        if not py.exists():
+            raise SetupError("The engine environment is missing, so the better translation model cannot be fetched.")
+        say(f"Better translation model: downloading {NLLB_BIG_REPO} (about {NLLB_BIG_DOWNLOAD_GB} GB, resumable; "
+            f"kept as {BETTER_TRANSLATION_GB} GB)...")
+        target.mkdir(parents=True, exist_ok=True)
+        code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", NLLB_BIG_REPO, *NLLB_FILES,
+                         "--local-dir", target], cwd=self.runtime)
+        if code != 0:
+            script = ("import sys; from huggingface_hub import snapshot_download; "
+                      "snapshot_download(sys.argv[1], local_dir=sys.argv[2], allow_patterns=sys.argv[3:])")
+            self.must([py, "-I", "-c", script, NLLB_BIG_REPO, target, *NLLB_FILES],
+                      "Downloading the better translation model", cwd=self.runtime)
+        if not self._has(target, ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")):
+            raise SetupError("The better translation model download finished but files are missing; run this again.")
+        say("Better translation model: storing it in fp16 (about a minute)...")
+        tmp = target / ".fp16"
+        shutil.rmtree(tmp, ignore_errors=True)
+        self.must([py, "-I", "-c", NLLB_FP16_SCRIPT, target, tmp], "Converting the better translation model",
+                  cwd=self.runtime, extra_env={"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+        if not (tmp / "model.safetensors").is_file():
+            raise SetupError(f"Converting the better translation model wrote no model.safetensors in {tmp}.")
+        os.replace(tmp / "model.safetensors", target / "model.safetensors")
+        shutil.rmtree(tmp, ignore_errors=True)
+        fp32.unlink(missing_ok=True)
+        if not self.has_better_translation():
+            raise SetupError("The better translation model is incomplete; run this again.")
+        size = (target / "model.safetensors").stat().st_size / 1e9
+        say(f"Better translation model: ready ({size:.1f} GB).")
+
     def separation_model(self) -> None:
         """Hybrid Demucs weights for "Remove background music" (torchaudio HDEMUCS_HIGH_MUSDB_PLUS, 335 MB)."""
         target = self.models_dir / DEMUCS_DIR / DEMUCS_FILE
@@ -963,6 +1040,11 @@ class Setup:
             problems.append(f"Translation model: missing {', '.join(missing)} in {nllb}")
         else:
             say("Translation model (NLLB-200 distilled 600M): all files present.")
+        if self.has_better_translation():
+            say("Better translation model (NLLB-200 distilled 1.3B): all files present.")
+        elif self.wants_better_translation():
+            say("Better translation model (NLLB-200 distilled 1.3B): not downloaded (optional; run setup to add it, "
+                "Redub uses the 600M meanwhile).")
         if not (self.models_dir / "whisper" / "large-v3-turbo.pt").is_file():
             say("Whisper turbo checkpoint: not downloaded yet (setup fetches it; otherwise the first Redub does).")
         demucs = self.models_dir / DEMUCS_DIR / DEMUCS_FILE
@@ -1081,6 +1163,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                              "fixes the paths inside the virtual environments, rewrites runtime.toml and location.toml, "
                              "checks the result and only then deletes the old copy")
     parser.add_argument("--no-check", action="store_true", help="with --move-to: skip the quick check (testing)")
+    parser.add_argument("--better-translation", choices=("auto", "yes", "no"), default="auto",
+                        help="the optional better translation model for Redub (NLLB-200 1.3B, a 5.5 GB download kept "
+                             "as 2.7 GB): auto = only with an NVIDIA GPU (default), yes = also without one, no = never")
     parser.add_argument("--remove-indextts", action="store_true",
                         help="delete <data>/runtime/index-tts (the IndexTTS-2.5 runtime of earlier versions, about 19 GB) "
                              "without asking; without this flag setup only offers it in an interactive terminal")
@@ -1140,7 +1225,8 @@ def build_setup(args: argparse.Namespace) -> Setup:
     data_dir = choose_data_dir(args, plat)
     return Setup(root=root, plat=plat, arch=host_arch(), data_dir=data_dir,
                  skip_toolchain=args.skip_toolchain, skip_models=args.skip_models, force_cpu=args.cpu,
-                 assume_yes=args.yes, force=args.force, uv_path=find_uv())
+                 assume_yes=args.yes, force=args.force, uv_path=find_uv(),
+                 better_translation=args.better_translation)
 
 
 def run_move(args: argparse.Namespace) -> int:
@@ -1236,7 +1322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     applio_cloned = attempt(lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
     if attempt(setup.engine_env) and not args.skip_models:
         if attempt(setup.omnivoice_models):
-            attempt(setup.speech_models)
+            if attempt(setup.speech_models) and setup.wants_better_translation():
+                attempt(setup.better_translation_model)
         attempt(setup.separation_model)
     if applio_cloned and attempt(setup.applio_venv) and not args.skip_models:
         attempt(setup.applio_models)
