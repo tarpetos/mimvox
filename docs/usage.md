@@ -72,6 +72,7 @@ The script installs `uv` if it is missing, then runs `tools/setup/setup.py`. Thi
    | Engine environment with PyTorch, plus the OmniVoice speech model (3.3 GB) | 11 GB | Speaking text in about 60 languages |
    | Applio environment (RVC) with its pretrained models (about 1.5 GB) | 12 GB | Training your voice and converting speech to it |
    | Whisper turbo (1.6 GB) and the NLLB-200 translation model (2.5 GB) | 4.5 GB | Redub: transcription and translation |
+   | Hybrid Demucs (`runtime/models/demucs`) | 0.3 GB | Removing background music from media files |
    | Each voice you make | 0.1 GB | Your recordings and trained model |
 
 6. At the end it writes `runtime.toml` into the data folder and prints the command that starts the app.
@@ -239,7 +240,10 @@ You can use existing recordings of yourself instead of reading live.
   (`media.combine`): each file is cleaned (silence trimmed at both ends, long pauses shortened, loudness evened out),
   then they are joined with a short gap, up to 20 minutes in total. You see *"Combining N files into one recording…"*
   and then, for example, *"3 files combined into one recording (4.2 min)."* Files that cannot be read or have no clear
-  speech are skipped and named in that message.
+  speech are skipped and named in that message. Background music is removed as you set **Remove background music**
+  on the Voices screen (see [Reference from media](#reference-from-media)); if you never touched that box, it is removed
+  from video files that have sound under the voice when you have an NVIDIA GPU. The message then adds *"Background
+  music removed from N of them."*
 
 ![Dropping a file on a part](screenshots/usage-record-drop.png)
 
@@ -294,12 +298,19 @@ memos. One noisy source makes a metallic clone, so the app combines many files a
 
 1. In the **Reference from media** block of the active voice, choose the language the media is in (the chip; by default
    the voice's own language).
-2. Press **Add media…** and pick the files, or drop them on the Voices screen. Many files are fine. (Dropping files on
+2. Leave **Remove background music** ticked if the files have music or effects under the voice (videos usually do).
+   The app then keeps only the voice of each file before cleaning it, which makes a cleaner reference: music under the
+   reference makes the clone sound metallic. It is a little slower (on an NVIDIA GPU about a second per minute of media;
+   on the CPU much longer). The box is ticked by default when the app runs on an NVIDIA GPU, and your choice is
+   remembered.
+3. Press **Add media…** and pick the files, or drop them on the Voices screen. Many files are fine. (Dropping files on
    Speak, or several files on Train or Redub, also brings you here.)
-3. The app cleans each file (*Cleaning · File k of n*), combines them, and looks for the best window. You can press
-   **Cancel**; a cancelled run changes nothing.
-4. When done it reports, for example, *"12 files combined · 7:32 · reference set: 11.4 s from file 3"*, with a play
-   button for the new reference and a list of skipped files with the reason.
+4. The app cleans each file (*Removing background music* and *Cleaning · File k of n*), combines them, and looks for
+   the best window. You can press **Cancel**; a cancelled run changes nothing.
+5. When done it reports, for example, *"12 files combined · 7:32 · reference set: 11.4 s from file 3"* and
+   *"Background music removed from 9 of 12 files."*, with a play button for the new reference and a list of skipped
+   files with the reason. If the music could not be removed it says why, for example *"Background music not removed:
+   the music-removal model is not installed (run setup again)."*: the files are then used as they are.
 
 ![A reference made from media files](screenshots/usage-voices-media.png)
 
@@ -311,6 +322,8 @@ Details:
 - If you chose the voice's own language, the result replaces the voice's main reference clip. If you chose another
   language, it becomes the per-language clip for that language (see below).
 - Your recordings for training are never touched: media files are used only for the reference.
+- Music removal works on music and sound effects; it cannot take out a second speaker. Use files where only this
+  person speaks.
 - **Remove combined media** deletes the combined files; the reference clip in use stays.
 - Only use media of your own voice, or of a person who has given you permission.
 
@@ -543,7 +556,8 @@ Redub uses the GPU like Speak: only one job runs at a time, and Redub is unavail
 - **A clean reference.** The speech model copies whatever is in the reference clip: noise, echo, a tired voice, a slow
   pace. Listen to it on the Voices screen and use **Choose…** to switch to a relaxed, natural-sounding clip.
 - **No music, no noise.** Record in a quiet, soft room. For media files and Redub sources, prefer clips with speech
-  only: background music and other voices end up in the clone or the conversion.
+  only: background music and other voices end up in the clone or the conversion. For media references, **Remove
+  background music** takes out most music; other voices stay.
 - **A consistent microphone.** Use the same microphone, distance (15-20 cm) and room for every part, and for parts
   you add later. Turn off noise suppression and automatic gain in your system if you can.
 - **Reference length.** The automatic reference is a 15-20 second window, and the speech model uses up to 12 seconds
@@ -602,7 +616,7 @@ Everything the app makes lives in one folder (the one you chose during setup; se
   outputs/                       every generated phrase and redub, one file each (WAV unless "Save as" says otherwise)
   logs/engine.log                the engine log
   tmp/                           scratch files, emptied at every engine start
-  settings.json                  your app settings (microphone, last choices, "Save as" format)
+  settings.json                  your app settings (microphone, last choices, "Save as" format, "Remove background music")
   runtime/, runtime.toml         the installed engine and models (about 28 GB)
 ```
 

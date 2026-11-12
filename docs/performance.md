@@ -139,6 +139,6 @@ the clearest symptom), which is why the app does not use them.
 ## Disk and memory
 
 - About 28 GB for the runtime and the models: the engine environment with OmniVoice ~11 GB, Applio/RVC ~12 GB (two
-  Python environments with their own PyTorch), Whisper and NLLB for Redub ~4.5 GB.
+  Python environments with their own PyTorch), Whisper and NLLB for Redub ~4.5 GB, Hybrid Demucs for music removal ~0.3 GB.
 - OmniVoice needs about 4-5 GB of VRAM with the 7-12 s reference cut; the RVC worker adds ~1-2 GB. 8 GB or more is
   recommended and 12 GB was used in testing.

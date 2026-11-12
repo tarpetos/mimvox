@@ -1,4 +1,5 @@
-"""Client of the persistent speech worker (``speech_worker.py``: Whisper + NLLB, run with the engine interpreter).
+"""Client of the persistent speech worker (``speech_worker.py``: Whisper + NLLB + Hybrid Demucs, run with the engine
+interpreter).
 
 Async, on the engine loop (see ``workerproc.py``): one owner task per worker serializes the requests through a queue,
 replies resolve futures keyed by request id, progress lines call callbacks, and a crash fails every pending request
@@ -6,7 +7,8 @@ at once (the next request restarts the process). The worker drops its models aft
 
 Concurrent ``redub.prepare`` + ``redub.dub`` + ``tts.generate`` + ``voices.warm`` are safe by construction: a
 preload (``load_asr`` from ``redub.prepare``) is just the first request in the queue, a transcription queues behind it,
-and ``release_gpu`` (before speech-model / RVC work) asks a running preload to stop and then queues behind it.
+and ``release_gpu`` (before speech-model / RVC work) asks a running preload to stop and then queues behind it (behind
+a running vocal separation too: that is one file of a media job, which then reloads the separator for its next file).
 """
 from __future__ import annotations
 
@@ -25,6 +27,12 @@ WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech_worker
 ASR_MODEL = "turbo"   # large-v3-turbo
 START_TIMEOUT_S = 120.0
 OP_TIMEOUT_S = 900.0
+SEPARATOR_FILE = os.path.join("demucs", "hdemucs_high_trained.pt")   # under <data>/runtime/models (setup fetches it)
+
+
+def separator_path(data_root: str) -> str:
+    """Where the vocal-separation weights (torchaudio HDEMUCS_HIGH_MUSDB_PLUS) live."""
+    return os.path.join(data_root, "runtime", "models", SEPARATOR_FILE)
 
 
 class Cancelled(Exception):
@@ -90,6 +98,15 @@ class SpeechWorker:
     async def translate(self, texts: list[str], src: str, progress: Progress | None,
                         tgt: str = "eng_Latn") -> dict[str, Any]:
         return await self.request("translate", {"texts": texts, "src": src, "tgt": tgt, "num_beams": 4}, progress)
+
+    async def separate_vocals(self, audio_npy: str, out_npy: str, seconds: float, progress: Progress | None,
+                              allow_cuda: bool | None = None) -> dict[str, Any]:
+        """Vocals only of a 44.1 kHz mono ``.npy`` of ``seconds``, written to ``out_npy``. The timeout grows with the
+        length (the CPU fallback can be slower than real time)."""
+        params: dict[str, Any] = {"audio": audio_npy, "out": out_npy}
+        if allow_cuda is not None:
+            params["allow_cuda"] = bool(allow_cuda) and self.allow_cuda
+        return await self.request("separate_vocals", params, progress, timeout=OP_TIMEOUT_S + 3.0 * seconds)
 
     async def release_gpu(self) -> None:
         """Hand the GPU memory back (models are dropped; they reload on the next request). No-op when not running.

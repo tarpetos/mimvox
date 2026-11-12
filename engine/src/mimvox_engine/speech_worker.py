@@ -1,4 +1,5 @@
-"""Persistent speech worker: Whisper (transcription) and NLLB (translation) in one child process of the engine.
+"""Persistent speech worker: Whisper (transcription), NLLB (translation) and Hybrid Demucs (vocal separation) in one
+child process of the engine.
 
 Started lazily by ``speech.py`` as ``python -I speech_worker.py --models-root <data>/runtime/models`` with the engine
 interpreter (the engine venv). Standalone on purpose: it imports nothing from ``mimvox_engine``.
@@ -17,9 +18,13 @@ Ops (all params optional unless stated):
                                                                                -> {"language","device","segments":[{start,end,text}]}
   translate   {"texts":[...](required),"src":"ukr_Cyrl"(required),"tgt":"eng_Latn","allow_cuda":true,"num_beams":4}
                                                                                -> {"texts":[...],"device","untranslated":[i]}
+  separate_vocals {"audio":"<.npy 44.1 kHz mono float32>"(required),"out":"<.npy to write>"(required),
+                   "allow_cuda":true}                                          -> {"device","seconds","elapsed_s",
+                                                                                   "peak_vram_gb"} (vocals in "out")
   release_gpu / unload                                                         -> {"free_gb"}
-  status                                                                       -> {"asr","mt","rss_gb","peak_rss_gb","free_gb"}
-Progress replies: {"id":N,"progress":{"stage":"load_model|transcribe|translate","pct":0-100}}.
+  status                                                                       -> {"asr","mt","sep","rss_gb","peak_rss_gb",
+                                                                                   "free_gb"}
+Progress replies: {"id":N,"progress":{"stage":"load_model|transcribe|translate|separate","pct":0-100}}.
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"} (models dropped after UNLOAD_S idle),
 {"event":"exit","reason":"idle"} (the process exits after EXIT_S idle).
 """
@@ -55,6 +60,14 @@ ASR_NEED_FP32_GB = 4.0
 MT_NEED_GB = float(os.environ.get("MIMVOX_NLLB_NEED_GB", "2.0"))            # fp16 weights (1.2 GB) + beam search
 NLLB_DIR = os.path.join(args.models_root, "nllb-200-distilled-600M")
 WHISPER_DIR = os.path.join(args.models_root, "whisper")
+# Vocal separation: torchaudio's HDEMUCS_HIGH_MUSDB_PLUS weights (setup downloads them; never fetched from here).
+SEP_PATH = os.path.join(args.models_root, "demucs", "hdemucs_high_trained.pt")
+SEP_SOURCES = ("drums", "bass", "other", "vocals")
+SEP_SR = 44100
+SEP_NEED_GB = float(os.environ.get("MIMVOX_DEMUCS_NEED_GB", "1.2"))   # 0.76 GB peak measured (fp32 weights + one 10 s
+                                                                      # segment) plus the CUDA context
+SEP_SEGMENT_S = 10.0     # audio per forward pass: bounds the memory whatever the file length
+SEP_OVERLAP = 0.25       # neighbouring segments overlap by this share and are cross-faded (as Demucs' apply does)
 SPLIT_OVER_CHARS = 160   # a longer text is translated sentence by sentence (NLLB drops content of long inputs)
 MERGE_MIN_CHARS = 50     # ... but a sentence shorter than this is joined to the next one
 
@@ -158,6 +171,7 @@ class Slot:
 
 ASR = [None]   # Slot of Whisper
 MT = [None]    # Slot of NLLB
+SEP = [None]   # Slot of Hybrid Demucs
 _half_broken = [False]   # the fp16 Whisper loader failed once: use the stock loader from then on
 
 
@@ -171,31 +185,34 @@ def unload(which):
 
 
 def unload_all(reason=""):
-    had = ASR[0] is not None or MT[0] is not None
+    had = ASR[0] is not None or MT[0] is not None or SEP[0] is not None
     unload(ASR)
     unload(MT)
+    unload(SEP)
     collect()
     if had:
         log(f"models unloaded ({reason or 'requested'}); {free_vram_gb():.1f} GB VRAM free")
     return had
 
 
-def pick_device(need_gb, other, allow_cuda):
-    """cuda when ``need_gb`` of VRAM is free (dropping the other model from the GPU if that makes it fit), else cpu
-    (dropping the other model too when it also sits in host RAM, so the process stays small)."""
+def pick_device(need_gb, allow_cuda, *others):
+    """cuda when ``need_gb`` of VRAM is free (dropping the other models from the GPU if that makes it fit), else cpu
+    (dropping the other models too when they also sit in host RAM, so the process stays small)."""
     torch = _torch()
     if allow_cuda and torch.cuda.is_available():
         free = free_vram_gb()
         if free >= need_gb:
             return "cuda"
-        if other[0] is not None and other[0].device == "cuda":
-            unload(other)
-            free = free_vram_gb()
-            if free >= need_gb:
-                return "cuda"
+        for other in others:
+            if other[0] is not None and other[0].device == "cuda":
+                unload(other)
+                free = free_vram_gb()
+                if free >= need_gb:
+                    return "cuda"
         log(f"only {free:.1f} GB of VRAM free (need {need_gb:.1f}): using the CPU")
-    if other[0] is not None and other[0].device == "cpu":
-        unload(other)
+    for other in others:
+        if other[0] is not None and other[0].device == "cpu":
+            unload(other)
     return "cpu"
 
 
@@ -269,7 +286,7 @@ def ensure_asr(name, allow_cuda):
     t0 = time.time()
     model, device, half = None, "cpu", False
     if allow_cuda and torch.cuda.is_available() and not _half_broken[0]:
-        device = pick_device(ASR_NEED_HALF_GB, MT, True)
+        device = pick_device(ASR_NEED_HALF_GB, True, MT, SEP)
         if device == "cuda":
             try:
                 model, half = _load_whisper_half(whisper, name, "cuda"), True
@@ -279,7 +296,7 @@ def ensure_asr(name, allow_cuda):
                 model = None
                 collect()
     if model is None:
-        device = pick_device(ASR_NEED_FP32_GB, MT, allow_cuda and torch.cuda.is_available())
+        device = pick_device(ASR_NEED_FP32_GB, allow_cuda and torch.cuda.is_available(), MT, SEP)
         if device == "cuda":
             with torch.device("cuda"):
                 model = whisper.load_model(name, device="cuda", download_root=WHISPER_DIR)
@@ -357,7 +374,7 @@ def ensure_mt(allow_cuda, force_cpu=False):
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
     progress("translate", 0)
     t0 = time.time()
-    device = "cpu" if force_cpu else pick_device(MT_NEED_GB, ASR, allow_cuda)
+    device = "cpu" if force_cpu else pick_device(MT_NEED_GB, allow_cuda, ASR, SEP)
     tok = AutoTokenizer.from_pretrained(NLLB_DIR, local_files_only=True)
     kw = {"local_files_only": True, "low_cpu_mem_usage": True}
     kw["dtype" if _transformers_major() >= 5 else "torch_dtype"] = torch.float16 if device == "cuda" else torch.float32
@@ -471,12 +488,121 @@ def op_translate(req):
     return {"texts": result, "device": slot.device, "untranslated": untranslated}
 
 
+# ------------------------------------------------------------------------------------------------ Hybrid Demucs
+
+def ensure_sep(allow_cuda, force_cpu=False):
+    """Load the separation model (torchaudio's ``hdemucs_high`` with the HDEMUCS_HIGH_MUSDB_PLUS weights from
+    ``SEP_PATH``, fp32) if it is not loaded yet; returns the Slot."""
+    slot = SEP[0]
+    if slot is not None and (not force_cpu or slot.device == "cpu"):
+        progress("load_model", 100)
+        return slot
+    unload(SEP)
+    if not os.path.isfile(SEP_PATH):
+        raise OpError("model_missing", f"the music-removal model is not installed ({SEP_PATH} is missing); "
+                                       "run setup again to download it")
+    torch = _torch()
+    from torchaudio.models import hdemucs_high
+    progress("load_model", 0)
+    t0 = time.time()
+    device = "cpu" if force_cpu else pick_device(SEP_NEED_GB, allow_cuda, ASR, MT)
+    with open(SEP_PATH, "rb") as fh:
+        state = torch.load(fh, map_location="cpu", weights_only=True)
+    model = hdemucs_high(sources=list(SEP_SOURCES))
+    model.load_state_dict(state)
+    del state
+    model = model.to(device).eval()
+    collect()
+    log(f"hdemucs_high loaded on {device} in {time.time() - t0:.1f}s; {free_vram_gb():.1f} GB VRAM free")
+    progress("load_model", 100)
+    SEP[0] = Slot("hdemucs", model, device)
+    return SEP[0]
+
+
+def _separate(slot, mix):
+    """Vocals of mono ``mix`` (float32 at SEP_SR) as a float32 numpy array of the same length.
+
+    The model takes stereo: the mono signal is fed on both channels and the two vocal channels are averaged. The
+    signal is normalised once for the whole file and cut into SEP_SEGMENT_S segments that overlap by SEP_OVERLAP;
+    each segment's output is weighted with a triangle and the overlaps are summed and divided by the summed weights
+    (Demucs' ``apply_model`` with ``segment`` / ``overlap``), so memory stays bounded for any length."""
+    import math
+    torch = _torch()
+    model, dev = slot.obj, slot.device
+    vocals = SEP_SOURCES.index("vocals")
+    x = torch.from_numpy(mix)
+    mean, std = float(x.mean()), float(x.std())
+    std = std if std > 1e-8 else 1.0
+    x = (x - mean) / std
+    n = int(x.shape[0])
+    seg = int(SEP_SEGMENT_S * SEP_SR)
+    stride = max(int(seg * (1.0 - SEP_OVERLAP)), 1)
+    half = seg // 2
+    weight = torch.cat([torch.arange(1, half + 1), torch.arange(seg - half, 0, -1)]).float()
+    weight /= weight.max()
+    starts = [i * stride for i in range(max(math.ceil((n - seg) / stride), 0) + 1)]
+    out = torch.zeros(n)
+    total = torch.zeros(n)
+    progress("separate", 0)
+    with torch.inference_mode():
+        for i, s in enumerate(starts):
+            check_cancel()
+            piece = x[s:s + seg]
+            length = int(piece.shape[0])
+            if length < seg:
+                piece = torch.nn.functional.pad(piece, (0, seg - length))
+            inp = piece.to(dev).view(1, 1, seg).expand(1, 2, seg).contiguous()
+            voc = model(inp)[0, vocals].mean(0)[:length].float().cpu()
+            del inp
+            w = weight[:length]
+            out[s:s + length] += voc * w
+            total[s:s + length] += w
+            progress("separate", 100.0 * (i + 1) / len(starts))
+    y = out / total.clamp_min(1e-8) * std
+    return y.numpy().astype("float32", copy=False)
+
+
+def op_separate_vocals(req):
+    import numpy as np
+    torch = _torch()
+    audio = np.load(req["audio"])
+    if audio.ndim != 1:
+        raise OpError("bad_request", "'audio' must hold mono samples")
+    audio = np.ascontiguousarray(audio, dtype=np.float32)
+    allow = req.get("allow_cuda", True)
+    force_cpu = False
+    for attempt in (1, 2):
+        check_cancel()
+        slot = ensure_sep(allow, force_cpu)
+        if slot.device == "cuda":
+            torch.cuda.reset_peak_memory_stats()
+        t1 = time.time()
+        try:
+            y = _separate(slot, audio)
+            break
+        except torch.cuda.OutOfMemoryError:
+            if attempt == 2 or slot.device != "cuda":
+                raise
+            log("out of VRAM while separating: retrying on the CPU")
+            unload(SEP)
+            force_cpu = True
+    elapsed = time.time() - t1
+    peak = torch.cuda.max_memory_allocated() / 2**30 if slot.device == "cuda" else 0.0
+    np.save(req["out"], y)
+    log(f"separated the vocals of {len(audio) / SEP_SR:.1f}s of audio in {elapsed:.1f}s on {slot.device}"
+        + (f" (peak {peak:.2f} GB VRAM)" if peak else ""))
+    progress("separate", 100)
+    return {"device": slot.device, "seconds": round(len(audio) / SEP_SR, 2), "elapsed_s": round(elapsed, 2),
+            "peak_vram_gb": round(peak, 2)}
+
+
 # ------------------------------------------------------------------------------------------------ main
 
 def op_status(_req):
     cur, peak = rss_gb()
     return {"asr": None if ASR[0] is None else {"model": ASR[0].key, "device": ASR[0].device, "half": ASR[0].half},
             "mt": None if MT[0] is None else {"device": MT[0].device},
+            "sep": None if SEP[0] is None else {"device": SEP[0].device},
             "rss_gb": round(cur, 2), "peak_rss_gb": round(peak, 2), "free_gb": round(free_vram_gb(), 2)}
 
 
@@ -485,8 +611,8 @@ def op_release(_req):
     return {"free_gb": round(free_vram_gb(), 2)}
 
 
-OPS = {"load_asr": op_load_asr, "transcribe": op_transcribe, "translate": op_translate, "status": op_status,
-       "release_gpu": op_release, "unload": op_release}
+OPS = {"load_asr": op_load_asr, "transcribe": op_transcribe, "translate": op_translate,
+       "separate_vocals": op_separate_vocals, "status": op_status, "release_gpu": op_release, "unload": op_release}
 
 
 def on_idle_unload():

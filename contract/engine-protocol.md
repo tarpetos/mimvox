@@ -127,7 +127,7 @@ existing runtime in the chosen directory reuses it and only fills in what is mis
 
 `setup.cmd` / `./setup.sh` take `--data-dir DIR`, `--yes`, `--force` and others (`--help`). Before anything is
 downloaded setup prints the install location, the free space there and the size (about 28 GB: engine + OmniVoice ~11 GB,
-Applio/RVC ~12 GB, Redub models ~4.5 GB, plus ~0.1 GB per voice), or "Existing runtime found, nothing big to download". It
+Applio/RVC ~12 GB, Redub models ~4.5 GB, music removal ~0.3 GB, plus ~0.1 GB per voice), or "Existing runtime found, nothing big to download". It
 refuses when the drive has under 32 GB free unless `--force`. An existing `runtime/index-tts` (IndexTTS-2.5 of earlier
 versions, ~19 GB) is deleted only with `--remove-indextts` or a "y" at the prompt in an interactive terminal; with `--yes`
 setup only prints a hint. Without `--yes` it asks (interactive; the app opens a terminal running plain
@@ -178,6 +178,10 @@ the quick check, and only then delete the old directory.
                                              #  only; same name as the saved file; gone at the next engine start)
 <data>/runtime/models/whisper/               # Whisper turbo (large-v3-turbo.pt, 1.6 GB), fetched by setup (else on the first Redub)
 <data>/runtime/models/nllb-200-distilled-600M/  # NLLB-200 translation model (2.5 GB), fetched by setup with `hf download`; never auto-downloaded
+<data>/runtime/models/demucs/hdemucs_high_trained.pt  # Hybrid Demucs (torchaudio HDEMUCS_HIGH_MUSDB_PLUS, 335 MB, SHA-256
+                                             #  a004b279...7816) for remove_music; fetched by setup over HTTPS (resumable
+                                             #  .part file next to it); never auto-downloaded, missing -> music not removed
+<data>/tmp/separate-<job>/                   # mix.npy / vocals.npy of the file being separated (deleted after each file)
 <data>/runtime/engine/.venv/                 # the engine environment (setup): engine, OmniVoice worker, speech worker
 <data>/runtime/models/omnivoice/             # OmniVoice weights k2-fsa/OmniVoice (3.3 GB), fetched by setup with `hf download`; never auto-downloaded
 <data>/voices/<voice_id>/reference.omnivoice.json  # OmniVoice's cut of reference.wav: {"version","sig":[mtime_ns,size],"start","end","text"}
@@ -325,24 +329,36 @@ speaks. Needs 3-40 s of speech after trimming (`bad_request` otherwise; about 10
 
 ### Combine media files (`media.combine`)
 
-`media.combine {"paths":["...",...]}` -> `{"path","duration_s","files":[{"name","duration_s","truncated"}],
-"skipped":[{"name","path","reason"}],"unused":["name",...]}`. Joins many audio / video files of one speaker into one
-mono 16-bit 44.1 kHz WAV under `<data>/tmp/combined/`, cleaned like the media pool below (DC removed, trimmed, long
-pauses shortened, loudness normalised, 0.4 s between files, at most 20 minutes; files past that are `unused`). Files
+`media.combine {"paths":["...",...],"remove_music"?}` -> `{"path","duration_s","files":[{"name","duration_s","truncated",
+"music_removed"}],"skipped":[{"name","path","reason"}],"unused":["name",...],"music_removed","music_files","music_reason",
+"music_device"}`. Joins many audio / video files of one speaker into one
+mono 16-bit 44.1 kHz WAV under `<data>/tmp/combined/`, cleaned like the media pool below (background music removed when
+`remove_music` says so, DC removed, trimmed, long pauses shortened, loudness normalised, 0.4 s between files, at most 20
+minutes; files past that are `unused`). `remove_music` and the `music_*` fields are as in
+[Reference from media](#reference-from-media-voicesreference_from_media--voicesmedia_cancel--voicesclear_media). Files
 that cannot be read or have no clear speech are `skipped`; none usable -> `bad_request`. The app's Record screen
-imports the result as one take (`recording.check` -> `dataset.add`).
+imports the result as one take (`recording.check` -> `dataset.add`); it sends the `remove_music` the user last chose on
+the Voices screen, or nothing (`"auto"`) when they never did. It is a plain request (no progress events).
 
 ### Reference from media (`voices.reference_from_media` / `voices.media_cancel` / `voices.clear_media`)
 The speech model clones from one short clip, so one noisy source makes a metallic clone. Instead, many audio / video files
-of the same speaker (any importable format) are combined and the cleanest window becomes the reference. CPU only
-(numpy/scipy and ffmpeg), no model is loaded.
+of the same speaker (any importable format) are combined and the cleanest window becomes the reference. numpy/scipy and
+ffmpeg, plus the speech worker's `separate_vocals` (Hybrid Demucs) when background music is removed.
 
-`voices.reference_from_media {"id","paths":["...",...],"language"?}` -> `{"job","files":n}` at once, then events.
+`voices.reference_from_media {"id","paths":["...",...],"language"?,"remove_music"?}` -> `{"job","files":n}` at once, then
+events.
 - `language`: omitted, `""`, `"auto"` or the voice's own language: the result is `reference.wav` (a manual choice,
   recorded in `meta.json` `reference` with `"source":"media"`). Another speech language: `reference_<language>.wav`
   (like `voices.add_reference`; `voices.list` then lists it in `references`).
+- `remove_music`: `true` (separate every file), `false` (never) or `"auto"` (the default; `null` too): a **video** file
+  (by extension: mp4, mkv, mov, webm, avi and aliases) whose decoded audio has an SNR under 35 dB (something plays under
+  the voice; a clean recording measures 40-60 dB) is separated, and only when the engine runs on CUDA and no training
+  holds the GPU. Anything else -> `bad_request`. A separated file keeps only its **vocals**: the speech worker's
+  `separate_vocals` (torchaudio's Hybrid Demucs, `HDEMUCS_HIGH_MUSDB_PLUS`, vocals stem), right after decoding and
+  before every step below. When the model file is missing (an install from before this feature: run setup again) or the
+  worker fails, the files are used as decoded and the job goes on: separation is never a reason for a job to fail.
 - Per file, in order, on the IO pool: decode to mono 44.1 kHz (only as far as the pool still has room plus 2 min),
-  remove DC, trim silence at both ends (as `dataset.add`), shorten inner silences longer than 0.7 s to 0.3 s (only when the
+  separate (see `remove_music`), remove DC, trim silence at both ends (as `dataset.add`), shorten inner silences longer than 0.7 s to 0.3 s (only when the
   file's SNR is 15 dB or more), normalise loudness (as `dataset.add`). A file that cannot be read, has no audio track, no
   clear speech or under 3 s of speech is **skipped** (listed with a reason) instead of failing the job.
 - The cleaned files are joined with 0.4 s gaps into `reference_media.wav` (mono 16-bit, 44.1 kHz). The pool stops at
@@ -355,17 +371,28 @@ of the same speaker (any importable format) are combined and the cleanest window
   cache dropped and (for `reference.wav`) `voices.warm` started.
 - The pool, `meta.json` `media` and the reference are installed together at the end; a cancelled or failed job changes
   nothing. A new job replaces the previous pool. The dataset (training data) is never touched.
-- Events: `voices.media.progress {"id","stage":"decode|combine|analyse|apply","pct":0-100,"files":n,"file"?,"name"?}`
-  (`file` 1-based and `name` while a file is decoded and cleaned: `decode` covers 0-85), then
+- Events: `voices.media.progress {"id","stage":"decode|separate|combine|analyse|apply","pct":0-100,"files":n,"file"?,
+  "name"?}` (`file` 1-based and `name` while a file is decoded, separated and cleaned: `decode` and `separate` share
+  0-85, file k of n taking its 1/n of it; `separate` is file k's middle 80 %, loading the model included), then
   `voices.media.done {"id","files":<used>,"duration_s":<pool>,"language":null|"<code>","target","applied":bool,
   "reference":{...as in set_reference...}|null,"warming":bool,"preview_path":<the target>|null,"skipped":[{"name","path",
-  "reason"}],"unused":["<name>"],"truncated":["<name>"],"message":null|"<text>","elapsed_s"}` or
-  `voices.media.error {"code","message","skipped"?}` (`cancelled`; `bad_request` "None of the files has usable speech."
-  with `skipped`; `not_found`, `internal`). `applied` is false (with a `message`) when a generation started meanwhile
+  "reason"}],"unused":["<name>"],"truncated":["<name>"],"message":null|"<text>","elapsed_s","music_removed":bool,
+  "music_files":<files separated>,"music_reason":null|"<text>","music_device":null|"cuda"|"cpu"}` or
+  `voices.media.error {"code","message","skipped"?,"music_*"?}` (`cancelled`; `bad_request` "None of the files has usable
+  speech." with `skipped` and the `music_*` fields; `not_found`, `internal`). `music_reason` says why no file was
+  separated: `"turned off"`, `"no background sound found under the voice"` (auto), `"no GPU for it (tick Remove
+  background music to run it on the CPU)"` (auto), `"the music-removal model is not installed (run setup again)"`,
+  `"music removal failed (<message>)"` (also set when some files were separated before the worker failed). Each
+  `meta.json` `media.files[]` entry has `music_removed` and `media.music_removed` counts the separated files. `applied` is false (with a `message`) when a generation started meanwhile
   (pick a clip with `voices.set_reference` later) or no 8-12 s window was found.
 - Errors at start: `bad_request` (`paths` not a non-empty list of strings, more than 500 files, `language` not a speech
   language), `not_found` (voice), `busy` (a generation is running, or a media job already runs for this voice).
 - Memory: one file is decoded at a time (at most about 22 min of float32 audio, ~230 MB) and the pool is kept as 16-bit.
+  A separated file also goes to `<data>/tmp/separate-<job>/` as `.npy` (the same size, twice) for the worker; the
+  folder is deleted after each file and at the end.
+- Speed (RTX 4070, measured): 45 s of audio separate in 0.6 s warm (1.3 s with the model just loaded; loading takes
+  0.8 s, a cold worker start about 2 s more), peak 0.76 GB VRAM, so 20 minutes of media take roughly 20 s more on the
+  GPU. On the CPU it is far slower (not measured here; expect minutes for long files).
 
 `voices.media_cancel {"job"}` -> `{}`: cancels the job (it ends with `voices.media.error` `cancelled`).
 
@@ -374,9 +401,14 @@ stay. Errors: `not_found` (voice), `busy` (a media job runs for this voice).
 
 - **App side.** The Voices card's reference section has a "Reference from media" block: a language chip (default the
   voice's own language; the shared language picker), a drop well with "Add media..." (native multi-file picker) and, while
-  the job runs, "Cleaning · File k of n · name", a progress bar and Cancel. Dropping files anywhere on the Voices screen
+  the job runs, "Cleaning" / "Removing background music" · File k of n · name, a progress bar and Cancel. Under the
+  well, a "Remove background music" checkbox with the hint "Cleaner reference from videos with music; a little slower."
+  sends `remove_music` true / false; it is remembered as `remove_music` in `settings.json`, and until the user sets it
+  it is ticked when the engine reports `device.backend` `cuda`. Dropping files anywhere on the Voices screen
   starts the job for the active voice (the well lights up while files hover). When done: "12 files combined · 7:32 ·
-  reference set: 11.4 s from file 3", a play button for the new reference, skipped files with reasons, and "Remove
+  reference set: 11.4 s from file 3", "Background music removed from 9 of 12 files." (or "Background music not
+  removed: <music_reason>." in the warning colour; nothing when it was turned off), a play button for the new
+  reference, skipped files with reasons, and "Remove
   combined media". The pool's windows appear in the "Choose..." list under "From your media".
 
 ### Languages
@@ -735,7 +767,7 @@ importable format, also video) and convert it themselves: the app never has to.
   `null` does not translate. Any language the speech model speaks is a target (all of them are NLLB languages; see
   [Speech model and languages](#speech-model-and-languages-omnivoice)); another code is `bad_request` (the message lists
   the targets). `translate_to_en: true` is the old spelling of `translate_to: "en"` and still accepted. (The earlier Whisper `medium` translate mode is gone: it dropped and paraphrased speech.)
-- **Speech worker.** Transcription and translation run in one persistent child process of the engine
+- **Speech worker.** Transcription, translation and vocal separation run in one persistent child process of the engine
   (`speech_worker.py`, engine interpreter, JSON lines on stdin/stdout like the RVC worker), started lazily by the first
   of `redub.prepare` / `redub.transcribe` / `redub.dub`, restarted automatically (and the request retried once) when it
   dies, one op at a time (requests queue in the engine's owner task for the worker; a `redub.prepare` preload that is
@@ -746,7 +778,13 @@ importable format, also video) and convert it themselves: the app never has to.
   runs on the GPU with fp16 weights (about 1.6 GB) when about 2.6 GB of VRAM are free (OmniVoice and RVC
   hold about 7 GB of a 12 GB card); NLLB (fp16, 1.2 GB, needs 2 GB) is never loaded next to Whisper unless both fit,
   otherwise Whisper is dropped from the GPU first; with too little VRAM, or without CUDA, the model runs on the CPU
-  (correct, slower; at most one model is then resident). Expect the worker at about 2-4 GB of host RAM while a model is
+  (correct, slower; at most one model is then resident). The separator (Hybrid Demucs, fp32, 335 MB file) goes on the
+  GPU when 1.2 GB are free (`MIMVOX_DEMUCS_NEED_GB`; Whisper and NLLB are dropped from the GPU first when that makes
+  it fit), else on the CPU, retries on the CPU after a CUDA out-of-memory error, and is dropped by `release_gpu` /
+  idleness like the others. Its op: `separate_vocals {"audio":"<.npy 44.1 kHz mono float32>","out":"<.npy>",
+  "allow_cuda"}` -> `{"device","seconds","elapsed_s","peak_vram_gb"}`, progress stages `load_model` then `separate`
+  (per 10 s segment; segments overlap by 25 % and are cross-faded, so memory does not grow with the length; cancel is
+  checked before every segment). A `release_gpu` that arrives during a separation waits for that one file. Expect the worker at about 2-4 GB of host RAM while a model is
   loaded (peak while loading the 2.5 GB NLLB checkpoint), about 1-1.5 GB with no model, plus a CUDA context (about
   0.4 GB VRAM) while the process lives.
 - **Translation.** NLLB-200 distilled 600M (`facebook/nllb-200-distilled-600M`, via transformers, local files only) in

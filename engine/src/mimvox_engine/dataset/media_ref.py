@@ -3,6 +3,7 @@ many media files of the same speaker.
 
 The speech model clones from one short clip, so a single noisy source (a compressed news intro, music under the voice)
 makes the clone sound metallic. Here the user drops many audio / video files; each is decoded to mono 44.1 kHz,
+optionally reduced to its vocals (``remove_music``: Hybrid Demucs in the speech worker, see :class:`_Separator`),
 DC-removed, trimmed at both ends, its long pauses shortened and its loudness normalised, and the files are joined with
 short gaps into ``<voice>/reference_media.wav`` (the *media pool*, at most 20 minutes). Every file is analysed on its
 own with the pace / SNR analysis of the dataset (``pace.py``), into pause-aligned windows of 8-12 s (the speech model
@@ -15,21 +16,23 @@ another one with ``voices.set_reference {"source": "media", ...}`` (see ``refere
 pool is a manual choice: ``dataset.add`` / ``dataset.remove`` keep it.
 
 The job runs on the engine loop; decoding and analysis run on the IO pool, one file at a time (bounded memory: a file
-is decoded only as far as the pool still has room). Cancelling stops at the next step; the pool, the meta entry and the
-reference are installed together at the end (a cancelled job changes nothing).
+is decoded only as far as the pool still has room), the vocal separation of a file in the speech worker process.
+Cancelling stops at the next step (a running separation stops at its next 10 s segment); the pool, the meta entry and
+the reference are installed together at the end (a cancelled job changes nothing).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import shutil
 import time
 from typing import Any
 
 import numpy as np
 import soundfile as sf
 
-from .. import aio, media
+from .. import aio, config, media, speech
 from ..registry import Context, EngineError, method
 from . import pace, quality, store
 from ._audio import HOP_S, write_wav
@@ -50,6 +53,9 @@ WIN_LO_S, WIN_HI_S, WIN_FALLBACK_HI_S, WIN_IDEAL_S = 8.0, 12.0, 15.0, 10.0
 KEEP_PER_FILE = 12             # best distinct windows kept per file before the pool-wide ranking
 KEEP_TOTAL = 24                # windows stored in meta.json for voices.reference_candidates
 N_SHOW, MAX_SHOW_PER_FILE = 5, 2
+# remove_music "auto": a video file is separated when its quiet parts sit less than this below its speech (something
+# plays under the voice) and the GPU can be used. A clean recording has 40-60 dB here, speech over music 10-30 dB.
+AUTO_BACKGROUND_SNR_DB = 35.0
 
 _RUNNING: dict[str, str] = {}  # voice id -> job id (loop thread only)
 
@@ -106,9 +112,8 @@ def _cut_at_pause(y: np.ndarray, sr: int, m: dict[str, Any], limit_s: float) -> 
     return store._fade(y[:max(end, sr)], sr)
 
 
-def _clean(path: str, room_s: float, analyse: bool = True) -> dict[str, Any]:
-    """Decode and clean one file (IO thread). Returns ``{"y": float32 at SR, "truncated", "clip_pen", "an", "rate",
-    "windows"}``; raises ``_Skip`` with a reason for the user."""
+def _decode(path: str, room_s: float) -> dict[str, Any]:
+    """Decode one file (IO thread): ``{"y": DC-free float32 at SR, "truncated", "snr_db"}``; raises ``_Skip``."""
     if not os.path.isfile(path):
         raise _Skip("file not found")
     limit = room_s + DECODE_SLACK_S
@@ -121,7 +126,18 @@ def _clean(path: str, room_s: float, analyse: bool = True) -> dict[str, Any]:
     if len(y) < int(0.5 * sr):
         raise _Skip("no audio")
     truncated = len(y) >= int((limit - 0.5) * sr)
-    y = (y - np.float32(np.mean(y, dtype=np.float64))).astype(np.float32, copy=False)  # DC offset
+    y = _dc(y)
+    return {"y": y, "truncated": truncated, "snr_db": float(quality.measure(y, sr)["snr_db"])}
+
+
+def _dc(y: np.ndarray) -> np.ndarray:
+    return (y - np.float32(np.mean(y, dtype=np.float64))).astype(np.float32, copy=False)
+
+
+def _finish(y: np.ndarray, truncated: bool, room_s: float, analyse: bool) -> dict[str, Any]:
+    """Clean one decoded file (IO thread). Returns ``{"y": float32 at SR, "truncated", "clip_pen", "rate",
+    "windows"}``; raises ``_Skip`` with a reason for the user."""
+    sr = SR
     m0 = quality.measure(y, sr)
     if m0["speech_db"] <= -90.0 or m0["snr_db"] < 6.0:
         raise _Skip("no clear speech found")
@@ -155,6 +171,124 @@ def _clean(path: str, room_s: float, analyse: bool = True) -> dict[str, Any]:
         scored.sort(key=lambda c: -c["score"])
         wins = _distinct(scored, KEEP_PER_FILE)
     return {"y": y, "truncated": truncated, "clip_pen": clip_pen, "rate": rate, "windows": wins}
+
+
+async def _clean(path: str, room_s: float, analyse: bool = True, separate: _Separator | None = None,
+                 on_separate: speech.Progress | None = None) -> dict[str, Any]:
+    """Decode, optionally separate (``separate``: the job's separator, which decides per file) and clean one file.
+    Returns what :func:`_finish` does plus ``music_removed``; raises ``_Skip``."""
+    d = await aio.run_io(_decode, path, room_s)
+    y, removed = d.pop("y"), False
+    if separate is not None and separate.wanted(path, d["snr_db"]):
+        vocals = await separate.run(y, on_separate)
+        if vocals is not None:
+            y, removed = await aio.run_io(_dc, vocals), True
+            del vocals
+    res = await aio.run_io(_finish, y, d["truncated"], room_s, analyse)
+    res["music_removed"] = removed
+    return res
+
+
+class _Separator:
+    """Removes background music from decoded files: the speech worker's ``separate_vocals`` (torchaudio's Hybrid
+    Demucs, HDEMUCS_HIGH_MUSDB_PLUS, vocals stem), one file at a time through ``.npy`` files in ``<data>/tmp``.
+
+    ``mode`` is the ``remove_music`` param: True (every file), False (none) or None ("auto": a video file with sound
+    under the voice, see AUTO_BACKGROUND_SNR_DB, and only when the GPU can be used). It never fails the job: without
+    the model, or when the worker fails, files are used as decoded and :attr:`reason` says why."""
+
+    NOT_INSTALLED = "the music-removal model is not installed (run setup again)"
+
+    def __init__(self, ctx: Context, mode: bool | None, tag: str) -> None:
+        from .. import tts  # noqa: PLC0415
+
+        data = config.data_dir(ctx)
+        self.mode = mode
+        self.model = speech.separator_path(data.root)
+        self.worker = speech.get(ctx.runtime, data.root)
+        self.gpu = config.backend(ctx.runtime) == "cuda" and "paused" not in tts.models_status().values()
+        self.workdir = os.path.join(data.tmp, f"separate-{tag}")
+        self.installed: bool | None = None   # checked on the first file that wants it
+        self.failed = False
+        self.reason: str | None = "turned off" if mode is False else None
+        self.count = 0
+        self.device: str | None = None
+
+    def wanted(self, path: str, snr_db: float) -> bool:
+        if self.mode is False or self.failed or self.installed is False:
+            return False
+        if self.mode is True:
+            return True
+        if not media.is_video(path) or snr_db >= AUTO_BACKGROUND_SNR_DB:
+            return False
+        if not self.gpu:
+            self.reason = self.reason or "no GPU for it (tick Remove background music to run it on the CPU)"
+            return False
+        return True
+
+    def summary(self) -> dict[str, Any]:
+        """``music_removed`` / ``music_files`` / ``music_reason`` / ``music_device`` of a done event or a result."""
+        if self.count == 0:
+            reason = self.reason or "no background sound found under the voice"
+        else:
+            reason = self.reason if self.failed else None   # removed from some files, then the worker failed
+        return {"music_removed": self.count > 0, "music_files": self.count, "music_reason": reason,
+                "music_device": self.device}
+
+    async def run(self, y: np.ndarray, on_progress: speech.Progress | None) -> np.ndarray | None:
+        """The vocals of ``y`` (same length), or None when they cannot be had (``reason`` is set). Cancelling the
+        caller cancels the worker op."""
+        if self.installed is None:
+            self.installed = await aio.run_io(os.path.isfile, self.model)
+        if not self.installed:
+            self.reason = self.NOT_INSTALLED
+            return None
+        src = os.path.join(self.workdir, "mix.npy")
+        dst = os.path.join(self.workdir, "vocals.npy")
+        await aio.run_io(_save_npy, src, y)
+        try:
+            res = await self.worker.separate_vocals(src, dst, len(y) / SR, on_progress, allow_cuda=self.gpu)
+            vocals = await aio.run_io(np.load, dst)
+        except speech.SpeechError as exc:
+            if exc.code == "model_missing":
+                self.installed, self.reason = False, self.NOT_INSTALLED
+            else:
+                self.failed, self.reason = True, f"music removal failed ({exc.message})"
+            log.warning("vocal separation: %s", exc.message)
+            return None
+        except speech.Cancelled:
+            self.reason = "music removal was interrupted"
+            return None
+        finally:
+            await aio.run_io(_remove_many, src, dst)
+        self.count += 1
+        self.device = str(res.get("device") or "")
+        log.info("vocal separation: %.1f s of audio in %.1f s on %s", len(y) / SR, float(res.get("elapsed_s", 0.0)),
+                 self.device)
+        return vocals
+
+    def close(self) -> None:
+        shutil.rmtree(self.workdir, ignore_errors=True)
+
+
+def _save_npy(path: str, y: np.ndarray) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.save(path, np.ascontiguousarray(y, dtype=np.float32))
+
+
+def _remove_many(*paths: str) -> None:
+    for p in paths:
+        _remove(p)
+
+
+def _music_mode(params: dict[str, Any]) -> bool | None:
+    """``remove_music``: true / false / "auto" (the default; also null)."""
+    v = params.get("remove_music", "auto")
+    if v is None or v == "auto":
+        return None
+    if isinstance(v, bool):
+        return v
+    raise EngineError("bad_request", "'remove_music' must be true, false or \"auto\"")
 
 
 def _distinct(cands: list[dict[str, Any]], count: int, per_file: int | None = None) -> list[dict[str, Any]]:
@@ -272,6 +406,7 @@ async def reference_from_media(ctx: Context, params: dict[str, Any]) -> dict[str
     vdir = store._voice_dir(ctx, {"voice_id": vid})
     vid = str(vid)
     paths = _paths(params)
+    music = _music_mode(params)
     code = await aio.run_io(_language, ctx, vid, params.get("language"))
     if tts.is_busy():
         raise EngineError("busy", "a generation is running; add media when it has finished")
@@ -280,7 +415,7 @@ async def reference_from_media(ctx: Context, params: dict[str, Any]) -> dict[str
 
     async def run(job: str) -> None:
         try:
-            await _job(ctx, job, vid, vdir, paths, code)
+            await _job(ctx, job, vid, vdir, paths, code, music)
         finally:
             if _RUNNING.get(vid) == job:
                 del _RUNNING[vid]
@@ -295,8 +430,10 @@ async def combine(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     """Many media files of one speaker joined into one WAV, cleaned like the media pool (decoded to mono 44.1 kHz,
     DC removed, trimmed, long pauses shortened, loudness normalised, 0.4 s between files, at most 20 minutes) and
     written to ``<data>/tmp/combined/``. Record imports the result as one take (it then goes through
-    ``recording.check`` -> ``dataset.add`` like any other file). Unreadable files are skipped and listed."""
+    ``recording.check`` -> ``dataset.add`` like any other file). Unreadable files are skipped and listed.
+    ``remove_music`` (true / false / "auto") separates the vocals first, as in ``voices.reference_from_media``."""
     paths = _paths(params)
+    sep = _Separator(ctx, _music_mode(params), f"combine-{time.time_ns():x}")
     out_dir = os.path.join(ctx.data_dir, "tmp", "combined")
     pieces: list[np.ndarray] = []
     files: list[dict[str, Any]] = []
@@ -304,32 +441,38 @@ async def combine(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     unused: list[str] = []
     gap = np.zeros(int(GAP_S * SR), dtype=np.int16)
     pos = 0
-    for k, path in enumerate(paths):
-        room = MAX_POOL_S - pos / SR
-        if room < MIN_SPEECH_S:
-            unused.extend(os.path.basename(p) for p in paths[k:])
-            break
-        try:
-            res = await aio.run_io(_clean, path, room, False)
-        except _Skip as exc:
-            skipped.append({"name": os.path.basename(path), "path": path, "reason": str(exc)})
-            continue
-        if pieces:
-            pieces.append(gap)
-            pos += len(gap)
-        y = res.pop("y")
-        pieces.append(np.round(np.clip(y, -1.0, 1.0) * 32767.0).astype(np.int16))
-        pos += len(y)
-        files.append({"name": os.path.basename(path), "duration_s": round(len(y) / SR, 2), "truncated": bool(res["truncated"])})
-        del y, res
+    try:
+        for k, path in enumerate(paths):
+            room = MAX_POOL_S - pos / SR
+            if room < MIN_SPEECH_S:
+                unused.extend(os.path.basename(p) for p in paths[k:])
+                break
+            try:
+                res = await _clean(path, room, False, sep)
+            except _Skip as exc:
+                skipped.append({"name": os.path.basename(path), "path": path, "reason": str(exc)})
+                continue
+            if pieces:
+                pieces.append(gap)
+                pos += len(gap)
+            y = res.pop("y")
+            pieces.append(np.round(np.clip(y, -1.0, 1.0) * 32767.0).astype(np.int16))
+            pos += len(y)
+            files.append({"name": os.path.basename(path), "duration_s": round(len(y) / SR, 2),
+                          "truncated": bool(res["truncated"]), "music_removed": bool(res["music_removed"])})
+            del y, res
+    finally:
+        await aio.run_io(sep.close)
     if not files:
         raise EngineError("bad_request", "None of the files has usable speech: "
                           + "; ".join(f"{x['name']}: {x['reason']}" for x in skipped))
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"combined-{time.strftime('%Y%m%d-%H%M%S')}-{len(files)}files.wav")
     await aio.run_io(_write_pool, out, pieces)
-    log.info("media.combine: %d file(s) -> %s (%.1f s), %d skipped", len(files), out, pos / SR, len(skipped))
-    return {"path": out, "duration_s": round(pos / SR, 2), "files": files, "skipped": skipped, "unused": unused}
+    log.info("media.combine: %d file(s) -> %s (%.1f s), %d skipped, music removed from %d", len(files), out, pos / SR,
+             len(skipped), sep.count)
+    return {"path": out, "duration_s": round(pos / SR, 2), "files": files, "skipped": skipped, "unused": unused,
+            **sep.summary()}
 
 
 @method("voices.media_cancel")
@@ -363,7 +506,8 @@ async def clear_media(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], code: str | None) -> None:
+async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], code: str | None,
+               music: bool | None) -> None:
     from .. import tts  # noqa: PLC0415
 
     n = len(paths)
@@ -384,6 +528,14 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
     pos = 0  # samples in the pool so far (gaps included)
     gap = np.zeros(int(GAP_S * SR), dtype=np.int16)
     tmp = os.path.join(vdir, f"{store.MEDIA_POOL}.{job}.tmp.wav")
+    sep = _Separator(ctx, music, job)
+
+    def separating(k: int) -> speech.Progress:
+        def cb(stage: str, pct: float) -> None:  # load_model 0-10 %, separate 10-100 % of this file's middle part
+            sub = 0.1 * pct if stage == "load_model" else 10.0 + 0.9 * pct
+            progress("separate", 85.0 * (k + 0.1 + 0.8 * sub / 100.0) / n, k)
+        return cb
+
     try:
         for k, path in enumerate(paths):
             room = MAX_POOL_S - pos / SR
@@ -392,7 +544,7 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
                 break
             progress("decode", 85.0 * k / n, k)
             try:
-                res = await aio.run_io(_clean, path, room)
+                res = await _clean(path, room, True, sep, separating(k))
             except _Skip as exc:
                 skipped.append({"name": os.path.basename(path), "path": path, "reason": str(exc)})
                 continue
@@ -404,7 +556,8 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
             pieces.append(np.round(np.clip(y, -1.0, 1.0) * 32767.0).astype(np.int16))
             pos += len(y)
             entry = {"index": k + 1, "name": os.path.basename(path), "start_s": round(off, 3),
-                     "end_s": round(pos / SR, 3), "truncated": bool(res["truncated"])}
+                     "end_s": round(pos / SR, 3), "truncated": bool(res["truncated"]),
+                     "music_removed": bool(res["music_removed"])}
             files.append(entry)
             if res["rate"] > 0:
                 rates.append(float(res["rate"]))
@@ -416,7 +569,7 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
             del y, res
         if not files:
             ctx.emit("voices.media.error", {"code": "bad_request", "message": "None of the files has usable speech.",
-                                            "skipped": skipped}, job=job)
+                                            "skipped": skipped, **sep.summary()}, job=job)
             return
         progress("combine", 88.0)
         await aio.run_io(_write_pool, tmp, pieces)
@@ -431,7 +584,8 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
         media_meta = {"version": 1, "pool": f"{int(time.time() * 1000):x}",
                       "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "language": code,
                       "duration_s": round(pos / SR, 2), "files": files, "skipped": skipped, "unused": unused,
-                      "rate_median": round(median, 3), "cands": keep, "current": None}
+                      "rate_median": round(median, 3), "cands": keep, "current": None,
+                      "music_removed": sep.count}
         install = asyncio.ensure_future(aio.run_io(_install, vdir, tmp, media_meta, None if busy else best, code))
         try:
             ref = await asyncio.shield(install)
@@ -450,6 +604,8 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
         ctx.emit("voices.media.error", {"code": "internal", "message": f"{type(exc).__name__}: {exc}"}, job=job)
         _remove(tmp)
         return
+    finally:
+        sep.close()  # at most two .npy files
 
     warming = False
     if ref is not None:
@@ -471,7 +627,7 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
         "target": target_name(code), "applied": ref is not None, "reference": ref, "warming": warming,
         "preview_path": os.path.join(vdir, target_name(code)) if ref is not None else None,
         "skipped": skipped, "unused": unused, "truncated": [f["name"] for f in files if f["truncated"]],
-        "message": message, "elapsed_s": round(time.time() - t0, 1),
+        "message": message, "elapsed_s": round(time.time() - t0, 1), **sep.summary(),
     }, job=job)
 
 
