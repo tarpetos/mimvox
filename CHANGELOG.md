@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
 
 * **Native accent sounds cleaner on trained voices:** it now goes through the zero-shot converter (Seed-VC) for
   trained voices too. RVC, trained on a few minutes of the user, made the native speaker's audio metallic and its
