@@ -341,6 +341,8 @@ begin
 end;
 
 function InitializeUninstall(): Boolean;
+var
+  ResultCode: Integer;
 begin
   Result := True;
   RemoveChoice := 0;
@@ -349,6 +351,8 @@ begin
   if ExpandConstant('{param:REMOVE|}') <> '' then
   begin
     RemoveChoice := StrToIntDef(ExpandConstant('{param:REMOVE|0}'), 0);
+    { /SHOWDONE=1: handed over from a run the user started, which showed the form. }
+    UserStarted := ExpandConstant('{param:SHOWDONE|0}') = '1';
     Log('Chosen on the command line: ' + IntToStr(RemoveChoice));
     exit;
   end;
@@ -365,6 +369,13 @@ begin
   end;
   UserStarted := True;
   Log('Chosen: ' + IntToStr(RemoveChoice) + ' (0 the app, 1 also the engine and models, 2 everything)');
+  if UninstallSilent() then exit;
+  { Started without /SILENT (unins000.exe by hand): Inno would ask its own Yes/No and show its own "removed" box.
+    A silent run of the same uninstaller takes the choice over; this one ends without removing anything. }
+  Result := False;
+  if not Exec(ExpandConstant('{uninstallexe}'), '/SILENT /REMOVE=' + IntToStr(RemoveChoice) + ' /SHOWDONE=1', '',
+              SW_SHOW, ewNoWait, ResultCode) then
+    MsgBox('The uninstaller could not continue. Run it again from Settings > Apps.', mbError, MB_OK);
 end;
 
 procedure RemoveEntry(Dir, Name: String);
@@ -418,7 +429,8 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then RemoveChosenData();
-  if (CurUninstallStep = usDone) and UserStarted then
+  { Ours is the one "removed" box: the uninstall always runs silent, and Inno shows its own only when it is not. }
+  if (CurUninstallStep = usDone) and UserStarted and UninstallSilent() then
     MsgBox('Mimvox was removed.', mbInformation, MB_OK);
 end;
 """
