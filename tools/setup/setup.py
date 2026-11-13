@@ -485,6 +485,9 @@ class Setup:
         # Fedora), and the Python packages unpack and compile there ("Disk quota exceeded").
         for name in ("TMPDIR", "TEMP", "TMP"):
             env[name] = str(self.temp_dir())
+        # uv's package cache next to the environments: on the same drive uv hard-links the packages into them
+        # instead of copying (PyTorch is several GB), and deleting the data folder removes everything setup wrote.
+        env.setdefault("UV_CACHE_DIR", str(self.data_dir / "cache" / "uv"))
         if GUI:  # plain text for the app's log
             env["NO_COLOR"] = "1"
             env["TERM"] = "dumb"

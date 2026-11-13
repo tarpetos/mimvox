@@ -188,21 +188,22 @@ pub fn start(s: &mut AppState, data_dir: &str) {
     let mut args = base_args(data_dir);
     args.push("--components".into());
     args.push(chosen.join(",").into());
-    start_with(s, args, None);
+    start_with(s, args, None, data_dir);
 }
 
 /// Setup again with the components installed before (a runtime update).
 pub fn update_runtime(s: &mut AppState) {
-    let args = base_args(&super::onboarding::data_dir().display().to_string());
-    start_with(s, args, None);
+    let dir = super::onboarding::data_dir().display().to_string();
+    start_with(s, base_args(&dir), None, &dir);
 }
 
 /// Adds one component to the installed runtime (the "Install" buttons on the screens that need it).
 pub fn install(s: &mut AppState, id: &str) {
-    let mut args = base_args(&super::onboarding::data_dir().display().to_string());
+    let dir = super::onboarding::data_dir().display().to_string();
+    let mut args = base_args(&dir);
     args.push("--add".into());
     args.push(id.into());
-    start_with(s, args, Some(id.to_owned()));
+    start_with(s, args, Some(id.to_owned()), &dir);
 }
 
 fn base_args(data_dir: &str) -> Vec<OsString> {
@@ -215,14 +216,22 @@ fn base_args(data_dir: &str) -> Vec<OsString> {
 }
 
 /// Starts setup with `args`. Does nothing while one runs.
-fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>) {
+fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, data_dir: &str) {
     if running(s) || s.shell.scripted() {
         return;
     }
     *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()) = false;
     let left_out = std::mem::take(&mut s.setup.left_out);
     s.setup = SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, adding, left_out, ..Default::default() };
-    let mut child = match command(&args).and_then(|mut c| c.spawn().map_err(|e| format!("Setup could not start: {e}"))) {
+    // uv's cache in the data folder from the first command on (setup.py sets the same for what it runs).
+    let cache = PathBuf::from(data_dir.trim()).join("cache").join("uv");
+    let spawned = command(&args).and_then(|mut c| {
+        if !data_dir.trim().is_empty() && std::env::var_os("UV_CACHE_DIR").is_none() {
+            c.env("UV_CACHE_DIR", &cache);
+        }
+        c.spawn().map_err(|e| format!("Setup could not start: {e}"))
+    });
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
             s.setup.phase = Phase::Error(e);

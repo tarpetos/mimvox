@@ -906,7 +906,8 @@ Everything the app makes lives in one folder (the one you chose during setup; se
   outputs/                       every generated phrase and redub, one file each (WAV unless "Save as" says otherwise),
                                  each with a <name>.result.json that lets the Results lists come back after a restart
   logs/engine.log                the engine log
-  tmp/                           scratch files, emptied at every engine start
+  tmp/                           scratch files, emptied at every engine start (tmp/setup: setup's own)
+  cache/uv/                      the Python package cache setup installs from (safe to delete; a move leaves it behind)
   settings.json                  your app settings (microphone, last choices, "Save as" format, "Remove background music")
   runtime/, runtime.toml         the installed engine and models (about 30 GB)
 ```
