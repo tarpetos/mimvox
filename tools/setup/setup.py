@@ -117,8 +117,10 @@ DEMUCS_SHA256 = "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd781
 ENGINE_DIR = "engine"
 ENGINE_PYTHON = "3.11"
 ENGINE_TORCH = ("torch==2.8.0", "torchaudio==2.8.0")
+# pypdf (BSD-3-Clause, pure Python, no dependencies on 3.11): the text layer of PDF books for text.import (audiobooks);
+# every other book format is read with the standard library.
 ENGINE_PACKAGES = ("omnivoice==0.2.1", "openai-whisper==20250625", "num2words==0.5.14", "sentencepiece", "g2p_en==2.1.0",
-                   "soundfile", "librosa", "scipy", "numpy", "marisa-trie==1.4.1")
+                   "soundfile", "librosa", "scipy", "numpy", "marisa-trie==1.4.1", "pypdf==6.21.4")
 # Ukrainian word stress for the OmniVoice text front-end (backends/omnivoice_stress.py, used when MIMVOX_STRESS_AUTO is
 # set): lang-uk's dictionary (12.5 MB, inside the wheel, so it works offline) in dictionary-only mode with marisa-trie.
 # Installed with --no-deps: its declared Stanza dependency (and the ~500 MB of models Stanza downloads) is only needed

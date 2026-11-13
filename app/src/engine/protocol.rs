@@ -1143,3 +1143,339 @@ pub fn redub_render(
 pub fn redub_cancel(job: &str) -> Request {
     ("redub.cancel", json!({ "job": job }))
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Text import and audiobooks (`text.import`, `book.*`)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// One chapter of an imported text.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TextChapter {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub words: u32,
+    /// Estimated speech seconds at the language's reading pace (speed 1.0).
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub est_s: f32,
+}
+
+/// `text.import`: the clean text of a file, cut into chapters.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TextImport {
+    #[serde(default)]
+    pub path: PathBuf,
+    /// The file name.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub format: String,
+    #[serde(default)]
+    pub format_label: String,
+    #[serde(default)]
+    pub title: String,
+    /// The text encoding found (plain-text formats only).
+    #[serde(default)]
+    pub encoding: Option<String>,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub language_detected: bool,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub words: u32,
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub est_s: f32,
+    #[serde(default)]
+    pub chapters: Vec<TextChapter>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+pub fn text_import(path: &std::path::Path) -> Request {
+    ("text.import", json!({ "path": path }))
+}
+
+/// Overall progress of a book (in `book.*` events and summaries).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BookTotals {
+    /// 0..100, by characters read.
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub percent: f32,
+    /// Seconds of audio made so far.
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub audio_s: f32,
+    /// Seconds spent making it (all sessions).
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub elapsed_s: f32,
+    /// Generation seconds per audio second so far.
+    #[serde(default)]
+    pub rtf: Option<f32>,
+    /// Seconds of generation left at the measured pace.
+    #[serde(default)]
+    pub eta_s: Option<f32>,
+    /// The whole book's audio length, extrapolated from what is made.
+    #[serde(default)]
+    pub est_audio_s: Option<f32>,
+}
+
+/// A chapter of a book project with its progress (`book.get` -> `chapter_list`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BookChapterRow {
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub index: u32,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub words: u32,
+    /// `waiting` | `partial` | `done`.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub segment: u32,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub segments: u32,
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub audio_s: f32,
+    #[serde(default)]
+    pub rtf: Option<f32>,
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+}
+
+/// A book project (`book.list` entries, `book.get`, the `book.paused` event).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BookSummary {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub voice_id: Option<String>,
+    /// `new` | `running` | `paused` | `done` | `error` | `cancelled`.
+    #[serde(default)]
+    pub status: String,
+    /// Recorded as running by an engine that stopped (the app closed mid-book): resumable.
+    #[serde(default)]
+    pub interrupted: bool,
+    #[serde(default)]
+    pub job: Option<String>,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub chapters: u32,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub chapters_done: u32,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub current: u32,
+    #[serde(default)]
+    pub folder: Option<PathBuf>,
+    #[serde(default)]
+    pub m4b: Option<PathBuf>,
+    #[serde(default)]
+    pub output_format: Option<String>,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub words: u32,
+    #[serde(default)]
+    pub error: Option<EngineError>,
+    #[serde(flatten)]
+    pub totals: BookTotals,
+    #[serde(default)]
+    pub chapter_list: Vec<BookChapterRow>,
+}
+
+/// `book.start` / `book.resume`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BookStarted {
+    pub id: String,
+    pub job: String,
+    #[serde(default)]
+    pub folder: Option<PathBuf>,
+    #[serde(default)]
+    pub accent_note: Option<String>,
+    #[serde(default)]
+    pub reference_note: Option<String>,
+}
+
+/// `book.progress`: after every segment (and when a chapter starts).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BookProgress {
+    pub id: String,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub chapter: u32,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub chapters: u32,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub segment: u32,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub segments: u32,
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub chapter_audio_s: f32,
+    /// `m4b` while the whole-book file is made.
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(flatten)]
+    pub totals: BookTotals,
+}
+
+/// `book.chapter`: a chapter file is finished.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BookChapterDone {
+    pub id: String,
+    #[serde(default, deserialize_with = "de::u32_or_zero")]
+    pub index: u32,
+    #[serde(default)]
+    pub path: PathBuf,
+    #[serde(default, deserialize_with = "de::f32_or_zero")]
+    pub duration_s: f32,
+    #[serde(default)]
+    pub rtf: Option<f32>,
+}
+
+/// `book.done`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BookDone {
+    pub id: String,
+    #[serde(default)]
+    pub folder: Option<PathBuf>,
+    #[serde(default)]
+    pub m4b: Option<PathBuf>,
+    #[serde(default)]
+    pub m4b_requested: bool,
+    #[serde(flatten)]
+    pub totals: BookTotals,
+}
+
+/// One chapter sent with `book.start`.
+#[derive(Clone, Debug, Serialize)]
+pub struct BookChapterIn<'a> {
+    pub title: &'a str,
+    pub text: &'a str,
+}
+
+/// The voice settings of a book (as `tts.generate`'s) plus its output options.
+pub struct BookParams<'a> {
+    pub title: &'a str,
+    pub source: Option<&'a str>,
+    pub format: Option<&'a str>,
+    pub chapters: Vec<BookChapterIn<'a>>,
+    pub voice_id: &'a str,
+    pub language: &'a str,
+    pub expressiveness: f32,
+    pub voice_match: f32,
+    pub quality: Quality,
+    pub speed: f32,
+    pub accent: Option<NativeVoice>,
+    pub output_format: &'a str,
+    pub m4b: bool,
+    pub read_titles: bool,
+}
+
+pub fn book_start(p: &BookParams<'_>) -> Request {
+    let params = json!({
+        "title": p.title,
+        "source": p.source,
+        "format": p.format,
+        "chapters": p.chapters,
+        "voice_id": p.voice_id,
+        "language": p.language,
+        "expressiveness": p.expressiveness,
+        "voice_match": p.voice_match,
+        "quality": p.quality.as_str(),
+        "speed": p.speed,
+        "output_format": p.output_format,
+        "m4b": p.m4b,
+        "read_titles": p.read_titles,
+    });
+    ("book.start", with_accent(params, p.accent))
+}
+
+pub fn book_id_request(method: &'static str, id: &str) -> Request {
+    (method, json!({ "id": id }))
+}
+
+pub fn book_play(id: &str, index: u32) -> Request {
+    ("book.play", json!({ "id": id, "index": index }))
+}
+
+// ---- saved results (outputs.list / outputs.play) ----
+
+/// One saved Speak or Redub result (`outputs.list`), from its sidecar (`<stem>.result.json`) or, for a result saved
+/// before sidecars (`legacy`), from the file alone: then only `name`, `created`, `duration_s`, `format` and the paths
+/// are known.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct OutputEntry {
+    /// The file stem, unique in the outputs folder.
+    pub id: String,
+    /// `speak` | `redub`.
+    pub kind: String,
+    #[serde(default)]
+    pub legacy: bool,
+    /// The saved file's name (what a legacy entry shows as its title).
+    #[serde(default)]
+    pub name: String,
+    /// Unix time in seconds; the list is sorted by it, newest first (`before` pages by it).
+    #[serde(default)]
+    pub created: f64,
+    pub path: PathBuf,
+    /// A WAV that plays it now (the file itself, or this session's copy in `<data>/tmp/play`); `None` until
+    /// `outputs.play` makes one.
+    #[serde(default)]
+    pub path_play: Option<PathBuf>,
+    #[serde(default)]
+    pub video_path: Option<PathBuf>,
+    #[serde(default)]
+    pub duration_s: Option<f32>,
+    #[serde(default)]
+    pub elapsed_s: Option<f32>,
+    #[serde(default)]
+    pub format: String,
+    #[serde(default)]
+    pub voice_id: Option<String>,
+    #[serde(default)]
+    pub voice_name: Option<String>,
+    /// Speak: the whole text.
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// Redub: `dub` | `convert` | `respeak`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub source_name: Option<String>,
+    /// Redub: the language a dub was spoken in.
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+/// The answer of `outputs.list`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct OutputsPage {
+    #[serde(default)]
+    pub results: Vec<OutputEntry>,
+    /// Older results exist (ask again with `before` = the last entry's `created`).
+    #[serde(default)]
+    pub more: bool,
+}
+
+/// `outputs.list`: the saved results of `kind` (`speak` | `redub`), newest first, `limit` of them, older than
+/// `before` (a `created`) when given.
+pub fn outputs_list(kind: &str, limit: u32, before: Option<f64>) -> Request {
+    let mut params = json!({ "kind": kind, "limit": limit });
+    if let Some(b) = before {
+        params["before"] = json!(b);
+    }
+    ("outputs.list", params)
+}
+
+/// `outputs.play`: a WAV to play a saved result with (`{path, path_play}`).
+pub fn outputs_play(path: &std::path::Path) -> Request {
+    ("outputs.play", json!({ "path": path }))
+}

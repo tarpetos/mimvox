@@ -53,6 +53,9 @@ Apache-2.0, BSD).
 - **ukrainian-word-stress** (lang-uk, MIT) with the stress dictionary in its package, and **marisa-trie** (MIT; the
   bundled libmarisa is BSD-2-Clause or LGPL-2.1-or-later), for the optional automatic Ukrainian word stress in the
   OmniVoice text front-end. Installed without its optional Stanza dependency.
+- **pypdf** 6.21.4 (BSD-3-Clause, the `LICENSE` file of the package; <https://github.com/py-pdf/pypdf>), for reading
+  the text layer of PDF books in the audiobook import. Installed without its optional extras. The other book formats
+  (EPUB, FB2, DOCX, ODT, RTF, HTML, Markdown, subtitles) are read with the Python standard library.
 
 ### Hybrid Demucs (Remove background music)
 

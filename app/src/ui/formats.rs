@@ -12,7 +12,8 @@
 //!   in their Results headers; the menu is [`output_overlay`]). Remembered as `output_format` in `settings.json`,
 //!   default WAV, and sent with every `tts.generate` / `redub.*` job as `output_format` (see [`output_format`]).
 //! * Window drops: a file dropped anywhere lands on the screen that can use it (see [`window_drops`]); on Voices
-//!   every dropped file goes into the active voice's "Reference from media".
+//!   every dropped file goes into the active voice's "Reference from media". A book or text file (EPUB, DOCX, TXT,
+//!   ...) opens on Speak from any screen (see `book::drop_file`).
 
 use super::components::{Button, Tone, dropdown_chip, glass_edge, icon_el, icons, segmented};
 use super::shell;
@@ -506,14 +507,21 @@ pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
 pub fn window_drops(root: El, s: &AppState) -> El {
     let exts = s.formats.import.clone();
     root.on_drop_files(|s: &mut AppState, files, _| on_window_drop(s, files))
-        .accepts_files(move |p| has_ext(p, &exts))
+        .accepts_files(move |p| has_ext(p, &exts) || super::book::is_text_path(p))
         .on_drop_hover(|s: &mut AppState, over, _| s.formats.over = over)
-        .on_drop_rejected(|s: &mut AppState, _, _| shell::toast(s, Tone::Warning, "That kind of file is not supported. Try WAV, MP3, FLAC, M4A, MP4 or MKV."))
+        .on_drop_rejected(|s: &mut AppState, _, _| shell::toast(s, Tone::Warning, "That kind of file is not supported. Try WAV, MP3, FLAC, M4A, MP4 or MKV, or a book: EPUB, DOCX, PDF, TXT."))
 }
 
 fn on_window_drop(s: &mut AppState, files: &[PathBuf]) {
     s.formats.over = false;
     let Some(path) = files.first().cloned() else { return };
+    // A book or text file (EPUB, DOCX, TXT, ...) opens on Speak, from any screen except first-run setup.
+    if super::book::is_text_path(&path) {
+        if s.screen != Screen::Onboarding {
+            super::book::drop_file(s, path);
+        }
+        return;
+    }
     match s.screen {
         Screen::Onboarding => {}
         Screen::Voices => super::refmedia::drop_files(s, files),

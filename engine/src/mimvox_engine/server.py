@@ -288,7 +288,7 @@ async def tts_languages(ctx: Server, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_handlers() -> None:
-    from . import media, tts, voices  # noqa: F401 - register their methods
+    from . import book, media, results, textimport, tts, voices  # noqa: F401 - register their methods
     for pkg in ("dataset", "training", "redub"):  # written by other modules; may not exist in every checkout
         try:
             importlib.import_module(f"{__package__}.{pkg}")

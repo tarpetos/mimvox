@@ -69,6 +69,7 @@ recordings joined with short pauses).
 | **Recording quality checks** | Every take is checked right away: duration, peak level, clipping, loudness, noise floor, signal-to-noise ratio and silence. You get a plain verdict (ok, warn, bad) with advice such as "Too quiet: speak closer to the mic", so you re-record before training, not after. |
 | **One-click training** | Press **Train**. The app prepares the dataset, extracts features, trains the timbre model, builds its index, shows progress and an estimated time, and can be cancelled. The number of epochs is chosen from the length of your recording. |
 | **Fast streaming generation** | Type text in English, Ukrainian or another supported language and press **Speak**. Long text is split into segments and each segment plays as soon as it is ready, while the rest is still being generated. The models stay loaded in a persistent engine, so the second phrase is much faster than the first. |
+| **Audiobooks** | Open a book (EPUB, DOCX, ODT, FB2, PDF with text, TXT in any encoding, Markdown, HTML, RTF, subtitles) and **Book** mode reads it in your voice, one file per chapter (WAV, MP3, ...; optionally one M4B with chapter marks). Chapters are found from the book's structure and can be ticked, renamed, split or joined. Whole sentences, pauses that follow the punctuation, every chapter levelled to the same loudness. Pause and resume at any time, even after closing the app; progress shows the chapter, the time left and the speed. Short text files open straight in Speak. |
 | **Native English accent** | A voice recorded in Ukrainian (or any other language) would speak English with your accent. **Native (American)**, the default when the reference clip is not English, has a native US speaker from the public CMU ARCTIC corpus say the text, then gives it your timbre: with no training at all, from your reference clip (Seed-VC zero-shot voice conversion, installed by setup), or, once the voice is trained, with your own voice model at your pitch, which is closer to you. Also in Redub's Translate & dub and Re-speak into English. |
 | **Redub a video, music kept** | Drop a video and Redub translates and dubs it (or re-speaks it, or converts the voice) in your voice, then writes a copy of the video with the new voice: the original music and sound effects are separated from the old voice and kept under yours, at the original balance, and the picture is copied without re-encoding. Or save the audio only. |
 | **History and export** | Every result is saved as one file in the format you pick (WAV by default, or MP3, FLAC, OGG, Opus, M4A, AIFF). Play it again, or export it to another format. |
@@ -173,11 +174,13 @@ rather than being bundled; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 app/                   Rust desktop app (Rune UI, microphone and playback, engine client)
   src/engine/          engine process client and protocol types
   src/audio/           capture and playback (cpal, hound)
-  src/ui/              screens: onboarding, record, train, voices, speak
+  src/ui/              screens: onboarding, record, train, voices, speak (with its Book mode, book.rs), redub
 engine/                Python engine (mimvox_engine), runs in the engine virtualenv
   src/mimvox_engine/
     server.py          JSON-lines server
     tts.py, rvc.py     generation pipeline and RVC client (rvc_worker.py runs in the Applio venv)
+    textimport.py      documents to clean text and chapters (EPUB, DOCX, ODT, FB2, PDF, TXT, ...)
+    book.py, narration.py  audiobooks: the resumable book job; segmentation, pauses and levels for narration
     backends/          speech model: OmniVoice worker, text normalization (numbers, abbreviations)
     dataset/           recording checks, text analysis, dataset management
     training/          RVC training driver

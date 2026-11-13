@@ -290,6 +290,34 @@ def decode_to_wav(src: str, dst: str, sr: int = 44100) -> float:
     return len(y) / float(rate)
 
 
+def play_wav(src: str, dst: str, sr: int, channels: int | None = None) -> str:
+    """Write the first audio track of ``src`` to ``dst`` as a 16-bit WAV at ``sr`` (``channels`` 1 for mono, ``None``
+    keeps the file's own), atomically (a ``.part`` file, then a rename); returns ``dst``. ffmpeg streams it (a long
+    file never sits in memory); without ffmpeg libsndfile reads it whole (mono). Blocking: call it on the IO pool."""
+    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+    part = f"{dst}.part-{os.getpid()}-{threading.get_ident()}.wav"
+    try:
+        exe = ffmpeg_path()
+        if exe:
+            mix = ["-ac", str(int(channels))] if channels else []
+            res = _run([exe, "-nostdin", "-v", "error", "-y", "-i", src, "-vn", "-map", "0:a:0", *mix, "-ar", str(int(sr)),
+                        "-c:a", "pcm_s16le", part])
+            if res.returncode != 0 or not os.path.isfile(part):
+                if _no_audio(res.stderr):
+                    raise EngineError("bad_request", "This file has no audio track.")
+                raise EngineError("internal", f"could not decode {os.path.basename(src)} ({_tail(res.stderr)})")
+        else:
+            decode_to_wav(src, part, sr)
+        os.replace(part, dst)
+    finally:
+        if os.path.exists(part):
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+    return dst
+
+
 # ------------------------------------------------------------------------------------------ format support
 
 def _ffmpeg_lists() -> tuple[set[str], set[str], set[str], str]:
@@ -587,13 +615,15 @@ def delete_outputs(data: config.DataDir, paths: list[Any]) -> dict[str, Any]:
             raise EngineError("bad_request", "'path' must be a file, not a folder")
         checked.append(real)
         # A result in outputs may have siblings with the same name: a Redub of a video saves the audio and the video
-        # side by side (redub_<stamp>.mp3 + redub_<stamp>.mp4). They are one result and go together.
+        # side by side (redub_<stamp>.mp3 + redub_<stamp>.mp4), and every result has its sidecar
+        # (<stamp>.result.json, see results.py). They are one result and go together.
         if _inside(real, data.outputs):
             folder, stem = os.path.dirname(real), os.path.splitext(os.path.basename(real))[0]
             try:
                 for name in os.listdir(folder):
                     sib = os.path.join(folder, name)
-                    if os.path.splitext(name)[0] == stem and os.path.isfile(sib) and _inside(os.path.realpath(sib), data.outputs):
+                    same = os.path.splitext(name)[0] == stem or name == stem + ".result.json"  # + its sidecar
+                    if same and os.path.isfile(sib) and _inside(os.path.realpath(sib), data.outputs):
                         checked.append(os.path.realpath(sib))
             except OSError:
                 pass

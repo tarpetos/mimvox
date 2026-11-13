@@ -80,6 +80,9 @@ Error codes: `bad_request`, `not_found`, `busy`, `not_ready`, `paused`, `cancell
 Job events of the reference-from-media job (`voices.media.progress`, `voices.media.done`, `voices.media.error`) are
 described in [Reference from media](#reference-from-media-voicesreference_from_media--voicesmedia_cancel--voicesclear_media).
 
+Job events of audiobooks (`book.progress`, `book.chapter`, `book.done`, `book.paused`, `book.error`) are described in
+[Audiobooks](#audiobooks-textimport-book).
+
 Job events of the Redub feature (`redub.progress`, `redub.transcript`, `redub.done`, `redub.error`) are described in the
 [Redub](#redub-transcribe-convert-and-re-speak-a-file) section; `audio.export` and `formats.list` in
 [Audio formats](#audio-formats-import-and-export).
@@ -187,10 +190,12 @@ the quick check, and only then delete the old directory.
                                              #  wav; 44.1 kHz mono, opus 48 kHz; a `_2`, `_3` suffix on a name clash)
 <data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext> # Redub results (same rules); a video output adds
                                              #  redub_<same stamp>.<mp4|mov|m4v|mkv|webm|avi> next to it
+<data>/outputs/<same stem>.result.json       # the sidecar of every Speak / Redub result (what made it), see Saved results
 <data>/tmp/redub_sep_<key>/                  # Redub's voice / background stems of one source (vocals.npy, background.npy:
                                              #  float32 (channels, n) at 44.1 kHz); only the latest file is kept
 <data>/tmp/play/<name>.wav                   # playback WAV of a result saved in another format than wav (the app plays WAV
-                                             #  only; same name as the saved file; gone at the next engine start)
+                                             #  only; same name as the saved file; written with the result or by
+                                             #  outputs.play; gone at the next engine start)
 <data>/runtime/models/whisper/               # Whisper turbo (large-v3-turbo.pt, 1.6 GB), fetched by setup (else on the first Redub)
 <data>/runtime/models/nllb-200-distilled-600M/  # NLLB-200 translation model (2.5 GB), fetched by setup with `hf download`; never auto-downloaded
 <data>/runtime/models/nllb-200-distilled-1.3B/  # optional better translation model (fp16 model.safetensors, 2.7 GB; a 5.5 GB fp32
@@ -206,6 +211,12 @@ the quick check, and only then delete the old directory.
                                              #  language; rebuilt when it changes; sidecars written by earlier versions have no "language")
 <data>/voices/<voice_id>/reference_<lang>.wav  # optional per-language reference (e.g. reference_uk.wav, 7-12 s of speech in that
                                              #  language); OmniVoice uses it instead of reference.wav for <lang> (+ its own .omnivoice.json)
+<data>/books/<book_id>/book.json             # an audiobook project: title, settings, chapters with their texts (see Audiobooks)
+<data>/books/<book_id>/state.json            # its progress: chapters done, the current chapter's next segment and PCM length
+<data>/books/<book_id>/work/<NNN>.pcm         # the chapter being read: 16-bit mono 44.1 kHz PCM, appended per segment
+<data>/books/<book_id>/work/<NNN>.segments.json  # that chapter's segments, fixed when it starts
+<data>/books/<book_id>/stats/<NNN>.json      # per-segment measures of a finished chapter (loudness, pitch, pauses, retries)
+<data>/outputs/books/<book title>/<NN> - <chapter title>.<ext>  # one file per chapter (+ <book title>.m4b with "m4b")
 <data>/tmp/                                  # scratch (job chunks, training logs), wiped at every engine start
 ```
 
@@ -673,12 +684,53 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   in `settings.json`, default `wav`); it lists the formats of `formats.list` `export`. The app plays `path_play`, and
   "Show in folder", "Open file" and "Export as..." use `path` (an export encodes from `path_play` while it exists).
   Fields `path_wav` / `path_mp3` of earlier versions are gone.
+- **Sidecar.** Next to every saved result the engine writes `<same stem>.result.json` (atomically: a temporary file,
+  then a rename; a failure is logged and the result kept), so the result comes back after a restart (`outputs.list`):
+  `{"version":1,"created":<unix s>,"kind":"speak|redub","voice_id","voice_name","language","accent","duration_s",
+  "elapsed_s","format","path","video_path"}` plus, for Speak, `"text"` (the whole text), and for Redub `"mode"`
+  (`dub` | `convert` | `respeak`; a `redub.render` with `"result_mode":"dub"` records `dub`), `"source_name"` (the
+  source file's name), `"to"` (the language spoken: a dub's target, a respeak's text language) and `"language"` (a
+  dub: the detected source language; a respeak: the text language; a convert: `null`). `path` / `video_path` are the
+  absolute paths at save time; `outputs.list` uses the files found next to the sidecar, so a moved data folder still
+  works. `outputs.delete` deletes the sidecar with its result.
 - **Pre-buffer rule (client).** Chunk 0 is played as soon as it arrives and later chunks are queued gaplessly behind
   it; the segment growth schedule keeps `rtf` of the later chunks near 1 (measured 1.05-1.4). A client that wants to
   avoid underruns on slower hardware estimates the total speech `S = duration_s(chunk 0) * sum(segment_chars) /
   segment_chars[0]` and holds chunk 0 back for `max(0, rtf * (S - duration_s(chunk 0)) - S)` seconds, taking `rtf`
   from chunk 0 (a first estimate) and refining it with each new chunk. With `rtf <= 1` this is 0: start at once.
 
+
+### `outputs.list` (the saved results, after a restart too)
+`{"kind"?:"speak|redub","limit"?:50,"before"?:<unix s>}` -> `{"results":[<entry>, ...],"more":false}`
+- The results in `<data>/outputs` (top level only: `books/` and other folders are skipped), newest first by `created`,
+  at most `limit` (default 50, at most 500; not a positive integer is `bad_request`), only those of `kind` when given,
+  only those with `created` < `before` when given (the next page: `before` = the last entry's `created`). `more` says
+  older ones exist.
+- One entry per result: the files with one stem are one entry (`redub_<stamp>.mp3` + `redub_<stamp>.mp4` + its
+  sidecar). `{"id":"<stem>","kind","legacy":false,"name":"<saved file name>","created","path","path_play",
+  "video_path","duration_s","elapsed_s","format"}` plus the sidecar's `voice_id`, `voice_name`, `text`, `language`,
+  `accent`, `mode`, `source_name`, `to` when it has them.
+- A result saved before sidecars (`legacy: true`) is recognised by its name only: `<YYYYMMDD_HHMMSS>[_N]` is Speak,
+  `redub_<YYYYMMDD_HHMMSS>[_N]` is Redub; any other file without a sidecar is not a result (a file the user put there,
+  an export) and is skipped. It gets `name`, `created` (the file's mtime), `duration_s` (read from the file:
+  libsndfile, else ffprobe; cached for the session by path, mtime and size) and `format`; `elapsed_s` and the sidecar
+  fields are `null` / absent. A sidecar whose files are gone is skipped.
+- `path` is the audio file (a video-only result: the video); `path_play` is a WAV that plays it now without decoding
+  (`path` itself for a WAV, or this session's copy in `tmp/play`), else `null`: then ask `outputs.play`.
+- **App side:** once the engine is ready Speak and Redub each ask for their kind (`limit` 50) and fill their Results
+  panels; results finished this session go on top. "Show older" at the bottom (shown while `more`) asks with
+  `before`. A legacy entry shows its file name as the title (and, on Redub, "Redubbed" for its unknown mode). After an
+  engine restart the list is asked again and merged by file name.
+
+### `outputs.play` (a WAV to play a saved result)
+`{"path":"<absolute path>"}` -> `{"path","path_play"}`
+- Like `book.play` for a Speak / Redub result: `path_play` is `path` itself for a WAV, else a decoded copy (16-bit,
+  44.1 kHz, the file's channels) in `<data>/tmp/play/<stem>.wav`, made once and reused for the rest of the session
+  (tmp is emptied at every engine start). A video path plays its first audio track.
+- `path` must be absolute and inside `<data>/outputs` (resolved through symlinks) else `bad_request`; a missing file
+  is `not_found`; an undecodable one `bad_request` / `internal`.
+- **App side:** the play button of a take and Redub's "Result" ask for it when their play path is not a WAV on disk
+  (a result from an earlier session, or after an engine restart), then play the answer and keep it for the card.
 
 ### `outputs.delete` (delete a saved result)
 `{"path":"<absolute path>","path_play"?:"<absolute path>"}` -> `{"deleted":["<absolute path>", ...]}`
@@ -688,7 +740,8 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   anything is removed, so one path outside those folders, a relative path or a folder refuses the whole request with
   `bad_request` and deletes nothing.
 - Files in `<data>/outputs` with the same name as `path` and another extension go too: they belong to the same result
-  (a Redub of a video saves `redub_<stamp>.<audio ext>` and `redub_<stamp>.<video ext>` side by side).
+  (a Redub of a video saves `redub_<stamp>.<audio ext>` and `redub_<stamp>.<video ext>` side by side), and so does
+  its sidecar `<stamp>.result.json`.
 - A file that is already gone is not an error (it is simply not listed in `deleted`). A file that cannot be removed
   (permissions, held open by another program on Windows) is `internal` with the reason.
 - **App side:** the trash button on a Speak take card and on a Redub Results row asks "Delete this result?" inline,
@@ -903,6 +956,147 @@ anything needing ffmpeg answers `not_ready`.
 - Errors: `bad_request` (unknown `format` / `quality`, relative or folder `dest`, `dest` equal to the source, unreadable
   source), `not_found`, `not_ready` (ffmpeg or the needed encoder missing).
 
+## Audiobooks (`text.import`, `book.*`)
+
+Speak has two modes: **Text** (`tts.generate`, above) and **Book**, which reads a whole document in the active voice
+with the same settings and writes one file per chapter. A book is one engine job that can be paused, resumed (also
+after the app or the engine closed in the middle) and cancelled. The engine owns the book's state on disk; the app
+only shows it.
+
+### `text.import` (read a document)
+`{"path":"<absolute path>","language"?:"auto"|"<code>"}` ->
+`{"path","name","format","format_label","title","encoding","language","language_detected","words","chars","est_s",
+"chapters":[{"title","text","words","chars","est_s"}],"warnings":["..."]}`
+- Formats (by extension): `.txt` (any encoding: a BOM, else strict UTF-8, else BOM-less UTF-16, else cp1251 or cp1252
+  by which gives plausible letters; `encoding` names the one used), `.md`/`.markdown`, `.html`/`.htm`/`.xhtml`,
+  `.epub`, `.docx`, `.odt`, `.rtf`, `.fb2` (and `.fb2.zip`), `.pdf` (the text layer only), `.srt`, `.vtt`. Read with the
+  standard library (zipfile + ElementTree for EPUB, DOCX, ODT and FB2; html.parser; a small RTF reader of its own) and
+  `pypdf` for PDF (installed by setup; missing -> `not_ready`). Not read aloud: Markdown code blocks, footnotes and
+  note references, page numbers, picture captions, subtitle sound tags such as `[MUSIC]`, tables of contents.
+- Chapters come from the format's structure: the EPUB navigation (`nav.xhtml`, else `toc.ncx`) mapped onto the spine,
+  headings in Markdown / HTML / DOCX / ODT, nested FB2 sections, the PDF outline, and in plain text lines such as
+  `Chapter 1`, `CHAPTER IV`, `Розділ 1`, `Глава 3`, `Part Two`, `Prologue` (at least two of them). Text before the first
+  heading becomes its own chapter when it has at least 150 words; a title page is dropped. One chapter when nothing is
+  found.
+- `text` is clean: paragraphs separated by one blank line, whitespace collapsed inside a paragraph, soft hyphens and
+  zero-width characters removed, hyphenated line breaks of a PDF joined, page numbers and running headers dropped; the
+  chapter title is not repeated at the start of its text. Subtitles lose their numbers, timestamps and tags.
+- `language`: detected from a sample of the text when omitted or `auto` (as `text.analyze`); `est_s` is the reading
+  time at that language's pace (145 words a minute in English) at speed 1.0.
+- Errors: `bad_request` (relative path, a folder, an unsupported extension, an unreadable or damaged file, no text,
+  a file over 300 MB, a **scanned PDF without a text layer**: "This PDF has no text layer (it is a scanned image) ..."),
+  `not_ready` (pypdf missing). DRM-protected EPUBs and PDFs with a user password are `bad_request` with that reason.
+- **App side:** Speak's "Open text file…" and a text file dropped on the window (from any screen) send this. Up to
+  5,000 words the text goes into the Speak editor (chapter titles as paragraphs); a longer one opens in Book mode with a
+  toast saying so. The detected language becomes the output language of the active voice.
+
+### `book.start`
+`{"title","source"?,"format"?,"chapters":[{"title","text"}],"voice_id","language"?,"expressiveness"?:0.6,
+"voice_match"?:1.0,"quality"?:"best","speed"?:1.0,"accent"?,"native_voice"?,"output_format"?:"wav","m4b"?:false,
+"read_titles"?:true}` -> `{"id","job","folder","chapters","words", ...accent and reference fields as tts.generate}`
+- Creates a book project and starts reading it at once. The voice settings mean what they mean for `tts.generate` and
+  are checked the same way (`not_found`, `not_ready`, `bad_request`), before anything is written. `expressiveness`
+  defaults to **0.6** for a book (a steadier narrator than Speak's 0.8); a given value is used as is. Empty chapters
+  are skipped; at most 20 million characters.
+- `output_format`: the format of each chapter file (`wav mp3 flac ogg opus m4a aiff`, as `tts.generate`; lossy
+  formats at `audio.export` quality `standard`: MP3 192 kbps, Opus 96 kbps, AAC 192 kbps). A WAV chapter over 4 GB is
+  written as RF64.
+- `m4b: true`: after the last chapter, one `<title>.m4b` (AAC 96 kbps mono, a chapter mark per chapter, `genre`
+  Audiobook) in the book's folder, when ffmpeg with an AAC encoder is there (else `m4b` is `null` in `book.done`).
+- `read_titles` (default true): each chapter starts with its title read aloud, then a pause.
+- `busy` while any generation runs (only one at a time). **While a book is read it holds the generation slot**:
+  `tts.generate`, Redub, `voices.warm` and reference changes answer `busy` with the message "a book is being read;
+  pause it (Speak, Book) to use speech, Redub or training" (training answers `busy` too). Nothing pre-empts a book.
+
+### `book.resume` / `book.pause` / `book.cancel`
+- `book.resume {"id"}` -> as `book.start` (`id`, `job`, ...). Continues a `paused`, `error`, `cancelled` or `new` book
+  with the settings it was started with, from the next unfinished segment (see Resume). `bad_request` for a finished
+  book, `busy` as above.
+- `book.pause {"id"}` -> `{}`: stops the job now (the segment being made is made again on resume) and frees the slot;
+  `book.paused` follows. `bad_request` when the book is not being read.
+- `book.cancel {"id"}` -> `{}`: stops a running book (`book.error {"code":"cancelled"}` follows) or marks a paused one
+  `cancelled`, and drops the unfinished chapter's progress. Finished chapter files stay; a resume starts that chapter
+  again.
+
+### `book.list` / `book.get` / `book.delete` / `book.play`
+- `book.list {}` -> `{"books":[summary, ...]}`, the most recently changed first. A summary: `{"id","title","source",
+  "format","language","voice_id","status":"new|running|paused|done|error|cancelled","interrupted","job","chapters",
+  "chapters_done","current","folder","m4b","output_format","words","created","updated","error":{"code","message"}|null,
+  "percent","audio_s","elapsed_s","rtf","eta_s","est_audio_s","chars","chars_done"}`. A book recorded as running whose
+  job is not running in this engine (the app or engine closed mid-book) is reported `paused` with `interrupted: true`.
+- `book.get {"id","text"?:false}` -> a summary plus `"settings"` and `"chapter_list":[{"index","title","words","chars",
+  "status":"waiting|partial|done","segment","segments","audio_s","elapsed_s","rtf","path"}]` (`text: true` adds each
+  chapter's text).
+- `book.delete {"id"}` -> `{}`: forgets the project (its texts and progress); the files in `outputs/books` stay. `busy`
+  while it is being read.
+- `book.play {"id","index"}` -> `{"path","path_play"}`: a WAV to play a finished chapter with (the chapter file itself
+  for WAV, else a decoded copy in `<data>/tmp/play/book-<id>-<NNN>.wav`, gone at the next engine start). `not_found`
+  for a chapter that is not finished.
+
+### Events
+- `book.progress {"id","chapter","chapters","title","segment","segments","chapter_audio_s","percent","audio_s",
+  "elapsed_s","rtf","eta_s","est_audio_s","chars","chars_done","segment_rtf"?,"stage"?}`: when a chapter starts and after
+  every segment (`segment` = segments of that chapter done). `percent` is by characters, `audio_s` the audio made so
+  far, `elapsed_s` the generation time over all sessions, `rtf = elapsed_s / audio_s`, `eta_s` the time left at the
+  measured pace (null until the first segment), `est_audio_s` the whole book's length extrapolated. `stage: "m4b"` while
+  the M4B is made.
+- `book.chapter {"id","index","title","path","duration_s","audio_s","elapsed_s","rtf","level":{"lufs_in","gain_db",
+  "peak_dbfs"}, ...totals}`: a chapter file is finished (`rtf` of that chapter alone).
+- `book.done {"id","folder","m4b","m4b_requested","chapters","retries","session_elapsed_s","session_audio_s", ...totals,
+  ...accent and reference fields}`; `book.paused {summary}`; `book.error {"id","code","message"}` (`cancelled` after
+  `book.cancel`). The slot is free when the end event arrives.
+
+### Narration (how a book sounds)
+The pipeline is `tts.generate`'s (backend, native accent and its converter, RVC), with these differences
+(`narration.py`, constants in one table there):
+- **Text**: typography is normalized and punctuation kept (OmniVoice's prosody follows it): `...` -> `…`, a spaced
+  hyphen or `--` -> `—`, TeX quotes -> curly ones, `!!!` -> `!`, no space before `, . ; : ? !`.
+- **Segments**: whole sentences packed up to 90 tokens (about 270 characters), never across a paragraph, no short
+  first segment and no streaming growth. A sentence is cut only when it alone is longer, and then only at clause
+  punctuation (`, ; : —`), into the fewest, most even pieces (a clause longer than the budget is cut at words, evenly).
+  Questions, exclamations, quotations and dialogue lines stay whole. Every segment is spoken with the full step count
+  (no 16-step first segment).
+- **Pauses**: each segment is trimmed of the model's own leading and trailing silence (keeping 30 ms before and
+  60 ms after the speech) and faded over 8 ms at both ends, then silence is inserted so that the pause heard is: clause
+  cut 220 ms, sentence (`.`, `?`, `!`) 440 ms,
+  `…` 620 ms, a paragraph end followed by a dialogue line 650 ms, other paragraph ends 820 ms, after the chapter title
+  1200 ms; every chapter file starts with 1600 ms of silence and ends with 700 ms.
+- **Levels**: each segment's loudness (BS.1770, gated), median pitch and seconds per character are compared with the
+  running medians of the book (the last 25 segments of at least 25 characters, once 4 are known; chapter titles, read
+  differently on purpose, are left out). An outlier (loudness
+  more than 4 dB off, pitch more than 4 semitones off, or a pace outside 0.62-1.6x, the sign of skipped or garbled
+  words) is made again once and the closer take is kept; a level step over 1.5 dB is pulled back to 1.5 dB. Each
+  finished chapter is normalized as a whole to **-18 LUFS** with sample peaks under **-1 dBFS** (two streamed passes).
+  Per-segment measures are kept in `<data>/books/<id>/stats/<NNN>.json`.
+
+### Resume (what is on disk)
+- After every segment its audio (44.1 kHz, 16-bit, mono) is appended to `work/<NNN>.pcm` and fsynced, then
+  `state.json` records the next segment and the PCM length that goes with it (written atomically). A resume cuts the
+  PCM back to the recorded length, so a segment written but not recorded is dropped and made again: no gap and no
+  repeat. A chapter's segments are fixed in `work/<NNN>.segments.json` when it starts, so a resume continues the same
+  cut. Nothing of a chapter is held in memory; the finished chapter file is written from the PCM in blocks, then the
+  work files go.
+- `<data>/books/<id>/book.json`: `{"id","title","source","format","created","folder","settings":{...},"words",
+  "chapters":[{"title","text","words","file","chars"}]}`; `state.json`: `{"status","current","audio_s","elapsed_s",
+  "chapters":[{"status","segment","segments","bytes","chars_done","audio_s","elapsed_s","path","duration_s","level"}],
+  "m4b","error","updated"}`.
+
+### Output files
+`<data>/outputs/books/<book title>/<NN> - <chapter title>.<ext>` (`NN` from 01, three digits past 99 chapters; names
+keep any letters, lose `<>:"/\|?*` and control characters, at most 80 / 60 characters; a folder name already used by
+another book gets ` (2)`, ...), plus `<book title>.m4b` with `m4b`.
+
+**App side (Speak, Book mode):** the Text / Book switch at the top right of Speak's left panel. Book mode shows the
+file (name, format, detected language, encoding), the totals (chapters, words, about how long the audio is and how long
+it takes to make), the chapter list with include boxes, click-to-rename titles and split / join buttons, and **Read the
+book**. While it reads: chapter k of n, percent, audio made, time left, the real-time factor, and per chapter done
+(with a play button through the player bar) / in progress (part i of n) / waiting; **Pause**, **Cancel**, **Resume**
+and **Open folder**. The right column keeps the Style panel (the voice settings; Expressiveness has its own value for
+books, default 0.60, `book_expressiveness` in settings.json) and shows **Output**: the shared "Save as" format chip,
+"Also make one M4B audiobook with chapter marks" (`book_m4b`), "Read each chapter's title first"
+(`book_read_titles`) and the recent books. After the engine starts the app asks `book.list` and shows the latest
+unfinished book again. While a book is read, Text mode's Generate is disabled with "A book is being read".
+
 ## Redub (transcribe, convert and re-speak a file)
 
 The user drops an audio or video file. It is either **converted** (the same recording, timing untouched, in a voice) or
@@ -1069,7 +1263,9 @@ importable format, also video) and convert it themselves: the app never has to.
 ### `redub.render`
 `{"voice_id","path","mode":"convert|respeak","segments"?:[{"start","end","text"}],"language"?:"uk","translated"?:false,
 "voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"timing"?:"keep","output_format"?:"wav",
-"output"?:"audio","keep_background"?:false}` -> `{"job"}`
+"output"?:"audio","keep_background"?:false,"result_mode"?:"dub"}` -> `{"job"}`
+- `result_mode: "dub"` (with `respeak`) only changes what the result's sidecar records: the finish of a reviewed
+  Translate & dub is a respeak the app lists as a dub.
 - `convert`: the voice's RVC model is run over the **whole source** (voice, noise and music alike) in chunks of about
   15-30 s cut at the quietest point (a pause), then joined. With `output:"video"` or `keep_background:true` it runs
   over the **separated voice** instead and the background is mixed back in (or left out), see

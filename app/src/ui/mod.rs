@@ -6,10 +6,12 @@
 //!   `on_engine` / `settle` convention every screen implements).
 //! * `events`: how background threads (engine, audio, dialogs) wake the UI; there is no polling.
 
+pub mod book;
 pub mod caption;
 pub mod components;
 pub mod events;
 pub mod formats;
+pub mod history;
 pub mod lang;
 pub mod onboarding;
 pub mod playbar;
@@ -70,6 +72,7 @@ pub const SCENES: &[(&str, fn(&mut AppState))] = &[
     ("speak_buffering", speak::scene_buffering),
     ("speak_preparing", speak::scene_preparing),
     ("speak_done", speak::scene_done),
+    ("speak_history", speak::scene_history),
     ("speak_trash_confirm", speak::scene_trash_confirm),
     ("speak_toast_long", speak::scene_toast_long),
     ("speak_export_menu", speak::scene_export_menu),
@@ -97,6 +100,7 @@ pub fn all_scenes() -> &'static [Scene] {
         all.extend_from_slice(train::scenes());
         all.extend_from_slice(redub::scenes());
         all.extend_from_slice(playbar::scenes());
+        all.extend_from_slice(book::scenes());
         all
     })
 }

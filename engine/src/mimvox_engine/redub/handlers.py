@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from .. import accent, aio, backends, config, dubmix, media, reflang, rvc, speech, tts, voices, zsvc
+from .. import accent, aio, backends, config, dubmix, media, reflang, results, rvc, speech, tts, voices, zsvc
 from .. import audio_util as au
 from ..registry import Context, EngineError, method
 from . import render, transcribe, video
@@ -408,12 +408,24 @@ async def _finish(data: config.DataDir, path: str, track: np.ndarray, stems: vid
     return saved, final, fields
 
 
+def _record(saved: dict[str, Any], voice: "_Voice", source: str, mode: str, duration_s: float, elapsed_s: float,
+            vfields: dict[str, Any], language: str | None = None, to: str | None = None,
+            accent_name: str | None = None) -> None:
+    """IO thread: the sidecar of a saved Redub result (results.py), so it comes back after a restart."""
+    results.record(saved, {"kind": "redub", "voice_id": voice.voice_id, "voice_name": voice.name, "mode": mode,
+                           "source_name": os.path.basename(source), "language": language, "to": to,
+                           "accent": accent_name, "duration_s": duration_s, "elapsed_s": elapsed_s,
+                           "video_path": vfields.get("video_path")})
+
+
 class _Voice:
     """The voice-side settings shared by ``redub.render`` and ``redub.dub``."""
 
     def __init__(self, ctx: Context, data: config.DataDir, params: dict[str, Any]) -> None:
         self.voice_id = str(params.get("voice_id") or "")
-        self.language = voices.read_meta(data, self.voice_id).get("language") or "en"  # not_found
+        meta = voices.read_meta(data, self.voice_id)  # not_found
+        self.language = meta.get("language") or "en"
+        self.name = str(meta.get("name") or self.voice_id)
         quality = params.get("quality") or "best"
         if quality not in ("best", "fast"):
             raise EngineError("bad_request", "'quality' must be \"best\" or \"fast\"")
@@ -552,6 +564,8 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             elapsed = round(time.time() - t0, 2)
             log.info("job %s (dub): %.1fs of audio in %.1fs %s%s", job, res["duration_s"], elapsed, timings,
                      f" -> {vfields['video_path']}" if vfields["video_path"] else "")
+            await aio.run_io(_record, saved, voice, path, "dub", au.duration_s(final, render.SR), elapsed, vfields,
+                             res["language"], target, accent_fields.get("accent"))
             finish("redub.done", {**saved, "duration_s": au.duration_s(final, render.SR),
                                   "elapsed_s": elapsed, "mode": "dub", "language": res["language"],
                                   "target_language": target, "translated": res["translated"], "segments": segs,
@@ -571,6 +585,8 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     mode = params.get("mode")
     if mode not in ("convert", "respeak"):
         raise EngineError("bad_request", "'mode' must be \"convert\" or \"respeak\"")
+    # The finish of a reviewed Translate & dub is a respeak the app still calls a dub (recorded so in the sidecar).
+    result_mode = "dub" if mode == "respeak" and params.get("result_mode") == "dub" else mode
     voice = await aio.run_io(_Voice, ctx, data, params)
     out_fmt = await aio.run_io(media.output_format, params)
     out = await aio.run_io(video.options, params, path)
@@ -646,6 +662,9 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             timings = emit.timings()
             log.info("job %s (%s): %.1fs of audio in %.1fs %s%s", job, mode, total_s, elapsed, timings,
                      f" -> {vfields['video_path']}" if vfields["video_path"] else "")
+            spoken = lang if mode == "respeak" else None
+            await aio.run_io(_record, saved, voice, path, result_mode, au.duration_s(final, render.SR), elapsed,
+                             vfields, spoken, spoken, extra.get("accent"))
             finish("redub.done", {**saved, "duration_s": au.duration_s(final, render.SR),
                                   "elapsed_s": elapsed, "mode": mode, "timings_s": timings, **extra, **vfields})
         finally:
