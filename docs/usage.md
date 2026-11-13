@@ -552,8 +552,9 @@ English clip under Other languages, and its main clip is in another language (or
 voice was created with another language):
 
 - **Native (American)** (the default): a native speaker says it, your timbre is kept. The caption says how: *Native
-  accent from your reference clip (no training needed); training makes it closer to you* for an untrained voice, or
-  *your trained voice model keeps your timbre*. With it, **Speaker** picks the native speaker: **Auto** (the one whose
+  accent from your reference clip (no training needed)*. It goes through the zero-shot converter for trained voices
+  too, which sounds cleaner than a voice model trained on a few minutes; only without the converter does a trained
+  voice use its model (*your trained voice model keeps your timbre*). With it, **Speaker** picks the native speaker: **Auto** (the one whose
   pitch is closest to yours), **Male** or **Female**.
 - **Like my recordings**: your own reference clip speaks, with its accent. The caption names it (*English gets the
   accent of your Ukrainian reference clip*), and **Add an English clip** is right below.
