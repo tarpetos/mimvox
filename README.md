@@ -129,27 +129,30 @@ More: [docs/architecture.md](docs/architecture.md).
 
 ## Quick start
 
+1. Download the installer for your system from the
+   [latest release](https://github.com/tarpetos/mimvox/releases/latest): Windows (`setup.exe` or `.msi`), macOS
+   (`.dmg`, Apple Silicon and Intel), Linux (`.AppImage`, or `.deb` for Debian and Ubuntu); x64 and ARM.
+2. Start Mimvox and press **Run setup** on the welcome screen. The app installs the speech engine and the models
+   (about 33 GB) by itself, with a progress list in its window; it can be stopped and continued.
+3. Choose a preset (or paste your own text), record, press **Train**, and start typing.
+
+The [usage guide](docs/usage.md#1-install-and-first-start) covers the details (the first-run warnings of unsigned
+installers, the install location, updates).
+
+### From the source code
+
+For working on Mimvox itself:
+
 ```bash
 git clone https://github.com/tarpetos/mimvox.git
 cd mimvox
-./setup.sh          # Linux and macOS
+./setup.sh          # Linux and macOS (.\setup.cmd on Windows)
+cd app && cargo run --release
 ```
 
-```powershell
-.\setup.cmd         # Windows
-```
-
-Setup installs what is missing (the Rust and Python toolchains), builds the two Python environments (the engine with
-OmniVoice, and Applio), downloads the models and writes `runtime.toml`. It can be run again at
-any time; it skips what is already done. Then start the app:
-
-```bash
-cd app
-cargo run --release
-```
-
-On first start the welcome screen checks that setup has run. Then choose a
-preset (or paste your own text), record, press **Train**, and start typing.
+The setup script also installs the toolchains the app is built with (Rust, a C/C++ compiler), builds the two Python
+environments (the engine with OmniVoice, and Applio), downloads the models and writes `runtime.toml`. It can be run
+again at any time; it skips what is already done.
 
 ## Usage
 
@@ -187,7 +190,7 @@ engine/                Python engine (mimvox_engine), runs in the engine virtual
     training/          RVC training driver
 presets/<lang>/        the guided reading texts (Quick, Standard, Pro) per language: en uk de fr es pl
 contract/              engine-protocol.md: the app <-> engine protocol and data layout
-tools/setup/           setup.py (called by setup.sh and setup.cmd)
+tools/setup/           setup.py (run by the app on first start, and by setup.sh / setup.cmd for developers)
 tools/release/         icons and release helpers
 scripts/build/         installer builds per operating system
 docs/                  architecture, recording guide, performance, screenshots

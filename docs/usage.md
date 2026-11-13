@@ -34,21 +34,33 @@ see [architecture.md](architecture.md) and [performance.md](performance.md); for
 - About **32 GB of free disk space** on the drive you install to (the runtime itself is about 30 GB).
 - A microphone, and an internet connection for the one-time setup. After setup the app works offline.
 
-### Run the one-click setup
+### Install the app
 
-From the project folder:
+Download the installer for your system from the [latest release](https://github.com/tarpetos/mimvox/releases/latest):
 
-```bash
-./setup.sh          # Linux and macOS
-```
+| System | File | How to install |
+| --- | --- | --- |
+| Windows (x64) | `mimvox_<version>_x64-setup.exe` (or the `.msi`) | Run it. No administrator rights needed. |
+| Windows (ARM) | `mimvox_<version>_arm64-setup.exe` | Run it. |
+| macOS (Apple Silicon and Intel) | `Mimvox_<version>_universal.dmg` | Open it and drag **Mimvox** into **Applications**. |
+| Linux (any distribution) | `mimvox_<version>_x86_64.AppImage` (`aarch64` on ARM) | Make it executable (`chmod +x`), then run it. |
+| Debian, Ubuntu | `mimvox_<version>_amd64.deb` (`arm64` on ARM) | `sudo apt install ./mimvox_<version>_amd64.deb` |
 
-```powershell
-.\setup.cmd         # Windows
-```
+The installers are not signed with a paid certificate yet, so the system warns the first time:
 
-The script installs `uv` if it is missing, then runs `tools/setup/setup.py`. This is what it asks and does:
+- **Windows:** "Windows protected your PC": press **More info**, then **Run anyway**.
+- **macOS:** "Mimvox cannot be opened": right-click the app in Applications, choose **Open**, then **Open** again. If
+  macOS still refuses, run `xattr -dr com.apple.quarantine /Applications/Mimvox.app` once.
 
-1. **Where to install (the data folder).** It prints the free space on each drive and a default:
+### First launch: setup in the app
+
+The installer holds only the app (about 15-30 MB). The speech engine and its models (about 33 GB) are installed by
+the app itself on the first start, in its window; there is no script to run and no terminal.
+
+![The welcome screen and the engine status](screenshots/usage-onboarding.png)
+
+1. **Engine and device** says *Runtime missing* and shows what will be downloaded and how much space it needs.
+2. **Install location** is where everything goes (the data folder). The default:
 
    | System | Default data folder |
    | --- | --- |
@@ -56,33 +68,45 @@ The script installs `uv` if it is missing, then runs `tools/setup/setup.py`. Thi
    | macOS | `~/Library/Application Support/mimvox` |
    | Linux | `~/.local/share/mimvox` (or `$XDG_DATA_HOME/mimvox`) |
 
-   Press **Enter** for the default, or type a full path to another folder (for example on a bigger drive). A folder
-   other than the default is remembered in a small pointer file, `location.toml`, so the app finds it later.
-2. **The size warning.** Before anything is downloaded, setup shows the install location, the free space there and
-   what it is about to download, then asks `Continue? [Y/n, or type another folder]`. Answer `n` or type another
-   path to install elsewhere. If the drive has less than 32 GB free (38 GB when the better translation model is part of
-   the install), setup stops (`--force` overrides this).
-3. **GPU or CPU.** Setup detects the hardware by itself and prints the backend it will use: `cuda` (an NVIDIA GPU,
-   found with `nvidia-smi`), `mps` (Apple Silicon) or `cpu` with a warning. Pass `--cpu` to ignore a GPU on purpose.
-4. **Toolchains.** It installs what is missing to build the app: Rust, a C/C++ toolchain (Visual Studio Build Tools
-   on Windows, the Xcode command line tools on macOS, the system packages on Linux) and `ffmpeg`.
-5. **Downloads.** Then it builds the runtime and fetches the models:
+   Edit the path or press **Change location…** to install on another drive; the free space there is shown below the
+   field. Setup needs at least 32 GB free (38 GB with an NVIDIA or AMD GPU, which also gets the better translation
+   model).
+3. Press **Run setup**. The card shows the steps with a progress bar and what setup is doing right now; **Show
+   details** opens its log. The steps and what they download:
 
-   | What | Size (about) | Used for |
+   | Step | Size (about) | Used for |
    | --- | --- | --- |
-   | Engine environment with PyTorch, plus the OmniVoice speech model (3.3 GB) | 11 GB | Speaking text in about 60 languages |
-   | Applio environment (RVC) with its pretrained models (about 1.5 GB) | 12 GB | Training your voice and converting speech to it |
-   | Whisper turbo (1.6 GB) and the NLLB-200 translation model (2.5 GB) | 4.5 GB | Redub: transcription and translation |
-   | With an NVIDIA GPU: the better translation model, NLLB-200 1.3B (a 5.5 GB download, kept as fp16) | 2.7 GB | Redub: fewer mistranslations |
-   | Hybrid Demucs (`runtime/models/demucs`) | 0.3 GB | Removing background music from media files |
-   | Each voice you make | 0.1 GB | Your recordings and trained model |
+   | Speech engine (Python, PyTorch) and Speech model (OmniVoice, 3.3 GB) | 11 GB | Speaking text in about 60 languages |
+   | Voice training tools (Applio/RVC) and their models | 12 GB | Training your voice and converting speech to it |
+   | Transcription and translation models (Whisper turbo, NLLB-200) | 4.5 GB | Redub: transcription and translation |
+   | Better translation model (NLLB-200 1.3B; with an NVIDIA or AMD GPU) | 2.7 GB | Redub: fewer mistranslations |
+   | Native accent converter (Seed-VC) | 2 GB | A native accent for voices that are not trained |
+   | Music removal model (Hybrid Demucs) | 0.3 GB | Removing background music from media files |
 
-6. At the end it writes `runtime.toml` into the data folder and prints the command that starts the app.
+   The GPU is found by itself (NVIDIA: CUDA; AMD on Linux: ROCm; Apple Silicon: MPS; otherwise the CPU).
+4. When setup is done the engine starts by itself: the status pill at the top right says *Starting engine…*, then
+   *Loading models…*, then **Ready**, and the card shows your device. Press **Get started**.
 
-Setup can be run again at any time. Every step checks what is already there and skips it, and an interrupted download
-resumes where it stopped, so after a lost connection or Ctrl-C you simply run it again.
+**Cancel** stops setup; **Run setup again** continues where it stopped (every step skips what is already there and an
+interrupted download resumes), so a lost connection costs nothing. Closing the app stops a running setup the same
+way. Setup asks for no administrator rights: where git or ffmpeg are missing it downloads what it needs itself.
 
-Useful options (all of them: `./setup.sh --help`):
+On a computer without a GPU the card says that training would take many hours, while a quick (zero-shot) voice still
+works.
+
+### From the source code (developers)
+
+Working on Mimvox itself, set up the repository with the setup script instead: it also installs the toolchains the
+app is built with (Rust, a C/C++ compiler, the system packages on Linux) and asks where to put the data folder.
+
+```bash
+./setup.sh          # Linux and macOS
+.\setup.cmd         # Windows
+cd app && cargo run --release
+```
+
+The script installs `uv` if it is missing, then runs `tools/setup/setup.py` (the same program the app runs). Useful
+options (all of them: `./setup.sh --help`):
 
 | Option | What it does |
 | --- | --- |
@@ -91,33 +115,8 @@ Useful options (all of them: `./setup.sh --help`):
 | `--cpu` | Set up the CPU backend even when a GPU is present. |
 | `--quick-check` | Verify an existing install, download nothing. |
 | `--move-to DIR` | Move an existing install to `DIR` (see below). |
-| `--better-translation no` | Leave out the better translation model (NLLB-200 1.3B); `yes` adds it also without an NVIDIA GPU (it then runs on the CPU only when the 600M is missing). |
-
-### Start the app
-
-```bash
-cd app
-cargo run --release
-```
-
-If you installed the app from an installer (see `scripts/build/README.md`), start it like any other program. An
-installed app does not include the models: if they are missing, the first screen offers **Run setup** (see below).
-
-### First launch: the welcome screen
-
-The first start shows a welcome screen with three steps (Record, Train, Speak) and the engine card:
-
-![The welcome screen and the engine status](screenshots/usage-onboarding.png)
-
-1. **Engine and device.** *Runtime found* means setup has run. If it says *Runtime missing*, the card shows the size
-   warning and an **Install location** field with **Change location…**. Press **Run setup**: a terminal window opens
-   and runs the same setup script with that folder. When it is done, the screen updates by itself (or press
-   **Check again**). Once the engine is running, the card shows your device, its video memory and the backend. On a
-   computer without a GPU it says that training would take many hours, while a quick (zero-shot) voice still works.
-2. Press **Get started**. You land on the Voices screen.
-
-The first start of the engine takes a while: the models load in the background (about 20-30 seconds on a GPU). The
-status pill at the top right says *Starting engine…*, then *Loading models…*, then **Ready**.
+| `--better-translation no` | Leave out the better translation model (NLLB-200 1.3B); `yes` adds it also without a GPU. |
+| `--skip-toolchain` | Install no toolchains or system packages (the app's own setup runs this way, with `--gui`). |
 
 ### Moving the data folder later
 
@@ -129,8 +128,8 @@ To move everything (runtime, models and your voices) to another drive:
    stops while the files are copied and starts again afterwards. Nothing is deleted from the old folder until the copy
    is complete and checked; if the move fails, your data stays where it was and keeps working.
 
-The same can be done from a terminal while the app is closed: `./setup.sh --move-to <new folder>` (or
-`setup.cmd --move-to <new folder>` on Windows). An interrupted move resumes when you run the same command again. A data folder
+In a repository checkout the same can be done from a terminal while the app is closed: `./setup.sh --move-to <new
+folder>` (or `setup.cmd --move-to <new folder>` on Windows). An interrupted move resumes when you run the same command again. A data folder
 fixed by the `MIMVOX_DATA` environment variable cannot be moved from the app.
 
 ---
@@ -871,7 +870,7 @@ More detail: the [recording guide](recording-guide.md).
 
 ### Where the logs are
 
-All paths are relative to your data folder (see [the table above](#run-the-one-click-setup)):
+All paths are relative to your data folder (see [the table above](#first-launch-setup-in-the-app)):
 
 | File | What is in it |
 | --- | --- |
@@ -885,7 +884,7 @@ Setup prints its progress to the terminal it runs in; there is no separate setup
 ## 10. Your data folder
 
 Everything the app makes lives in one folder (the one you chose during setup; see the defaults in
-[Install](#run-the-one-click-setup)). The **Data location** card at the bottom of the Voices screen shows its path.
+[Install](#first-launch-setup-in-the-app)). The **Data location** card at the bottom of the Voices screen shows its path.
 
 ```
 <data folder>/

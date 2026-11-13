@@ -10,9 +10,11 @@
   the check off. An updated AppImage named after the old version is renamed after the new one.
 * **Runtime check:** when a new version needs newer engine packages or models, a banner asks to run setup again
   (it installs only what changed) and the engine restarts when setup is done.
-* **Setup from an installed app:** **Run setup** finds the setup script in AppImage, .deb and macOS installs, the
-  AppImage's launcher settings no longer break the setup's and the engine's Python, closing the app no longer stops a
-  setup started from an AppImage, and more terminal emulators are found (`$TERMINAL` first).
+* **Setup runs inside the app:** **Run setup** on the welcome screen installs the engine and the models in the app's
+  window, with the steps, a progress bar and the log; no terminal, no script and no administrator rights (git and
+  ffmpeg are downloaded where missing). **Cancel** stops it, and the next run continues where it stopped. The
+  installers carry `uv` for it; `setup.sh` / `setup.cmd` are for developers working in the repository. Without a
+  runtime the engine is no longer started (no "cannot read runtime.toml" error).
 ## 0.1.5
 
 * **Audiobooks:** Speak has a Book mode. Open an EPUB, FB2, DOCX, ODT, RTF, PDF (with a text layer), HTML, Markdown,
