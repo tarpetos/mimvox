@@ -106,7 +106,11 @@ fn uv_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("MIMVOX_UV").map(PathBuf::from).filter(|p| p.is_file()) {
         return Some(p);
     }
-    if let Some(p) = crate::engine::find_resources().map(|r| r.join("bin").join(exe)).filter(|p| p.is_file()) {
+    let res = crate::engine::find_resources();
+    if let Some(p) = res.as_ref().map(|r| r.join("bin").join(exe)).filter(|p| p.is_file()) {
+        return Some(p);
+    }
+    if let Some(p) = res.as_ref().map(|r| r.join("bin").join("uv.gz")).filter(|p| p.is_file()).and_then(|gz| unpack_uv(&gz)) {
         return Some(p);
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
@@ -115,6 +119,30 @@ fn uv_path() -> Option<PathBuf> {
     }
     let home = dirs::home_dir()?;
     [home.join(".local").join("bin").join(exe), home.join(".cargo").join("bin").join(exe)].into_iter().find(|p| p.is_file())
+}
+
+/// The Linux installers carry uv gzipped (the AppImage tool would rewrite a bare one and break it): unpacked once into
+/// the user's cache folder, under a name that changes with the packed file.
+fn unpack_uv(gz: &std::path::Path) -> Option<PathBuf> {
+    let size = std::fs::metadata(gz).ok()?.len();
+    let dir = dirs::cache_dir()?.join("mimvox").join(format!("uv-{size}"));
+    let target = dir.join("uv");
+    if target.is_file() {
+        return Some(target);
+    }
+    std::fs::create_dir_all(&dir).ok()?;
+    let tmp = dir.join("uv.part");
+    let mut reader = flate2::read::GzDecoder::new(std::fs::File::open(gz).ok()?);
+    let mut out = std::fs::File::create(&tmp).ok()?;
+    std::io::copy(&mut reader, &mut out).ok()?;
+    drop(out);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).ok()?;
+    }
+    std::fs::rename(&tmp, &target).ok()?;
+    Some(target)
 }
 
 /// `uv run ... python -u tools/setup/setup.py <args>` in the resources folder, with no console window and the output
@@ -191,6 +219,7 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>) {
     if running(s) || s.shell.scripted() {
         return;
     }
+    *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()) = false;
     let left_out = std::mem::take(&mut s.setup.left_out);
     s.setup = SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, adding, left_out, ..Default::default() };
     let mut child = match command(&args).and_then(|mut c| c.spawn().map_err(|e| format!("Setup could not start: {e}"))) {
@@ -229,8 +258,16 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>) {
             let _ = r.join();
         }
         *RUNNING.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let code = status.ok().and_then(|s| s.code());
-        events::post(move |s| on_exit(s, code));
+        let code = status.as_ref().ok().and_then(|s| s.code());
+        // A process killed by a signal has no exit code: say which one (Cancel sends SIGTERM).
+        #[cfg(unix)]
+        let signal = {
+            use std::os::unix::process::ExitStatusExt;
+            status.as_ref().ok().and_then(|s| s.signal())
+        };
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
+        events::post(move |s| on_exit(s, code, signal));
     });
 }
 
@@ -285,13 +322,18 @@ fn on_event(s: &mut AppState, v: &Value) {
     }
 }
 
-fn on_exit(s: &mut AppState, code: Option<i32>) {
+fn on_exit(s: &mut AppState, code: Option<i32>, signal: Option<i32>) {
     if s.setup.phase == Phase::Running {
         // Ended without its final report: stopped, or failed before the steps (the log says why).
         let last = s.setup.log.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
+        let cancelled = std::mem::take(&mut *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()));
         s.setup.phase = match code {
             Some(0) => Phase::Finished(true),
-            None => Phase::Error("Setup was stopped. Run it again to continue where it stopped.".into()),
+            None if cancelled => Phase::Error("Setup was stopped. Run it again to continue where it stopped.".into()),
+            None => Phase::Error(match signal {
+                Some(sig) => format!("Setup crashed (signal {sig}). Run it again; if it keeps crashing, report it on the project's GitHub page."),
+                None => "Setup ended unexpectedly. Run it again to continue where it stopped.".into(),
+            }),
             Some(c) if last.is_empty() => Phase::Error(format!("Setup stopped (exit code {c}).")),
             Some(_) => Phase::Error(last),
         };
@@ -318,8 +360,12 @@ pub fn cancel(_s: &mut AppState) {
     stop_on_exit();
 }
 
+/// Cancel was pressed (the end of the process is then not a crash).
+static CANCELLED: Mutex<bool> = Mutex::new(false);
+
 /// Called on Cancel and by `main` when the app closes.
 pub fn stop_on_exit() {
+    *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()) = true;
     let Some(pid) = *RUNNING.lock().unwrap_or_else(|e| e.into_inner()) else { return };
     #[cfg(windows)]
     {
@@ -469,9 +515,18 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
                 s.setup.left_out.push(id.to_owned());
             }
         };
+        // Speech cannot be left out: a dimmed, fixed tick instead of a checkbox.
+        let check = if required {
+            row().w_full().gap(12.0).items_start().opacity(0.5).help("Always installed: everything else builds on it.")
+                .child(el().size(20.0, 20.0).radius(super::theme::radius::CONTROL * 0.4).fill(p.text_faint).center()
+                    .child(icon_el(&icons::CHECK, 13.0, p.bg_top)))
+                .child(text(label).font(ty::BODY).color(p.text))
+        } else {
+            kit::checkbox(&p, on, &label, toggle)
+        };
         list = list.child(
             col().key(format!("component-{id}")).w_full().gap(2.0)
-                .child(kit::checkbox(&p, on, &label, toggle))
+                .child(check)
                 .child(text(c.what).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)),
         );
     }

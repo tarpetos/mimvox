@@ -28,10 +28,6 @@ pub fn runtime_toml_path() -> PathBuf {
     std::env::var_os("MIMVOX_RUNTIME").map(PathBuf::from).unwrap_or_else(|| data_dir().join("runtime.toml"))
 }
 
-/// Shown on the welcome page: the app is an early version.
-const EARLY_VERSION: &str = "Early version: expect bugs. Some things may not work, work badly or change between \
-    versions. Keep your own copies of recordings that matter, and report problems on the project's GitHub page.";
-
 fn settings_path() -> PathBuf {
     data_dir().join("settings.json")
 }
@@ -448,7 +444,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         .child(step(&p, 3, "Speak", "Any text in 60+ languages, in your voice"));
 
     let mut page = col().w_full().gap(18.0).child(
-        kit::panel(&p).gap(18.0).child(hero).child(intro).child(steps).child(kit::notice(&p, Tone::Warning, EARLY_VERSION)),
+        kit::panel(&p).gap(18.0).child(hero).child(intro).child(steps),
     );
     page = page.child(engine_card(&p, s));
 
@@ -506,6 +502,9 @@ fn location_block(p: &Palette, o: &OnboardingState, needed_gb: f32) -> El {
             .child(kit::field(p, &o.location, "Folder for the speech models and your voices", |s: &mut AppState| &mut s.onboarding.location))
             .child(kit::button(p, "Change location…", BtnKind::Glass, !o.picking, pick_location)))
         .child(text(format!("{line}. Pick a folder, or edit the path, to change where everything is installed.")).font(ty::CAPTION).color(if tone_ok { p.text_faint } else { p.warn }).wrap())
+        .children((!o.location.text.trim().is_empty() && !std::path::Path::new(o.location.text.trim()).is_dir()).then(|| {
+            text("This folder does not exist yet: setup creates it.").font(ty::CAPTION).color(p.text_dim).wrap()
+        }))
 }
 
 fn engine_card(p: &Palette, s: &AppState) -> El {
@@ -579,7 +578,7 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
             };
             card = card.child(kit::notice(p, Tone::Danger, &format!("The engine stopped: {why}")));
         }
-        ShellEngine::Unavailable { reason } => {
+        ShellEngine::Unavailable { reason } if reason != super::shell::NOT_INSTALLED => {
             card = card.child(kit::notice(p, Tone::Warning, reason));
         }
         _ => {}

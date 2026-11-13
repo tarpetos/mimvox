@@ -325,9 +325,17 @@ pub fn audio_unavailable(s: &AppState) -> String {
 
 /// Starts (or restarts) the engine. Called once a moment after launch (see [`settle`]) and by the Retry buttons.
 /// Its messages arrive as events ([`on_engine_msg`]); a replaced engine's late messages are dropped there.
+/// `EngineStatus::Unavailable` before setup has run.
+pub const NOT_INSTALLED: &str = "The speech engine is not installed yet.";
+
 pub fn restart_engine(s: &mut AppState) {
     if let Some(mut old) = s.engine.take() {
         let _ = guard(|| old.shutdown());
+    }
+    // Nothing to start before setup: the start screen offers it (and starts the engine when it is done).
+    if !super::onboarding::runtime_toml_path().is_file() {
+        s.shell.engine = EngineStatus::Unavailable { reason: NOT_INSTALLED.into() };
+        return;
     }
     s.shell.engine = EngineStatus::Starting { since: clock_now(s) };
     let cfg = match guard(EngineConfig::discover) {
@@ -413,7 +421,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
             if s.onboarding.runtime_present {
                 restart_engine(s);
             } else {
-                s.shell.engine = EngineStatus::Unavailable { reason: "The speech engine is not installed yet.".into() };
+                s.shell.engine = EngineStatus::Unavailable { reason: NOT_INSTALLED.into() };
             }
             changed = true;
         }
@@ -861,6 +869,8 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
                 (Tone::Success, "Ready".to_owned(), false, false)
             }
         }
+        // Before setup: nothing is wrong and nothing to retry.
+        EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED => (Tone::Neutral, "Not installed".to_owned(), false, false),
         EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => (Tone::Danger, "Engine stopped".to_owned(), false, true),
     };
     let mut pill = glass_edge(p, row().key("engine-pill").role("status").label(label.clone()).h(32.0).px(13.0).gap(8.0).center().radius(16.0)
@@ -988,7 +998,7 @@ fn engine_banner(s: &AppState, p: Palette) -> Option<El> {
             if detail.is_empty() { code.map(|c| format!("Exit code {c}.")).unwrap_or_default() } else { detail.clone() },
         ),
         // The start screen shows setup itself; elsewhere point there.
-        EngineStatus::Unavailable { .. } if s.screen == Screen::Onboarding || super::setuprun::running(s) => return None,
+        EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED || s.screen == Screen::Onboarding || super::setuprun::running(s) => return None,
         EngineStatus::Unavailable { reason } => ("The voice engine is not set up yet".to_owned(), format!("{reason} Run setup on the start screen.")),
         _ => return None,
     };

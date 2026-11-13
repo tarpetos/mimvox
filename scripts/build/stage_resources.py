@@ -12,7 +12,7 @@ Layout produced (this is also the layout the app looks for at runtime, see app/P
     tools/setup/                       runtime setup (setup.py), triggered by the app on first run
     contract/                          engine protocol
     bin/uv(.exe)                       uv, which the app runs setup with (--uv TARGET; two targets: a macOS universal
-                                       binary made with lipo)
+                                       binary made with lipo; Linux: bin/uv.gz, see stage_uv)
     DISCLAIMER.md, THIRD_PARTY_NOTICES.md, LICENSE*   optional, if present
 
 setup.sh / setup.cmd are for developers working in the repository and are not bundled: the installed app runs
@@ -79,6 +79,14 @@ def stage_uv(targets: list[str]) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     name = "uv.exe" if any("windows" in t for t in targets) else "uv"
     out = out_dir / name
+    if any("linux" in t for t in targets):
+        # The AppImage tool (linuxdeploy) rewrites every ELF file in the AppDir and breaks the static uv, so Linux
+        # gets it gzipped; the app unpacks it on first use (app/src/ui/setuprun.rs, uv_path).
+        import gzip  # noqa: PLC0415
+        packed = out_dir / "uv.gz"
+        packed.write_bytes(gzip.compress(uv_binary(targets[0]), compresslevel=9))
+        print(f"[stage] uv {UV_VERSION} ({targets[0]}) -> {packed}")
+        return
     if len(targets) == 1:
         out.write_bytes(uv_binary(targets[0]))
     else:

@@ -24,6 +24,8 @@ hound = "3"
 rfd = "0.15"
 # Self-update from the signed installers of each GitHub release (see src/update.rs).
 cargo-packager-updater = "0.2.3"
+# Unpacks the gzipped uv of the Linux installers (see src/ui/setuprun.rs).
+flate2 = "1"
 
 [build-dependencies]
 # Embeds assets/icon.ico (and version info) into the Windows executable; build.rs does nothing on other targets.
