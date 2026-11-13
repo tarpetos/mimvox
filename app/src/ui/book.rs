@@ -1076,16 +1076,17 @@ static SPLIT: rune::Icon = rune::Icon {
 // Headless scenes
 // -------------------------------------------------------------------------------------------------
 
+// A public-domain book (Herman Melville, 1851) for the snapshots.
 const CHAPTERS: [(&str, u32); 9] = [
-    ("Opening", 640),
-    ("Chapter 1. The Boy Who Lived", 4910),
-    ("Chapter 2. The Vanishing Glass", 4120),
-    ("Chapter 3. The Letters from No One", 4870),
-    ("Chapter 4. The Keeper of the Keys", 4610),
-    ("Chapter 5. Diagon Alley", 7420),
-    ("Chapter 6. The Journey from Platform Nine and Three-Quarters", 6980),
-    ("Chapter 7. The Sorting Hat", 4950),
-    ("Chapter 8. The Potions Master", 3540),
+    ("Etymology", 640),
+    ("Chapter 1. Loomings", 2210),
+    ("Chapter 2. The Carpet-Bag", 1900),
+    ("Chapter 3. The Spouter-Inn", 5150),
+    ("Chapter 4. The Counterpane", 1550),
+    ("Chapter 5. Breakfast", 900),
+    ("Chapter 6. The Street", 1100),
+    ("Chapter 7. The Chapel", 1100),
+    ("Chapter 8. The Pulpit", 1050),
 ];
 
 fn scene_base(s: &mut AppState) {
@@ -1098,11 +1099,11 @@ fn scene_base(s: &mut AppState) {
 
 fn scene_file() -> TextImport {
     TextImport {
-        path: "/home/me/Books/Under the Old Lime Tree.epub".into(),
-        name: "Under the Old Lime Tree.epub".into(),
+        path: "/home/me/Books/Moby-Dick.epub".into(),
+        name: "Moby-Dick.epub".into(),
         format: "epub".into(),
         format_label: "EPUB".into(),
-        title: "Under the Old Lime Tree".into(),
+        title: "Moby-Dick".into(),
         encoding: None,
         language: "en".into(),
         language_detected: true,
@@ -1126,7 +1127,7 @@ fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
             segment: if st == "partial" { seg.0 } else { 0 },
             segments: if st == "partial" { seg.1 } else { 0 },
             audio_s: if st == "done" { d } else if st == "partial" { d * seg.0 as f32 / seg.1 as f32 } else { 0.0 },
-            rtf: (st == "done").then_some(1.08 + 0.03 * i as f32),
+            rtf: (st == "done").then_some(0.30 + 0.01 * i as f32),
             path: (st == "done").then(|| PathBuf::from(format!("/tmp/books/{:02} - {t}.mp3", i + 1))),
             ..Default::default()
         }
@@ -1136,7 +1137,7 @@ fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
     let finished = status == "done";
     s.book.project = Some(BookSummary {
         id: "under-the-old-lime-tree-20261113-101500".into(),
-        title: "Under the Old Lime Tree".into(),
+        title: "Moby-Dick".into(),
         format: Some("EPUB".into()),
         language: Some("en".into()),
         voice_id: Some("me".into()),
@@ -1145,15 +1146,15 @@ fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
         chapters: rows.len() as u32,
         chapters_done: done as u32,
         current: done.min(rows.len() - 1) as u32,
-        folder: Some("/tmp/books/Under the Old Lime Tree".into()),
-        m4b: finished.then(|| PathBuf::from("/tmp/books/Under the Old Lime Tree/Under the Old Lime Tree.m4b")),
+        folder: Some("/tmp/books/Moby-Dick".into()),
+        m4b: finished.then(|| PathBuf::from("/tmp/books/Moby-Dick/Moby-Dick.m4b")),
         words: CHAPTERS.iter().map(|c| c.1).sum(),
         totals: protocol::BookTotals {
             percent: 100.0 * audio / total,
             audio_s: audio,
-            elapsed_s: audio * 1.12,
-            rtf: Some(1.12),
-            eta_s: (!finished).then_some((total - audio) * 1.12),
+            elapsed_s: audio * 0.32,
+            rtf: Some(0.32),
+            eta_s: (!finished).then_some((total - audio) * 0.32),
             est_audio_s: Some(total),
         },
         chapter_list: rows,
