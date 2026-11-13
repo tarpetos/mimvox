@@ -9,7 +9,7 @@ import os
 from typing import Any
 
 from . import config
-from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env
+from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 
 log = logging.getLogger("mimvox.rvc")
 
@@ -41,7 +41,7 @@ class RvcWorker:
         self.python = python
         self.applio = applio
         # -I: do not put the script directory (engine modules such as config.py) on sys.path.
-        self.client = WorkerClient("rvc", [python, "-I", WORKER, "--applio", applio], child_env(), start_timeout=240.0)
+        self.client = WorkerClient("rvc", [python, *isolated(), WORKER, "--applio", applio], child_env(), start_timeout=240.0)
         self.loaded_model: tuple | None = None   # (path, mtime, size) of the voice model the worker has loaded
 
     @property

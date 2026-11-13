@@ -287,6 +287,9 @@ impl EngineClient {
             .arg("--data-dir")
             .arg(&cfg.data_dir)
             .env("PYTHONPATH", pythonpath)
+            // Bytecode caches in the data folder, never next to the sources: an installed app's folder may be
+            // read-only, and its uninstaller should find only the files it installed.
+            .env("PYTHONPYCACHEPREFIX", cfg.data_dir.join("cache").join("pycache"))
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUTF8", "1")

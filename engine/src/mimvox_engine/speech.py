@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .registry import EngineError
-from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env
+from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 
 log = logging.getLogger("mimvox.speech")
 
@@ -60,7 +60,7 @@ class SpeechWorker:
         self.allow_cuda = allow_cuda
         env = child_env(TRANSFORMERS_OFFLINE="1", HF_HUB_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
         # -I: do not put the script directory (engine modules such as config.py) on sys.path.
-        self.client = WorkerClient("speech", [sys.executable, "-I", WORKER, "--models-root", models_root], env,
+        self.client = WorkerClient("speech", [sys.executable, *isolated(), WORKER, "--models-root", models_root], env,
                                    start_timeout=START_TIMEOUT_S)
         # Tags of background separations (a Redub preload): release_gpu stops one that is running.
         self.background_tags: set[str] = set()

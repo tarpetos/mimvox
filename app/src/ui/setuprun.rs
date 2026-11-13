@@ -161,6 +161,8 @@ pub fn command(args: &[OsString]) -> Result<Command, String> {
         .current_dir(&res)
         .env("MIMVOX_UV", &uv)
         .env("PYTHONUNBUFFERED", "1")
+        // No __pycache__ next to the installed sources (see the engine's spawn).
+        .env("PYTHONPYCACHEPREFIX", super::onboarding::data_dir().join("cache").join("pycache"))
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -226,8 +228,11 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, dat
     // uv's cache in the data folder from the first command on (setup.py sets the same for what it runs).
     let cache = PathBuf::from(data_dir.trim()).join("cache").join("uv");
     let spawned = command(&args).and_then(|mut c| {
-        if !data_dir.trim().is_empty() && std::env::var_os("UV_CACHE_DIR").is_none() {
-            c.env("UV_CACHE_DIR", &cache);
+        if !data_dir.trim().is_empty() {
+            if std::env::var_os("UV_CACHE_DIR").is_none() {
+                c.env("UV_CACHE_DIR", &cache);
+            }
+            c.env("PYTHONPYCACHEPREFIX", PathBuf::from(data_dir.trim()).join("cache").join("pycache"));
         }
         c.spawn().map_err(|e| format!("Setup could not start: {e}"))
     });
