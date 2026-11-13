@@ -21,7 +21,6 @@ on:
   # Only for a release (a version tag on master) or when started by hand: never on every push or pull request.
   push:
     tags: ["v*"]
-    branches: ["ci/release-builds"]   # TEMPORARY: one build before the merge (workflow_dispatch needs the file on master)
   workflow_dispatch:
 
 permissions:
