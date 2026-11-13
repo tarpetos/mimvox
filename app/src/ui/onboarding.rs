@@ -636,7 +636,8 @@ fn kv(p: &Palette, k: &str, v: String) -> El {
 
 fn base(s: &mut AppState) {
     s.screen = Screen::Onboarding;
-    s.shell.set_engine(ShellEngine::Idle);
+    // No runtime yet: the app does not start the engine and the pill says so.
+    s.shell.set_engine(ShellEngine::Unavailable { reason: super::shell::NOT_INSTALLED.into() });
     s.onboarding = OnboardingState {
         runtime_present: false,
         device: None,
