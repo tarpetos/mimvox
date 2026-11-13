@@ -278,11 +278,38 @@ fn on_line(s: &mut AppState, line: String) {
         }
         return;
     }
+    let line = strip_ansi(&line);
     let line = line.strip_prefix("[setup] ").map(str::to_owned).unwrap_or(line);
+    // Advice meant for a developer's terminal, not for this screen.
+    if line.contains("hf skills add") || line.trim().is_empty() {
+        return;
+    }
     s.setup.log.push_back(line);
     while s.setup.log.len() > LOG_KEEP {
         s.setup.log.pop_front();
     }
+}
+
+/// The text without terminal colour codes (`ESC [ ... m` and the like).
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                // Parameters, then one final letter.
+                for d in chars.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn on_event(s: &mut AppState, v: &Value) {
@@ -447,12 +474,13 @@ pub fn panel(s: &AppState, p: Palette) -> El {
         }
     }
     if s.setup.show_log && !s.setup.log.is_empty() {
-        let lines: Vec<&str> = s.setup.log.iter().rev().take(14).map(String::as_str).collect();
-        let body = lines.into_iter().rev().collect::<Vec<_>>().join("\n");
-        c = c.child(
-            el().key("setup-log").w_full().padding(10.0).radius(8.0).fill(p.well)
-                .child(text(body).font(ty::CAPTION).color(p.text_dim).wrap()),
-        );
+        // One line each, cut with an ellipsis: a long path or a progress bar never widens the card.
+        let start = s.setup.log.len().saturating_sub(14);
+        let mut body = col().key("setup-log").w_full().padding(10.0).radius(8.0).fill(p.well).gap(2.0);
+        for line in s.setup.log.iter().skip(start) {
+            body = body.child(text(line.clone()).font(ty::CAPTION).color(p.text_dim).truncate().w_full().min_w(0.0));
+        }
+        c = c.child(body);
     }
     c
 }

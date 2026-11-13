@@ -30,6 +30,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
@@ -118,6 +119,11 @@ SEEDVC_STAMP = ".mimvox-setup-ok"      # in the weights folder: the engine uses 
 ZERO_SHOT_GB = 2.0   # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, BigVGAN 0.45, Whisper-small 0.97)
 
 WHISPER_MODEL = "turbo"
+# The checkpoint openai-whisper downloads for "turbo" (whisper._MODELS; the SHA-256 is part of the URL). Fetched by
+# setup directly: importing whisper only to download it loaded torch and numba (LLVM) for nothing.
+WHISPER_FILE = "large-v3-turbo.pt"
+WHISPER_SHA256 = "aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a"
+WHISPER_URL = f"https://openaipublic.azureedge.net/main/whisper/models/{WHISPER_SHA256}/{WHISPER_FILE}"
 # "Remove background music" (reference from media, Record's multi-file import): torchaudio's HDEMUCS_HIGH_MUSDB_PLUS
 # weights, the very file that bundle downloads (download.pytorch.org/torchaudio/<its _model_path>), kept in
 # <data>/runtime/models/demucs; the speech worker loads them from there with torchaudio.models.hdemucs_high.
@@ -475,6 +481,13 @@ class Setup:
         env.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        # Temporary files on the install drive, not /tmp: /tmp is often a small RAM disk with a per-user quota (Arch,
+        # Fedora), and the Python packages unpack and compile there ("Disk quota exceeded").
+        for name in ("TMPDIR", "TEMP", "TMP"):
+            env[name] = str(self.temp_dir())
+        if GUI:  # plain text for the app's log
+            env["NO_COLOR"] = "1"
+            env["TERM"] = "dumb"
         if extra:
             env.update(extra)
         return env
@@ -819,6 +832,12 @@ class Setup:
             raise SetupError(f"ffmpeg and ffprobe are needed for audio and video files; install them with {how}.")
         say("ffmpeg: installed.")
 
+    def temp_dir(self) -> Path:
+        """Setup's temporary files (``<data>/tmp/setup``; see ``env``)."""
+        path = self.data_dir / "tmp" / "setup"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def ffmpeg_dir(self) -> Path:
         """Where a portable ffmpeg goes (the engine looks there too: media._find)."""
         return self.runtime / "ffmpeg"
@@ -1052,14 +1071,11 @@ class Setup:
         if not py.exists():
             raise SetupError("The engine environment is missing, so Whisper cannot be fetched.")
         whisper_dir = self.models_dir / "whisper"
-        if any(whisper_dir.glob("large-v3-turbo.pt")):
+        if (whisper_dir / WHISPER_FILE).is_file():
             say("Whisper turbo checkpoint: present.")
             return
         say("Whisper turbo checkpoint: downloading (about 1.6 GB, resumable)...")
-        whisper_dir.mkdir(parents=True, exist_ok=True)
-        script = "import sys, whisper; whisper._download(whisper._MODELS[sys.argv[1]], sys.argv[2], False)"
-        self.must([py, "-c", script, WHISPER_MODEL, whisper_dir], "Downloading the Whisper turbo checkpoint",
-                  cwd=self.runtime)
+        fetch_checked(WHISPER_URL, whisper_dir / WHISPER_FILE, WHISPER_SHA256, "the Whisper checkpoint")
 
     def speech_models(self) -> None:
         """Redub's translation model: NLLB-200 distilled 600M (``hf download``)."""
@@ -1488,6 +1504,46 @@ class Setup:
         return lines
 
 
+def fetch_checked(url: str, target: Path, sha256: str, label: str) -> None:
+    """Download ``url`` to ``target`` through a ``.part`` file that a later run continues (an HTTP range request),
+    with a progress line every 10 %, checked against ``sha256`` before it is renamed into place."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + ".part")
+    have = part.stat().st_size if part.is_file() else 0
+    request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - a fixed https URL
+            if response.status == 416:  # the .part is already complete
+                pass
+            else:
+                resumed = have > 0 and response.status == 206
+                done = have if resumed else 0
+                total = done + int(response.headers.get("Content-Length") or 0)
+                step = max(total // 10, 1)
+                next_note = (done // step + 1) * step
+                with open(part, "ab" if resumed else "wb") as handle:
+                    for block in iter(lambda: response.read(1 << 20), b""):
+                        handle.write(block)
+                        done += len(block)
+                        if total and next_note <= done < total:
+                            say(f"  {100 * done // total}% of {total / 1e9:.1f} GB")
+                            next_note = (done // step + 1) * step
+    except urllib.error.HTTPError as error:
+        if error.code != 416:
+            raise SetupError(f"Downloading {label} failed ({error}); run setup again to resume.") from error
+    except OSError as error:
+        raise SetupError(f"Downloading {label} failed ({error}); run setup again to resume.") from error
+    digest = hashlib.sha256()
+    with open(part, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    if digest.hexdigest() != sha256:
+        part.unlink()
+        raise SetupError(f"The download of {label} is corrupt (checksum mismatch); run setup again.")
+    os.replace(part, target)
+    say(f"Saved {target}.")
+
+
 def fetch_demucs(models_dir: Path) -> Path:
     """Download the Hybrid Demucs weights to ``<models_dir>/demucs/hdemucs_high_trained.pt``: into a ``.part`` file that
     a later run continues (an HTTP range request), checked against the pinned SHA-256, then renamed into place."""
@@ -1724,6 +1780,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     setup.confirm()
+    # This process's own temporary files (downloaded archives) go there too.
+    tempfile.tempdir = str(setup.temp_dir())
     failed: list[str] = []
     models = not args.skip_models
     has = setup.components.__contains__
@@ -1809,6 +1867,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         event(event="done", ok=False, failed=failed)
         return 1
     event(event="done", ok=True)
+    if GUI:
+        return 0
     for line in setup.ready_lines():
         say(line)
     return 0

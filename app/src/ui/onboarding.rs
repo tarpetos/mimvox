@@ -239,7 +239,6 @@ pub fn recheck(s: &mut AppState) -> bool {
     let was = s.onboarding.runtime_present;
     s.onboarding.runtime_present = runtime_toml_path().is_file();
     if s.onboarding.runtime_present && !was {
-        s.onboarding.setup_note = Some((Tone::Success, "Setup finished. Restart the app if the engine does not start by itself.".into()));
         // Setup may have moved the data dir (location.toml pointer): follow it.
         let dir = data_dir();
         s.shell.data_dir = dir.clone();
