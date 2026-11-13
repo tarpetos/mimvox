@@ -44,6 +44,8 @@ pub struct HistoryState {
     redub: Listing,
     /// `outputs.play` requests waiting for their answer: (request id, list, result id).
     play: Vec<(u64, Kind, u64)>,
+    /// The screen at the last settle: opening Speak or Redub asks its list again, so files deleted on disk leave it.
+    seen_screen: Option<crate::state::Screen>,
 }
 
 impl HistoryState {
@@ -116,6 +118,21 @@ pub fn settle(s: &mut AppState) -> bool {
     if s.shell.scripted() || !shell::engine_ready(s) {
         return false;
     }
+    // Entering Speak or Redub: refresh its list (a fresh list drops results whose files were deleted meanwhile).
+    if s.history.seen_screen != Some(s.screen) {
+        s.history.seen_screen = Some(s.screen);
+        let kind = match s.screen {
+            crate::state::Screen::Speak => Some(Kind::Speak),
+            crate::state::Screen::Redub => Some(Kind::Redub),
+            _ => None,
+        };
+        if let Some(k) = kind {
+            let l = s.history.listing(k);
+            if l.req.is_none() {
+                l.listed = false;
+            }
+        }
+    }
     for kind in [Kind::Speak, Kind::Redub] {
         if !s.history.get(kind).listed {
             request(s, kind, None);
@@ -135,6 +152,11 @@ fn playable_now(play: &Path) -> bool {
 pub fn fetch_play(s: &mut AppState, kind: Kind, id: u64, file: &Path, play: &Path) -> bool {
     if playable_now(play) {
         return false;
+    }
+    if !file.is_file() && !s.shell.scripted() {
+        drop_result(s, kind, id);
+        shell::toast(s, Tone::Warning, "That result's file was deleted, so it was removed from the list.");
+        return true;
     }
     if s.history.play.iter().any(|(_, k, i)| *k == kind && *i == id) {
         return true; // already asked
@@ -190,11 +212,24 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                             Kind::Redub => super::redub::play_result(s, item),
                         }
                     }
+                    Err(e) if e.code == "not_found" => {
+                        // Deleted on disk: the result leaves the list.
+                        drop_result(s, kind, item);
+                        shell::toast(s, Tone::Warning, "That result's file was deleted, so it was removed from the list.");
+                    }
                     Err(e) => shell::toast(s, Tone::Danger, format!("Could not play the result: {}", e.message)),
                 }
             }
         }
         EngineMsg::Event(_) => {}
+    }
+}
+
+/// Removes a result from its list (its files are gone).
+pub fn drop_result(s: &mut AppState, kind: Kind, id: u64) {
+    match kind {
+        Kind::Speak => s.speak.takes.retain(|t| t.id != id),
+        Kind::Redub => s.redub.history.retain(|r| r.id != id),
     }
 }
 

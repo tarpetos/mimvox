@@ -73,6 +73,8 @@ pub struct PlaybarState {
     watch: Option<(u64, f64)>,
     /// The output was reopened for this track already (no second retry).
     retried: Option<u64>,
+    /// The seek knob is being dragged: whether the track was playing when it was grabbed.
+    scrub: Option<bool>,
     pub looped: bool,
     pub speed: f32,
     /// The speed menu is open.
@@ -81,7 +83,7 @@ pub struct PlaybarState {
 
 impl Default for PlaybarState {
     fn default() -> Self {
-        PlaybarState { now: None, watch: None, retried: None, looped: false, speed: 1.0, speed_menu: false }
+        PlaybarState { now: None, watch: None, retried: None, scrub: None, looped: false, speed: 1.0, speed_menu: false }
     }
 }
 
@@ -289,6 +291,34 @@ pub fn stop_path(s: &mut AppState, paths: &[&Path]) {
     }
 }
 
+/// The seek knob is grabbed: the sound pauses (once) while it moves.
+fn begin_scrub(s: &mut AppState) {
+    if s.playbar.scrub.is_some() {
+        return;
+    }
+    let was_playing = s.playbar.now.as_ref().is_some_and(|n| n.status == Status::Playing);
+    if was_playing {
+        pause(s);
+    }
+    s.playbar.scrub = Some(was_playing);
+}
+
+/// The knob is let go at `at` (None: the drag was cancelled): one seek there, and playing again if it played.
+fn end_scrub(s: &mut AppState, at: Option<f32>) {
+    let Some(was_playing) = s.playbar.scrub.take() else {
+        if let Some(at) = at {
+            seek(s, at); // a click without a drag
+        }
+        return;
+    };
+    if let Some(at) = at {
+        seek(s, at);
+    }
+    if was_playing {
+        resume(s);
+    }
+}
+
 /// Jumps to `pos_s` seconds (not while live).
 pub fn seek(s: &mut AppState, pos_s: f32) {
     let Some(n) = s.playbar.now.as_ref().filter(|n| !n.live) else { return };
@@ -461,14 +491,25 @@ fn seek_bar(p: Palette, n: &Now) -> El {
     hit.focusable(true).cursor(rune::Cursor::Pointer)
         .on_step(move |s: &mut AppState, steps, _| seek(s, pos + steps as f32 * STEP_S))
         .on_drag(move |s: &mut AppState, d: &mut Drag, tx| {
-            if d.cancelled() || d.phase == Phase::Up {
+            // Dragging only moves the knob; the sound jumps once, to where it is let go (no "scrubbing" noise).
+            let inner = (d.w - KNOB).max(1.0);
+            let at = ((d.x - KNOB / 2.0) / inner).clamp(0.0, 1.0) * len;
+            if d.cancelled() {
+                end_scrub(s, None);
                 return;
             }
-            if d.phase == Phase::Move {
-                tx.instant();
+            match d.phase {
+                Phase::Up => end_scrub(s, Some(at)),
+                _ => {
+                    if d.phase == Phase::Move {
+                        tx.instant();
+                    }
+                    begin_scrub(s);
+                    if let Some(n) = s.playbar.now.as_mut() {
+                        n.pos_s = at;
+                    }
+                }
             }
-            let inner = (d.w - KNOB).max(1.0);
-            seek(s, ((d.x - KNOB / 2.0) / inner).clamp(0.0, 1.0) * len);
         })
 }
 
