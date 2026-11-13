@@ -838,7 +838,7 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
         p,
         &format!("{key}-pick"),
         &["Native (American)", "Like my recordings"],
-        if trained {
+        if trained && !s.shell.zero_shot_vc {
             &["A native American speaker says it, then your trained voice model gives it your timbre", "Copies the accent of your own recordings"]
         } else if possible {
             &["A native American speaker says it, then it gets the timbre of your reference clip (no training needed)", "Copies the accent of your own recordings"]
@@ -855,7 +855,7 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     // Whose accent English gets from the voice's own clip: "your Ukrainian reference clip" once its language is
     // detected, else the recording language.
     let source = if detected { format!("your {rec} reference clip") } else { format!("your {rec} recordings") };
-    let caption = if native && trained {
+    let caption = if native && trained && !s.shell.zero_shot_vc {
         "A native American speaker says it; your trained voice model keeps your timbre.".to_owned()
     } else if native {
         "Native accent from your reference clip (no training needed); training makes it closer to you.".to_owned()

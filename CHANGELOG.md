@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+* **Native accent sounds cleaner on trained voices:** it now goes through the zero-shot converter (Seed-VC) for
+  trained voices too. RVC, trained on a few minutes of the user, made the native speaker's audio metallic and its
+  pitch shift overshot; RVC is still used for speech with your own accent, and for the native accent when the
+  converter is not installed.
+* **Player bar:** no longer keeps the GPU busy while something plays (each position update was animated).
+* **Build scripts:** a binary built into another `CARGO_TARGET_DIR` is packaged correctly.
+
 ## 0.1.3
 
 * **Video redub keeps the music:** for a video source Redub (Translate & dub, Re-speak, Convert voice) separates the
@@ -17,7 +26,7 @@
 * **Native accent without training:** an untrained voice can speak English with an American accent. OmniVoice speaks
   the text from a native US reference and a zero-shot voice converter (Seed-VC, installed by setup, GPL-3.0, never
   bundled) gives it the timbre of the voice's reference clip. Native is the default for English from a clip in another
-  language; trained voices keep using their RVC model. The converter uses 12 diffusion steps (8 with Quality Fast).
+  language. The converter uses 12 diffusion steps (8 with Quality Fast).
 * **Reference language:** the engine detects the real language of each reference clip. Voices shows it, warns when it
   differs from the voice's language, and offers "Set the voice to <language>"; the Accent choice appears whenever
   English would carry another language's accent, also in Re-speak.

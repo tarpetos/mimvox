@@ -236,11 +236,16 @@ class Choice:
 def choose(requested: str, native_voice: str, lang: str, trained: bool, voice_match: float,
            zero_shot: bool = False) -> Choice:
     """Decide the accent of a request speaking ``lang`` with a voice that is ``trained`` (has an RVC model), given
-    whether the zero-shot converter is installed (``zsvc.installed``): RVC for a trained voice with ``voice_match``
-    above 0, else the zero-shot converter."""
+    whether the zero-shot converter is installed (``zsvc.installed``): the zero-shot converter whenever it is
+    installed, else RVC for a trained voice with ``voice_match`` above 0.
+
+    The zero-shot converter wins even for trained voices: here the source is another speaker (the native clip), and
+    RVC, trained on a few minutes of the user, turned it metallic with a pitch shift that overshot (measured on the
+    owner's voice: high-band flatness 0.32 against 0.22 for the recording and 0.26 with the zero-shot converter, median
+    pitch 148 Hz against the recording's 135 Hz). RVC stays what "own" speech goes through."""
     if requested != "native-us":
         return Choice("own")
-    converter = "rvc" if trained and voice_match > 0 else "zero-shot" if zero_shot else None
+    converter = "zero-shot" if zero_shot else "rvc" if trained and voice_match > 0 else None
     reason = ("not_english" if (lang or "").lower() != NATIVE_LANG
               else "unavailable" if not available()
               else "no_converter" if converter is None

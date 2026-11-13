@@ -744,9 +744,9 @@ result the user's timbre (`accent.py`): the voice's RVC model when it is trained
   `"accent": "own" | "native-us"` (default `own`: the voice's own reference, as before) and `"native_voice": "auto" |
   "male" | "female"` (default `auto`). Other values are `bad_request`.
 - **When it applies**: the speech is English (`language` of `tts.generate`, `target_language` of `redub.dub`, the
-  spoken language of a respeak). The converter is RVC for a trained voice (`rvc/model.pth`) with `voice_match > 0`,
-  the zero-shot converter for any other voice (untrained, or `voice_match` 0) when setup installed it (`hello` ->
-  `zero_shot_vc`). Otherwise the request is **not refused**: it speaks with the voice's own reference and says why
+  spoken language of a respeak). The converter is the zero-shot converter whenever setup installed it (`hello` ->
+  `zero_shot_vc`), for trained voices too (RVC, trained on a few minutes of the user, turned another speaker's audio
+  metallic); without it, RVC for a trained voice (`rvc/model.pth`) with `voice_match > 0`. Otherwise the request is **not refused**: it speaks with the voice's own reference and says why
   (see below). It works for a voice of any recording language (the app offers it when the voice has no English clip,
   see App side).
 - **Native references**: `engine/src/mimvox_engine/assets/native/` (shipped inside the engine package, so every install
