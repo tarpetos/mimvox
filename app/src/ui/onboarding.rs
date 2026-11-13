@@ -173,11 +173,6 @@ pub struct OnboardingState {
     picking: bool,
 }
 
-/// What setup downloads, shown before it runs.
-const SETUP_SIZE_WARNING: &str = "Setup downloads about 28 GB (engine and speech model ~11 GB, voice-training tools ~12 GB, \
-Redub models ~4.5 GB, music removal ~0.3 GB), plus ~2.7 GB for the better translation model with an NVIDIA GPU. \
-Make sure the drive has at least 32 GB free (38 GB with an NVIDIA GPU).";
-const NEEDED_FREE_BYTES: u64 = 32 * 1_000_000_000;
 
 /// Free bytes on the drive that holds `path` (or its nearest existing parent). `None` when it cannot be told.
 pub(crate) fn free_bytes(path: &str) -> Option<u64> {
@@ -280,7 +275,7 @@ fn runtime_outdated() -> bool {
 
 /// "Run setup" from the banner: setup again into the current data folder (it installs only what changed).
 fn run_setup_update(s: &mut AppState) {
-    super::setuprun::start(s, &data_dir().display().to_string());
+    super::setuprun::update_runtime(s);
 }
 
 /// Under the header while the runtime is older than this version needs, and while that setup runs.
@@ -494,11 +489,13 @@ fn step(p: &Palette, n: u32, title: &str, sub: &str) -> El {
 }
 
 /// The install folder (editable) and the free space on its drive.
-fn location_block(p: &Palette, o: &OnboardingState) -> El {
+fn location_block(p: &Palette, o: &OnboardingState, needed_gb: f32) -> El {
     let free = o.free_space.clone();
     let (line, tone_ok) = match free {
         Some((path, Some(b))) if path == o.location.text.trim() => {
-            (format!("{:.1} GB free on this drive", b as f64 / 1e9), b >= NEEDED_FREE_BYTES)
+            let ok = b as f64 / 1e9 >= f64::from(needed_gb);
+            let short = if ok { String::new() } else { format!(" (about {needed_gb:.0} GB needed)") };
+            (format!("{:.1} GB free on this drive{short}", b as f64 / 1e9), ok)
         }
         Some((path, None)) if path == o.location.text.trim() => ("Free space could not be read for this folder.".to_owned(), true),
         _ => ("Checking free space…".to_owned(), true),
@@ -530,7 +527,6 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
     if !o.runtime_present || running || run.phase != super::setuprun::Phase::Idle {
         if !o.runtime_present && run.phase == super::setuprun::Phase::Idle {
             card = card
-                .child(kit::notice(p, Tone::Warning, SETUP_SIZE_WARNING))
                 .child(
                     text("Setup downloads the speech engine and its models into the folder below. It runs here, in this window; \
                           you can leave it running and come back. If it stops, it continues where it stopped.")
@@ -538,7 +534,8 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
                         .color(p.text_dim)
                         .wrap(),
                 )
-                .child(location_block(p, o));
+                .child(super::setuprun::chooser(s, *p))
+                .child(location_block(p, o, super::setuprun::chosen_gb(s) + 4.0));
         } else {
             card = card.child(super::setuprun::panel(s, *p));
         }
@@ -666,6 +663,13 @@ fn scene_setup_missing(s: &mut AppState) {
     base(s);
 }
 
+/// Train without the voice training component: the install card.
+fn scene_install_training(s: &mut AppState) {
+    scene_ready_gpu(s);
+    s.shell.components = Some(vec!["speech".into(), "translation".into()]);
+    s.screen = Screen::Train;
+}
+
 fn scene_setup_running(s: &mut AppState) {
     base(s);
     s.onboarding.setup_started = true;
@@ -693,6 +697,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("onboarding-welcome", scene_welcome),
         ("onboarding-setup", scene_setup_missing),
         ("onboarding-setup-running", scene_setup_running),
+        ("install-training", scene_install_training),
         ("onboarding-ready", scene_ready_gpu),
         ("onboarding-cpu", scene_cpu_warning),
         ("onboarding-stopped", scene_engine_stopped),

@@ -96,9 +96,8 @@ def omnivoice_model_dir(runtime: dict[str, Any]) -> str | None:
 
 
 def _runtime_root(runtime: dict[str, Any]) -> str | None:
-    """``<data>/runtime``: the parent of the Applio checkout named in runtime.toml."""
-    d = config.applio_dir(runtime)
-    return os.path.dirname(d) if d else None
+    """``<data>/runtime`` (see ``config.runtime_root``)."""
+    return config.runtime_root(runtime)
 
 
 def installed(runtime: dict[str, Any]) -> bool:

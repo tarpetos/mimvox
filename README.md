@@ -132,8 +132,10 @@ More: [docs/architecture.md](docs/architecture.md).
 1. Download the installer for your system from the
    [latest release](https://github.com/tarpetos/mimvox/releases/latest): Windows (`setup.exe` or `.msi`), macOS
    (`.dmg`, Apple Silicon and Intel), Linux (`.AppImage`, or `.deb` for Debian and Ubuntu); x64 and ARM.
-2. Start Mimvox and press **Run setup** on the welcome screen. The app installs the speech engine and the models
-   (about 33 GB) by itself, with a progress list in its window; it can be stopped and continued.
+2. Start Mimvox, choose what to install and press **Run setup**. The app installs the speech engine and the models
+   by itself, with a progress list in its window: about 13 GB for speech alone, about 33 GB for everything (voice
+   training, translation, native accent, music removal). A part left out installs later in one click, on the screen
+   that needs it.
 3. Choose a preset (or paste your own text), record, press **Train**, and start typing.
 
 The [usage guide](docs/usage.md#1-install-and-first-start) covers the details (the first-run warnings of unsigned

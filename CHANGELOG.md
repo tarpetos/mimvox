@@ -8,6 +8,12 @@
   signature and installs it when the app closes, or at once with **Restart now** (a running training or book pauses
   and continues). A `.deb` install gets a link to the download page. `"check_updates": false` in settings.json turns
   the check off. An updated AppImage named after the old version is renamed after the new one.
+* **Install only what you need:** the welcome screen lists the parts of the runtime with their sizes: Speech
+  (required, about 13 GB: Speak, Book, Re-speak), Voice training (12 GB), Translation (2.5 GB), Better translation
+  (2.7 GB), Native accent (2 GB) and Music removal (0.3 GB). A part left out installs later in one click where it is
+  needed (Train, Redub's modes, the accent, voice match, music options), with its progress there; the engine restarts
+  by itself afterwards. Setup takes `--components` / `--add` and keeps the chosen set for later runs; Windows without
+  voice training gets a portable ffmpeg.
 * **Runtime check:** when a new version needs newer engine packages or models, a banner asks to run setup again
   (it installs only what changed) and the engine restarts when setup is done.
 * **Setup runs inside the app:** **Run setup** on the welcome screen installs the engine and the models in the app's

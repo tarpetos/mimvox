@@ -31,6 +31,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -154,6 +155,19 @@ BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with 
 SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 34
+# What can be installed, in order. "speech" is always installed; the rest are chosen in the app (or with
+# --components / --add) and recorded in runtime.toml ([setup] components), so a later run keeps the same set.
+# Sizes on disk in GB (the app shows them too: COMPONENTS in app/src/ui/setuprun.rs).
+COMPONENTS = {
+    "speech": 12.6,             # engine venv + OmniVoice (11) + Whisper turbo (1.6): Speak, Book, Redub's Re-speak
+    "training": APPLIO_GB,      # Applio/RVC: Train, voice match for trained voices, Redub's Convert voice
+    "translation": 2.5,         # NLLB-200 600M: Redub's Translate & dub
+    "better_translation": BETTER_TRANSLATION_GB,   # NLLB-200 1.3B (a 5.5 GB download)
+    "native_accent": ZERO_SHOT_GB,                 # Seed-VC: the native accent of voices that are not trained
+    "music_removal": SEPARATION_GB,                # Hybrid Demucs: background music out of media files
+}
+# Portable ffmpeg for Windows when Applio (which brings one) is not installed.
+FFMPEG_WINDOWS_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-{}-gpl.zip"
 UV_HTTP_TIMEOUT = "600"
 # Records the commit of a source tree that came as an archive (no git): see Setup._fetch_archive.
 ARCHIVE_MARKER = ".mimvox-commit"
@@ -275,6 +289,17 @@ def read_location(plat: str) -> Path | None:
     return Path(value) if isinstance(value, str) and value.strip() else None
 
 
+def previous_components(data_dir: Path) -> set[str] | None:
+    """The components an earlier run installed (runtime.toml ``[setup] components``); None before there were any."""
+    import tomllib  # noqa: PLC0415 - Python 3.11+, only needed here
+
+    try:
+        found = tomllib.loads((data_dir / "runtime.toml").read_text(encoding="utf-8")).get("setup", {}).get("components")
+    except (OSError, ValueError):
+        return None
+    return {c for c in found if c in COMPONENTS} if isinstance(found, list) else None
+
+
 def has_runtime(data_dir: Path) -> bool:
     """True when ``data_dir`` already holds an installed runtime (setup then reuses it and resumes)."""
     return (data_dir / "runtime.toml").is_file() or (data_dir / "runtime" / ENGINE_DIR).is_dir() \
@@ -388,8 +413,12 @@ class Setup:
     force: bool = False
     gpu: Gpu = field(default_factory=lambda: Gpu("cpu"))
     uv_path: str = ""
-    better_translation: str = "auto"   # auto (with a GPU) | yes | no
-    zero_shot_vc: bool = True          # Seed-VC for the native accent of untrained voices (--no-zero-shot-vc)
+    components: set[str] = field(default_factory=lambda: set(COMPONENTS))   # what to install (see COMPONENTS)
+
+    @property
+    def zero_shot_vc(self) -> bool:
+        """Seed-VC for the native accent of untrained voices."""
+        return "native_accent" in self.components
 
     # ---- paths -----------------------------------------------------------------------------------------------
 
@@ -540,6 +569,45 @@ class Setup:
     def free_gb(self) -> float:
         return shutil.disk_usage(self._existing_parent(self.data_dir)).free / 1e9
 
+    def resolve_components(self, args: argparse.Namespace) -> None:
+        """``--components`` (exactly these), else what an earlier run installed, else everything (better_translation
+        only with a CUDA / ROCm GPU); then ``--add``, ``--better-translation`` and ``--no-zero-shot-vc``. ``speech``
+        is always in."""
+        def parse(value: str) -> set[str]:
+            items = {x.strip() for x in value.split(",") if x.strip()}
+            unknown = items - set(COMPONENTS)
+            if unknown:
+                raise SetupError(f"Unknown component(s): {', '.join(sorted(unknown))} (known: {', '.join(COMPONENTS)}).")
+            return items
+
+        previous = previous_components(self.data_dir)
+        if args.components:
+            chosen = parse(args.components)
+        elif previous is not None:
+            chosen = set(previous)
+        else:
+            chosen = set(COMPONENTS)
+        if "better_translation" in chosen and self.gpu.backend != "cuda" and args.better_translation != "yes" \
+                and not (previous and "better_translation" in previous):
+            chosen.discard("better_translation")
+            say("Better translation left out: it runs on an NVIDIA or AMD GPU (--add better_translation installs it "
+                "anyway).")
+        if args.add:
+            chosen |= parse(args.add)
+        if args.better_translation == "yes":
+            chosen.add("better_translation")
+        elif args.better_translation == "no":
+            chosen.discard("better_translation")
+        if args.no_zero_shot_vc:
+            chosen.discard("native_accent")
+        chosen.add("speech")
+        self.components = chosen
+        say("Components: " + ", ".join(c for c in COMPONENTS if c in chosen))
+
+    def install_gb(self) -> float:
+        """Disk use of the chosen components."""
+        return sum(gb for c, gb in COMPONENTS.items() if c in self.components)
+
     def announce(self) -> bool:
         """Print where everything goes and how big it is, before anything is downloaded. Returns True when there is
         a big download ahead (False: a runtime already exists here)."""
@@ -550,12 +618,16 @@ class Setup:
         say(f"Free space there : {free:.0f} GB")
         if existing:
             say("Existing runtime found, nothing big to download (setup only fills in what is missing).")
-            if not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED) and not self.skip_models:
-                say(f"Missing Redub models will be downloaded now (about {SPEECH_GB} GB: translation and Whisper turbo).")
+            if "translation" in self.components and not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED) \
+                    and not self.skip_models:
+                say(f"The translation model for Redub will be downloaded now (about {COMPONENTS['translation']} GB).")
+            if "training" in self.components and not self.rvc_python().exists():
+                say(f"Voice training (Applio/RVC, about {APPLIO_GB} GB) will be installed now.")
             if self.wants_better_translation() and not self.has_better_translation() and not self.skip_models:
                 say(f"The better translation model (NLLB-200 1.3B) will be downloaded now: about "
                     f"{NLLB_BIG_DOWNLOAD_GB} GB, kept as {BETTER_TRANSLATION_GB} GB.")
-            if not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() and not self.skip_models:
+            if "music_removal" in self.components and not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() \
+                    and not self.skip_models:
                 say(f"The music-removal model will be downloaded now (about {SEPARATION_GB} GB: Hybrid Demucs).")
             if self.zero_shot_vc and not self.has_zero_shot_vc() and not self.skip_models:
                 say(f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
@@ -568,33 +640,19 @@ class Setup:
                 say(f"{self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used; setup offers to delete it "
                     "at the end.")
         else:
-            better = self.wants_better_translation()
-            total = (RUNTIME_GB + (round(BETTER_TRANSLATION_GB) if better else 0)
-                     - (0 if self.zero_shot_vc else round(ZERO_SHOT_GB)))
-            say(f"This will download and install about {total} GB (engine + OmniVoice ~{ENGINE_GB} GB, "
-                f"Applio/RVC ~{APPLIO_GB} GB, Redub models ~{SPEECH_GB} GB, music removal ~{SEPARATION_GB} GB"
-                + (f", zero-shot native accent ~{ZERO_SHOT_GB:.0f} GB" if self.zero_shot_vc else "")
-                + (f", better translation ~{BETTER_TRANSLATION_GB} GB" if better else "") + ") plus ~0.1 GB per voice.")
-            say("OmniVoice speaks every language (Ukrainian, English and about 60 more): the engine environment in "
-                "<data>/runtime/engine and the model (3.3 GB) in <data>/runtime/models/omnivoice.")
-            say(f"Redub (dubbing a file) uses two models, about {SPEECH_GB} GB: Whisper turbo (transcription, 1.6 GB, "
-                "<data>/runtime/models/whisper) and NLLB-200 (translation, 2.5 GB, "
-                "<data>/runtime/models/nllb-200-distilled-600M).")
-            if better:
-                say(f"With a GPU Redub also gets the better translation model, NLLB-200 1.3B (a "
-                    f"{NLLB_BIG_DOWNLOAD_GB} GB download kept as {BETTER_TRANSLATION_GB} GB in fp16, "
-                    "<data>/runtime/models/nllb-200-distilled-1.3B; --better-translation no leaves it out).")
-            say(f"Removing background music from media files uses Hybrid Demucs (about {SEPARATION_GB} GB, "
-                "<data>/runtime/models/demucs).")
-            if self.zero_shot_vc:
-                say(f"The native accent of voices that are not trained uses Seed-VC, a zero-shot voice converter "
-                    f"(about {ZERO_SHOT_GB:.0f} GB: its source in <data>/runtime/{SEEDVC_DIR}, GPL-3.0, downloaded "
-                    f"from its own repository; weights in <data>/runtime/models/{SEEDVC_DIR}; --no-zero-shot-vc "
-                    "leaves it out).")
+            labels = {"speech": "speech engine, OmniVoice and Whisper", "training": "voice training (Applio/RVC)",
+                      "translation": "translation for Redub", "better_translation": "better translation",
+                      "native_accent": "native accent (Seed-VC, GPL-3.0)", "music_removal": "music removal"}
+            chosen = [c for c in COMPONENTS if c in self.components]
+            parts = ", ".join(f"{labels[c]} ~{COMPONENTS[c]:g} GB" for c in chosen)
+            say(f"This will download and install about {self.install_gb():.0f} GB ({parts}) plus ~0.1 GB per voice.")
+            left = [labels[c] for c in COMPONENTS if c not in self.components]
+            if left:
+                say(f"Left out for now (can be added later): {', '.join(left)}.")
             if self.skip_models:
                 say("--skip-models: the model files (most of that size) are left out for now.")
         say("=" * 78)
-        needed = DISK_NEEDED_GB + (round(NLLB_BIG_DOWNLOAD_GB) if self.wants_better_translation() else 0)
+        needed = round(self.install_gb() + 4 + (NLLB_BIG_DOWNLOAD_GB if self.wants_better_translation() else 0))
         if not existing and free < needed:
             if self.force:
                 warn(f"Only {free:.0f} GB free, less than the {needed} GB needed; continuing because of --force.")
@@ -769,10 +827,28 @@ class Setup:
         """ffmpeg + ffprobe without system packages: present on PATH or in the runtime, else a static build on Linux,
         Homebrew's on macOS when Homebrew is there. Windows uses Applio's copies (see ``applio_models``)."""
         exe = ".exe" if self.plat == "windows" else ""
-        if self.plat == "windows" or (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        if self.plat == "windows" and "training" in self.components:
+            return  # Applio's prerequisites bring ffmpeg.exe / ffprobe.exe
+        if shutil.which("ffmpeg") and shutil.which("ffprobe"):
             return
         if all((self.ffmpeg_dir() / f"{name}{exe}").is_file() for name in ("ffmpeg", "ffprobe")):
             say("ffmpeg: present (portable).")
+            return
+        if self.plat == "windows":
+            url = FFMPEG_WINDOWS_URL.format("winarm64" if self.arch == "arm64" else "win64")
+            say(f"ffmpeg: downloading a portable build ({url})...")
+            with tempfile.TemporaryDirectory() as tmp:
+                archive = Path(tmp) / "ffmpeg.zip"
+                self._download(url, archive)
+                self.ffmpeg_dir().mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(archive) as z:
+                    for member in z.namelist():
+                        name = member.rsplit("/", 1)[-1]
+                        if name in ("ffmpeg.exe", "ffprobe.exe"):
+                            (self.ffmpeg_dir() / name).write_bytes(z.read(member))
+            if not (self.ffmpeg_dir() / "ffmpeg.exe").is_file():
+                raise SetupError("The portable ffmpeg could not be unpacked.")
+            say(f"ffmpeg: installed in {self.ffmpeg_dir()}.")
             return
         if self.plat == "macos":
             if shutil.which("brew"):
@@ -970,11 +1046,26 @@ class Setup:
     def models_dir(self) -> Path:
         return self.runtime / "models"
 
-    def speech_models(self) -> None:
-        """Redub: the NLLB-200 translation model (``hf download``) and the Whisper turbo checkpoint."""
+    def whisper_model(self) -> None:
+        """The Whisper turbo checkpoint: the speech model transcribes reference clips with it, Redub transcribes."""
         py = self.engine_python()
         if not py.exists():
-            raise SetupError("The engine environment is missing, so the Redub models cannot be fetched.")
+            raise SetupError("The engine environment is missing, so Whisper cannot be fetched.")
+        whisper_dir = self.models_dir / "whisper"
+        if any(whisper_dir.glob("large-v3-turbo.pt")):
+            say("Whisper turbo checkpoint: present.")
+            return
+        say("Whisper turbo checkpoint: downloading (about 1.6 GB, resumable)...")
+        whisper_dir.mkdir(parents=True, exist_ok=True)
+        script = "import sys, whisper; whisper._download(whisper._MODELS[sys.argv[1]], sys.argv[2], False)"
+        self.must([py, "-c", script, WHISPER_MODEL, whisper_dir], "Downloading the Whisper turbo checkpoint",
+                  cwd=self.runtime)
+
+    def speech_models(self) -> None:
+        """Redub's translation model: NLLB-200 distilled 600M (``hf download``)."""
+        py = self.engine_python()
+        if not py.exists():
+            raise SetupError("The engine environment is missing, so the translation model cannot be fetched.")
         nllb = self.models_dir / NLLB_DIR
         if self._has(nllb, NLLB_REQUIRED):
             say("Translation model (NLLB-200 distilled 600M): present.")
@@ -992,22 +1083,11 @@ class Setup:
                           cwd=self.runtime)
             if not self._has(nllb, NLLB_REQUIRED):
                 raise SetupError("The translation model download finished but files are missing; run this again.")
-        whisper_dir = self.models_dir / "whisper"
-        if any(whisper_dir.glob("large-v3-turbo.pt")):
-            say("Whisper turbo checkpoint: present.")
-            return
-        say("Whisper turbo checkpoint: downloading (about 1.6 GB, resumable)...")
-        whisper_dir.mkdir(parents=True, exist_ok=True)
-        script = "import sys, whisper; whisper._download(whisper._MODELS[sys.argv[1]], sys.argv[2], False)"
-        self.must([py, "-c", script, WHISPER_MODEL, whisper_dir], "Downloading the Whisper turbo checkpoint",
-                  cwd=self.runtime)
 
     def wants_better_translation(self) -> bool:
-        """The optional NLLB-200 1.3B: by default only with a CUDA or ROCm GPU (it runs on the GPU; without one Redub uses
-        the 600M, which is about 3x faster on a CPU)."""
-        if self.better_translation in ("yes", "no"):
-            return self.better_translation == "yes"
-        return self.gpu.backend == "cuda"
+        """The optional NLLB-200 1.3B (the ``better_translation`` component; by default only with a CUDA or ROCm GPU:
+        it runs on the GPU, and without one Redub uses the 600M, which is about 3x faster on a CPU)."""
+        return "better_translation" in self.components
 
     def has_better_translation(self) -> bool:
         return self._has(self.models_dir / NLLB_BIG_DIR, NLLB_BIG_REQUIRED)
@@ -1182,17 +1262,19 @@ class Setup:
     # ---- step 4: runtime.toml --------------------------------------------------------------------------------
 
     def write_runtime_toml(self) -> None:
-        for what, path in (("engine", self.engine_python()), ("Applio", self.rvc_python())):
-            if not path.exists():
-                raise SetupError(f"runtime.toml not written: the {what} interpreter {path} does not exist.")
+        if not self.engine_python().exists():
+            raise SetupError(f"runtime.toml not written: the engine interpreter {self.engine_python()} does not exist.")
+        training = "training" in self.components and self.rvc_python().exists()
+        if "training" in self.components and not training:
+            warn(f"Voice training is not ready (no {self.rvc_python()}): runtime.toml leaves it out; run setup again.")
         text = (
             "# Written by tools/setup/setup.py; setup rewrites it on every run.\n"
             "[python]\n"
             f"engine = {toml_str(self.engine_python())}\n"
-            f"rvc = {toml_str(self.rvc_python())}\n"
-            "\n[paths]\n"
-            f"applio = {toml_str(self.applio)}\n"
-            f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
+            + (f"rvc = {toml_str(self.rvc_python())}\n" if training else "")
+            + "\n[paths]\n"
+            + (f"applio = {toml_str(self.applio)}\n" if training else "")
+            + f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
             f"seed_vc = {toml_str(self.seed_vc)}\n"
             f"seed_vc_models = {toml_str(self.seed_vc_models)}\n"
             "\n[device]\n"
@@ -1203,7 +1285,8 @@ class Setup:
         if self.gpu.vendor == "amd":
             text += f"name = {toml_str(self.gpu.name)}\nvram_gb = {self.gpu.vram_gb}\n"
         # What this runtime was set up for: the app asks for setup again when it needs a newer one.
-        text += f"\n[setup]\nruntime_version = {runtime_version()}\n"
+        chosen = ", ".join(f'"{c}"' for c in COMPONENTS if c in self.components)
+        text += f"\n[setup]\nruntime_version = {runtime_version()}\ncomponents = [{chosen}]\n"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.runtime_toml.with_suffix(".toml.tmp")
         tmp.write_text(text, encoding="utf-8", newline="\n")
@@ -1261,27 +1344,36 @@ class Setup:
     def quick_check(self) -> list[str]:
         """Verify an existing setup without loading a model: files, interpreters, torch and the GPU."""
         problems: list[str] = []
+        training = "training" in (previous_components(self.data_dir) or set(COMPONENTS))
         if not self.runtime_toml.is_file():
             problems.append(f"{self.runtime_toml} is missing.")
         else:
             say(f"runtime.toml: {self.runtime_toml}")
             text = self.runtime_toml.read_text(encoding="utf-8")
-            for key, path in (("engine", self.engine_python()), ("rvc", self.rvc_python())):
+            keys = [("engine", self.engine_python())] + ([("rvc", self.rvc_python())] if training else [])
+            for key, path in keys:
                 if toml_str(path) not in text:
                     problems.append(f"runtime.toml does not point [python] {key} at {path}.")
-        head = self.read(self.git("rev-parse", "HEAD"), self.applio).strip() if self.applio.exists() else ""
-        if head == APPLIO_COMMIT:
-            say(f"Applio: pinned commit {APPLIO_COMMIT[:9]}.")
-        else:
-            problems.append(f"Applio is not at the pinned commit {APPLIO_COMMIT[:9]} (found {head[:9] or 'nothing'}).")
-        for label, folder, files in (("Applio prerequisites", self.applio, self.applio_required()),
-                                     ("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)):
+        if training:
+            if (self.applio / ".git").exists() and shutil.which("git"):
+                head = self.read(self.git("rev-parse", "HEAD"), self.applio).strip()
+            else:
+                marker = self.applio / ARCHIVE_MARKER
+                head = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+            if head == APPLIO_COMMIT:
+                say(f"Applio: pinned commit {APPLIO_COMMIT[:9]}.")
+            else:
+                problems.append(f"Applio is not at the pinned commit {APPLIO_COMMIT[:9]} (found {head[:9] or 'nothing'}).")
+        checks = [("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)]
+        if training:
+            checks.insert(0, ("Applio prerequisites", self.applio, self.applio_required()))
+        for label, folder, files in checks:
             missing = [f for f in files if not (folder / f).is_file()]
             if missing:
                 problems.append(f"{label}: missing {', '.join(missing)} in {folder}")
             else:
                 say(f"{label}: all files present.")
-        for label, py in (("Engine", self.engine_python()), ("Applio", self.rvc_python())):
+        for label, py in [("Engine", self.engine_python())] + ([("Applio", self.rvc_python())] if training else []):
             problems += self._check_torch(label, py)
         if self.engine_python().exists():
             out = self.read([self.engine_python(), "-I", "-c",
@@ -1450,6 +1542,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                         help=f"data directory (default: ${DATA_ENV}, else asked for; the default is the local app data dir + "
                              f"{APP_DIR_NAME}, or the one in location.toml)")
     parser.add_argument("--skip-toolchain", action="store_true", help="do not install Rust / compilers / system packages")
+    parser.add_argument("--components", metavar="LIST",
+                        help=f"what to install, comma separated ({', '.join(COMPONENTS)}; speech is always included). "
+                             "Default: what an earlier run installed, else everything (better_translation only with a "
+                             "GPU)")
+    parser.add_argument("--add", metavar="LIST", help="install these components in addition to the installed ones")
     parser.add_argument("--gui", action="store_true",
                         help="run by the app: no questions and no system packages (no sudo; implies --yes and "
                              "--skip-toolchain), plus '@@mimvox {json}' progress lines for its setup screen")
@@ -1540,7 +1637,7 @@ def build_setup(args: argparse.Namespace) -> Setup:
     return Setup(root=root, plat=plat, arch=host_arch(), data_dir=data_dir,
                  skip_toolchain=args.skip_toolchain, skip_models=args.skip_models, force_cpu=args.cpu,
                  assume_yes=args.yes, force=args.force, uv_path=find_uv(),
-                 better_translation=args.better_translation, zero_shot_vc=not args.no_zero_shot_vc)
+                 )
 
 
 def run_move(args: argparse.Namespace) -> int:
@@ -1601,6 +1698,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         say(f"Failed: {error}")
         return 1
     setup.detect()
+    try:
+        setup.resolve_components(args)
+    except SetupError as error:
+        say(f"Failed: {error}")
+        return 1
 
     if args.quick_check:
         problems = setup.quick_check()
@@ -1624,20 +1726,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     setup.confirm()
     failed: list[str] = []
     models = not args.skip_models
-    better = models and setup.wants_better_translation()
-    zero_shot = setup.zero_shot_vc
-    plan = [("toolchain", "System tools"), ("applio_source", "Voice training tools: source"),
-            ("engine_env", "Speech engine")]
+    has = setup.components.__contains__
+    better = models and has("better_translation")
+    zero_shot = has("native_accent")
+    training = has("training")
+    plan = [("toolchain", "System tools")]
+    if training:
+        plan.append(("applio_source", "Voice training: source"))
+    plan.append(("engine_env", "Speech engine"))
     if models:
-        plan += [("omnivoice", "Speech model"), ("speech_models", "Transcription and translation models")]
+        plan += [("omnivoice", "Speech model"), ("whisper", "Speech recognition (Whisper)")]
+        if has("translation"):
+            plan.append(("speech_models", "Translation model"))
         if better:
             plan.append(("better_translation", "Better translation model"))
-        plan.append(("separation", "Music removal model"))
+        if has("music_removal"):
+            plan.append(("separation", "Music removal model"))
     if zero_shot:
         plan.append(("zero_shot_vc", "Native accent converter"))
-    plan.append(("applio_env", "Voice training tools: environment"))
-    if models:
-        plan.append(("applio_models", "Voice training models"))
+    if training:
+        plan.append(("applio_env", "Voice training: environment"))
+        if models:
+            plan.append(("applio_models", "Voice training: models"))
     plan.append(("runtime_toml", "Finishing"))
     labels = dict(plan)
     event(event="plan", steps=[{"id": i, "label": label} for i, label in plan])
@@ -1661,19 +1771,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 event(event="step", id=step_id, state="skip")
 
     attempt("toolchain", setup.toolchains)
-    applio_cloned = attempt("applio_source", lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
+    applio_cloned = training and attempt(
+        "applio_source", lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
     if attempt("engine_env", setup.engine_env):
         if models:
-            if attempt("omnivoice", setup.omnivoice_models):
-                if attempt("speech_models", setup.speech_models) and better:
-                    attempt("better_translation", setup.better_translation_model)
-                else:
-                    skipped("better_translation")
-            else:
-                skipped("speech_models", "better_translation")
-            attempt("separation", setup.separation_model)
+            attempt("omnivoice", setup.omnivoice_models)
+            attempt("whisper", setup.whisper_model)
+            if has("translation"):
+                attempt("speech_models", setup.speech_models)
+            if better:
+                attempt("better_translation", setup.better_translation_model)
+            if has("music_removal"):
+                attempt("separation", setup.separation_model)
     else:
-        skipped("omnivoice", "speech_models", "better_translation", "separation")
+        skipped("omnivoice", "whisper", "speech_models", "better_translation", "separation")
     if zero_shot and setup.engine_python().exists():
         attempt("zero_shot_vc", setup.zero_shot_vc_runtime)
     else:
@@ -1682,7 +1793,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if models:
             attempt("applio_models", setup.applio_models)
     else:
-        if not applio_cloned:
+        if training and not applio_cloned:
             skipped("applio_env")
         skipped("applio_models")
     attempt("runtime_toml", setup.write_runtime_toml)

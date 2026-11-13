@@ -60,6 +60,41 @@ pub struct SetupRunState {
     pub steps: Vec<Step>,
     pub log: VecDeque<String>,
     pub show_log: bool,
+    /// The component an "Install" button is adding (None: a full setup or a runtime update).
+    pub adding: Option<String>,
+    /// Optional components unticked on the start screen (all are ticked at first).
+    pub left_out: Vec<String>,
+}
+
+/// One part of the runtime that can be installed on its own (setup's COMPONENTS; the sizes match).
+pub struct Component {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub gb: f32,
+    pub what: &'static str,
+}
+
+pub const COMPONENTS: [Component; 6] = [
+    Component { id: "speech", label: "Speech", gb: 12.6, what: "Speak and Book in about 60 languages, and Redub's Re-speak. Always installed." },
+    Component { id: "training", label: "Voice training", gb: 12.0, what: "Train your voice: voice match for trained voices and Redub's Convert voice." },
+    Component { id: "translation", label: "Translation", gb: 2.5, what: "Redub's Translate & dub (NLLB-200 600M)." },
+    Component {
+        id: "better_translation",
+        label: "Better translation",
+        gb: 2.7,
+        what: "Fewer mistranslations in Redub (NLLB-200 1.3B). Installed only with an NVIDIA or AMD GPU.",
+    },
+    Component { id: "native_accent", label: "Native accent", gb: 2.0, what: "English with a native accent for voices that are not trained (Seed-VC, GPL-3.0)." },
+    Component { id: "music_removal", label: "Music removal", gb: 0.3, what: "Keeps only the voice: Redub keeps a video's background, references come out clean." },
+];
+
+pub fn component(id: &str) -> Option<&'static Component> {
+    COMPONENTS.iter().find(|c| c.id == id)
+}
+
+/// The engine has this component installed (true until the engine has said, so nothing flashes at start).
+pub fn has(s: &AppState, id: &str) -> bool {
+    s.shell.components.as_ref().is_none_or(|c| c.iter().any(|x| x == id))
 }
 
 /// The running setup's process id (for Cancel and for closing the app).
@@ -119,17 +154,45 @@ pub fn running(s: &AppState) -> bool {
     s.setup.phase == Phase::Running
 }
 
-/// Starts setup into `data_dir`. Does nothing while one runs.
+/// The first setup from the start screen: into `data_dir`, with the components left ticked.
 pub fn start(s: &mut AppState, data_dir: &str) {
-    if running(s) || s.shell.scripted() {
-        return;
-    }
-    s.setup = SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, ..Default::default() };
+    let chosen: Vec<&str> = COMPONENTS.iter().map(|c| c.id).filter(|id| !s.setup.left_out.iter().any(|x| x == id)).collect();
+    let mut args = base_args(data_dir);
+    args.push("--components".into());
+    args.push(chosen.join(",").into());
+    start_with(s, args, None);
+}
+
+/// Setup again with the components installed before (a runtime update).
+pub fn update_runtime(s: &mut AppState) {
+    let args = base_args(&super::onboarding::data_dir().display().to_string());
+    start_with(s, args, None);
+}
+
+/// Adds one component to the installed runtime (the "Install" buttons on the screens that need it).
+pub fn install(s: &mut AppState, id: &str) {
+    let mut args = base_args(&super::onboarding::data_dir().display().to_string());
+    args.push("--add".into());
+    args.push(id.into());
+    start_with(s, args, Some(id.to_owned()));
+}
+
+fn base_args(data_dir: &str) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["--gui".into()];
     if !data_dir.trim().is_empty() {
         args.push("--data-dir".into());
         args.push(data_dir.trim().into());
     }
+    args
+}
+
+/// Starts setup with `args`. Does nothing while one runs.
+fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>) {
+    if running(s) || s.shell.scripted() {
+        return;
+    }
+    let left_out = std::mem::take(&mut s.setup.left_out);
+    s.setup = SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, adding, left_out, ..Default::default() };
     let mut child = match command(&args).and_then(|mut c| c.spawn().map_err(|e| format!("Setup could not start: {e}"))) {
         Ok(c) => c,
         Err(e) => {
@@ -236,10 +299,17 @@ fn on_exit(s: &mut AppState, code: Option<i32>) {
     for step in s.setup.steps.iter_mut().filter(|st| st.state == StepState::Running) {
         step.state = StepState::Failed;
     }
-    // A runtime that is now there (or up to date): the onboarding screen and the engine follow.
+    // A runtime that is now there, up to date or with a new component: the onboarding screen and the engine follow
+    // (the engine reads what is installed when it starts).
+    let ok = s.setup.phase == Phase::Finished(true);
     super::onboarding::recheck(s);
-    if s.onboarding.runtime_present && !super::shell::engine_ready(s) {
+    if s.onboarding.runtime_present && (ok || !super::shell::engine_ready(s)) {
         super::shell::restart_engine(s);
+    }
+    if ok {
+        if let Some(c) = s.setup.adding.as_deref().and_then(component) {
+            super::shell::toast(s, Tone::Success, format!("{} is installed.", c.label));
+        }
     }
 }
 
@@ -369,4 +439,115 @@ pub fn scene_running(s: &mut AppState) {
         .map(|l| (*l).to_owned())
         .collect();
     s.setup.show_log = true;
+}
+
+/// Disk use of the components ticked on the start screen.
+pub fn chosen_gb(s: &AppState) -> f32 {
+    COMPONENTS.iter().filter(|c| c.id == "speech" || !s.setup.left_out.iter().any(|x| x == c.id)).map(|c| c.gb).sum()
+}
+
+/// The start screen's choice of components: Speech (always), the others ticked at first, and the total size.
+pub fn chooser(s: &AppState, p: Palette) -> El {
+    use super::voices::kit;
+    let mut list = col().key("setup-components").w_full().gap(10.0);
+    let mut total = 0.0;
+    for c in &COMPONENTS {
+        let required = c.id == "speech";
+        let on = required || !s.setup.left_out.iter().any(|x| x == c.id);
+        if on {
+            total += c.gb;
+        }
+        let label = format!("{} · {:.1} GB{}", c.label, c.gb, if required { " · required" } else { "" });
+        let id = c.id;
+        let toggle = move |s: &mut AppState| {
+            if id == "speech" {
+                return;
+            }
+            if let Some(i) = s.setup.left_out.iter().position(|x| x == id) {
+                s.setup.left_out.remove(i);
+            } else {
+                s.setup.left_out.push(id.to_owned());
+            }
+        };
+        list = list.child(
+            col().key(format!("component-{id}")).w_full().gap(2.0)
+                .child(kit::checkbox(&p, on, &label, toggle))
+                .child(text(c.what).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)),
+        );
+    }
+    let all = s.setup.left_out.is_empty();
+    let toggle_all = move |s: &mut AppState| {
+        s.setup.left_out = if all { COMPONENTS.iter().filter(|c| c.id != "speech").map(|c| c.id.to_owned()).collect() } else { Vec::new() };
+    };
+    col().w_full().gap(10.0)
+        .child(row().w_full().center_y().justify_between()
+            .child(text(format!("What to install · about {total:.0} GB")).font(ty::LABEL).color(p.text))
+            .child(super::components::Button::new(if all { "Only what is required" } else { "Everything" }).ghost().small()
+                .key("components-all").on_press(toggle_all).build(p)))
+        .child(list)
+        .child(text("Anything left out can be installed later in one click, on the screen that needs it.").font(ty::CAPTION).color(p.text_dim).wrap())
+}
+
+/// In place of a feature whose component is not installed: what it is, its size and an Install button; while it
+/// installs, the progress.
+pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El {
+    use super::components::{Button, glass_card};
+    let Some(c) = component(id) else { return el() };
+    let this = s.setup.adding.as_deref() == Some(id);
+    let mut info = col().grow(1.0).min_w(0.0).gap(4.0);
+    let button: Option<El> = if running(s) && this {
+        let step = current(s).map(|st| st.label.clone()).unwrap_or_else(|| "Starting…".into());
+        info = info
+            .child(text(format!("Installing {}: {step}", c.label)).font(ty::LABEL).color(p.text))
+            .child(text(last_line(s).unwrap_or("").to_owned()).font(ty::CAPTION).color(p.text_dim).truncate())
+            .child(el().w_full().pt(4.0).child(progress_bar(p, Some(progress(s)))));
+        Some(Button::new("Cancel").ghost().small().key(format!("install-{id}-cancel")).on_press(cancel).build(p))
+    } else {
+        let failed = this && matches!(s.setup.phase, Phase::Error(_) | Phase::Finished(false));
+        info = info
+            .child(text(format!("{} is not installed", c.label)).font(ty::LABEL).color(p.text))
+            .child(text(format!("{}{} About {:.1} GB; it installs in the background, and the engine restarts when it is done.",
+                if needed_for.is_empty() { String::new() } else { format!("{needed_for} ") }, c.what, c.gb))
+                .font(ty::CAPTION).color(p.text_dim).wrap());
+        if failed {
+            let why = match &s.setup.phase {
+                Phase::Error(e) => e.clone(),
+                _ => s.setup.steps.iter().find_map(|st| st.message.clone()).unwrap_or_else(|| "A step failed.".into()),
+            };
+            info = info.child(text(format!("The last attempt stopped: {why}")).font(ty::CAPTION).color(p.bad).wrap());
+        }
+        let id_owned = id.to_owned();
+        Some(
+            Button::new(if failed { "Try again".to_owned() } else { format!("Install · {:.1} GB", c.gb) })
+                .primary().small().icon(&icons::SPARKLE).key(format!("install-{id}"))
+                .disabled(running(s))
+                .help(if running(s) { "Another setup is running; this can start when it is done." } else { "" })
+                .on_press(move |s| install(s, &id_owned))
+                .build(p),
+        )
+    };
+    let row_ = row().key(format!("install-card-{id}")).w_full().px(14.0).py(12.0).gap(12.0).center_y()
+        .child(icon_el(&icons::SPARKLE, 16.0, p.accent))
+        .child(info)
+        .children(button);
+    glass_card(p).w_full().child(row_)
+}
+
+/// A small inline "Install" for an option that needs a component (a checkbox, a mode): one line with the button.
+pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
+    use super::components::Button;
+    let Some(c) = component(id) else { return el() };
+    let this = s.setup.adding.as_deref() == Some(id) && running(s);
+    let id_owned = id.to_owned();
+    let line = if this {
+        format!("Installing {}… {:.0}%", c.label, progress(s) * 100.0)
+    } else {
+        format!("{what} needs {} ({:.1} GB).", c.label.to_lowercase(), c.gb)
+    };
+    row().key(format!("install-line-{id}")).w_full().gap(8.0).center_y()
+        .child(text(line).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).wrap())
+        .children((!this).then(|| {
+            Button::new("Install").ghost().small().key(format!("install-line-{id}-go")).disabled(running(s))
+                .on_press(move |s| install(s, &id_owned)).build(p)
+        }))
 }

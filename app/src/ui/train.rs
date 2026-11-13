@@ -587,6 +587,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     body = body.child(kit::header(&p, "Train", &sub));
 
     match &t.phase {
+        Phase::Idle if !super::setuprun::has(s, "training") => {
+            body = body.child(super::setuprun::install_card(s, p, "training", ""));
+        }
         Phase::Idle => {
             if name.is_none() {
                 body = body.child(no_voice(&p));

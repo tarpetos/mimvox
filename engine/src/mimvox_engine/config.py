@@ -25,6 +25,16 @@ def applio_dir(runtime: dict[str, Any]) -> str | None:
     return runtime_path(runtime, "paths", "applio")
 
 
+def runtime_root(runtime: dict[str, Any]) -> str | None:
+    """``<data>/runtime``: the parent of the Applio checkout, or (without voice training) of the models folder that
+    holds the OmniVoice model."""
+    applio = applio_dir(runtime)
+    if applio:
+        return os.path.dirname(os.path.normpath(applio))
+    model = runtime_path(runtime, "paths", "omnivoice_model")
+    return os.path.dirname(os.path.dirname(os.path.normpath(model))) if model else None
+
+
 def rvc_python(runtime: dict[str, Any]) -> str | None:
     return runtime_path(runtime, "python", "rvc")
 

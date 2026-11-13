@@ -234,6 +234,8 @@ pub struct RedubState {
     video_out: bool,
     /// "Keep background music and sounds" for a video source.
     keep_bg: bool,
+    /// The engine can separate a voice from the background (the music removal component; `hello` -> `components`).
+    pub can_separate: bool,
     segments: Vec<Seg>,
     /// The segments are a dub's translation waiting for the user's edits (shown as the two-column review).
     reviewing: bool,
@@ -268,6 +270,7 @@ impl Default for RedubState {
             keep_timing: [None, None],
             video_out: true,
             keep_bg: true,
+            can_separate: true,
             segments: Vec::new(),
             reviewing: false,
             transcript_lang: None,
@@ -348,7 +351,7 @@ fn source_is_video(r: &RedubState) -> bool {
 
 /// What the job writes: for a video source the user's choices, for an audio file its audio alone (no separation).
 fn output(r: &RedubState) -> RedubOutput {
-    if source_is_video(r) { RedubOutput { video: r.video_out, keep_background: r.keep_bg } } else { RedubOutput::default() }
+    if source_is_video(r) { RedubOutput { video: r.video_out, keep_background: r.keep_bg && r.can_separate } } else { RedubOutput::default() }
 }
 
 /// The timing is fixed to "keep": a video output keeps the picture's timing.
@@ -370,7 +373,7 @@ fn keep_timing(r: &RedubState) -> bool {
 /// converted video, whose voice is converted alone).
 fn wants_separation(r: &RedubState) -> bool {
     let o = output(r);
-    o.keep_background || (o.video && r.mode == RedubMode::Convert)
+    r.can_separate && (o.keep_background || (o.video && r.mode == RedubMode::Convert))
 }
 
 fn timing(r: &RedubState) -> RedubTiming {
@@ -464,7 +467,11 @@ fn output_block(s: &AppState, p: Palette, key: &str) -> El {
                 .child(text("Output").font(ty::LABEL).color(p.text))
                 .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap()))
             .child(pick))
-        .child(col().w_full().gap(3.0).child(keep).child(text(bg_hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)))
+        .child(if r.can_separate {
+            col().w_full().gap(3.0).child(keep).child(text(bg_hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
+        } else {
+            super::setuprun::install_line(s, p, "music_removal", "Keeping the background music and sounds")
+        })
 }
 
 const TRANSLATOR_BETTER: &str = "nllb-1.3b";
@@ -491,6 +498,12 @@ fn engine_blocker(s: &AppState) -> Option<&'static str> {
         EngineStatus::Idle | EngineStatus::Starting { .. } => return Some("Waiting for the engine to start…"),
         EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => return Some("The engine is not running. Press Retry above."),
         EngineStatus::Ready { .. } => {}
+    }
+    if s.redub.mode == RedubMode::Dub && !super::setuprun::has(s, "translation") {
+        return Some("Translate & dub needs the translation model: install it under Mode.");
+    }
+    if s.redub.mode == RedubMode::Convert && !super::setuprun::has(s, "training") {
+        return Some("Convert voice needs voice training: install it under Mode.");
     }
     if super::train::is_training(s) {
         return Some("A voice is training and is using the GPU. Redub is back when it finishes.");
@@ -1224,12 +1237,19 @@ fn mode_card(p: Palette, key: &str, title: &str, sub: &str, on: bool, mode: Redu
 
 fn mode_block(s: &AppState, p: Palette) -> El {
     let m = s.redub.mode;
+    // The mode's component, when it is not installed: offered right under the cards.
+    let missing = match m {
+        RedubMode::Dub if !super::setuprun::has(s, "translation") => Some(("translation", "")),
+        RedubMode::Convert if !super::setuprun::has(s, "training") => Some(("training", "")),
+        _ => None,
+    };
     col().key("mode-block").w_full().gap(8.0)
         .child(text("Mode").font(ty::TITLE).color(p.text))
         .child(row().w_full().gap(10.0)
             .child(mode_card(p, "mode-dub", "Translate & dub", "Any language to another, in your voice", m == RedubMode::Dub, RedubMode::Dub))
             .child(mode_card(p, "mode-convert", "Convert voice", "Same recording, your voice", m == RedubMode::Convert, RedubMode::Convert))
             .child(mode_card(p, "mode-respeak", "Re-speak", "Edit the words, then speak", m == RedubMode::Respeak, RedubMode::Respeak)))
+        .children(missing.map(|(id, why)| super::setuprun::install_card(s, p, id, why)))
 }
 
 fn voice_chip(p: Palette, v: &VoiceInfo) -> El {
@@ -1321,6 +1341,8 @@ fn dub_block(s: &AppState, p: Palette) -> El {
     }
     if translator_choice(s) {
         options = options.child(translation_quality(r, p));
+    } else if super::setuprun::has(s, "translation") && !super::setuprun::has(s, "better_translation") {
+        options = options.child(super::setuprun::install_line(s, p, "better_translation", "Fewer mistranslations"));
     }
     if source_is_video(r) {
         options = options.child(output_block(s, p, "dub-output"));

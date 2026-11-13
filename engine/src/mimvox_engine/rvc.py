@@ -87,6 +87,12 @@ def model_sig(pth: str) -> tuple | None:
 _WORKER: RvcWorker | None = None
 
 
+def available(runtime: dict[str, Any]) -> bool:
+    """Voice training (Applio + its interpreter) is installed."""
+    py, applio = config.rvc_python(runtime), config.applio_dir(runtime)
+    return bool(py and applio and os.path.isfile(py) and os.path.isdir(applio))
+
+
 def get(runtime: dict[str, Any]) -> RvcWorker | None:
     """The shared worker, or None when the runtime has no RVC interpreter / Applio."""
     global _WORKER

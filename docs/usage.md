@@ -59,8 +59,24 @@ the app itself on the first start, in its window; there is no script to run and 
 
 ![The welcome screen and the engine status](screenshots/usage-onboarding.png)
 
-1. **Engine and device** says *Runtime missing* and shows what will be downloaded and how much space it needs.
-2. **Install location** is where everything goes (the data folder). The default:
+1. **Engine and device** says *Runtime missing*.
+2. **What to install.** Choose the parts you want; everything is ticked at first, **Only what is required** keeps
+   just Speech (about 13 GB), **Everything** ticks all again:
+
+   | Part | Size (about) | Gives you |
+   | --- | --- | --- |
+   | **Speech** (always) | 12.6 GB | Speak and Book in about 60 languages, Redub's Re-speak (engine, OmniVoice, Whisper) |
+   | Voice training | 12 GB | Train; voice match for trained voices; Redub's Convert voice (Applio/RVC) |
+   | Translation | 2.5 GB | Redub's Translate & dub (NLLB-200 600M) |
+   | Better translation | 2.7 GB | fewer mistranslations (NLLB-200 1.3B); installed only with an NVIDIA or AMD GPU |
+   | Native accent | 2 GB | English with a native accent for voices that are not trained (Seed-VC) |
+   | Music removal | 0.3 GB | Redub keeps a video's background music; clean references from videos (Hybrid Demucs) |
+
+   A part left out can be added later in one click: Train shows **Install** when voice training is missing, Redub
+   under **Mode** for Translate & dub and Convert voice, and the same small **Install** appears next to Native accent,
+   Voice match, "Keep background music" and "Remove background music". It installs in the background with its
+   progress on that screen, and the engine restarts by itself when it is done.
+3. **Install location** is where everything goes (the data folder). The default:
 
    | System | Default data folder |
    | --- | --- |
@@ -69,22 +85,11 @@ the app itself on the first start, in its window; there is no script to run and 
    | Linux | `~/.local/share/mimvox` (or `$XDG_DATA_HOME/mimvox`) |
 
    Edit the path or press **Change location…** to install on another drive; the free space there is shown below the
-   field. Setup needs at least 32 GB free (38 GB with an NVIDIA or AMD GPU, which also gets the better translation
-   model).
-3. Press **Run setup**. The card shows the steps with a progress bar and what setup is doing right now; **Show
-   details** opens its log. The steps and what they download:
-
-   | Step | Size (about) | Used for |
-   | --- | --- | --- |
-   | Speech engine (Python, PyTorch) and Speech model (OmniVoice, 3.3 GB) | 11 GB | Speaking text in about 60 languages |
-   | Voice training tools (Applio/RVC) and their models | 12 GB | Training your voice and converting speech to it |
-   | Transcription and translation models (Whisper turbo, NLLB-200) | 4.5 GB | Redub: transcription and translation |
-   | Better translation model (NLLB-200 1.3B; with an NVIDIA or AMD GPU) | 2.7 GB | Redub: fewer mistranslations |
-   | Native accent converter (Seed-VC) | 2 GB | A native accent for voices that are not trained |
-   | Music removal model (Hybrid Demucs) | 0.3 GB | Removing background music from media files |
-
-   The GPU is found by itself (NVIDIA: CUDA; AMD on Linux: ROCm; Apple Silicon: MPS; otherwise the CPU).
-4. When setup is done the engine starts by itself: the status pill at the top right says *Starting engine…*, then
+   field; it turns yellow when the drive has less room than the chosen parts need.
+4. Press **Run setup**. The card shows the steps with a progress bar and what setup is doing right now; **Show
+   details** opens its log. The GPU is found by itself (NVIDIA: CUDA; AMD on Linux: ROCm; Apple Silicon: MPS;
+   otherwise the CPU).
+5. When setup is done the engine starts by itself: the status pill at the top right says *Starting engine…*, then
    *Loading models…*, then **Ready**, and the card shows your device. Press **Get started**.
 
 **Cancel** stops setup; **Run setup again** continues where it stopped (every step skips what is already there and an
@@ -116,6 +121,8 @@ options (all of them: `./setup.sh --help`):
 | `--quick-check` | Verify an existing install, download nothing. |
 | `--move-to DIR` | Move an existing install to `DIR` (see below). |
 | `--better-translation no` | Leave out the better translation model (NLLB-200 1.3B); `yes` adds it also without a GPU. |
+| `--components LIST` | Install exactly these parts (`speech,training,translation,better_translation,native_accent,music_removal`); later runs keep the same set. |
+| `--add LIST` | Add parts to an existing install. |
 | `--skip-toolchain` | Install no toolchains or system packages (the app's own setup runs this way, with `--gui`). |
 
 ### Moving the data folder later

@@ -141,6 +141,8 @@ pub struct ShellState {
     /// The engine has the zero-shot voice converter (`hello` -> `zero_shot_vc`): the native accent works for an
     /// untrained voice too.
     pub zero_shot_vc: bool,
+    /// The installed runtime components (`hello` -> `components`); `None` until the engine says.
+    pub components: Option<Vec<String>>,
     /// The voice used by Speak and shown in the header pill.
     pub active_voice: Option<String>,
     pub voice_menu_open: bool,
@@ -219,6 +221,7 @@ impl Default for ShellState {
             languages: Vec::new(),
             translators: Vec::new(),
             zero_shot_vc: false,
+            components: None,
             active_voice: None,
             voice_menu_open: false,
             caption_preview: None,
@@ -505,6 +508,8 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             }
             s.shell.translators = hello.translators.clone();
             s.shell.zero_shot_vc = hello.zero_shot_vc;
+            s.shell.components = Some(hello.components.clone());
+            s.redub.can_separate = hello.components.iter().any(|c| c == "music_removal");
             reset_warm(s);
             refresh_voices(s);
         }
@@ -843,7 +848,9 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
         EngineStatus::Ready { tts, rvc, .. } => {
             let loading = [tts, rvc].iter().any(|m| m.as_deref() == Some("loading"));
             let paused = [tts, rvc].iter().any(|m| m.as_deref() == Some("paused"));
-            let missing = [tts, rvc].iter().any(|m| m.as_deref() == Some("missing"));
+            // RVC is "missing" by design when voice training is not installed.
+            let rvc_needed = super::setuprun::has(s, "training");
+            let missing = tts.as_deref() == Some("missing") || (rvc_needed && rvc.as_deref() == Some("missing"));
             if missing {
                 (Tone::Danger, "Models missing".to_owned(), false, false)
             } else if paused {
@@ -862,7 +869,7 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
         .motion(motion::UI)
         .child(status_dot(p, tone, pulse))
         .children((!tight).then(|| text(label.clone()).font(ty::LABEL).color(p.text).a11y_hidden()));
-    pill = pill.help(engine_help(&s.shell.engine));
+    pill = pill.help(engine_help(&s.shell.engine, super::setuprun::has(s, "training")));
     if retry {
         pill = pill.hover(p.glass_hover).focusable(true)
             .on_press(|s: &mut AppState| restart_engine(s))
@@ -872,7 +879,7 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
 }
 
 /// The status pill's tooltip: what the state means, the device, and each model's state.
-fn engine_help(engine: &EngineStatus) -> String {
+fn engine_help(engine: &EngineStatus, training: bool) -> String {
     let model = |m: &Option<String>| match m.as_deref() {
         Some("ready") => "ready".to_owned(),
         Some("loading") => "loading…".to_owned(),
@@ -887,7 +894,8 @@ fn engine_help(engine: &EngineStatus) -> String {
         }
         EngineStatus::Ready { device, tts, rvc } => {
             let any = |want: &str| [tts, rvc].iter().any(|m| m.as_deref() == Some(want));
-            let summary = if any("missing") {
+            let missing = tts.as_deref() == Some("missing") || (training && rvc.as_deref() == Some("missing"));
+            let summary = if missing {
                 "Some models are not installed: run setup again."
             } else if any("paused") {
                 "A voice is training: the speech models are paused so training has the GPU. They come back when training ends or pauses."
@@ -900,7 +908,8 @@ fn engine_help(engine: &EngineStatus) -> String {
             if let Some(d) = device {
                 t.push_str(&format!("\nDevice: {d}"));
             }
-            t.push_str(&format!("\nSpeech model: {}\nVoice conversion: {}", model(tts), model(rvc)));
+            let conversion = if training { model(rvc) } else { "not installed (voice training is not part of this install)".to_owned() };
+            t.push_str(&format!("\nSpeech model: {}\nVoice conversion: {conversion}", model(tts)));
             t
         }
         EngineStatus::Stopped { code, detail } => {

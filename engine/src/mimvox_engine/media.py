@@ -91,13 +91,13 @@ def _find(name: str) -> str | None:
         cand = os.path.join(folder, name + _EXE)
         if os.path.isfile(cand):
             return cand
+    # Applio's own copies (Windows), then the portable build setup puts in <runtime>/ffmpeg when the system has none
     applio = config.applio_dir(_runtime) if _runtime else None
-    if applio:
-        # Applio's own copies (Windows), then the portable build setup puts in <runtime>/ffmpeg when the system has none
-        for folder in (applio, os.path.join(os.path.dirname(os.path.normpath(applio)), "ffmpeg")):
-            cand = os.path.join(folder, name + _EXE)
-            if os.path.isfile(cand):
-                return cand
+    root = config.runtime_root(_runtime) if _runtime else None
+    for folder in (applio, os.path.join(root, "ffmpeg") if root else None):
+        cand = os.path.join(folder, name + _EXE) if folder else ""
+        if cand and os.path.isfile(cand):
+            return cand
     return shutil.which(name)
 
 

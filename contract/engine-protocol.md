@@ -92,7 +92,7 @@ Job events of the Redub feature (`redub.progress`, `redub.transcript`, `redub.do
 ```toml
 [python]
 engine = "/abs/path/runtime/engine/.venv/bin/python"   # runs the engine, the OmniVoice worker and the speech worker
-rvc    = "/abs/path/runtime/applio/.venv/bin/python"   # runs the RVC worker and training (Applio deps)
+rvc    = "/abs/path/runtime/applio/.venv/bin/python"   # runs the RVC worker and training (only with "training")
 
 [paths]
 applio          = "/abs/path/runtime/applio"           # Applio repo with prerequisites downloaded
@@ -110,6 +110,7 @@ vendor  = "nvidia" # nvidia | amd, with the cuda backend (optional)
 [setup]
 runtime_version = 1 # tools/setup/runtime_version.txt at setup time (missing: 1). Read by the app only: when the
                     # bundled file is higher, the app asks to run setup again.
+components = ["speech", "training", "translation", "music_removal"]   # what setup installs; a later run keeps it
 ```
 
 An AMD GPU (Linux only) uses the `cuda` backend: the ROCm build of PyTorch uses the `torch.cuda` API and the `cuda`
@@ -235,7 +236,8 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 `{}` -> `{"version":"0.1.0","device":{"backend":"cuda|mps|cpu","name":"NVIDIA GeForce RTX 4070","vram_gb":12.0,"vendor":"nvidia"},
 "models":{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"},
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
-"native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"],"zero_shot_vc":true}`
+"native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"],"zero_shot_vc":true,
+"components":["speech","training","translation","better_translation","native_accent","music_removal"]}`
 - `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
@@ -251,6 +253,12 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
   app is closed). See [Translation](#redubtranscribe--redubcancel).
 - `zero_shot_vc`: setup installed the zero-shot voice converter (Seed-VC), so `accent: "native-us"` also works for an
   untrained voice (see [Native accent](#native-accent-accent)). Read at engine start.
+- `components`: the parts of the runtime that are installed, from the files on disk (setup's `COMPONENTS`): `speech`
+  (engine, OmniVoice, Whisper: always there in a complete runtime), `training` (Applio/RVC: Train, voice match, Redub's
+  Convert voice), `translation` (NLLB-200 600M: Redub's Translate & dub), `better_translation` (NLLB-200 1.3B),
+  `native_accent` (Seed-VC) and `music_removal` (Hybrid Demucs). The app offers to install a missing one where it is
+  needed (setup `--add <component>`). Without `training` runtime.toml has no `[python] rvc` / `[paths] applio` and
+  `models.rvc` is `missing`. Read at engine start.
 
 ### `voices.list`
 `{}` -> `{"voices":[{"id","name","created","preset","language":"en","dataset_minutes":6.4,"parts":5,"trained":true,
