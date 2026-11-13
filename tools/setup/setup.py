@@ -749,6 +749,8 @@ class Setup:
         return (int(match.group(1)), int(match.group(2))) if match else None
 
     def _rust(self) -> None:
+        if not (self.root / "app" / "Cargo.toml").is_file():
+            return  # an installed app (no sources to build): Rust is not needed
         if self._cargo():
             version = self._rust_version()
             if version and version >= MIN_RUST:
@@ -1269,6 +1271,8 @@ class Setup:
         if self.data_dir != default_data_dir(self.plat).resolve():
             lines.insert(0, f"The app finds the data directory {self.data_dir} through {location_file(self.plat)}.")
         app = self.root / "app"
+        if not (app / "Cargo.toml").is_file():
+            return [*lines[:-1], "Go back to the Mimvox window: it notices the finished setup by itself."]
         if binary.exists():
             lines.append(f"  {binary}")
         elif self.plat == "windows":

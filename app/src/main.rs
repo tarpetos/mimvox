@@ -17,7 +17,33 @@ const NOTO_BOLD: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold.ttf");
 /// macOS. On Windows the executable also carries it as a resource for Explorer (see `build.rs`).
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
+/// An AppImage's launcher (AppRun) points `PYTHONHOME` into the image and puts the image's folders first in `PATH`,
+/// `LD_LIBRARY_PATH`, `PYTHONPATH`, `XDG_DATA_DIRS` and a few more. Every process the app starts inherits them: the
+/// setup's and the engine's Python then cannot find their standard library, and a terminal or `xdg-open` may load the
+/// wrong libraries. The image bundles no libraries the app needs at run time, so the entries inside it are dropped
+/// before anything starts (still one thread here, so changing the environment is sound).
+fn leave_appimage_env() {
+    let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) else { return };
+    let appdir = std::path::PathBuf::from(appdir);
+    let inside = |p: &std::path::Path| p.starts_with(&appdir);
+    for var in ["PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "XDG_DATA_DIRS", "PERLLIB", "QT_PLUGIN_PATH",
+        "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0", "GSETTINGS_SCHEMA_DIR", "PYTHONHOME"] {
+        let Some(value) = std::env::var_os(var) else { continue };
+        let kept: Vec<_> = std::env::split_paths(&value).filter(|p| !p.as_os_str().is_empty() && !inside(p)).collect();
+        // SAFETY: called first thing in `main`, before any other thread exists.
+        unsafe {
+            match std::env::join_paths(&kept) {
+                Ok(joined) if !kept.is_empty() => std::env::set_var(var, joined),
+                _ => std::env::remove_var(var),
+            }
+        }
+    }
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("PYTHONDONTWRITEBYTECODE") };
+}
+
 fn main() {
+    leave_appimage_env();
     // Before `run`: every window opened afterwards shows it. A failure only costs the icon.
     let _ = rune::set_app_icon(ICON_PNG);
     let spec = AppSpec::<AppState> {

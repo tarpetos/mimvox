@@ -6,7 +6,7 @@
 #   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
 #   a pull request that touches the build      build every installer as a check (nothing is published)
 #
-# Targets: Windows x64 and ARM64 (NSIS setup .exe and .msi), Linux x64 and ARM64 (AppImage and .deb), macOS
+# Targets: Windows x64 (NSIS setup .exe and .msi) and ARM64 (setup .exe), Linux x64 and ARM64 (AppImage and .deb), macOS
 # universal (one .dmg for Apple Silicon and Intel). The installers carry only the app and the engine sources; the
 # app's first-run setup downloads Python, PyTorch and the models.
 name: Build installers
@@ -49,9 +49,12 @@ jobs:
           - name: Windows x64
             os: windows-latest
             kind: windows
+            win_format: both
+          # Setup .exe only: WiX 3 (the .msi) cannot build ARM64 packages.
           - name: Windows ARM64
             os: windows-11-arm
             kind: windows
+            win_format: nsis
           # 22.04 (glibc 2.35) so the AppImage also runs on older distributions.
           - name: Linux x64
             os: ubuntu-22.04
@@ -89,7 +92,7 @@ jobs:
       - name: Build (Windows)
         if: matrix.kind == 'windows'
         shell: pwsh
-        run: ./scripts/build/build-win.ps1 -Format both
+        run: ./scripts/build/build-win.ps1 -Format ${{ matrix.win_format }}
 
       - name: Build (Linux)
         if: matrix.kind == 'linux'

@@ -97,7 +97,7 @@ fn is_resources_root(dir: &Path) -> bool {
 /// 2. next to the executable: `<exe_dir>` (Windows), `<exe_dir>/../Resources` (macOS),
 ///    `<exe_dir>/../lib/mimvox` (Linux deb / AppImage), `<exe_dir>/resources` (portable);
 /// 3. a repo checkout: walk up from the executable's folder, then from `CARGO_MANIFEST_DIR/..`.
-fn find_resources() -> Option<PathBuf> {
+pub(crate) fn find_resources() -> Option<PathBuf> {
     if let Some(p) = env_path("MIMVOX_RESOURCES") {
         return Some(p);
     }

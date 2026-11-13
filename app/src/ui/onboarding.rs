@@ -304,9 +304,14 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
 // Running the setup script in a terminal window
 // ---------------------------------------------------------------------------------------------
 
-/// Finds the repo or bundle root that holds `setup.sh` / `setup.cmd`.
+/// Finds the repo or bundle root that holds `setup.sh` / `setup.cmd`. An installed app keeps it with the other bundled
+/// resources, which are not above the executable on Linux (`usr/bin` vs `usr/lib/mimvox`) or macOS (`Contents/MacOS`
+/// vs `Contents/Resources`), so the resources root the engine uses is tried first.
 pub(crate) fn find_setup_root() -> Option<PathBuf> {
     let script = if cfg!(windows) { "setup.cmd" } else { "setup.sh" };
+    if let Some(res) = crate::engine::find_resources().filter(|r| r.join(script).is_file()) {
+        return Some(res);
+    }
     let mut starts: Vec<PathBuf> = Vec::new();
     if let Some(p) = std::env::var_os("MIMVOX_ROOT") {
         starts.push(PathBuf::from(p));
@@ -328,6 +333,35 @@ pub(crate) fn find_setup_root() -> Option<PathBuf> {
     None
 }
 
+/// An AppImage's files exist only while the app runs (the image is mounted for it), so a setup started from it would
+/// break when the app is closed. Its setup files (`setup.sh`, `tools/setup/`) are copied to a temp folder first.
+fn outside_appimage(root: PathBuf) -> Result<PathBuf, String> {
+    if std::env::var_os("APPIMAGE").is_none() {
+        return Ok(root);
+    }
+    fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let target = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                if entry.file_name() != "__pycache__" {
+                    copy_dir(&entry.path(), &target)?;
+                }
+            } else {
+                std::fs::copy(entry.path(), &target)?;
+            }
+        }
+        Ok(())
+    }
+    let dest = std::env::temp_dir().join("mimvox-setup");
+    let _ = std::fs::remove_dir_all(&dest);
+    copy_dir(&root.join("tools").join("setup"), &dest.join("tools").join("setup"))
+        .and_then(|()| std::fs::copy(root.join("setup.sh"), dest.join("setup.sh")).map(|_| ()))
+        .map_err(|e| format!("Could not copy the setup files to {}: {e}", dest.display()))?;
+    Ok(dest)
+}
+
 /// Opens a terminal window running the setup script. Returns a message for the user.
 /// The terminal process is waited for on its own thread; when it ends, `runtime.toml` is checked again (terminals that
 /// hand the window to another process end at once: then the check on focus or "Check again" sees the result).
@@ -335,6 +369,7 @@ fn launch_setup(location: &str) -> Result<String, String> {
     let root = find_setup_root().ok_or_else(|| {
         "Could not find setup.sh / setup.cmd next to the app. Run it from the project folder by hand.".to_string()
     })?;
+    let root = outside_appimage(root)?;
     let mut child = spawn_terminal(&root, location)?;
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -357,7 +392,7 @@ fn spawn_terminal(root: &std::path::Path, location: &str) -> Result<std::process
 fn spawn_terminal(root: &std::path::Path, location: &str) -> Result<std::process::Child, String> {
     let quote = |v: &str| format!("'{}'", v.replace('\'', "'\\''"));
     let args: Vec<String> = setup_args(location).iter().map(|a| quote(a)).collect();
-    let cmd = format!("cd {} && ./setup.sh {}", quote(&root.display().to_string()), args.join(" "));
+    let cmd = format!("cd {} && /bin/sh ./setup.sh {}", quote(&root.display().to_string()), args.join(" "));
     let script = format!("tell application \"Terminal\" to do script \"{}\"", cmd.replace('"', "\\\""));
     Command::new("osascript")
         .args(["-e", &script, "-e", "tell application \"Terminal\" to activate"])
@@ -367,18 +402,31 @@ fn spawn_terminal(root: &std::path::Path, location: &str) -> Result<std::process
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn spawn_terminal(root: &std::path::Path, location: &str) -> Result<std::process::Child, String> {
-    let inner = "./setup.sh \"$@\"; echo; echo 'Setup finished. Press Enter to close this window.'; read _";
-    let terminals: [(&str, &[&str]); 6] = [
-        ("x-terminal-emulator", &["-e"]),
-        ("gnome-terminal", &["--"]),
-        ("konsole", &["-e"]),
-        ("xfce4-terminal", &["-x"]),
-        ("alacritty", &["-e"]),
-        ("xterm", &["-e"]),
-    ];
+    // `sh ./setup.sh`, not `./setup.sh`: the script needs no executable bit (an unpacked archive may lose it).
+    let inner = "sh ./setup.sh \"$@\"; echo; echo 'Setup finished. Press Enter to close this window.'; read _";
+    // The user's choice first ($TERMINAL, common on Arch and tiling setups), then the usual emulators; each with the
+    // flag after which it runs a command.
+    let preferred = std::env::var("TERMINAL").ok().filter(|t| !t.trim().is_empty());
+    let mut terminals: Vec<(String, Vec<&str>)> = preferred.into_iter().map(|t| (t, vec!["-e"])).collect();
+    terminals.extend([
+        ("x-terminal-emulator", vec!["-e"]),
+        ("gnome-terminal", vec!["--"]),
+        ("kgx", vec!["--"]),
+        ("ptyxis", vec!["--"]),
+        ("konsole", vec!["-e"]),
+        ("xfce4-terminal", vec!["-x"]),
+        ("kitty", vec![]),
+        ("alacritty", vec!["-e"]),
+        ("wezterm", vec!["start", "--"]),
+        ("foot", vec![]),
+        ("ghostty", vec!["-e"]),
+        ("tilix", vec!["-e"]),
+        ("terminator", vec!["-x"]),
+        ("xterm", vec!["-e"]),
+    ].into_iter().map(|(t, pre)| (t.to_owned(), pre)));
     for (term, pre) in terminals {
-        let mut c = Command::new(term);
-        c.args(pre).args(["bash", "-c", inner, "setup"]).args(setup_args(location)).current_dir(root);
+        let mut c = Command::new(&term);
+        c.args(&pre).args(["bash", "-c", inner, "setup"]).args(setup_args(location)).current_dir(root);
         if let Ok(child) = c.spawn() {
             return Ok(child);
         }
