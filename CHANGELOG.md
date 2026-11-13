@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 * **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage
   and .deb) and macOS on Apple Silicon (.dmg), built by GitHub Actions for every release.
