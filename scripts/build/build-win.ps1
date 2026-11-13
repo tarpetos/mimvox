@@ -65,7 +65,9 @@ if ($hostLine -notmatch "msvc") {
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 $hasMsvc = $false
 if (Test-Path $vswhere) {
-    $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    # x64 tools on Intel/AMD machines, ARM64 tools on Windows on Arm.
+    $vcTools = if ($hostLine -match "aarch64") { "Microsoft.VisualStudio.Component.VC.Tools.ARM64" } else { "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" }
+    $vs = & $vswhere -latest -products * -requires $vcTools -property installationPath
     $hasMsvc = [bool]$vs
 }
 if (-not $hasMsvc -and -not (Get-Command link.exe -ErrorAction SilentlyContinue)) {

@@ -120,6 +120,12 @@ if [ ! -x "$BIN_DIR/$BIN_NAME" ]; then
     echo "Release binary not found: $BIN_DIR/$BIN_NAME" >&2
     exit 1
 fi
+# cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
+# --binaries-dir points elsewhere (see build-linux.sh), so the per-target binary is copied there first.
+if [ "$(cd "$BIN_DIR" && pwd -P)" != "$(mkdir -p "$APP_DIR/target/release" && cd "$APP_DIR/target/release" && pwd -P)" ]; then
+    cp -f "$BIN_DIR/$BIN_NAME" "$APP_DIR/target/release/$BIN_NAME"
+    BIN_DIR="$APP_DIR/target/release"
+fi
 
 # Optional signing: cargo-packager takes the identity from the config only, so write a throw-away copy of
 # Packager.toml (it must sit in app/ because paths in it are relative to its folder).
