@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.5
+
+* **Audiobooks:** Speak has a Book mode. Open an EPUB, FB2, DOCX, ODT, RTF, PDF (with a text layer), HTML, Markdown,
+  TXT (any encoding) or subtitle file; chapters are found from the book's structure and can be renamed, split, joined
+  or left out. The book is read chapter by chapter into one file per chapter (plus an optional M4B with chapter marks),
+  with pauses that follow the punctuation and the structure, steady loudness, and a re-take of a segment that comes out
+  off. Pause, close the app and resume from the same sentence; listen to finished chapters while the rest is read.
+* **Text files in Speak:** "Open text file…" and dropping a text file: short texts go into the editor, long ones open
+  as a book.
+* **Results persist:** Speak and Redub results come back after a restart (newest first, "Show older"), refresh when the
+  screen opens, and leave the list when their files were deleted. A video redub is titled by its video and has its own
+  "Open video" button.
+* **Player bar:** Stop rewinds to the start and keeps the bar; dragging the seek knob jumps once where it is let go;
+  the sound comes back by itself after the PC slept or the output device changed.
+
 ## 0.1.4
 
 * **Native accent sounds cleaner on trained voices:** it now goes through the zero-shot converter (Seed-VC) for
