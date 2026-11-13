@@ -9,7 +9,7 @@ Run by build-win.ps1 (``uv run --no-project --with pillow python scripts/build/i
 What it does: draws the wizard's pictures from the app icon and the app's dark palette (the Welcome/Finish side banner
 and the top-right icon, at every display scale), writes ``mimvox.iss`` and compiles it with a pinned, portable Inno
 Setup (downloaded once into ``--cache``, checked against its SHA-256). The wizard is forced dark
-(``WizardStyle=modern dark polar``) on the app's background colour, and its title bar is painted the same colour.
+(``WizardStyle=modern dark``) in the app's palette (app/src/ui/theme.rs), and its title bar is painted the same colour.
 
 The installer installs per user (no administrator prompt), into ``%LOCALAPPDATA%\\Programs\\Mimvox`` by default. An
 update from inside the app runs it with ``/SILENT /SUPPRESSMSGBOXES /NORESTART`` (and ``/RELAUNCH=1`` for "Restart
@@ -40,13 +40,21 @@ TAGLINE = "Your voice, any text"
 # The app's top-level folders (scripts/build/stage_resources.py): replaced whole on install, removed on uninstall.
 APP_DIRS = ("engine", "presets", "tools", "contract", "bin")
 
-# The app's dark palette (app/src/ui/theme.rs).
+# The app's dark palette (app/src/ui/theme.rs, Palette::new): navy background, the four "aurora" light fields drifting
+# behind its glass (ice, teal, steel, deep blue), the ice accent and its gradient, the text colours.
 BG_TOP = "#0B131F"
 BG_BOTTOM = "#070C13"
-PANEL = "#0F1A28"
+GLASS = "#101A28"   # smoked glass over the background: the header strip
+AURORA_ICE = "#9CD2FF"
+AURORA_TEAL = "#3FC0CF"
+AURORA_STEEL = "#6283B8"
+AURORA_BLUE = "#2F66C2"
 ACCENT = "#9CD2FF"
+ACCENT_TOP = "#AEDAFF"
+ACCENT_BOTTOM = "#5FAAF0"
 TEXT = "#F2F6FB"
 TEXT_DIM = "#AFBBCB"
+WELL = "#0E182A"    # the app's recessed wells: the progress bar's track
 
 # Pinned, because the download is executed: the digest GitHub publishes for the release asset.
 INNO_VERSION = "6.7.3"
@@ -76,23 +84,33 @@ def colorref(colour: str) -> str:
 # ------------------------------------------------------------------------------------------------- the pictures
 
 def draw_banner(width: int, height: int, out: Path) -> None:
-    """The Welcome/Finish side banner: the app's dark gradient, a soft accent glow, the icon, the name and tagline."""
+    """The Welcome/Finish side banner, drawn like the app's window: the navy gradient with its aurora light fields
+    (ice, teal, steel, deep blue), the icon on an accent glow, the name, an accent-gradient rule and the tagline."""
     from PIL import Image, ImageDraw, ImageFilter, ImageFont  # noqa: PLC0415 - only the Windows build draws
 
-    top, bottom = rgb(PANEL), rgb(BG_BOTTOM)
-    image = Image.new("RGB", (width, height))
-    pixels = image.load()
+    top, bottom = rgb(BG_TOP), rgb(BG_BOTTOM)
+    base = Image.new("RGB", (width, height))
+    pixels = base.load()
     for y in range(height):
         t = y / max(height - 1, 1)
         row = tuple(round(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
         for x in range(width):
             pixels[x, y] = row
-    # A soft ice-blue light behind the icon, like the app's background fields.
-    glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    cx, cy, radius = width // 2, round(height * 0.36), round(width * 0.55)
-    ImageDraw.Draw(glow).ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(*rgb(ACCENT), 46))
-    glow = glow.filter(ImageFilter.GaussianBlur(radius * 0.45))
-    image = Image.alpha_composite(image.convert("RGBA"), glow)
+    image = base.convert("RGBA")
+
+    def field(colour: str, cx: float, cy: float, rx: float, ry: float, alpha: int) -> None:
+        """One soft light field, as the app's background draws them (a blurred ellipse)."""
+        nonlocal image
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        box = (round((cx - rx) * width), round((cy - ry) * height), round((cx + rx) * width), round((cy + ry) * height))
+        ImageDraw.Draw(layer).ellipse(box, fill=(*rgb(colour), alpha))
+        image = Image.alpha_composite(image, layer.filter(ImageFilter.GaussianBlur(width * 0.16)))
+
+    field(AURORA_ICE, 0.0, 0.04, 0.7, 0.2, 92)
+    field(AURORA_TEAL, 1.0, 0.3, 0.5, 0.16, 84)
+    field(AURORA_STEEL, 0.05, 0.9, 0.6, 0.18, 74)
+    field(AURORA_BLUE, 1.0, 0.75, 0.55, 0.18, 96)
+    field(AURORA_ICE, 0.5, 0.36, 0.4, 0.12, 58)   # the light behind the icon
 
     icon = Image.open(ICON_PNG).convert("RGBA")
     side = round(width * 0.46)
@@ -105,8 +123,14 @@ def draw_banner(width: int, height: int, out: Path) -> None:
     tag_font = ImageFont.truetype(str(FONT_REGULAR), round(width * 0.062))
     name_y = icon_top + side + round(height * 0.045)
     draw.text((width / 2, name_y), APP, font=name_font, fill=rgb(TEXT), anchor="mt")
+    # The rule: the accent's own gradient, light to deep, like the app's primary buttons.
     rule_y = name_y + round(width * 0.17)
-    draw.line((round(width * 0.4), rule_y, round(width * 0.6), rule_y), fill=rgb(ACCENT), width=max(2, width // 100))
+    x0, x1 = round(width * 0.38), round(width * 0.62)
+    thick = max(2, width // 90)
+    a, b = rgb(ACCENT_TOP), rgb(ACCENT_BOTTOM)
+    for x in range(x0, x1 + 1):
+        t = (x - x0) / max(x1 - x0, 1)
+        draw.line((x, rule_y, x, rule_y + thick - 1), fill=tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3)))
     draw.text((width / 2, rule_y + round(width * 0.05)), TAGLINE, font=tag_font, fill=rgb(TEXT_DIM), anchor="mt")
     image.convert("RGB").save(out)
 
@@ -154,6 +178,8 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         f"DefaultDirName={{autopf}}\\{APP}",
         f"DefaultGroupName={APP}",
         "DisableProgramGroupPage=yes",
+        # Lets /NOICONS skip the Start menu entry (a test install, a scripted one).
+        "AllowNoIcons=yes",
         "AllowRootDirectory=no",
         "PrivilegesRequired=lowest",
         f"ArchitecturesAllowed={arch_allowed}",
@@ -166,20 +192,26 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "SolidCompression=yes",
         "LZMANumBlockThreads=4",
         # The look: forced dark, the app's background everywhere, our pictures.
-        "WizardStyle=modern dark polar",
+        # Inno's own dark style (neutral, its default button only outlined in light blue, like the app's glass
+        # buttons), coloured with the app's palette below; no bevel lines (the app has none).
+        "WizardStyle=modern dark hidebevels",
         f"WizardBackColor={BG_TOP}",
         f"WizardImageFile={','.join(str(p) for p in banners)}",
         f"WizardImageBackColor={BG_TOP}",
         f"WizardSmallImageFile={','.join(str(p) for p in smalls)}",
         "WizardSmallImageBackColor=none",
         "DisableWelcomePage=no",
+        # One settings page: the folder and the desktop shortcut together (see [Code]); Install is pressed there.
+        "DisableReadyPage=yes",
         f"OutputDir={out}",
         f"OutputBaseFilename={base}",
         "",
         "[Messages]",
-        f"WelcomeLabel2=This installs {APP} [ver] on your computer.%n%nThe speech engine and its models are not in "
+        "WelcomeLabel2=This installs [name/ver] on your computer.%n%nThe speech engine and its models are not in "
         "this installer: the app downloads them on its first start, and you choose which parts you want.",
         f"FinishedLabel={APP} is installed. On its first start it sets up the speech engine for you.",
+        # The folder page is the last before installing (no Ready page): its button installs.
+        "SelectDirBrowseLabel=To install, click Install. To choose a different folder, click Browse.",
         "",
         "[InstallDelete]",
         # An update replaces the app's folders whole, so nothing an older version shipped stays behind.
@@ -188,12 +220,9 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "[Files]",
         f'Source: "{stage}\\*"; DestDir: "{{app}}"; Flags: recursesubdirs createallsubdirs ignoreversion',
         "",
-        "[Tasks]",
-        'Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"',
-        "",
         "[Icons]",
         f'Name: "{{group}}\\{APP}"; Filename: "{{app}}\\{BINARY}"',
-        f'Name: "{{autodesktop}}\\{APP}"; Filename: "{{app}}\\{BINARY}"; Tasks: desktopicon',
+        f'Name: "{{autodesktop}}\\{APP}"; Filename: "{{app}}\\{BINARY}"; Check: DesktopWanted',
         "",
         "[UninstallDelete]",
         # Whatever the app wrote inside its own folders goes with them; the data folder is elsewhere.
@@ -208,6 +237,19 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "[Code]",
         "function DwmSetWindowAttribute(Wnd: HWND; Attribute: Cardinal; var Value: Cardinal; Size: Cardinal): Integer;",
         "  external 'DwmSetWindowAttribute@dwmapi.dll stdcall delayload';",
+        "",
+        "var",
+        "  DesktopCheck: TNewCheckBox;",
+        "  BarTrack, BarFill: TBitmapImage;",
+        "",
+        "function DesktopWanted: Boolean;",
+        "begin",
+        "  { A silent update keeps what the user has: a shortcut only when there already is one. }",
+        "  if WizardSilent then",
+        f"    Result := FileExists(ExpandConstant('{{autodesktop}}\\{APP}.lnk'))",
+        "  else",
+        "    Result := DesktopCheck.Checked;",
+        "end;",
         "",
         "function Relaunch: Boolean;",
         "begin",
@@ -225,9 +267,51 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "  end;",
         "end;",
         "",
+        "procedure InitializeWizard;",
+        "begin",
+        "  { The app's palette: the header strip is smoked glass, titles in the text colour, the rest dimmer. }",
+        f"  WizardForm.MainPanel.Color := {colorref(GLASS)};",
+        f"  WizardForm.PageNameLabel.Font.Color := {colorref(TEXT)};",
+        f"  WizardForm.PageDescriptionLabel.Font.Color := {colorref(TEXT_DIM)};",
+        f"  WizardForm.WelcomeLabel1.Font.Color := {colorref(TEXT)};",
+        f"  WizardForm.WelcomeLabel2.Font.Color := {colorref(TEXT_DIM)};",
+        f"  WizardForm.FinishedHeadingLabel.Font.Color := {colorref(TEXT)};",
+        f"  WizardForm.FinishedLabel.Font.Color := {colorref(TEXT_DIM)};",
+        "",
+        "  { The desktop shortcut on the folder page: one settings page instead of two. }",
+        "  DesktopCheck := TNewCheckBox.Create(WizardForm);",
+        "  DesktopCheck.Parent := WizardForm.SelectDirPage;",
+        "  DesktopCheck.Caption := 'Create a desktop shortcut';",
+        "  DesktopCheck.Left := WizardForm.DirEdit.Left;",
+        "  DesktopCheck.Top := WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(24);",
+        "  DesktopCheck.Width := WizardForm.DirEdit.Width;",
+        "  DesktopCheck.Height := ScaleY(22);",
+        "  DesktopCheck.Checked := True;",
+        "",
+        "  { The progress bar in the app's colours (the style's own is green): a well and an accent fill. }",
+        "  BarTrack := TBitmapImage.Create(WizardForm);",
+        "  BarTrack.Parent := WizardForm.InstallingPage;",
+        "  BarTrack.SetBounds(WizardForm.ProgressGauge.Left, WizardForm.ProgressGauge.Top,",
+        "    WizardForm.ProgressGauge.Width, ScaleY(8));",
+        f"  BarTrack.BackColor := {colorref(WELL)};",
+        "  BarFill := TBitmapImage.Create(WizardForm);",
+        "  BarFill.Parent := WizardForm.InstallingPage;",
+        "  BarFill.SetBounds(BarTrack.Left, BarTrack.Top, 0, BarTrack.Height);",
+        f"  BarFill.BackColor := {colorref(ACCENT)};",
+        "  WizardForm.ProgressGauge.Visible := False;",
+        "end;",
+        "",
+        "procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer);",
+        "begin",
+        "  if MaxProgress > 0 then",
+        "    BarFill.Width := MulDiv(BarTrack.Width, CurProgress, MaxProgress);",
+        "end;",
+        "",
         "procedure CurPageChanged(CurPageID: Integer);",
         "begin",
         "  PaintTitleBar(WizardForm.Handle);",
+        "  if CurPageID = wpSelectDir then",
+        "    WizardForm.NextButton.Caption := SetupMessage(msgButtonInstall);",
         "  { Cancel is hidden on the last page: Finish takes its place at the right edge. }",
         "  if CurPageID = wpFinished then",
         "    WizardForm.NextButton.Left := WizardForm.CancelButton.Left;",
