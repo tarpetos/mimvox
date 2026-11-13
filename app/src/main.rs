@@ -43,8 +43,32 @@ fn leave_appimage_env() {
     unsafe { std::env::remove_var("PYTHONDONTWRITEBYTECODE") };
 }
 
+/// The app's id: the single-instance pipe (`rune::single_instance`) and the Windows mutex below are named after it.
+const APP_ID: &str = "io.github.tarpetos.mimvox";
+/// Held while the app runs (Windows): the installer and the uninstaller check it (scripts/build/inno.py, APP_MUTEX) and
+/// install or remove nothing while it is held.
+#[cfg(windows)]
+const APP_MUTEX: &str = "Local\\Mimvox-running";
+
+#[cfg(windows)]
+fn hold_app_mutex() {
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = APP_MUTEX.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a NUL-terminated name; the handle is never closed, so the mutex lives as long as the process.
+    let _ = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+}
+
 fn main() {
     leave_appimage_env();
+    // One Mimvox at a time: a second launch brings the running one's window forward and ends here. Headless runs
+    // (snapshots, scripted recordings) open no window and may run beside the app.
+    if !rune::is_headless() {
+        if !rune::single_instance(APP_ID) {
+            return;
+        }
+        #[cfg(windows)]
+        hold_app_mutex();
+    }
     // Before `run`: every window opened afterwards shows it. A failure only costs the icon.
     let _ = rune::set_app_icon(ICON_PNG);
     let spec = AppSpec::<AppState> {

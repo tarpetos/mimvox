@@ -27,6 +27,10 @@ cargo-packager-updater = "0.2.3"
 # Unpacks the gzipped uv of the Linux installers (see src/ui/setuprun.rs).
 flate2 = "1"
 
+[target.'cfg(windows)'.dependencies]
+# The named mutex the installer and the uninstaller look for (AppMutex): "Mimvox is running" (see src/main.rs).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [build-dependencies]
 # Embeds assets/icon.ico (and version info) into the Windows executable; build.rs does nothing on other targets.
 winresource = "0.1"

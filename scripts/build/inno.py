@@ -161,6 +161,8 @@ def draw_images(folder: Path) -> tuple[list[Path], list[Path]]:
 
 # ------------------------------------------------------------------------------------------------- uninstalling
 
+# The mutex the app holds while it runs (app/src/main.rs, APP_MUTEX).
+APP_MUTEX = "Local\\Mimvox-running"
 # Inno's uninstall entry: <AppId>_is1 under the install mode's root (HKA: per user here).
 UNINSTALL_KEY = f"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP}_is1"
 # What the data folder holds that Mimvox made (scripts never delete the folder blindly: a folder the user chose may
@@ -179,8 +181,59 @@ var
   ChoiceForm: TSetupForm;
   ChoiceAccepted: Boolean;
   OptionApp, OptionEngine, OptionAll: TNewRadioButton;
-  AllWarning: TNewStaticText;
+  AllWarning, RunningNotice: TNewStaticText;
+  FormUninstallButton, FormCancelButton: TNewButton;
+  FormButtonsTop: Integer;
+  RunningTimer: Longword;
   PointerUsed: Boolean;
+
+function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: Longword): Longword;
+  external 'SetTimer@user32.dll stdcall';
+function KillTimer(hWnd, nIDEvent: Longword): Bool;
+  external 'KillTimer@user32.dll stdcall';
+
+function AppRunning(): Boolean;
+begin
+  Result := CheckForMutexes('@MUTEX@');
+end;
+
+{ The app's files are held while it runs: nothing is removed until it is closed. The form watches it live. }
+procedure ShowRunningState();
+var
+  Running: Boolean;
+  Extra: Integer;
+begin
+  Running := AppRunning();
+  RunningNotice.Visible := Running;
+  FormUninstallButton.Enabled := not Running;
+  Extra := 0;
+  if Running then Extra := RunningNotice.Height + ScaleY(12);
+  FormUninstallButton.Top := FormButtonsTop + Extra;
+  FormCancelButton.Top := FormButtonsTop + Extra;
+  ChoiceForm.ClientHeight := FormButtonsTop + Extra + FormUninstallButton.Height + ScaleY(20);
+end;
+
+procedure RunningTimerProc(Arg1, Arg2, Arg3, Arg4: Longword);
+begin
+  if ChoiceForm <> nil then ShowRunningState();
+end;
+
+{ A silent run (an update's, or a script's) waits up to 30 s for the app to close. }
+function WaitForAppToClose(): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to 60 do
+  begin
+    if not AppRunning() then
+    begin
+      Result := True;
+      exit;
+    end;
+    Sleep(500);
+  end;
+  Result := not AppRunning();
+end;
 
 procedure RegisterOneWindowUninstall();
 var
@@ -239,6 +292,11 @@ end;
 
 procedure UninstallClick(Sender: TObject);
 begin
+  if AppRunning() then
+  begin
+    ShowRunningState();
+    exit;
+  end;
   ChoiceAccepted := True;
   ChoiceForm.Close();
 end;
@@ -304,6 +362,16 @@ begin
     AllWarning.Font.Color := @BAD@;
     AllWarning.Visible := False;
     OptionApp.Checked := True;
+    RunningNotice := TNewStaticText.Create(ChoiceForm);
+    RunningNotice.Parent := ChoiceForm;
+    RunningNotice.WordWrap := True;
+    RunningNotice.Left := ScaleX(24);
+    RunningNotice.Top := AllWarning.Top + AllWarning.Height + ScaleY(14);
+    RunningNotice.Width := ChoiceForm.ClientWidth - ScaleX(48);
+    RunningNotice.Caption := 'Mimvox is running. Close it to uninstall: this window notices by itself.';
+    RunningNotice.AdjustHeight();
+    RunningNotice.StyleElements := RunningNotice.StyleElements - [seFont];
+    RunningNotice.Font.Color := @BAD@;
     ButtonsTop := AllWarning.Top + AllWarning.Height + ScaleY(20);
     ButtonWidth := ChoiceForm.CalculateButtonWidth(['Uninstall', 'Cancel']);
     CancelButton := TNewButton.Create(ChoiceForm);
@@ -324,7 +392,11 @@ begin
     UninstallButton.Left := CancelButton.Left - ScaleX(10) - ButtonWidth;
     UninstallButton.OnClick := @UninstallClick;
     UninstallButton.Default := True;
-    ChoiceForm.ClientHeight := ButtonsTop + UninstallButton.Height + ScaleY(20);
+    FormUninstallButton := UninstallButton;
+    FormCancelButton := CancelButton;
+    FormButtonsTop := ButtonsTop;
+    ShowRunningState();
+    RunningTimer := SetTimer(0, 0, 700, CreateCallback(@RunningTimerProc));
     PaintTitleBar(ChoiceForm.Handle);
     ChoiceAccepted := False;
     ChoiceForm.ShowModal();
@@ -336,7 +408,10 @@ begin
       Result := True;
     end;
   finally
+    if RunningTimer <> 0 then KillTimer(0, RunningTimer);
+    RunningTimer := 0;
     ChoiceForm.Free();
+    ChoiceForm := nil;
   end;
 end;
 
@@ -348,6 +423,12 @@ begin
   RemoveChoice := 0;
   UserStarted := False;
   { /REMOVE=0|1|2 answers the question up front (scripts, tests). }
+  if UninstallSilent() and AppRunning() and not WaitForAppToClose() then
+  begin
+    Log('Mimvox is still running: nothing is removed');
+    Result := False;
+    exit;
+  end;
   if ExpandConstant('{param:REMOVE|}') <> '' then
   begin
     RemoveChoice := StrToIntDef(ExpandConstant('{param:REMOVE|0}'), 0);
@@ -439,7 +520,7 @@ end;
 def uninstall_code() -> str:
     def lines(entries: tuple[str, ...]) -> str:
         return "\n".join(f"  RemoveEntry(Data, '{name}');" for name in entries)
-    return (UNINSTALL_CODE.replace("@KEY@", UNINSTALL_KEY).replace("@DIM@", colorref(TEXT_DIM))
+    return (UNINSTALL_CODE.replace("@KEY@", UNINSTALL_KEY).replace("@MUTEX@", APP_MUTEX).replace("@DIM@", colorref(TEXT_DIM))
             .replace("@BAD@", colorref(BAD)).replace("@ENGINE@", lines(ENGINE_ENTRIES))
             .replace("@USER@", lines(USER_ENTRIES)))
 
@@ -531,7 +612,33 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "",
         "var",
         "  DesktopCheck, StartMenuCheck: TNewCheckBox;",
+        "  WizardSilentWaited: Integer;",
         "  BarTrack, BarFill: TBitmapImage;",
+        "",
+        "function InitializeSetup(): Boolean;",
+        "begin",
+        "  Result := True;",
+        "  { Nothing is installed over a running Mimvox: an update waits for it to close, a person is asked. }",
+        f"  while CheckForMutexes('{APP_MUTEX}') do",
+        "  begin",
+        "    if WizardSilent then",
+        "    begin",
+        "      Sleep(500);",
+        "      if WizardSilentWaited >= 60 then",
+        "      begin",
+        "        Log('Mimvox is still running: Setup stops');",
+        "        Result := False;",
+        "        exit;",
+        "      end;",
+        "      WizardSilentWaited := WizardSilentWaited + 1;",
+        "    end",
+        f"    else if MsgBox('{APP} is running. Close it, then click OK to continue.', mbError, MB_OKCANCEL) = IDCANCEL then",
+        "    begin",
+        "      Result := False;",
+        "      exit;",
+        "    end;",
+        "  end;",
+        "end;",
         "",
         "function DesktopWanted: Boolean;",
         "begin",
@@ -594,6 +701,12 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "  StartMenuCheck.Width := DesktopCheck.Width;",
         "  StartMenuCheck.Height := DesktopCheck.Height;",
         "  StartMenuCheck.Checked := True;",
+        "  { An update keeps the shortcuts the user has (or does not have). }",
+        f"  if RegKeyExists(HKA, '{UNINSTALL_KEY}') then",
+        "  begin",
+        f"    DesktopCheck.Checked := FileExists(ExpandConstant('{{autodesktop}}\\{APP}.lnk'));",
+        f"    StartMenuCheck.Checked := FileExists(ExpandConstant('{{group}}\\{APP}.lnk'));",
+        "  end;",
         "",
         "  { The progress bar in the app's colours (the style's own is green): a well and an accent fill. }",
         "  BarTrack := TBitmapImage.Create(WizardForm);",
