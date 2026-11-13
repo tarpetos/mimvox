@@ -95,8 +95,7 @@ minimum-system-version = "13.0"
 [nsis]
 installer-mode = "currentUser"
 compression = "lzma"
-# cargo-packager's template with an uninstall that removes the resource folders whole (see the file's header).
-template = "packaging/nsis/installer.nsi"
+# The setup .exe the releases ship is built with Inno Setup (scripts/build/inno.py), not this NSIS section.
 
 [dmg]
 window-size = { width = 540, height = 380 }

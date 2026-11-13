@@ -1,11 +1,14 @@
-# Build the Mimvox desktop installer on Windows: an NSIS setup .exe (default) or an .msi.
+# Build the Mimvox desktop installer on Windows: a setup .exe (Inno Setup, dark, in the app's colours; default), or an
+# .msi (WiX through cargo-packager, the stock light dialog).
 # Run it from anywhere:  .\scripts\build\build-win.ps1
 #
-#   -Format nsis|msi|both   installer type (default: nsis). nsis = per-user setup .exe, no admin rights needed;
-#                           msi = WiX package. cargo-packager downloads NSIS / WiX itself on first use.
+#   -Format setup|msi|both  installer type (default: setup). setup = per-user setup .exe, no admin rights needed
+#                           (scripts/build/inno.py; downloads a pinned, portable Inno Setup once);
+#                           msi = WiX package (cargo-packager downloads WiX itself on first use).
 #   -SkipCompile            reuse app\target\release (only re-stage resources and re-package)
 #
-# Output: dist\Mimvox_<version>_x64-setup.exe and/or dist\*.msi (dist\ is git-ignored).
+# Output: dist\mimvox_<version>_<x64|arm64>-setup.exe and/or dist\*.msi (dist\ is git-ignored). With
+# $env:CARGO_PACKAGER_SIGN_PRIVATE_KEY (and _PASSWORD) set, each installer also gets the .sig the app's updater checks.
 #
 # If Windows PowerShell 5.1 blocks the script ("running scripts is disabled on this system"), run this ONCE in the
 # same window, then run the script again:
@@ -18,8 +21,8 @@
 #
 # Knobs: $env:CARGO_PACKAGER_VERSION (default below), $env:CARGO_BUILD_JOBS (default 6), $env:CARGO_TARGET_DIR.
 param(
-    [ValidateSet("nsis", "msi", "both")]
-    [string]$Format = "nsis",
+    [ValidateSet("setup", "msi", "both")]
+    [string]$Format = "setup",
     [switch]$SkipCompile
 )
 $ErrorActionPreference = "Stop"
@@ -116,11 +119,31 @@ if ((Resolve-Path $releaseDir).Path -ne (Join-Path (Resolve-Path $appDir).Path "
     $releaseDir = $appRelease
 }
 
-$formats = switch ($Format) { "nsis" { "nsis" } "msi" { "wix" } "both" { "nsis,wix" } }
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-Write-Host "[build-win] Packaging ($formats)..."
-cargo packager --config Packager.toml --formats $formats --binaries-dir $releaseDir --out-dir $distDir
-Check-Exit "cargo packager"
+$arch = if ($hostLine -match "aarch64") { "arm64" } else { "x64" }
+
+if ($Format -ne "msi") {
+    # The app as it is installed: the binary next to the bundled resources.
+    $stage = Join-Path $appDir "target\setup-stage"
+    if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    Copy-Item (Join-Path $releaseDir "$binName.exe") $stage
+    Copy-Item -Recurse -Force (Join-Path $appDir "target\bundle-resources\*") $stage
+    $innoCache = if ($env:MIMVOX_INNO_CACHE) { $env:MIMVOX_INNO_CACHE } else { Join-Path $appDir "target\inno" }
+    Write-Host "[build-win] Building the setup .exe (Inno Setup)..."
+    uv run --no-project --with pillow python (Join-Path $repoRoot "scripts\build\inno.py") --version $cargoVersion --arch $arch `
+        --stage $stage --out $distDir --cache $innoCache
+    Check-Exit "Inno Setup"
+    if ($env:CARGO_PACKAGER_SIGN_PRIVATE_KEY) {
+        cargo packager signer sign (Join-Path $distDir "mimvox_${cargoVersion}_${arch}-setup.exe")
+        Check-Exit "Signing the setup .exe"
+    }
+}
+if ($Format -ne "setup") {
+    Write-Host "[build-win] Packaging the .msi..."
+    cargo packager --config Packager.toml --formats wix --binaries-dir $releaseDir --out-dir $distDir
+    Check-Exit "cargo packager"
+}
 
 Write-Host "[build-win] Done. Installers in ${distDir}:"
 Get-ChildItem $distDir -File | ForEach-Object { Write-Host ("  {0}  ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB)) }

@@ -6,8 +6,8 @@
 //! for its platform on request ([`download`]: the signature is verified against [`PUBKEY`] before anything is kept),
 //! and installs it after the window is gone and the engine has exited ([`install_pending`], called by `main`):
 //!
-//! * Windows (setup .exe, or .msi when installed from one): the installer runs without questions; it starts the app
-//!   again when the user chose "Restart now".
+//! * Windows (the Inno Setup .exe): it runs with `/SILENT /SUPPRESSMSGBOXES /NORESTART`, and `/RELAUNCH=1` when the
+//!   user chose "Restart now" (scripts/build/inno.py starts the new version then).
 //! * Linux AppImage: the new AppImage replaces the file the app was started from; a file named after the old version
 //!   (`mimvox_0.1.5_x86_64.AppImage`) is renamed after the new one.
 //! * macOS: the new `Mimvox.app` replaces the installed one.
@@ -59,25 +59,13 @@ fn app_bundle() -> Option<PathBuf> {
     exe.ancestors().find(|a| a.extension().is_some_and(|e| e == "app")).map(PathBuf::from)
 }
 
-/// The manifest entry for this install: `<os>-<arch>`, except a Windows copy installed from the .msi (under Program
-/// Files; the setup .exe installs per user), which updates with the .msi (`windows-<arch>-msi`).
-fn target() -> Option<String> {
-    if !cfg!(windows) {
-        return None;
-    }
-    let exe = std::env::current_exe().ok()?;
-    let program_files = ["ProgramFiles", "ProgramW6432"].iter().filter_map(std::env::var_os).map(PathBuf::from);
-    let from_msi = program_files.into_iter().any(|dir| exe.starts_with(dir));
-    from_msi.then(|| format!("windows-{}-msi", std::env::consts::ARCH))
-}
-
 fn config(relaunch: bool) -> Config {
-    // NSIS: "/P" installs with only a progress bar, "/R" starts the app again afterwards.
-    let windows = if relaunch {
-        WindowsConfig { install_mode: Some(WindowsUpdateInstallMode::Passive), installer_args: None }
-    } else {
-        WindowsConfig { install_mode: Some(WindowsUpdateInstallMode::BasicUi), installer_args: Some(vec!["/P".into()]) }
-    };
+    // The updater passes nothing of its own with BasicUi; these are Inno Setup's options for a quiet install.
+    let mut args: Vec<String> = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"].map(String::from).to_vec();
+    if relaunch {
+        args.push("/RELAUNCH=1".into());
+    }
+    let windows = WindowsConfig { install_mode: Some(WindowsUpdateInstallMode::BasicUi), installer_args: Some(args) };
     Config { endpoints: vec![ENDPOINT.parse().expect("valid endpoint")], pubkey: PUBKEY.into(), windows: Some(windows) }
 }
 
@@ -93,10 +81,7 @@ pub struct Found {
 /// Asks for the newest release (blocking: call it on a background thread). `Ok(None)`: this is the newest.
 pub fn check() -> Result<Option<Found>, String> {
     let current = env!("CARGO_PKG_VERSION").parse().map_err(|e| format!("{e}"))?;
-    let mut builder = UpdaterBuilder::new(current, config(false)).timeout(Duration::from_secs(30));
-    if let Some(t) = target() {
-        builder = builder.target(t);
-    }
+    let builder = UpdaterBuilder::new(current, config(false)).timeout(Duration::from_secs(30));
     let update = builder.build().map_err(|e| e.to_string())?.check().map_err(|e| e.to_string())?;
     Ok(update.map(|u| Found { version: u.version.clone(), notes: u.body.clone(), update: u }))
 }

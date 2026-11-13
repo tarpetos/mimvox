@@ -7,7 +7,7 @@
 #   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
 #   a pull request that touches the build      build every installer as a check (nothing is published)
 #
-# Targets: Windows x64 (NSIS setup .exe and .msi) and ARM64 (setup .exe), Linux x64 and ARM64 (AppImage and .deb), macOS
+# Targets: Windows x64 and ARM64 (setup .exe, Inno Setup), Linux x64 and ARM64 (AppImage and .deb), macOS
 # universal (one .dmg for Apple Silicon and Intel). The installers carry only the app and the engine sources; the
 # app's first-run setup downloads Python, PyTorch and the models.
 #
@@ -55,12 +55,9 @@ jobs:
           - name: Windows x64
             os: windows-latest
             kind: windows
-            win_format: both
-          # Setup .exe only: WiX 3 (the .msi) cannot build ARM64 packages.
           - name: Windows ARM64
             os: windows-11-arm
             kind: windows
-            win_format: nsis
           # 22.04 (glibc 2.35) so the AppImage also runs on older distributions.
           - name: Linux x64
             os: ubuntu-22.04
@@ -111,7 +108,8 @@ jobs:
       - name: Build (Windows)
         if: matrix.kind == 'windows'
         shell: pwsh
-        run: ./scripts/build/build-win.ps1 -Format ${{ matrix.win_format }}
+        # The setup .exe (Inno Setup, dark, in the app's colours); the .msi is no longer shipped.
+        run: ./scripts/build/build-win.ps1 -Format setup
 
       - name: Build (Linux)
         if: matrix.kind == 'linux'
@@ -173,7 +171,7 @@ jobs:
           fi
           rm -f ./*.deb.sig ./*.dmg.sig
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
-          # One manifest entry: <os>-<arch> (or windows-<arch>-msi, see target() in app/src/update.rs), a file
+          # One manifest entry: <os>-<arch>, a file
           # pattern and the updater's format for it.
           entry() {
             f="$(ls $2 2>/dev/null | head -n1)"
@@ -185,8 +183,7 @@ jobs:
               '{($k): {url: $url, signature: $sig, format: $fmt}}'
           }
           {
-            entry windows-x86_64 '*_x64-setup.exe' nsis
-            entry windows-x86_64-msi '*_x64_*.msi' wix
+            entry windows-x86_64 '*_x64-setup.exe' nsis   # an Inno Setup .exe: the updater runs it with its args
             entry windows-aarch64 '*_arm64-setup.exe' nsis
             entry linux-x86_64 '*_x86_64.AppImage' appimage
             entry linux-aarch64 '*_aarch64.AppImage' appimage
