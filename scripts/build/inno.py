@@ -55,6 +55,7 @@ ACCENT_BOTTOM = "#5FAAF0"
 TEXT = "#F2F6FB"
 TEXT_DIM = "#AFBBCB"
 WELL = "#0E182A"    # the app's recessed wells: the progress bar's track
+BAD = "#FF7A85"
 
 # Pinned, because the download is executed: the digest GitHub publishes for the release asset.
 INNO_VERSION = "6.7.3"
@@ -156,6 +157,279 @@ def draw_images(folder: Path) -> tuple[list[Path], list[Path]]:
         smalls.append(folder / f"small-{side}.png")
         draw_small(side, smalls[-1])
     return banners, smalls
+
+
+# ------------------------------------------------------------------------------------------------- uninstalling
+
+# Inno's uninstall entry: <AppId>_is1 under the install mode's root (HKA: per user here).
+UNINSTALL_KEY = f"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP}_is1"
+# What the data folder holds that Mimvox made (scripts never delete the folder blindly: a folder the user chose may
+# hold other files). ENGINE: the speech engine, models, caches; YOURS: what the user made, and the settings.
+ENGINE_ENTRIES = ("runtime", "cache", "tmp", "runtime.toml")
+USER_ENTRIES = ("voices", "outputs", "books", "logs", "settings.json")
+
+# The uninstaller's one window (Pascal). "Apps & features" runs it with /SILENT (RegisterOneWindowUninstall), so Inno's
+# own "Remove ...?" box never shows; /VERYSILENT (a tool removing apps unattended) keeps every bit of data. The choice:
+# 0 the app only, 1 also the speech engine and models, 2 everything; /REMOVE=<n> answers it without the form. A run
+# started by hand (unins000.exe without /SILENT) shows the form too, then Inno's box.
+UNINSTALL_CODE = r"""
+var
+  RemoveChoice: Integer;
+  UserStarted: Boolean;
+  ChoiceForm: TSetupForm;
+  ChoiceAccepted: Boolean;
+  OptionApp, OptionEngine, OptionAll: TNewRadioButton;
+  AllWarning: TNewStaticText;
+  PointerUsed: Boolean;
+
+procedure RegisterOneWindowUninstall();
+var
+  Command: String;
+begin
+  if RegQueryStringValue(HKA, '@KEY@', 'UninstallString', Command) then
+  begin
+    RegWriteStringValue(HKA, '@KEY@', 'UninstallString', Command + ' /SILENT');
+    RegWriteStringValue(HKA, '@KEY@', 'QuietUninstallString', Command + ' /VERYSILENT');
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then RegisterOneWindowUninstall();
+end;
+
+function VerySilentRun(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/VERYSILENT') = 0 then Result := True;
+end;
+
+{ The data folder, as the app finds it: MIMVOX_DATA, else location.toml's data_dir, else the default. }
+function DataDir(): String;
+var
+  Pointer: String;
+  Text: AnsiString;
+  Value: String;
+  First, Last: Integer;
+begin
+  PointerUsed := False;
+  Result := GetEnv('MIMVOX_DATA');
+  if Result <> '' then exit;
+  Result := ExpandConstant('{localappdata}\mimvox');
+  Pointer := ExpandConstant('{localappdata}\mimvox\location.toml');
+  if not LoadStringFromFile(Pointer, Text) then exit;
+  First := Pos('"', Text);
+  if First = 0 then exit;
+  Text := Copy(Text, First + 1, Length(Text));
+  Last := Pos('"', Text);
+  if Last <= 1 then exit;
+  Value := String(Copy(Text, 1, Last - 1));
+  StringChangeEx(Value, '\\', '\', True);  { TOML escapes each backslash }
+  Result := Value;
+  PointerUsed := True;
+end;
+
+procedure ChoiceChanged(Sender: TObject);
+begin
+  AllWarning.Visible := OptionAll.Checked;
+end;
+
+procedure UninstallClick(Sender: TObject);
+begin
+  ChoiceAccepted := True;
+  ChoiceForm.Close();
+end;
+
+function NewOption(Top: Integer; Caption, Detail: String; var DetailText: TNewStaticText): TNewRadioButton;
+begin
+  Result := TNewRadioButton.Create(ChoiceForm);
+  Result.Parent := ChoiceForm;
+  Result.Left := ScaleX(24);
+  Result.Top := Top;
+  Result.Width := ChoiceForm.ClientWidth - ScaleX(48);
+  Result.Height := ScaleY(22);
+  Result.Caption := Caption;
+  Result.OnClick := @ChoiceChanged;
+  DetailText := TNewStaticText.Create(ChoiceForm);
+  DetailText.Parent := ChoiceForm;
+  DetailText.WordWrap := True;
+  DetailText.Left := ScaleX(46);
+  DetailText.Top := Result.Top + Result.Height;
+  DetailText.Width := ChoiceForm.ClientWidth - ScaleX(70);
+  DetailText.Caption := Detail;
+  DetailText.AdjustHeight();
+  DetailText.StyleElements := DetailText.StyleElements - [seFont];
+  DetailText.Font.Color := @DIM@;
+end;
+
+function AskWhatToRemove(): Boolean;
+var
+  Title: TNewStaticText;
+  D1, D2, D3: TNewStaticText;
+  UninstallButton, CancelButton: TNewButton;
+  ButtonsTop, ButtonWidth: Integer;
+begin
+  Result := False;
+  ChoiceForm := CreateCustomForm(ScaleX(520), ScaleY(300), True, True);
+  try
+    ChoiceForm.ClientWidth := ScaleX(520);
+    ChoiceForm.Caption := 'Uninstall Mimvox';
+    Title := TNewStaticText.Create(ChoiceForm);
+    Title.Parent := ChoiceForm;
+    Title.Left := ScaleX(24);
+    Title.Top := ScaleY(20);
+    Title.Width := ChoiceForm.ClientWidth - ScaleX(48);
+    Title.WordWrap := True;
+    Title.Caption := 'What should be removed?';
+    Title.Font.Style := [fsBold];
+    Title.AdjustHeight();
+    OptionApp := NewOption(Title.Top + Title.Height + ScaleY(14), 'Only the app',
+      'Your voices, results, settings and the speech engine stay. Installing Mimvox again continues where you left off.', D1);
+    OptionEngine := NewOption(D1.Top + D1.Height + ScaleY(12), 'The app, the speech engine and its models',
+      'Frees almost all the space Mimvox uses. Your voices, recordings, results and settings stay.', D2);
+    OptionAll := NewOption(D2.Top + D2.Height + ScaleY(12), 'Everything',
+      'Also your voices, recordings, trained voice models, results, audiobooks and settings.', D3);
+    AllWarning := TNewStaticText.Create(ChoiceForm);
+    AllWarning.Parent := ChoiceForm;
+    AllWarning.WordWrap := True;
+    AllWarning.Left := ScaleX(46);
+    AllWarning.Top := D3.Top + D3.Height + ScaleY(6);
+    AllWarning.Width := ChoiceForm.ClientWidth - ScaleX(70);
+    AllWarning.Caption := 'This cannot be undone: copy any recordings and results you want to keep first.';
+    AllWarning.AdjustHeight();
+    AllWarning.StyleElements := AllWarning.StyleElements - [seFont];
+    AllWarning.Font.Color := @BAD@;
+    AllWarning.Visible := False;
+    OptionApp.Checked := True;
+    ButtonsTop := AllWarning.Top + AllWarning.Height + ScaleY(20);
+    ButtonWidth := ChoiceForm.CalculateButtonWidth(['Uninstall', 'Cancel']);
+    CancelButton := TNewButton.Create(ChoiceForm);
+    CancelButton.Parent := ChoiceForm;
+    CancelButton.Caption := 'Cancel';
+    CancelButton.Width := ButtonWidth;
+    CancelButton.Height := ScaleY(25);
+    CancelButton.Top := ButtonsTop;
+    CancelButton.Left := ChoiceForm.ClientWidth - ScaleX(24) - ButtonWidth;
+    CancelButton.ModalResult := mrCancel;
+    CancelButton.Cancel := True;
+    UninstallButton := TNewButton.Create(ChoiceForm);
+    UninstallButton.Parent := ChoiceForm;
+    UninstallButton.Caption := 'Uninstall';
+    UninstallButton.Width := ButtonWidth;
+    UninstallButton.Height := ScaleY(25);
+    UninstallButton.Top := ButtonsTop;
+    UninstallButton.Left := CancelButton.Left - ScaleX(10) - ButtonWidth;
+    UninstallButton.OnClick := @UninstallClick;
+    UninstallButton.Default := True;
+    ChoiceForm.ClientHeight := ButtonsTop + UninstallButton.Height + ScaleY(20);
+    PaintTitleBar(ChoiceForm.Handle);
+    ChoiceAccepted := False;
+    ChoiceForm.ShowModal();
+    if ChoiceAccepted then
+    begin
+      if OptionAll.Checked then RemoveChoice := 2
+      else if OptionEngine.Checked then RemoveChoice := 1
+      else RemoveChoice := 0;
+      Result := True;
+    end;
+  finally
+    ChoiceForm.Free();
+  end;
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := True;
+  RemoveChoice := 0;
+  UserStarted := False;
+  { /REMOVE=0|1|2 answers the question up front (scripts, tests). }
+  if ExpandConstant('{param:REMOVE|}') <> '' then
+  begin
+    RemoveChoice := StrToIntDef(ExpandConstant('{param:REMOVE|0}'), 0);
+    Log('Chosen on the command line: ' + IntToStr(RemoveChoice));
+    exit;
+  end;
+  if VerySilentRun() then
+  begin
+    Log('A very silent uninstall: the data folder is kept');
+    exit;
+  end;
+  if not AskWhatToRemove() then
+  begin
+    Log('Cancelled: nothing is removed');
+    Result := False;
+    exit;
+  end;
+  UserStarted := True;
+  Log('Chosen: ' + IntToStr(RemoveChoice) + ' (0 the app, 1 also the engine and models, 2 everything)');
+end;
+
+procedure RemoveEntry(Dir, Name: String);
+var
+  Path: String;
+begin
+  Path := AddBackslash(Dir) + Name;
+  if DirExists(Path) then
+  begin
+    if DelTree(Path, True, True, True) then Log('Removed ' + Path) else Log('Could not remove ' + Path);
+  end
+  else if FileExists(Path) then
+  begin
+    if DeleteFile(Path) then Log('Removed ' + Path) else Log('Could not remove ' + Path);
+  end;
+end;
+
+procedure RemoveChosenData();
+var
+  Data: String;
+begin
+  if RemoveChoice = 0 then exit;
+  Data := DataDir();
+  { Only a folder Mimvox set up (it holds runtime.toml, a runtime or voices), and only what Mimvox made in it. }
+  if not (FileExists(AddBackslash(Data) + 'runtime.toml') or DirExists(AddBackslash(Data) + 'runtime')
+          or DirExists(AddBackslash(Data) + 'voices')) then
+  begin
+    Log('No Mimvox data folder at ' + Data + ': nothing else is removed');
+    exit;
+  end;
+  UninstallProgressForm.StatusLabel.Caption := 'Removing the speech engine and its models...';
+@ENGINE@
+  if RemoveChoice = 2 then
+  begin
+    UninstallProgressForm.StatusLabel.Caption := 'Removing your voices, results and settings...';
+@USER@
+    { The pointer goes only with the folder it names (MIMVOX_DATA may point elsewhere). }
+    if PointerUsed then DeleteFile(ExpandConstant('{localappdata}\mimvox\location.toml'));
+  end;
+  RemoveDir(Data);
+  RemoveDir(ExpandConstant('{localappdata}\mimvox'));
+end;
+
+procedure InitializeUninstallProgressForm();
+begin
+  PaintTitleBar(UninstallProgressForm.Handle);
+  { The style's progress bar is green; the steps are short, a status line says what happens. }
+  UninstallProgressForm.ProgressBar.Visible := False;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then RemoveChosenData();
+  if (CurUninstallStep = usDone) and UserStarted then
+    MsgBox('Mimvox was removed.', mbInformation, MB_OK);
+end;
+"""
+
+
+def uninstall_code() -> str:
+    def lines(entries: tuple[str, ...]) -> str:
+        return "\n".join(f"  RemoveEntry(Data, '{name}');" for name in entries)
+    return (UNINSTALL_CODE.replace("@KEY@", UNINSTALL_KEY).replace("@DIM@", colorref(TEXT_DIM))
+            .replace("@BAD@", colorref(BAD)).replace("@ENGINE@", lines(ENGINE_ENTRIES))
+            .replace("@USER@", lines(USER_ENTRIES)))
 
 
 # ------------------------------------------------------------------------------------------------- the script
@@ -333,12 +607,8 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "    WizardForm.NextButton.Left := WizardForm.CancelButton.Left;",
         "end;",
         "",
-        "procedure InitializeUninstallProgressForm();",
-        "begin",
-        "  PaintTitleBar(UninstallProgressForm.Handle);",
-        "end;",
     ]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n" + uninstall_code()
 
 
 # ------------------------------------------------------------------------------------------------- the compiler
