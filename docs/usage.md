@@ -639,6 +639,8 @@ The **Text / Book** switch at the top right of the text box turns Speak into an 
 book in the active voice with the Style settings, one file per chapter, and you can pause it and continue later, even
 after closing the app.
 
+![Reading a book chapter by chapter](screenshots/book.png)
+
 1. Press **Open book…** (or drop the file on the window). The book opens with the chapters Mimvox found: from the
    EPUB's table of contents, the headings of a DOCX, ODT, FB2, Markdown or HTML file, the PDF's bookmarks, or lines
    such as *Chapter 1*, *CHAPTER IV*, *Розділ 1* in a text file.

@@ -10,7 +10,7 @@ spoken in your own voice. Everything runs
 on your computer: your recordings, your voice models and the generated speech are never uploaded anywhere.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Mimvox: recording, training, speaking and dubbing in your own voice" width="880">
+  <img src="docs/demo.gif" alt="Mimvox: setup, recording, training, speaking, an audiobook and dubbing in your own voice" width="880">
 </p>
 
 > [!WARNING]
@@ -235,6 +235,10 @@ Where your data lives (voices, datasets, trained models, generated audio) is des
 | Speak | Voices |
 | --- | --- |
 | ![Typing text and playing it in your voice](docs/screenshots/speak.png) | ![Your voices](docs/screenshots/voices.png) |
+
+| Book | Redub |
+| --- | --- |
+| ![Reading a book into an audiobook, chapter by chapter](docs/screenshots/book.png) | ![A video dubbed into English in your voice](docs/screenshots/redub.png) |
 
 ---
 
