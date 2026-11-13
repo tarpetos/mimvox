@@ -203,9 +203,13 @@ pub fn brand_mark(s: &AppState, size: f32) -> El {
     }
 }
 
-/// Headless runs (`--snap`, `--tree`, `--script`, ...) must not start processes or open audio devices.
+/// Headless runs (`--snap`, `--tree`, `--script`, ...) must not start processes or open audio devices. A
+/// `--realtime` run is the exception: it keeps pace with the wall clock so it can record a real session (the engine
+/// starts and work really runs), for demo videos made with `--script` and `--video`.
 pub fn headless_run() -> bool {
-    std::env::args().any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--trace" | "--video"))
+    let mut args = std::env::args();
+    let headless = args.any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--trace" | "--video"));
+    headless && !std::env::args().any(|a| a == "--realtime")
 }
 
 impl Default for ShellState {
