@@ -30,7 +30,10 @@ one; without one they run on the processor, which works but is several times slo
 | **Linux** x64 | **Yes** (CUDA) | **Yes** (ROCm, new; tested on an RX 9070 XT) | n/a | Processor only | Yes, slow |
 | **Linux** ARM64 | Not supported | n/a | n/a | n/a | Experimental, not tried yet |
 | **macOS** Apple Silicon (M1 and later) | n/a | n/a | Best effort (MPS), not validated | n/a | n/a |
-| **macOS** Intel | Not supported: current PyTorch has no Intel Mac builds, so the speech engine cannot be set up | | | | |
+| **macOS** Intel | n/a | Not supported | n/a | Not supported | Not supported |
+
+macOS on Intel is not supported because current PyTorch has no builds for it, so the speech engine cannot be set up
+there (the `.dmg` still installs the app).
 
 - **Installers:** Windows `setup.exe` (x64, ARM64), Linux `.AppImage` and `.deb` (x64, ARM64), one macOS `.dmg` for
   Apple Silicon and Intel; every [release](https://github.com/tarpetos/mimvox/releases/latest) has them all.
