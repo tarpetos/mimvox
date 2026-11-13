@@ -468,6 +468,11 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "AllowNoIcons=yes",
         "AllowRootDirectory=no",
         "PrivilegesRequired=lowest",
+        # Off: it is inherited by what Setup starts (the app after installing, and after an update), and it blocks the
+        # links uv's Python installs are made of (cpython-3.11-... -> cpython-3.11.13-...): the engine's python.exe then
+        # fails with "uv trampoline failed to spawn Python child process: entity not found". It protects elevated
+        # installers writing to shared folders; this one installs per user into the user's own folders.
+        "RedirectionGuard=no",
         f"ArchitecturesAllowed={arch_allowed}",
         f"ArchitecturesInstallIn64BitMode={arch_allowed}",
         # Closes a running Mimvox (Restart Manager) before its files are replaced.
