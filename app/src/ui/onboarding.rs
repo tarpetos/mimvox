@@ -36,7 +36,7 @@ fn settings_path() -> PathBuf {
     data_dir().join("settings.json")
 }
 
-fn read_settings() -> Value {
+pub(crate) fn read_settings() -> Value {
     std::fs::read_to_string(settings_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}))
 }
 
@@ -50,7 +50,7 @@ fn write_settings(v: &Value) {
     }
 }
 
-fn update_settings(f: impl FnOnce(&mut Value)) {
+pub(crate) fn update_settings(f: impl FnOnce(&mut Value)) {
     let mut v = read_settings();
     if !v.is_object() {
         v = json!({});

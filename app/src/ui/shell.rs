@@ -203,13 +203,9 @@ pub fn brand_mark(s: &AppState, size: f32) -> El {
     }
 }
 
-/// Headless runs (`--snap`, `--tree`, `--script`, ...) must not start processes or open audio devices. A
-/// `--realtime` run is the exception: it keeps pace with the wall clock so it can record a real session (the engine
-/// starts and work really runs), for demo videos made with `--script` and `--video`.
+/// Headless runs (`--snap`, `--tree`, `--script`, ...) must not start processes or open audio devices.
 pub fn headless_run() -> bool {
-    let mut args = std::env::args();
-    let headless = args.any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--trace" | "--video"));
-    headless && !std::env::args().any(|a| a == "--realtime")
+    std::env::args().any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--trace" | "--video"))
 }
 
 impl Default for ShellState {
@@ -428,6 +424,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     }
     changed |= ensure_warm(s);
     changed |= super::playbar::settle(s, tx);
+    changed |= super::update::settle(s, tx);
 
     // Toasts: drop the expired ones, wake for the next expiry.
     let before = s.shell.toasts.len();
@@ -645,6 +642,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let fit = HeaderFit { compact, tight: header_w < 1120.0, balance };
     let page = body_page(s, cx);
     let mut body = col().key("body").w_full().grow(1.0).min_h(0.0).pt(14.0).gap(12.0);
+    if let Some(b) = super::update::banner(s, p) {
+        body = body.child(b);
+    }
     if let Some(b) = engine_banner(s, p) {
         body = body.child(b);
     }

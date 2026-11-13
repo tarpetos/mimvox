@@ -127,7 +127,7 @@ pub struct TrainState {
     /// Why the close dialog could not pause (shown inside it).
     pub close_note: Option<String>,
     /// Exit the app when the current event settles (the shell owns the `Tx` that can quit).
-    quit_requested: bool,
+    pub(crate) quit_requested: bool,
     /// A short note after a cancel.
     pub note: Option<String>,
     pending: HashMap<u64, Tag>,

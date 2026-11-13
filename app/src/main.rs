@@ -5,6 +5,7 @@
 mod audio;
 mod engine;
 mod state;
+mod update;
 mod ui;
 
 use rune::{App, AppSpec, Titlebar};
@@ -79,5 +80,7 @@ fn main() {
     if let Some(mut engine) = ui::train::take_closing_engine() {
         engine.shutdown();
     }
+    // An update downloaded this session installs now that the app and the engine are gone.
+    update::install_pending();
     ui::stats::write();
 }

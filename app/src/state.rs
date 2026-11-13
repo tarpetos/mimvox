@@ -52,6 +52,8 @@ pub struct AppState {
     pub trash: crate::ui::trash::TrashState,
     /// Speak's and Redub's Results from earlier sessions (see `ui::history`).
     pub history: crate::ui::history::HistoryState,
+    /// A newer release and its download (see `ui::update`).
+    pub update: crate::ui::update::UpdateState,
 }
 
 impl Default for AppState {
@@ -78,6 +80,7 @@ impl Default for AppState {
             playbar: Default::default(),
             trash: Default::default(),
             history: Default::default(),
+            update: Default::default(),
         }
     }
 }

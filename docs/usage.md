@@ -135,6 +135,24 @@ fixed by the `MIMVOX_DATA` environment variable cannot be moved from the app.
 
 ---
 
+### Updates
+
+An installed app checks once per launch whether a newer version exists. If one does, a banner under the header says
+so: **What's new** opens the release page, **Skip this version** hides it for good, **Later** until the next launch,
+and **Update** downloads it in the background. The download is checked against the project's signature before it is
+kept; then **Restart now** installs it and starts the new version (a running training or book pauses and continues
+afterwards), or it installs by itself when you close the app.
+
+| Installed from | How it updates |
+| --- | --- |
+| Windows setup `.exe` / `.msi` | the installer runs with only a progress bar |
+| Linux AppImage | the new AppImage replaces the file you started |
+| macOS `.dmg` | the new Mimvox.app replaces the one in Applications |
+| Linux `.deb` | **Download** opens the release page; install the new `.deb` as before |
+
+Your voices, results and the engine runtime are not touched by an update. To turn the check off, set
+`"check_updates": false` in `settings.json` in your data folder.
+
 ## 2. The window at a glance
 
 - **Tabs** in the middle of the header: **Record**, **Train**, **Speak**, **Redub**.

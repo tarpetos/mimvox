@@ -26,6 +26,7 @@ pub mod stats;
 pub mod theme;
 pub mod train;
 pub mod trash;
+pub mod update;
 pub mod voices;
 
 use crate::state::AppState;

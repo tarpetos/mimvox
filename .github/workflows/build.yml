@@ -1,14 +1,20 @@
 # Builds the desktop installers on GitHub-hosted runners (free for public repositories) with the scripts in
 # scripts/build/, and publishes them as a GitHub Release when a version tag is pushed.
 #
-#   git tag v0.1.6 && git push origin v0.1.6   build every installer and publish the pre-release "Mimvox 0.1.6"
-#                                              (notes: that version's section of CHANGELOG.md)
+#   git tag v0.1.6 && git push origin v0.1.6   build every installer and publish the release "Mimvox 0.1.6" (notes:
+#                                              that version's section of CHANGELOG.md) with latest.json, the manifest
+#                                              the app's updater reads (src/update.rs)
 #   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
 #   a pull request that touches the build      build every installer as a check (nothing is published)
 #
 # Targets: Windows x64 (NSIS setup .exe and .msi) and ARM64 (setup .exe), Linux x64 and ARM64 (AppImage and .deb), macOS
 # universal (one .dmg for Apple Silicon and Intel). The installers carry only the app and the engine sources; the
 # app's first-run setup downloads Python, PyTorch and the models.
+#
+# Updates: with the CARGO_PACKAGER_SIGN_PRIVATE_KEY(_PASSWORD) secrets, cargo-packager signs every installer (and packs
+# the macOS .app into a signed .app.tar.gz); the release job lists the signed installers per platform in latest.json.
+# The key pair was made with `cargo packager signer generate`; its public half is PUBKEY in app/src/update.rs. Builds
+# without the secrets (pull requests from forks) are simply unsigned.
 name: Build installers
 
 on:
@@ -89,6 +95,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
             libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev file
 
+      - name: Signing key
+        shell: bash
+        env:
+          KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "CARGO_PACKAGER_SIGN_PRIVATE_KEY=$KEY" >> "$GITHUB_ENV"
+            echo "CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "No signing key: the installers are not signed for updates."
+          fi
+
       - name: Build (Windows)
         if: matrix.kind == 'windows'
         shell: pwsh
@@ -113,6 +132,8 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.dmg
+            dist/*.app.tar.gz
+            dist/*.sig
 
   release:
     name: Publish release
@@ -140,12 +161,43 @@ jobs:
           path: out
           merge-multiple: true
 
-      - name: Release notes and checksums
+      - name: Release notes, update manifest and checksums
         run: |
           awk -v v="## $VERSION" '$0 == v {on = 1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then echo "See CHANGELOG.md." > notes.md; fi
-          (cd out && sha256sum * > SHA256SUMS.txt)
-          ls -l out
+          cd out
+          # The macOS update bundle gets a versioned name; signatures only the updater uses are dropped.
+          if [ -f Mimvox.app.tar.gz ]; then
+            mv Mimvox.app.tar.gz "Mimvox_${VERSION}_universal.app.tar.gz"
+            mv Mimvox.app.tar.gz.sig "Mimvox_${VERSION}_universal.app.tar.gz.sig"
+          fi
+          rm -f ./*.deb.sig ./*.dmg.sig
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          # One manifest entry: <os>-<arch> (or windows-<arch>-msi, see target() in app/src/update.rs), a file
+          # pattern and the updater's format for it.
+          entry() {
+            f="$(ls $2 2>/dev/null | head -n1)"
+            if [ -z "$f" ] || [ ! -f "$f.sig" ]; then
+              echo "::warning::No signed $2: $1 gets no automatic update."
+              return
+            fi
+            jq -n --arg k "$1" --arg url "$base/$f" --arg sig "$(cat "$f.sig")" --arg fmt "$3" \
+              '{($k): {url: $url, signature: $sig, format: $fmt}}'
+          }
+          {
+            entry windows-x86_64 '*_x64-setup.exe' nsis
+            entry windows-x86_64-msi '*_x64_*.msi' wix
+            entry windows-aarch64 '*_arm64-setup.exe' nsis
+            entry linux-x86_64 '*_x86_64.AppImage' appimage
+            entry linux-aarch64 '*_aarch64.AppImage' appimage
+            entry macos-x86_64 '*_universal.app.tar.gz' app
+            entry macos-aarch64 '*_universal.app.tar.gz' app
+          } | jq -s 'add // {}' > ../platforms.json
+          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile n ../notes.md \
+            --slurpfile p ../platforms.json '{version: $v, notes: $n, pub_date: $d, platforms: $p[0]}' > latest.json
+          sha256sum -- * > SHA256SUMS.txt
+          jq . latest.json
+          ls -l
 
       - name: Publish
         env:
@@ -154,5 +206,6 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" out/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" out/* --prerelease --title "Mimvox $VERSION" --notes-file notes.md
+            # A full release, not a pre-release: the updater reads releases/latest, which skips pre-releases.
+            gh release create "$GITHUB_REF_NAME" out/* --latest --title "Mimvox $VERSION" --notes-file notes.md
           fi

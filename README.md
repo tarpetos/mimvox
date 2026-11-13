@@ -75,7 +75,8 @@ recordings joined with short pauses).
 | **History and export** | Every result is saved as one file in the format you pick (WAV by default, or MP3, FLAC, OGG, Opus, M4A, AIFF). Play it again, or export it to another format. |
 | **Several voices** | Keep more than one voice (for example "Studio" and "Casual"), rename or delete them, and see how much data each one has. |
 | **Two sliders** | **Expressiveness** and **Voice match**. The validated defaults are already set; you do not need to touch anything else. |
-| **Private by design** | No account, no cloud, no telemetry. Setup downloads the models once; after that the app works offline. |
+| **Private by design** | No account, no cloud, no telemetry. Setup downloads the models once; after that the app works offline. The only request of its own is a check for a new version at launch (it can be turned off). |
+| **Updates from inside the app** | A new version shows a banner: **Update** downloads it, checks its signature and installs it when you close the app or press **Restart now** (Windows, macOS, AppImage; a `.deb` gets a link to the download page). |
 
 ---
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+* **Installers for every platform:** Windows x64 and ARM64 (setup .exe; .msi for x64), Linux x64 and ARM64 (AppImage
+  and .deb) and one macOS app for Apple Silicon and Intel, built by GitHub Actions for every release.
+* **Updates from inside the app:** a new version shows a banner under the header. **Update** downloads it, checks its
+  signature and installs it when the app closes, or at once with **Restart now** (a running training or book pauses
+  and continues). A `.deb` install gets a link to the download page. `"check_updates": false` in settings.json turns
+  the check off.
+* **Setup from an installed app:** **Run setup** finds the setup script in AppImage, .deb and macOS installs, the
+  AppImage's launcher settings no longer break the setup's and the engine's Python, closing the app no longer stops a
+  setup started from an AppImage, and more terminal emulators are found (`$TERMINAL` first).
 ## 0.1.5
 
 * **Audiobooks:** Speak has a Book mode. Open an EPUB, FB2, DOCX, ODT, RTF, PDF (with a text layer), HTML, Markdown,
