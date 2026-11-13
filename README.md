@@ -31,7 +31,8 @@ one; without one they run on the processor, which works but is several times slo
 | **Linux** ARM64 | Not supported | n/a | n/a | n/a | Experimental, not tried yet |
 | **macOS** Apple Silicon (M1 and later) | n/a | n/a | Best effort (MPS), not validated | n/a | n/a |
 
-Intel Macs are not supported: current PyTorch has no builds for them, so the speech engine cannot run there.
+Intel Macs are not supported: the official PyTorch builds for them stopped at 2.2, and the speech engine needs 2.8 or
+newer.
 
 - **Installers:** Windows `setup.exe` (x64, ARM64), Linux `.AppImage` and `.deb` (x64, ARM64), one macOS `.dmg` for
   Apple Silicon; every [release](https://github.com/tarpetos/mimvox/releases/latest) has them all.
