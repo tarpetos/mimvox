@@ -1516,17 +1516,18 @@ fn segment_row(p: Palette, i: usize, g: &Seg, busy: bool, with_source: bool) -> 
 
 // ---- result and actions ----
 
-/// "Show in folder" and "Open file" of a result: of its video when it has one ("Open video" plays it in the system
+/// "Show in folder" and "Open file" of a result: the folder shows its video when it has one; the file opened is the audio
 /// player; the audio sits next to it under the same name), else of the audio file.
 fn open_reveal(p: Palette, id: u64, tag: &str, r: &Redub) -> (El, El) {
-    let path = r.video.as_deref().unwrap_or(&r.path);
-    let (a, b) = (path.to_path_buf(), path.to_path_buf());
+    // "Show in folder" selects the video when there is one; the open icon opens the audio ("Open video" is its own
+    // button on video results).
+    let (a, b) = (r.video.as_deref().unwrap_or(&r.path).to_path_buf(), r.path.to_path_buf());
     let reveal = icon_button(p, &format!("reveal-{tag}{id}"), &icons::FOLDER, "Show in folder", move |s| {
         if let Err(e) = speak::reveal_file(&a) {
             shell::toast(s, Tone::Danger, e);
         }
     });
-    let open = icon_button(p, &format!("open-{tag}{id}"), &icons::OPEN, if r.video.is_some() { "Open video" } else { "Open file" }, move |s| {
+    let open = icon_button(p, &format!("open-{tag}{id}"), &icons::OPEN, if r.video.is_some() { "Open the audio" } else { "Open file" }, move |s| {
         if let Err(e) = speak::open_file(&b) {
             shell::toast(s, Tone::Danger, e);
         }
@@ -1683,6 +1684,16 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
 
 fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
     let (reveal, open) = open_reveal(p, r.id, "h", r);
+    // A video result is the video: its file names the card, and "Open video" is spelled out (the audio plays here).
+    let title = r.video.as_ref().and_then(|v| v.file_name()).map(|n| n.to_string_lossy().into_owned())
+        .filter(|_| r.name.starts_with("redub_")).unwrap_or_else(|| r.name.clone());
+    let video_btn = r.video.clone().map(|v| {
+        Button::new("Open video").small().grow().icon(&icons::OPEN).key(format!("open-video-h{}", r.id)).on_press(move |s| {
+            if let Err(e) = speak::open_file(&v) {
+                shell::toast(s, Tone::Danger, e);
+            }
+        }).build(p)
+    });
     let mut meta = format!("{} · {}", capitalize(&mode_past(r)), fmt_time(r.duration_s));
     if let Some(e) = r.elapsed_s {
         meta = format!("{meta} · {e:.0} s");
@@ -1693,10 +1704,11 @@ fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
     glass_card(p).key(format!("redub{}", r.id)).w_full().padding(10.0).gap(8.0)
         .child(col().w_full().gap(1.0)
             .child(row().w_full().gap(8.0).center_y()
-                .child(text(r.name.clone()).font(ty::LABEL).color(p.text).truncate().grow(1.0).min_w(0.0))
+                .child(text(title).font(ty::LABEL).color(p.text).truncate().grow(1.0).min_w(0.0))
                 .children(r.video.is_some().then(|| badge(p, "Video", Tone::Accent))))
             .child(text(meta).font(ty::CAPTION).color(p.text_faint).truncate()))
         .child(ab_buttons(s, p, r, "h"))
+        .children(video_btn.map(|b| row().w_full().child(b)))
         .child(if trash::confirming(s, trash::Kind::Redub, r.id) {
             trash::confirm_row(s, p, trash::Kind::Redub, r.id, &r.path, &r.play)
         } else {
