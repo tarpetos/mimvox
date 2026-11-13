@@ -6,6 +6,7 @@
 //!   `on_engine` / `settle` convention every screen implements).
 //! * `events`: how background threads (engine, audio, dialogs) wake the UI; there is no polling.
 
+pub mod book;
 pub mod caption;
 pub mod components;
 pub mod events;
@@ -97,6 +98,7 @@ pub fn all_scenes() -> &'static [Scene] {
         all.extend_from_slice(train::scenes());
         all.extend_from_slice(redub::scenes());
         all.extend_from_slice(playbar::scenes());
+        all.extend_from_slice(book::scenes());
         all
     })
 }

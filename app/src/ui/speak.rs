@@ -21,6 +21,11 @@
 //! once the user changes them. A job spoken from a clip in another language than its text (`reference_note`) shows a
 //! warning toast.
 //!
+//! "Open text file…" (and a text file dropped on the window) reads a document with `text.import`: a short text lands in
+//! the editor, a long one opens in Book mode (the Text / Book switch at the top right; see `ui::book`), which reads a
+//! whole book with these same Style settings. While a book is being read, Generate waits (the book holds the engine's
+//! generation slot).
+//!
 //! Playback is pre-buffered: a single-segment job plays at once; for longer text the finished segments are held
 //! back until, by the engine's real-time factor, the segments still to come will arrive before the buffered audio
 //! runs out (see [`can_start`]). So it starts as early as it can without ever stuttering, and never later than
@@ -305,6 +310,9 @@ fn blocker(s: &AppState) -> Option<&'static str> {
     if shell::active_voice(s).is_none() {
         return Some("Record your voice first, or pick one at the top right.");
     }
+    if s.book.running() {
+        return Some("A book is being read. Pause it in Book mode to speak other text.");
+    }
     None
 }
 
@@ -387,6 +395,7 @@ fn estimate_segments(text: &str) -> usize {
 fn friendly_error(code: &str, message: &str) -> String {
     match code {
         "not_ready" => "The engine is still loading its models. Try again in a moment.".into(),
+        "busy" if message.contains("book") => "A book is being read. Pause it in Book mode to speak other text.".into(),
         "busy" => "The engine is busy with another job. Try again when it finishes.".into(),
         "not_found" => "That voice could not be found. Pick another one.".into(),
         _ if message.is_empty() => "Generation failed.".into(),
@@ -629,9 +638,11 @@ fn fmt_time(secs: f32) -> String {
 
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
-    row().key("speak").w_full().h_full().px(16.0).pb(16.0).gap(16.0)
-        .child(text_panel(s, p))
-        .child(side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
+    let r = row().key("speak").w_full().h_full().px(16.0).pb(16.0).gap(16.0);
+    if s.book.shown {
+        return r.child(super::book::panel(s, p)).child(side_column(s, p, cx, |own_scroll| super::book::side_panel(s, p, own_scroll)));
+    }
+    r.child(text_panel(s, p)).child(side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
 }
 
 /// The Results panel never gets shorter than this: below it, the side column scrolls instead.
@@ -659,7 +670,13 @@ fn text_panel(s: &AppState, p: Palette) -> El {
     let words = s.speak.text.text.split_whitespace().count();
     let est = (words as f32 / 2.6).round();
     let meta = if words == 0 { String::new() } else { format!("{words} words · about {} of speech", fmt_time(est)) };
-    let head = text(meta).font(ty::CAPTION).color(p.text_faint).pin(None, Some(24.0), Some(22.0), None);
+    let open = Button::new("Open text file…").ghost().small().icon(&icons::FILE).key("speak-open-file")
+        .help("TXT, Markdown, HTML, EPUB, DOCX, ODT, RTF, FB2, PDF or subtitles. A long text opens in Book mode.")
+        .on_press(|s| super::book::choose_file(s, false)).build(p);
+    let head = row().key("speak-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y()
+        .children((!meta.is_empty()).then(|| text(meta).font(ty::CAPTION).color(p.text_faint)))
+        .child(open)
+        .child(super::book::mode_switch(s, p));
     let editor = TextArea::new("speak-text", &s.speak.text, |s| &mut s.speak.text)
         .placeholder(format!("Type or paste anything in {}, then press Generate.", lang::name(&language(s))))
         .on_submit(generate)
@@ -745,8 +762,18 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
             s.speak.speed = (v * 100.0).round() / 100.0;
             s.speak.speed_dirty = true;
         }).build(p);
-    let expr = Slider::new("expr", "Expressiveness", s.speak.expressiveness, 0.4, 1.0).step(0.05).ends("Steady", "Lively")
-        .on_change(|s, v| s.speak.expressiveness = v).build(p);
+    // Book mode keeps its own, calmer expressiveness (a steady narrator; `ui::book`).
+    let book = s.screen == Screen::Speak && s.book.shown;
+    let expr = Slider::new("expr", "Expressiveness", if book { s.book.expressiveness } else { s.speak.expressiveness }, 0.4, 1.0).step(0.05)
+        .ends("Steady", "Lively")
+        .on_change(move |s, v| {
+            if book {
+                s.book.expressiveness = v;
+                s.book.settings_dirty = true;
+            } else {
+                s.speak.expressiveness = v;
+            }
+        }).build(p);
     let mut m = Slider::new("match", "Voice match", s.speak.voice_match, 0.3, 1.0).step(0.05).ends("Natural", "Closest to me")
         .on_change(|s, v| s.speak.voice_match = v).build(p);
     if !trained {

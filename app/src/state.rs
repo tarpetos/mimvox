@@ -9,7 +9,7 @@
 use crate::audio::Player;
 use crate::engine::EngineClient;
 use crate::ui::{
-    formats::FormatsState, onboarding::OnboardingState, record::RecordState, redub::RedubState, relocate::RelocateState, shell::ShellState, speak::SpeakState, train::TrainState,
+    book::BookState, formats::FormatsState, onboarding::OnboardingState, record::RecordState, redub::RedubState, relocate::RelocateState, shell::ShellState, speak::SpeakState, train::TrainState,
     voices::VoicesState,
 };
 
@@ -37,6 +37,8 @@ pub struct AppState {
     pub record: RecordState,
     pub train: TrainState,
     pub speak: SpeakState,
+    /// Speak's Book mode: imported books and the book being read (see `ui::book`).
+    pub book: BookState,
     pub redub: RedubState,
     /// Audio formats from the engine and the shared "Export as..." menu (see `ui::formats`).
     pub formats: FormatsState,
@@ -66,6 +68,7 @@ impl Default for AppState {
             record,
             train: TrainState::default(),
             speak: SpeakState::default(),
+            book: BookState::default(),
             redub: RedubState::default(),
             formats: FormatsState::default(),
             relocate: RelocateState::default(),

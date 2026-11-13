@@ -42,7 +42,8 @@ MIN_TAIL_TOKENS = 10  # a paragraph never ends in a segment shorter than this (m
 
 # Loop-thread state (only the event loop changes it, so no locks).
 _RVC_STATUS = ["loading"]
-_ACTIVE: list[str | None] = [None]   # the job holding the one generation slot (tts.generate, Redub GPU jobs)
+_ACTIVE: list[str | None] = [None]   # the job holding the one generation slot (tts.generate, Redub GPU jobs, books)
+_HOLDER: list[str | None] = [None]   # what a busy answer says while that job runs, when it says more than the caller's
 _WARMING: set[str] = set()
 _SETTLED: asyncio.Event | None = None  # set while no model is "loading"
 
@@ -88,7 +89,7 @@ async def wait_settled(timeout: float) -> bool:
 
 _ABBREV = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e", "no", "inc", "ltd", "mt",
            "gen", "col", "lt", "capt", "sgt", "fig", "approx"}
-_SENT_END = re.compile(r"""([.!?…]+["'”’)\]]*)\s+""")
+_SENT_END = re.compile(r"""([.!?…]+["'”’»)\]]*)\s+""")
 _CLAUSE = re.compile(r"(?<=[,;:—–])\s+")
 
 
@@ -108,18 +109,22 @@ def _split_sentences(par: str) -> list[str]:
     return out
 
 
-def segment_text(text: str, count: Callable[[str], int]) -> list[tuple[str, int]]:
+def segment_text(text: str, count: Callable[[str], int], fixed: int | None = None) -> list[tuple[str, int]]:
     """Split ``text`` into ``(segment, pause_after_ms)`` pairs.
 
     Sentences are never cut unless one exceeds the token budget (then at clause punctuation, then at words).
     The first segment is a single sentence so the first audio arrives fast; later ones are packed greedily up to
     the growing token budget, never across a paragraph break.
+
+    With ``fixed`` (narration, ``book.py``) there is no streaming schedule: every segment, the first one too, packs
+    whole sentences up to ``fixed`` tokens, and only a sentence longer than that is cut (same rules, no stubs).
     """
+    cap = fixed or LATER_TOKENS
     paragraphs = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"\n\s*\n|\r\n\s*\r\n|\n", text)]
     paragraphs = [p for p in paragraphs if p]
     segs: list[tuple[str, int]] = []
 
-    target = [FIRST_TOKENS]
+    target = [fixed or FIRST_TOKENS]
 
     def budget() -> int:
         """Growing schedule: segment 0 is the first sentence, then each segment may be ~GROWTH x the previous target (2.5 measured best), so
@@ -127,7 +132,9 @@ def segment_text(text: str, count: Callable[[str], int]) -> list[tuple[str, int]
         return target[0]
 
     def add(seg: str, pause: int) -> None:
-        if not segs:
+        if fixed is not None:
+            pass
+        elif not segs:
             target[0] = min(LATER_TOKENS, max(count(seg) + 6, round(count(seg) * GROWTH)))
         else:
             target[0] = min(LATER_TOKENS, max(target[0] + 6, round(target[0] * GROWTH)))
@@ -156,6 +163,34 @@ def segment_text(text: str, count: Callable[[str], int]) -> list[tuple[str, int]
     def short(piece: str, limit: int) -> bool:
         return len(piece.split()) < MIN_PIECE_WORDS or count(piece) < limit * MIN_PIECE_SHARE
 
+    def balanced(parts: list[str], limit: int) -> list[str]:
+        """Narration: ``parts`` (clauses) joined into the fewest pieces of at most ``limit`` tokens, cut at the
+        clause boundaries that make the pieces most even (so no stub, and no cut inside a clause)."""
+        n = len(parts)
+        cost = [[count(" ".join(parts[i:j])) if j > i else 0 for j in range(n + 1)] for i in range(n + 1)]
+        inf = float("inf")
+        best: list[list[float]] = [[inf] * (n + 1)]  # best[g][j]: the smallest largest piece of parts[:j] in g pieces
+        best[0][0] = 0
+        cut: list[list[int]] = [[0] * (n + 1)]
+        for g in range(1, n + 1):
+            row, back = [inf] * (n + 1), [0] * (n + 1)
+            for j in range(1, n + 1):
+                for i in range(j):
+                    if best[g - 1][i] < inf and cost[i][j] <= limit:
+                        v = max(best[g - 1][i], cost[i][j])
+                        if v < row[j]:
+                            row[j], back[j] = v, i
+            best.append(row)
+            cut.append(back)
+            if row[n] < inf:
+                pieces_, j = [], n
+                for gg in range(g, 0, -1):
+                    i = cut[gg][j]
+                    pieces_.insert(0, " ".join(parts[i:j]))
+                    j = i
+                return pieces_
+        return parts  # (each part fits by construction; unreachable)
+
     def pieces(sentence: str, limit: int) -> list[str]:
         """Cut an over-budget sentence: at clause punctuation first (clauses stay whole), a clause longer than
         LATER_TOKENS into equal runs of words, then re-pack neighbouring clauses up to ``limit``. No piece is left
@@ -164,8 +199,10 @@ def segment_text(text: str, count: Callable[[str], int]) -> list[tuple[str, int]
             return [sentence]
         out: list[str] = []
         for clause in _CLAUSE.split(sentence):
-            n = -(-count(clause) // LATER_TOKENS)
+            n = -(-count(clause) // cap)
             out.extend([clause] if n <= 1 else words_split(clause.split(" "), n))
+        if fixed is not None:
+            return balanced(out, limit)
         merged: list[str] = []
         for p in out:
             if merged and count(merged[-1] + " " + p) <= limit:
@@ -195,20 +232,20 @@ def segment_text(text: str, count: Callable[[str], int]) -> list[tuple[str, int]
         cur = ""
         par_start = len(segs)
         for sent in _split_sentences(par):
-            if not segs and cur and count(cur) >= MIN_FIRST_TOKENS:  # segment 0 is just the first sentence
+            if fixed is None and not segs and cur and count(cur) >= MIN_FIRST_TOKENS:  # segment 0: the first sentence
                 add(cur, PAUSE_SENTENCE_MS)
                 cur = ""
             for piece in pieces(sent, budget()):
                 if not cur:
                     cur = piece
-                elif (not segs and count(cur) >= MIN_FIRST_TOKENS) or count(cur + " " + piece) > budget():
+                elif (fixed is None and not segs and count(cur) >= MIN_FIRST_TOKENS) or count(cur + " " + piece) > budget():
                     add(cur, PAUSE_SENTENCE_MS)
                     cur = piece
                 else:
                     cur = f"{cur} {piece}"
         if cur:
             if len(segs) > max(par_start, 1) and count(cur) < MIN_TAIL_TOKENS \
-                    and count(segs[-1][0]) + count(cur) <= LATER_TOKENS + MIN_TAIL_TOKENS:
+                    and count(segs[-1][0]) + count(cur) <= cap + MIN_TAIL_TOKENS:
                 cur = f"{segs.pop()[0]} {cur}"  # no tiny trailing segment: its fixed cost is not worth it
             add(cur, PAUSE_PARAGRAPH_MS)
     return segs
@@ -544,12 +581,14 @@ def _prepare_jobdir(data: config.DataDir, jobdir: str) -> None:
 
 
 def start_exclusive(ctx: Context, fn: Callable[[str], Awaitable[None]],
-                    busy_message: str = "another generation or Redub job is running") -> str:
+                    busy_message: str = "another generation or Redub job is running", holder: str | None = None) -> str:
     """Start an async GPU job that takes the one generation slot (``tts.generate``, Redub and training then answer
     ``busy``). ``fn(job)`` should call :func:`release_job` before it emits its final event; the slot is freed when it
-    ends in any case. Loop thread only (the check-and-take is atomic there). Raises ``busy`` when taken."""
+    ends in any case. Loop thread only (the check-and-take is atomic there). Raises ``busy`` when taken: with the
+    ``holder`` text of the job that holds the slot when it gave one (a book: "a book is being read ..."), else
+    ``busy_message``."""
     if _ACTIVE[0] is not None:
-        raise EngineError("busy", busy_message)
+        raise EngineError("busy", _HOLDER[0] or busy_message)
 
     async def body(job: str) -> None:
         try:
@@ -559,17 +598,25 @@ def start_exclusive(ctx: Context, fn: Callable[[str], Awaitable[None]],
 
     job = ctx.start_job(body)
     _ACTIVE[0] = job
+    _HOLDER[0] = holder
     return job
 
 
 def release_job(job: str) -> None:
     if _ACTIVE[0] == job:
         _ACTIVE[0] = None
+        _HOLDER[0] = None
 
 
 def is_busy() -> bool:
-    """A generation (or Redub / training GPU job) holds the generation slot."""
+    """A generation (or Redub / training GPU job, or a book) holds the generation slot."""
     return _ACTIVE[0] is not None
+
+
+def busy_message(default: str) -> str:
+    """The ``busy`` message for a request refused because the slot is taken: what holds it when that job said
+    (``start_exclusive(holder=...)``), else ``default``."""
+    return _HOLDER[0] or default
 
 
 def _gc_tmp(data: config.DataDir) -> None:
@@ -680,7 +727,7 @@ async def release_gpu(ctx: Context) -> None:
     Raises ``EngineError("busy")`` while a generation is running. Until :func:`reacquire_gpu` finishes, both models
     report ``"paused"`` in ``models_status()`` and ``tts.generate`` answers ``not_ready``."""
     if _ACTIVE[0] is not None:
-        raise EngineError("busy", "a generation is running; wait for it or cancel it before training")
+        raise EngineError("busy", busy_message("a generation is running; wait for it or cancel it before training"))
     _set_status(ctx, tts="paused", rvc="paused")
     for b in backends.all_backends():
         try:

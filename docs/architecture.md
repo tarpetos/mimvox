@@ -198,6 +198,18 @@ grow with the length; cancel is checked per segment; progress per segment), and 
    result. The model is saved as `rvc/model.pth` and `rvc/model.index` in the voice's folder.
 4. Training and generation both need the GPU: do not run them together on a small card.
 
+## Audiobook path
+
+1. The app sends `text.import` with a file; `textimport.py` returns clean text cut into chapters (the EPUB navigation,
+   document headings, the PDF outline, "Chapter N" lines in plain text).
+2. `book.start` stores the book (`<data>/books/<id>/book.json`) and starts one job that takes the generation slot. It
+   reads chapter by chapter through the same backend, accent converter and RVC as Speak, but with narration rules
+   (`narration.py`): whole sentences per segment, pauses chosen by the punctuation, each segment trimmed, faded and
+   checked against the running loudness / pitch / pace (an outlier is made again once).
+3. Every segment is appended to the chapter's PCM file and recorded in `state.json`, so pause, cancel, an app that
+   closes or an engine that stops lose at most the segment being made. A finished chapter is levelled to -18 LUFS and
+   written as `<data>/outputs/books/<book>/<NN> - <title>.<ext>`; an M4B with chapter marks can follow.
+
 ## Data layout
 
 The engine owns the data folder; the app reads only the files the engine names. Source of truth:
@@ -212,6 +224,8 @@ The engine owns the data folder; the app reads only the files the engine names. 
 <data>/voices/<voice_id>/rvc/model.pth       trained RVC model (after training)
 <data>/voices/<voice_id>/rvc/model.index
 <data>/outputs/<timestamp>.<ext>             generated speech and redubs, one file each in the chosen format
+<data>/outputs/books/<book>/<NN> - <title>.<ext>  audiobook chapters (+ <book>.m4b)
+<data>/books/<id>/                           an audiobook's project: book.json, state.json, work/ (the chapter in progress), stats/
 <data>/tmp/                                  scratch (incl. tmp/play: playback WAVs of non-WAV results, tmp/separate-<job>:
                                              the file being separated), safe to delete
 ```
@@ -253,6 +267,7 @@ exchange absolute file paths.
 | Recording and dataset | `recording.check`, `dataset.add`, `dataset.remove`, `dataset.summary` |
 | Training | `train.start`, `train.cancel`; events `train.progress`, `train.done`, `train.error` |
 | Generation | `tts.generate`, `tts.cancel`; events `tts.chunk`, `tts.done`, `tts.error` |
+| Audiobooks | `text.import`, `book.start`, `book.resume`, `book.pause`, `book.cancel`, `book.list`, `book.get`, `book.delete`, `book.play`; events `book.progress`, `book.chapter`, `book.done`, `book.paused`, `book.error` |
 | Media references | `voices.reference_from_media` (`remove_music`), `voices.media_cancel`, `voices.clear_media`, `media.combine`; events `voices.media.progress` (stages `decode`, `separate`, `combine`, `analyse`, `apply`), `voices.media.done`, `voices.media.error` |
 
 The full parameters and results are in [contract/engine-protocol.md](../contract/engine-protocol.md). That file is the

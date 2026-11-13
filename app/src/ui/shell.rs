@@ -407,6 +407,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     changed |= super::record::settle(s);
     changed |= super::train::settle(s);
     changed |= super::speak::settle(s);
+    changed |= super::book::settle(s);
     changed |= super::redub::settle(s);
     changed |= super::formats::settle(s);
     if super::train::take_quit(s, tx) {
@@ -468,6 +469,7 @@ fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     super::record::on_engine(s, &m);
     super::train::on_engine(s, &m);
     super::speak::on_engine(s, &m);
+    super::book::on_engine(s, &m);
     super::redub::on_engine(s, &m);
     super::formats::on_engine(s, &m);
     super::trash::on_engine(s, &m);

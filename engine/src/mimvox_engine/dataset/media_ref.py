@@ -409,7 +409,7 @@ async def reference_from_media(ctx: Context, params: dict[str, Any]) -> dict[str
     music = _music_mode(params)
     code = await aio.run_io(_language, ctx, vid, params.get("language"))
     if tts.is_busy():
-        raise EngineError("busy", "a generation is running; add media when it has finished")
+        raise EngineError("busy", tts.busy_message("a generation is running; add media when it has finished"))
     if vid in _RUNNING:
         raise EngineError("busy", "media files are already being combined for this voice")
 

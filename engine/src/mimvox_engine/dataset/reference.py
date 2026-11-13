@@ -186,7 +186,7 @@ def set_reference(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     if not os.path.isfile(store._part_path(vdir, part)):
         raise EngineError("not_found", f"part {part} does not exist")
     if tts.is_busy():
-        raise EngineError("busy", "a generation is running; change the reference clip when it has finished")
+        raise EngineError("busy", tts.busy_message("a generation is running; change the reference clip when it has finished"))
     with store._LOCK:
         meta = store._load_meta(vdir)
         y, sr = read_audio(store._part_path(vdir, part))
@@ -236,7 +236,7 @@ def _set_from_media(ctx: Any, vid: str, vdir: str, params: dict[str, Any]) -> di
     start_s, end_s = _times(params)
     pool = os.path.join(vdir, store.MEDIA_POOL)
     if tts.is_busy():
-        raise EngineError("busy", "a generation is running; change the reference clip when it has finished")
+        raise EngineError("busy", tts.busy_message("a generation is running; change the reference clip when it has finished"))
     with store._LOCK:
         meta = store._load_meta(vdir)
         mm = meta.get("media")
@@ -305,7 +305,7 @@ def add_reference(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(path, str) or not path:
         raise EngineError("bad_request", "'path' must be an audio file path")
     if tts.is_busy():
-        raise EngineError("busy", "a generation is running; add the reference when it has finished")
+        raise EngineError("busy", tts.busy_message("a generation is running; add the reference when it has finished"))
     y, sr = read_audio(os.path.abspath(path))
     if len(y) == 0:
         raise EngineError("bad_request", "The audio file is empty.")
@@ -336,7 +336,7 @@ def remove_reference(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     if not os.path.isfile(path):
         raise EngineError("not_found", f"this voice has no reference for {code!r}")
     if tts.is_busy():
-        raise EngineError("busy", "a generation is running; remove the reference when it has finished")
+        raise EngineError("busy", tts.busy_message("a generation is running; remove the reference when it has finished"))
     os.remove(path)
     sidecar = os.path.join(vdir, f"reference_{code}.omnivoice.json")
     if os.path.isfile(sidecar):

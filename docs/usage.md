@@ -581,6 +581,70 @@ match is kept low (at most 0.2) so your recordings do not pull the vowels back t
 Voice match does not apply. The first native result of a session takes about 10 s longer while the converter loads
 (selecting the voice prepares it in the background).
 
+### Open a text file
+
+**Open text file…** at the top of the text box (or dropping a file on the window, from any screen) reads a document:
+TXT in any encoding, Markdown, HTML, EPUB, DOCX, ODT, RTF, FB2, PDF (with a text layer) or subtitles (SRT, VTT). A
+short text, up to about 5,000 words, lands in the text box, ready for **Generate**. A longer one opens in **Book**
+mode (below). The language of the text is detected and set in the Style panel.
+
+A scanned PDF (pictures of pages, no text layer) cannot be read: run it through OCR first, or use another format of
+the book.
+
+### Book mode: an audiobook in your voice
+
+The **Text / Book** switch at the top right of the text box turns Speak into an audiobook maker. It reads a whole
+book in the active voice with the Style settings, one file per chapter, and you can pause it and continue later, even
+after closing the app.
+
+1. Press **Open book…** (or drop the file on the window). The book opens with the chapters Mimvox found: from the
+   EPUB's table of contents, the headings of a DOCX, ODT, FB2, Markdown or HTML file, the PDF's bookmarks, or lines
+   such as *Chapter 1*, *CHAPTER IV*, *Розділ 1* in a text file.
+2. Check the list. Untick what you do not want read (a table of contents, notes). Click a title to rename it.
+   The split button cuts a chapter in two at the paragraph nearest its middle; the join button joins the next chapter
+   into this one. The badges show the chapters, words, about how long the audio will be and how long it takes to make.
+3. Set the voice, language and Style as for Speak. **Expressiveness** has its own value in Book mode, **0.60** by
+   default: a steadier narrator for long listening. In the **Output** panel pick the format ("Save as"), and tick
+   **Also make one M4B audiobook with chapter marks** if you want a single file for an audiobook player. **Read each
+   chapter's title first** reads the title, then pauses, before the text.
+4. Press **Read the book**. The panel shows *Chapter k of n*, the percentage, how much audio is made, about how long is
+   left and the speed (for example *1.10× real time*: 10 % slower than listening). Finished chapters get a play button
+   (the [player bar](#the-player-bar)); the one being read shows *part i of n*.
+5. **Pause** stops at once and frees the GPU (Speak, Redub and training wait while a book is read); **Resume**
+   continues from the sentence where it stopped. **Cancel** stops and drops the unfinished chapter (finished chapters
+   stay; Resume starts that chapter again). **Open folder** shows the files.
+
+If the app closes while a book is being read, the book is shown again the next time, marked *Interrupted*: press
+**Resume**. The **Your books** list on the right keeps every book; click one to open it, or the trash button to remove
+it from the list (its audio files stay).
+
+How it sounds: Mimvox reads whole sentences (a sentence is cut only when it is very long, and then only at a comma,
+semicolon, colon or dash), keeps the punctuation the model uses for intonation, and inserts pauses that follow it:
+short after a comma cut, longer after a sentence, longer still after "…" and between paragraphs, and about a second
+after a chapter title. A segment that comes out much louder, higher or faster than the ones around it is made again
+once, and every chapter is levelled to the same loudness (-18 LUFS), so you do not have to touch the volume between
+chapters.
+
+**Time and space.** On an RTX 4070 an untrained voice with Best quality made a book about three to five times faster
+than it lasts (a real-time factor of 0.16-0.37 per chapter: 3.5 minutes of audio in 42 seconds); a trained voice or the
+native accent adds a voice conversion per segment and is slower. The estimate before the start assumes 0.5 and is
+replaced by the measured pace once the book runs. A 350,000-token novel is roughly 28-30 hours of audio: about 5-15
+hours of generation, paused whenever you need the computer. As MP3 that is about 2.5 GB (192 kbps); as WAV about 9 GB.
+
+#### Example: an EPUB to MP3 chapters
+
+1. Speak, switch to **Book**, **Open book…**, choose `Meditations.epub`. Three chapters appear, *English (detected)*.
+2. In **Output**, "Save as" **MP3**, tick the M4B box.
+3. **Read the book**. When it finishes:
+
+```
+<data>/outputs/books/Meditations (excerpts)/
+  01 - Chapter 1. Time Is Running Out.mp3
+  02 - Chapter 2. Do Every Act As Your Last.mp3
+  03 - Chapter 3. Get Up In The Morning.mp3
+  Meditations (excerpts).m4b
+```
+
 ---
 
 ## 7. Redub
