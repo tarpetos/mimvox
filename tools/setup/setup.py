@@ -27,14 +27,29 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
 
 APP_DIR_NAME = "mimvox"
+
+
+def runtime_version() -> int:
+    """The runtime version this copy needs (tools/setup/runtime_version.txt; the app reads the same file)."""
+    path = Path(__file__).with_name("runtime_version.txt")
+    try:
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+        return int(next(line for line in lines if line and not line.startswith("#")))
+    except (OSError, StopIteration, ValueError):
+        return 1
+
+
 DATA_ENV = "MIMVOX_DATA"
 LOCATION_FILE = "location.toml"
 UV_ENV = "MIMVOX_UV"
@@ -104,6 +119,11 @@ SEEDVC_STAMP = ".mimvox-setup-ok"      # in the weights folder: the engine uses 
 ZERO_SHOT_GB = 2.0   # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, BigVGAN 0.45, Whisper-small 0.97)
 
 WHISPER_MODEL = "turbo"
+# The checkpoint openai-whisper downloads for "turbo" (whisper._MODELS; the SHA-256 is part of the URL). Fetched by
+# setup directly: importing whisper only to download it loaded torch and numba (LLVM) for nothing.
+WHISPER_FILE = "large-v3-turbo.pt"
+WHISPER_SHA256 = "aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a"
+WHISPER_URL = f"https://openaipublic.azureedge.net/main/whisper/models/{WHISPER_SHA256}/{WHISPER_FILE}"
 # "Remove background music" (reference from media, Record's multi-file import): torchaudio's HDEMUCS_HIGH_MUSDB_PLUS
 # weights, the very file that bundle downloads (download.pytorch.org/torchaudio/<its _model_path>), kept in
 # <data>/runtime/models/demucs; the speech worker loads them from there with torchaudio.models.hdemucs_high.
@@ -141,7 +161,22 @@ BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with 
 SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 34
+# What can be installed, in order. "speech" is always installed; the rest are chosen in the app (or with
+# --components / --add) and recorded in runtime.toml ([setup] components), so a later run keeps the same set.
+# Sizes on disk in GB (the app shows them too: COMPONENTS in app/src/ui/setuprun.rs).
+COMPONENTS = {
+    "speech": 12.6,             # engine venv + OmniVoice (11) + Whisper turbo (1.6): Speak, Book, Redub's Re-speak
+    "training": APPLIO_GB,      # Applio/RVC: Train, voice match for trained voices, Redub's Convert voice
+    "translation": 2.5,         # NLLB-200 600M: Redub's Translate & dub
+    "better_translation": BETTER_TRANSLATION_GB,   # NLLB-200 1.3B (a 5.5 GB download)
+    "native_accent": ZERO_SHOT_GB,                 # Seed-VC: the native accent of voices that are not trained
+    "music_removal": SEPARATION_GB,                # Hybrid Demucs: background music out of media files
+}
+# Portable ffmpeg for Windows when Applio (which brings one) is not installed.
+FFMPEG_WINDOWS_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-{}-gpl.zip"
 UV_HTTP_TIMEOUT = "600"
+# Records the commit of a source tree that came as an archive (no git): see Setup._fetch_archive.
+ARCHIVE_MARKER = ".mimvox-commit"
 
 # Linux packages: a C/C++ toolchain and the libraries Rune (wgpu, winit, cpal, fontconfig) builds and runs against,
 # plus ffmpeg and libsndfile for the Python side. Keys are the package managers' names.
@@ -185,8 +220,19 @@ class SetupError(RuntimeError):
     """A step could not complete; the message is the one line the user sees."""
 
 
+# Run by the app (--gui): progress goes out as "@@mimvox {json}" lines next to the readable ones (see event()).
+GUI = False
+
+
 def say(line: str) -> None:
     print(f"[setup] {line}", flush=True)
+
+
+def event(**fields: object) -> None:
+    """A progress line for the app's setup screen (only with --gui): ``plan`` (the steps that will run), ``step``
+    (one step starts, succeeds or fails) and ``done``. The app shows the readable lines as the log."""
+    if GUI:
+        print("@@mimvox " + json.dumps(fields), flush=True)
 
 
 def warn(line: str) -> None:
@@ -247,6 +293,17 @@ def read_location(plat: str) -> Path | None:
     except (OSError, ValueError, ImportError):
         return None
     return Path(value) if isinstance(value, str) and value.strip() else None
+
+
+def previous_components(data_dir: Path) -> set[str] | None:
+    """The components an earlier run installed (runtime.toml ``[setup] components``); None before there were any."""
+    import tomllib  # noqa: PLC0415 - Python 3.11+, only needed here
+
+    try:
+        found = tomllib.loads((data_dir / "runtime.toml").read_text(encoding="utf-8")).get("setup", {}).get("components")
+    except (OSError, ValueError):
+        return None
+    return {c for c in found if c in COMPONENTS} if isinstance(found, list) else None
 
 
 def has_runtime(data_dir: Path) -> bool:
@@ -362,8 +419,12 @@ class Setup:
     force: bool = False
     gpu: Gpu = field(default_factory=lambda: Gpu("cpu"))
     uv_path: str = ""
-    better_translation: str = "auto"   # auto (with a GPU) | yes | no
-    zero_shot_vc: bool = True          # Seed-VC for the native accent of untrained voices (--no-zero-shot-vc)
+    components: set[str] = field(default_factory=lambda: set(COMPONENTS))   # what to install (see COMPONENTS)
+
+    @property
+    def zero_shot_vc(self) -> bool:
+        """Seed-VC for the native accent of untrained voices."""
+        return "native_accent" in self.components
 
     # ---- paths -----------------------------------------------------------------------------------------------
 
@@ -420,6 +481,16 @@ class Setup:
         env.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        # Temporary files on the install drive, not /tmp: /tmp is often a small RAM disk with a per-user quota (Arch,
+        # Fedora), and the Python packages unpack and compile there ("Disk quota exceeded").
+        for name in ("TMPDIR", "TEMP", "TMP"):
+            env[name] = str(self.temp_dir())
+        # uv's package cache next to the environments: on the same drive uv hard-links the packages into them
+        # instead of copying (PyTorch is several GB), and deleting the data folder removes everything setup wrote.
+        env.setdefault("UV_CACHE_DIR", str(self.data_dir / "cache" / "uv"))
+        if GUI:  # plain text for the app's log
+            env["NO_COLOR"] = "1"
+            env["TERM"] = "dumb"
         if extra:
             env.update(extra)
         return env
@@ -514,6 +585,45 @@ class Setup:
     def free_gb(self) -> float:
         return shutil.disk_usage(self._existing_parent(self.data_dir)).free / 1e9
 
+    def resolve_components(self, args: argparse.Namespace) -> None:
+        """``--components`` (exactly these), else what an earlier run installed, else everything (better_translation
+        only with a CUDA / ROCm GPU); then ``--add``, ``--better-translation`` and ``--no-zero-shot-vc``. ``speech``
+        is always in."""
+        def parse(value: str) -> set[str]:
+            items = {x.strip() for x in value.split(",") if x.strip()}
+            unknown = items - set(COMPONENTS)
+            if unknown:
+                raise SetupError(f"Unknown component(s): {', '.join(sorted(unknown))} (known: {', '.join(COMPONENTS)}).")
+            return items
+
+        previous = previous_components(self.data_dir)
+        if args.components:
+            chosen = parse(args.components)
+        elif previous is not None:
+            chosen = set(previous)
+        else:
+            chosen = set(COMPONENTS)
+        if "better_translation" in chosen and self.gpu.backend != "cuda" and args.better_translation != "yes" \
+                and not (previous and "better_translation" in previous):
+            chosen.discard("better_translation")
+            say("Better translation left out: it runs on an NVIDIA or AMD GPU (--add better_translation installs it "
+                "anyway).")
+        if args.add:
+            chosen |= parse(args.add)
+        if args.better_translation == "yes":
+            chosen.add("better_translation")
+        elif args.better_translation == "no":
+            chosen.discard("better_translation")
+        if args.no_zero_shot_vc:
+            chosen.discard("native_accent")
+        chosen.add("speech")
+        self.components = chosen
+        say("Components: " + ", ".join(c for c in COMPONENTS if c in chosen))
+
+    def install_gb(self) -> float:
+        """Disk use of the chosen components."""
+        return sum(gb for c, gb in COMPONENTS.items() if c in self.components)
+
     def announce(self) -> bool:
         """Print where everything goes and how big it is, before anything is downloaded. Returns True when there is
         a big download ahead (False: a runtime already exists here)."""
@@ -524,12 +634,16 @@ class Setup:
         say(f"Free space there : {free:.0f} GB")
         if existing:
             say("Existing runtime found, nothing big to download (setup only fills in what is missing).")
-            if not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED) and not self.skip_models:
-                say(f"Missing Redub models will be downloaded now (about {SPEECH_GB} GB: translation and Whisper turbo).")
+            if "translation" in self.components and not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED) \
+                    and not self.skip_models:
+                say(f"The translation model for Redub will be downloaded now (about {COMPONENTS['translation']} GB).")
+            if "training" in self.components and not self.rvc_python().exists():
+                say(f"Voice training (Applio/RVC, about {APPLIO_GB} GB) will be installed now.")
             if self.wants_better_translation() and not self.has_better_translation() and not self.skip_models:
                 say(f"The better translation model (NLLB-200 1.3B) will be downloaded now: about "
                     f"{NLLB_BIG_DOWNLOAD_GB} GB, kept as {BETTER_TRANSLATION_GB} GB.")
-            if not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() and not self.skip_models:
+            if "music_removal" in self.components and not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() \
+                    and not self.skip_models:
                 say(f"The music-removal model will be downloaded now (about {SEPARATION_GB} GB: Hybrid Demucs).")
             if self.zero_shot_vc and not self.has_zero_shot_vc() and not self.skip_models:
                 say(f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
@@ -542,33 +656,19 @@ class Setup:
                 say(f"{self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used; setup offers to delete it "
                     "at the end.")
         else:
-            better = self.wants_better_translation()
-            total = (RUNTIME_GB + (round(BETTER_TRANSLATION_GB) if better else 0)
-                     - (0 if self.zero_shot_vc else round(ZERO_SHOT_GB)))
-            say(f"This will download and install about {total} GB (engine + OmniVoice ~{ENGINE_GB} GB, "
-                f"Applio/RVC ~{APPLIO_GB} GB, Redub models ~{SPEECH_GB} GB, music removal ~{SEPARATION_GB} GB"
-                + (f", zero-shot native accent ~{ZERO_SHOT_GB:.0f} GB" if self.zero_shot_vc else "")
-                + (f", better translation ~{BETTER_TRANSLATION_GB} GB" if better else "") + ") plus ~0.1 GB per voice.")
-            say("OmniVoice speaks every language (Ukrainian, English and about 60 more): the engine environment in "
-                "<data>/runtime/engine and the model (3.3 GB) in <data>/runtime/models/omnivoice.")
-            say(f"Redub (dubbing a file) uses two models, about {SPEECH_GB} GB: Whisper turbo (transcription, 1.6 GB, "
-                "<data>/runtime/models/whisper) and NLLB-200 (translation, 2.5 GB, "
-                "<data>/runtime/models/nllb-200-distilled-600M).")
-            if better:
-                say(f"With a GPU Redub also gets the better translation model, NLLB-200 1.3B (a "
-                    f"{NLLB_BIG_DOWNLOAD_GB} GB download kept as {BETTER_TRANSLATION_GB} GB in fp16, "
-                    "<data>/runtime/models/nllb-200-distilled-1.3B; --better-translation no leaves it out).")
-            say(f"Removing background music from media files uses Hybrid Demucs (about {SEPARATION_GB} GB, "
-                "<data>/runtime/models/demucs).")
-            if self.zero_shot_vc:
-                say(f"The native accent of voices that are not trained uses Seed-VC, a zero-shot voice converter "
-                    f"(about {ZERO_SHOT_GB:.0f} GB: its source in <data>/runtime/{SEEDVC_DIR}, GPL-3.0, downloaded "
-                    f"from its own repository; weights in <data>/runtime/models/{SEEDVC_DIR}; --no-zero-shot-vc "
-                    "leaves it out).")
+            labels = {"speech": "speech engine, OmniVoice and Whisper", "training": "voice training (Applio/RVC)",
+                      "translation": "translation for Redub", "better_translation": "better translation",
+                      "native_accent": "native accent (Seed-VC, GPL-3.0)", "music_removal": "music removal"}
+            chosen = [c for c in COMPONENTS if c in self.components]
+            parts = ", ".join(f"{labels[c]} ~{COMPONENTS[c]:g} GB" for c in chosen)
+            say(f"This will download and install about {self.install_gb():.0f} GB ({parts}) plus ~0.1 GB per voice.")
+            left = [labels[c] for c in COMPONENTS if c not in self.components]
+            if left:
+                say(f"Left out for now (can be added later): {', '.join(left)}.")
             if self.skip_models:
                 say("--skip-models: the model files (most of that size) are left out for now.")
         say("=" * 78)
-        needed = DISK_NEEDED_GB + (round(NLLB_BIG_DOWNLOAD_GB) if self.wants_better_translation() else 0)
+        needed = round(self.install_gb() + 4 + (NLLB_BIG_DOWNLOAD_GB if self.wants_better_translation() else 0))
         if not existing and free < needed:
             if self.force:
                 warn(f"Only {free:.0f} GB free, less than the {needed} GB needed; continuing because of --force.")
@@ -616,9 +716,10 @@ class Setup:
     def toolchains(self) -> None:
         """Rust and the C/C++ toolchain the app is built with, plus git."""
         if self.skip_toolchain:
+            # No system packages (no sudo): git is optional (the sources come as archives without it) and ffmpeg
+            # comes as a portable copy where the system has none.
             say("Skipping the toolchain install (--skip-toolchain).")
-            if not shutil.which("git"):
-                raise SetupError("git is not installed and is needed to fetch Applio; install it.")
+            self._portable_ffmpeg()
             return
         failed: list[str] = []
         for step in (self._git, self._compiler, self._rust, self._ffmpeg):
@@ -734,6 +835,73 @@ class Setup:
             raise SetupError(f"ffmpeg and ffprobe are needed for audio and video files; install them with {how}.")
         say("ffmpeg: installed.")
 
+    def temp_dir(self) -> Path:
+        """Setup's temporary files (``<data>/tmp/setup``; see ``env``)."""
+        path = self.data_dir / "tmp" / "setup"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def ffmpeg_dir(self) -> Path:
+        """Where a portable ffmpeg goes (the engine looks there too: media._find)."""
+        return self.runtime / "ffmpeg"
+
+    def _portable_ffmpeg(self) -> None:
+        """ffmpeg + ffprobe without system packages: present on PATH or in the runtime, else a static build on Linux,
+        Homebrew's on macOS when Homebrew is there. Windows uses Applio's copies (see ``applio_models``)."""
+        exe = ".exe" if self.plat == "windows" else ""
+        if self.plat == "windows" and "training" in self.components:
+            return  # Applio's prerequisites bring ffmpeg.exe / ffprobe.exe
+        if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+            return
+        if all((self.ffmpeg_dir() / f"{name}{exe}").is_file() for name in ("ffmpeg", "ffprobe")):
+            say("ffmpeg: present (portable).")
+            return
+        if self.plat == "windows":
+            url = FFMPEG_WINDOWS_URL.format("winarm64" if self.arch == "arm64" else "win64")
+            say(f"ffmpeg: downloading a portable build ({url})...")
+            with tempfile.TemporaryDirectory() as tmp:
+                archive = Path(tmp) / "ffmpeg.zip"
+                self._download(url, archive)
+                self.ffmpeg_dir().mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(archive) as z:
+                    for member in z.namelist():
+                        name = member.rsplit("/", 1)[-1]
+                        if name in ("ffmpeg.exe", "ffprobe.exe"):
+                            (self.ffmpeg_dir() / name).write_bytes(z.read(member))
+            if not (self.ffmpeg_dir() / "ffmpeg.exe").is_file():
+                raise SetupError("The portable ffmpeg could not be unpacked.")
+            say(f"ffmpeg: installed in {self.ffmpeg_dir()}.")
+            return
+        if self.plat == "macos":
+            if shutil.which("brew"):
+                say("Installing ffmpeg with Homebrew...")
+                self.run(["brew", "install", "ffmpeg"])
+            if not shutil.which("ffmpeg"):
+                warn("ffmpeg is missing: video files and some audio formats cannot be opened. Install Homebrew "
+                     "(https://brew.sh), run 'brew install ffmpeg', then run setup again.")
+            return
+        arch = "arm64" if self.arch == "arm64" else "amd64"
+        url = f"https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-{arch}-static.tar.xz"
+        say(f"ffmpeg: downloading a portable build ({url})...")
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "ffmpeg.tar.xz"
+            self._download(url, archive)
+            self.ffmpeg_dir().mkdir(parents=True, exist_ok=True)
+            with tarfile.open(archive) as tar:
+                for member in tar.getmembers():
+                    name = Path(member.name).name
+                    if member.isfile() and name in ("ffmpeg", "ffprobe"):
+                        source = tar.extractfile(member)
+                        if source is None:
+                            continue
+                        target = self.ffmpeg_dir() / name
+                        with source, open(target, "wb") as out:
+                            shutil.copyfileobj(source, out)
+                        target.chmod(0o755)
+        if not (self.ffmpeg_dir() / "ffmpeg").is_file():
+            raise SetupError("The portable ffmpeg could not be unpacked; install ffmpeg with your package manager.")
+        say(f"ffmpeg: installed in {self.ffmpeg_dir()}.")
+
     def _cargo(self) -> str | None:
         found = shutil.which("cargo")
         if found:
@@ -749,6 +917,8 @@ class Setup:
         return (int(match.group(1)), int(match.group(2))) if match else None
 
     def _rust(self) -> None:
+        if not (self.root / "app" / "Cargo.toml").is_file():
+            return  # an installed app (no sources to build): Rust is not needed
         if self._cargo():
             version = self._rust_version()
             if version and version >= MIN_RUST:
@@ -787,10 +957,18 @@ class Setup:
     # ---- step 3: runtime -------------------------------------------------------------------------------------
 
     def ensure_repo(self, name: str, url: str, commit: str, dest: Path) -> None:
-        """Make ``dest`` a checkout of ``commit`` (shallow, resumable); re-running with the right commit is a no-op."""
-        head = self.read(self.git("rev-parse", "HEAD"), dest).strip() if (dest / ".git").exists() else ""
+        """Make ``dest`` a checkout of ``commit`` (shallow, resumable); re-running with the right commit is a no-op.
+        Without git (an installed app on a system without it) the commit comes as a GitHub archive instead."""
+        marker = dest / ARCHIVE_MARKER
+        if (dest / ".git").exists() and shutil.which("git"):
+            head = self.read(self.git("rev-parse", "HEAD"), dest).strip()
+        else:
+            head = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
         if head == commit:
             say(f"{name}: at the pinned commit {commit[:9]}.")
+            return
+        if not shutil.which("git") or marker.is_file():
+            self._fetch_archive(name, url, commit, dest)
             return
         if dest.exists() and not (dest / ".git").exists() and any(dest.iterdir()):
             raise SetupError(f"{dest} exists and is not a git checkout; move it away.")
@@ -804,6 +982,40 @@ class Setup:
             self.must(self.git("fetch", "--quiet", "origin"), f"Fetching {name}", cwd=dest)
         self.must(self.git("checkout", "--quiet", "--force", commit), f"Checking out {name}", cwd=dest)
         say(f"{name}: checked out {commit[:9]}.")
+
+    def _fetch_archive(self, name: str, url: str, commit: str, dest: Path) -> None:
+        """``commit`` of a GitHub repository as a .tar.gz, unpacked over ``dest`` (files it already has, like a venv or
+        downloaded models, stay); ``ARCHIVE_MARKER`` records the commit."""
+        if dest.exists() and any(dest.iterdir()) and not (dest / ARCHIVE_MARKER).is_file():
+            raise SetupError(f"{dest} exists and holds something else; move it away.")
+        repo = url.removeprefix("https://github.com/").removesuffix(".git")
+        archive_url = f"https://codeload.github.com/{repo}/tar.gz/{commit}"
+        say(f"{name}: downloading {repo} @ {commit[:9]} (no git needed)...")
+        dest.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "source.tar.gz"
+            self._download(archive_url, archive)
+            with tarfile.open(archive) as tar:
+                for member in tar.getmembers():
+                    parts = Path(member.name).parts[1:]  # drop the "<repo>-<commit>/" folder
+                    if not parts or member.issym() or member.islnk():
+                        continue
+                    target = dest.joinpath(*parts)
+                    if not target.resolve().is_relative_to(dest.resolve()):
+                        raise SetupError(f"The {name} archive holds a path outside its folder: {member.name}")
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    elif member.isfile():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        source = tar.extractfile(member)
+                        if source is None:
+                            continue
+                        with source, open(target, "wb") as out:
+                            shutil.copyfileobj(source, out)
+                        if member.mode & 0o111:
+                            target.chmod(0o755)
+        (dest / ARCHIVE_MARKER).write_text(commit, encoding="utf-8")
+        say(f"{name}: unpacked {commit[:9]}.")
 
     def _stamp(self, venv_dir: Path) -> Path:
         return venv_dir / ".mimvox-setup-ok"
@@ -856,11 +1068,23 @@ class Setup:
     def models_dir(self) -> Path:
         return self.runtime / "models"
 
-    def speech_models(self) -> None:
-        """Redub: the NLLB-200 translation model (``hf download``) and the Whisper turbo checkpoint."""
+    def whisper_model(self) -> None:
+        """The Whisper turbo checkpoint: the speech model transcribes reference clips with it, Redub transcribes."""
         py = self.engine_python()
         if not py.exists():
-            raise SetupError("The engine environment is missing, so the Redub models cannot be fetched.")
+            raise SetupError("The engine environment is missing, so Whisper cannot be fetched.")
+        whisper_dir = self.models_dir / "whisper"
+        if (whisper_dir / WHISPER_FILE).is_file():
+            say("Whisper turbo checkpoint: present.")
+            return
+        say("Whisper turbo checkpoint: downloading (about 1.6 GB, resumable)...")
+        fetch_checked(WHISPER_URL, whisper_dir / WHISPER_FILE, WHISPER_SHA256, "the Whisper checkpoint")
+
+    def speech_models(self) -> None:
+        """Redub's translation model: NLLB-200 distilled 600M (``hf download``)."""
+        py = self.engine_python()
+        if not py.exists():
+            raise SetupError("The engine environment is missing, so the translation model cannot be fetched.")
         nllb = self.models_dir / NLLB_DIR
         if self._has(nllb, NLLB_REQUIRED):
             say("Translation model (NLLB-200 distilled 600M): present.")
@@ -878,22 +1102,11 @@ class Setup:
                           cwd=self.runtime)
             if not self._has(nllb, NLLB_REQUIRED):
                 raise SetupError("The translation model download finished but files are missing; run this again.")
-        whisper_dir = self.models_dir / "whisper"
-        if any(whisper_dir.glob("large-v3-turbo.pt")):
-            say("Whisper turbo checkpoint: present.")
-            return
-        say("Whisper turbo checkpoint: downloading (about 1.6 GB, resumable)...")
-        whisper_dir.mkdir(parents=True, exist_ok=True)
-        script = "import sys, whisper; whisper._download(whisper._MODELS[sys.argv[1]], sys.argv[2], False)"
-        self.must([py, "-c", script, WHISPER_MODEL, whisper_dir], "Downloading the Whisper turbo checkpoint",
-                  cwd=self.runtime)
 
     def wants_better_translation(self) -> bool:
-        """The optional NLLB-200 1.3B: by default only with a CUDA or ROCm GPU (it runs on the GPU; without one Redub uses
-        the 600M, which is about 3x faster on a CPU)."""
-        if self.better_translation in ("yes", "no"):
-            return self.better_translation == "yes"
-        return self.gpu.backend == "cuda"
+        """The optional NLLB-200 1.3B (the ``better_translation`` component; by default only with a CUDA or ROCm GPU:
+        it runs on the GPU, and without one Redub uses the 600M, which is about 3x faster on a CPU)."""
+        return "better_translation" in self.components
 
     def has_better_translation(self) -> bool:
         return self._has(self.models_dir / NLLB_BIG_DIR, NLLB_BIG_REQUIRED)
@@ -1068,17 +1281,19 @@ class Setup:
     # ---- step 4: runtime.toml --------------------------------------------------------------------------------
 
     def write_runtime_toml(self) -> None:
-        for what, path in (("engine", self.engine_python()), ("Applio", self.rvc_python())):
-            if not path.exists():
-                raise SetupError(f"runtime.toml not written: the {what} interpreter {path} does not exist.")
+        if not self.engine_python().exists():
+            raise SetupError(f"runtime.toml not written: the engine interpreter {self.engine_python()} does not exist.")
+        training = "training" in self.components and self.rvc_python().exists()
+        if "training" in self.components and not training:
+            warn(f"Voice training is not ready (no {self.rvc_python()}): runtime.toml leaves it out; run setup again.")
         text = (
             "# Written by tools/setup/setup.py; setup rewrites it on every run.\n"
             "[python]\n"
             f"engine = {toml_str(self.engine_python())}\n"
-            f"rvc = {toml_str(self.rvc_python())}\n"
-            "\n[paths]\n"
-            f"applio = {toml_str(self.applio)}\n"
-            f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
+            + (f"rvc = {toml_str(self.rvc_python())}\n" if training else "")
+            + "\n[paths]\n"
+            + (f"applio = {toml_str(self.applio)}\n" if training else "")
+            + f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
             f"seed_vc = {toml_str(self.seed_vc)}\n"
             f"seed_vc_models = {toml_str(self.seed_vc_models)}\n"
             "\n[device]\n"
@@ -1088,6 +1303,9 @@ class Setup:
             text += f'vendor = "{self.gpu.vendor}"\n'
         if self.gpu.vendor == "amd":
             text += f"name = {toml_str(self.gpu.name)}\nvram_gb = {self.gpu.vram_gb}\n"
+        # What this runtime was set up for: the app asks for setup again when it needs a newer one.
+        chosen = ", ".join(f'"{c}"' for c in COMPONENTS if c in self.components)
+        text += f"\n[setup]\nruntime_version = {runtime_version()}\ncomponents = [{chosen}]\n"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.runtime_toml.with_suffix(".toml.tmp")
         tmp.write_text(text, encoding="utf-8", newline="\n")
@@ -1145,27 +1363,36 @@ class Setup:
     def quick_check(self) -> list[str]:
         """Verify an existing setup without loading a model: files, interpreters, torch and the GPU."""
         problems: list[str] = []
+        training = "training" in (previous_components(self.data_dir) or set(COMPONENTS))
         if not self.runtime_toml.is_file():
             problems.append(f"{self.runtime_toml} is missing.")
         else:
             say(f"runtime.toml: {self.runtime_toml}")
             text = self.runtime_toml.read_text(encoding="utf-8")
-            for key, path in (("engine", self.engine_python()), ("rvc", self.rvc_python())):
+            keys = [("engine", self.engine_python())] + ([("rvc", self.rvc_python())] if training else [])
+            for key, path in keys:
                 if toml_str(path) not in text:
                     problems.append(f"runtime.toml does not point [python] {key} at {path}.")
-        head = self.read(self.git("rev-parse", "HEAD"), self.applio).strip() if self.applio.exists() else ""
-        if head == APPLIO_COMMIT:
-            say(f"Applio: pinned commit {APPLIO_COMMIT[:9]}.")
-        else:
-            problems.append(f"Applio is not at the pinned commit {APPLIO_COMMIT[:9]} (found {head[:9] or 'nothing'}).")
-        for label, folder, files in (("Applio prerequisites", self.applio, self.applio_required()),
-                                     ("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)):
+        if training:
+            if (self.applio / ".git").exists() and shutil.which("git"):
+                head = self.read(self.git("rev-parse", "HEAD"), self.applio).strip()
+            else:
+                marker = self.applio / ARCHIVE_MARKER
+                head = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+            if head == APPLIO_COMMIT:
+                say(f"Applio: pinned commit {APPLIO_COMMIT[:9]}.")
+            else:
+                problems.append(f"Applio is not at the pinned commit {APPLIO_COMMIT[:9]} (found {head[:9] or 'nothing'}).")
+        checks = [("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)]
+        if training:
+            checks.insert(0, ("Applio prerequisites", self.applio, self.applio_required()))
+        for label, folder, files in checks:
             missing = [f for f in files if not (folder / f).is_file()]
             if missing:
                 problems.append(f"{label}: missing {', '.join(missing)} in {folder}")
             else:
                 say(f"{label}: all files present.")
-        for label, py in (("Engine", self.engine_python()), ("Applio", self.rvc_python())):
+        for label, py in [("Engine", self.engine_python())] + ([("Applio", self.rvc_python())] if training else []):
             problems += self._check_torch(label, py)
         if self.engine_python().exists():
             out = self.read([self.engine_python(), "-I", "-c",
@@ -1269,6 +1496,8 @@ class Setup:
         if self.data_dir != default_data_dir(self.plat).resolve():
             lines.insert(0, f"The app finds the data directory {self.data_dir} through {location_file(self.plat)}.")
         app = self.root / "app"
+        if not (app / "Cargo.toml").is_file():
+            return [*lines[:-1], "Go back to the Mimvox window: it notices the finished setup by itself."]
         if binary.exists():
             lines.append(f"  {binary}")
         elif self.plat == "windows":
@@ -1276,6 +1505,46 @@ class Setup:
         else:
             lines.append(f"  cd {shlex_quote(str(app))} && cargo run --release")
         return lines
+
+
+def fetch_checked(url: str, target: Path, sha256: str, label: str) -> None:
+    """Download ``url`` to ``target`` through a ``.part`` file that a later run continues (an HTTP range request),
+    with a progress line every 10 %, checked against ``sha256`` before it is renamed into place."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + ".part")
+    have = part.stat().st_size if part.is_file() else 0
+    request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - a fixed https URL
+            if response.status == 416:  # the .part is already complete
+                pass
+            else:
+                resumed = have > 0 and response.status == 206
+                done = have if resumed else 0
+                total = done + int(response.headers.get("Content-Length") or 0)
+                step = max(total // 10, 1)
+                next_note = (done // step + 1) * step
+                with open(part, "ab" if resumed else "wb") as handle:
+                    for block in iter(lambda: response.read(1 << 20), b""):
+                        handle.write(block)
+                        done += len(block)
+                        if total and next_note <= done < total:
+                            say(f"  {100 * done // total}% of {total / 1e9:.1f} GB")
+                            next_note = (done // step + 1) * step
+    except urllib.error.HTTPError as error:
+        if error.code != 416:
+            raise SetupError(f"Downloading {label} failed ({error}); run setup again to resume.") from error
+    except OSError as error:
+        raise SetupError(f"Downloading {label} failed ({error}); run setup again to resume.") from error
+    digest = hashlib.sha256()
+    with open(part, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    if digest.hexdigest() != sha256:
+        part.unlink()
+        raise SetupError(f"The download of {label} is corrupt (checksum mismatch); run setup again.")
+    os.replace(part, target)
+    say(f"Saved {target}.")
 
 
 def fetch_demucs(models_dir: Path) -> Path:
@@ -1332,6 +1601,14 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                         help=f"data directory (default: ${DATA_ENV}, else asked for; the default is the local app data dir + "
                              f"{APP_DIR_NAME}, or the one in location.toml)")
     parser.add_argument("--skip-toolchain", action="store_true", help="do not install Rust / compilers / system packages")
+    parser.add_argument("--components", metavar="LIST",
+                        help=f"what to install, comma separated ({', '.join(COMPONENTS)}; speech is always included). "
+                             "Default: what an earlier run installed, else everything (better_translation only with a "
+                             "GPU)")
+    parser.add_argument("--add", metavar="LIST", help="install these components in addition to the installed ones")
+    parser.add_argument("--gui", action="store_true",
+                        help="run by the app: no questions and no system packages (no sudo; implies --yes and "
+                             "--skip-toolchain), plus '@@mimvox {json}' progress lines for its setup screen")
     parser.add_argument("--skip-models", action="store_true", help="set the environments up but download no models")
     parser.add_argument("--cpu", action="store_true", help="ignore any GPU and set up the CPU backend")
     parser.add_argument("--yes", "-y", action="store_true",
@@ -1344,7 +1621,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                         help="only (re)write runtime.toml for a runtime that already exists in the data directory")
     parser.add_argument("--move-to", metavar="DIR",
                         help="move the installed data directory (from --data-dir, location.toml or the default) to DIR: "
-                             "renames on the same volume, else copies with '[move] 37% 11.4/31.0 GB' progress lines, "
+                             "renames on the same volume, else copies with '[move] 37%% 11.4/31.0 GB' progress lines, "
                              "fixes the paths inside the virtual environments, rewrites runtime.toml and location.toml, "
                              "checks the result and only then deletes the old copy")
     parser.add_argument("--no-check", action="store_true", help="with --move-to: skip the quick check (testing)")
@@ -1408,13 +1685,18 @@ def ask_data_dir(plat: str, default: Path) -> Path:
 
 
 def build_setup(args: argparse.Namespace) -> Setup:
+    global GUI  # noqa: PLW0603 - set once, before any output
+    if args.gui:
+        GUI = True
+        args.yes = True
+        args.skip_toolchain = True
     plat = host_platform()
     root = Path(__file__).resolve().parents[2]
     data_dir = choose_data_dir(args, plat)
     return Setup(root=root, plat=plat, arch=host_arch(), data_dir=data_dir,
                  skip_toolchain=args.skip_toolchain, skip_models=args.skip_models, force_cpu=args.cpu,
                  assume_yes=args.yes, force=args.force, uv_path=find_uv(),
-                 better_translation=args.better_translation, zero_shot_vc=not args.no_zero_shot_vc)
+                 )
 
 
 def run_move(args: argparse.Namespace) -> int:
@@ -1475,6 +1757,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         say(f"Failed: {error}")
         return 1
     setup.detect()
+    try:
+        setup.resolve_components(args)
+    except SetupError as error:
+        say(f"Failed: {error}")
+        return 1
 
     if args.quick_check:
         problems = setup.quick_check()
@@ -1496,29 +1783,81 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     setup.confirm()
+    # This process's own temporary files (downloaded archives) go there too.
+    tempfile.tempdir = str(setup.temp_dir())
     failed: list[str] = []
+    models = not args.skip_models
+    has = setup.components.__contains__
+    better = models and has("better_translation")
+    zero_shot = has("native_accent")
+    training = has("training")
+    plan = [("toolchain", "System tools")]
+    if training:
+        plan.append(("applio_source", "Voice training: source"))
+    plan.append(("engine_env", "Speech engine"))
+    if models:
+        plan += [("omnivoice", "Speech model"), ("whisper", "Speech recognition (Whisper)")]
+        if has("translation"):
+            plan.append(("speech_models", "Translation model"))
+        if better:
+            plan.append(("better_translation", "Better translation model"))
+        if has("music_removal"):
+            plan.append(("separation", "Music removal model"))
+    if zero_shot:
+        plan.append(("zero_shot_vc", "Native accent converter"))
+    if training:
+        plan.append(("applio_env", "Voice training: environment"))
+        if models:
+            plan.append(("applio_models", "Voice training: models"))
+    plan.append(("runtime_toml", "Finishing"))
+    labels = dict(plan)
+    event(event="plan", steps=[{"id": i, "label": label} for i, label in plan])
 
-    def attempt(step) -> bool:  # noqa: ANN001 - a bound method
+    def attempt(step_id: str, step) -> bool:  # noqa: ANN001 - a bound method
+        event(event="step", id=step_id, state="run")
+        say(f"== {labels.get(step_id, step_id)} ==")
         try:
             step()
-            return True
         except SetupError as error:
             say(f"Failed: {error}")
             failed.append(str(error))
+            event(event="step", id=step_id, state="fail", message=str(error))
             return False
+        event(event="step", id=step_id, state="ok")
+        return True
 
-    attempt(setup.toolchains)
-    applio_cloned = attempt(lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
-    if attempt(setup.engine_env) and not args.skip_models:
-        if attempt(setup.omnivoice_models):
-            if attempt(setup.speech_models) and setup.wants_better_translation():
-                attempt(setup.better_translation_model)
-        attempt(setup.separation_model)
-    if setup.zero_shot_vc and setup.engine_python().exists():
-        attempt(setup.zero_shot_vc_runtime)
-    if applio_cloned and attempt(setup.applio_venv) and not args.skip_models:
-        attempt(setup.applio_models)
-    attempt(setup.write_runtime_toml)
+    def skipped(*step_ids: str) -> None:
+        for step_id in step_ids:
+            if step_id in labels:
+                event(event="step", id=step_id, state="skip")
+
+    attempt("toolchain", setup.toolchains)
+    applio_cloned = training and attempt(
+        "applio_source", lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
+    if attempt("engine_env", setup.engine_env):
+        if models:
+            attempt("omnivoice", setup.omnivoice_models)
+            attempt("whisper", setup.whisper_model)
+            if has("translation"):
+                attempt("speech_models", setup.speech_models)
+            if better:
+                attempt("better_translation", setup.better_translation_model)
+            if has("music_removal"):
+                attempt("separation", setup.separation_model)
+    else:
+        skipped("omnivoice", "whisper", "speech_models", "better_translation", "separation")
+    if zero_shot and setup.engine_python().exists():
+        attempt("zero_shot_vc", setup.zero_shot_vc_runtime)
+    else:
+        skipped("zero_shot_vc")
+    if applio_cloned and attempt("applio_env", setup.applio_venv):
+        if models:
+            attempt("applio_models", setup.applio_models)
+    else:
+        if training and not applio_cloned:
+            skipped("applio_env")
+        skipped("applio_models")
+    attempt("runtime_toml", setup.write_runtime_toml)
     if not failed:
         setup.offer_legacy_removal(args.remove_indextts)
     if args.skip_models:
@@ -1528,7 +1867,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         say(f"Setup finished with {len(failed)} step(s) failed; fix them and run it again (it resumes):")
         for line in failed:
             say(f"  - {line}")
+        event(event="done", ok=False, failed=failed)
         return 1
+    event(event="done", ok=True)
+    if GUI:
+        return 0
     for line in setup.ready_lines():
         say(line)
     return 0

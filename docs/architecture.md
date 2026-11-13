@@ -244,6 +244,9 @@ omnivoice_model = ".../runtime/models/omnivoice"
 
 [device]
 backend = "cuda"   # cuda | mps | cpu
+
+[setup]
+runtime_version = 1  # compared with tools/setup/runtime_version.txt: a higher bundled number asks for setup again
 ```
 
 ## Protocol summary

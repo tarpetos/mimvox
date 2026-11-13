@@ -43,7 +43,7 @@
 
 name = "mimvox"
 product-name = "Mimvox"
-version = "0.1.5" # keep equal to app/Cargo.toml (the build scripts check it)
+version = "0.2.0" # keep equal to app/Cargo.toml (the build scripts check it)
 identifier = "io.github.tarpetos.mimvox"
 description = "Clone your own voice and speak any text with it"
 long-description = """\
@@ -95,6 +95,7 @@ minimum-system-version = "13.0"
 [nsis]
 installer-mode = "currentUser"
 compression = "lzma"
+# The setup .exe the releases ship is built with Inno Setup (scripts/build/inno.py), not this NSIS section.
 
 [dmg]
 window-size = { width = 540, height = 380 }

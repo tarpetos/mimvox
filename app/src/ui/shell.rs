@@ -141,6 +141,8 @@ pub struct ShellState {
     /// The engine has the zero-shot voice converter (`hello` -> `zero_shot_vc`): the native accent works for an
     /// untrained voice too.
     pub zero_shot_vc: bool,
+    /// The installed runtime components (`hello` -> `components`); `None` until the engine says.
+    pub components: Option<Vec<String>>,
     /// The voice used by Speak and shown in the header pill.
     pub active_voice: Option<String>,
     pub voice_menu_open: bool,
@@ -203,9 +205,13 @@ pub fn brand_mark(s: &AppState, size: f32) -> El {
     }
 }
 
-/// Headless runs (`--snap`, `--tree`, `--script`, ...) must not start processes or open audio devices.
+/// Headless runs (`--snap`, `--tree`, `--script`, ...) must not start processes or open audio devices. A
+/// `--realtime` run is the exception: it keeps pace with the wall clock so it can record a real session (the engine
+/// starts and work really runs), for demo videos made with `--script` and `--video`.
 pub fn headless_run() -> bool {
-    std::env::args().any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--trace" | "--video"))
+    let mut args = std::env::args();
+    let headless = args.any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--trace" | "--video"));
+    headless && !std::env::args().any(|a| a == "--realtime")
 }
 
 impl Default for ShellState {
@@ -219,6 +225,7 @@ impl Default for ShellState {
             languages: Vec::new(),
             translators: Vec::new(),
             zero_shot_vc: false,
+            components: None,
             active_voice: None,
             voice_menu_open: false,
             caption_preview: None,
@@ -322,9 +329,17 @@ pub fn audio_unavailable(s: &AppState) -> String {
 
 /// Starts (or restarts) the engine. Called once a moment after launch (see [`settle`]) and by the Retry buttons.
 /// Its messages arrive as events ([`on_engine_msg`]); a replaced engine's late messages are dropped there.
+/// `EngineStatus::Unavailable` before setup has run.
+pub const NOT_INSTALLED: &str = "The speech engine is not installed yet.";
+
 pub fn restart_engine(s: &mut AppState) {
     if let Some(mut old) = s.engine.take() {
         let _ = guard(|| old.shutdown());
+    }
+    // Nothing to start before setup: the start screen offers it (and starts the engine when it is done).
+    if !super::onboarding::runtime_toml_path().is_file() {
+        s.shell.engine = EngineStatus::Unavailable { reason: NOT_INSTALLED.into() };
+        return;
     }
     s.shell.engine = EngineStatus::Starting { since: clock_now(s) };
     let cfg = match guard(EngineConfig::discover) {
@@ -405,7 +420,13 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
             tx.wake_at(ENGINE_START_DELAY);
         } else {
             start_audio(s);
-            restart_engine(s);
+            // Without a runtime there is nothing to start: the start screen offers setup, which starts the engine
+            // when it finishes (`setuprun::on_exit`).
+            if s.onboarding.runtime_present {
+                restart_engine(s);
+            } else {
+                s.shell.engine = EngineStatus::Unavailable { reason: NOT_INSTALLED.into() };
+            }
             changed = true;
         }
     }
@@ -424,6 +445,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     }
     changed |= ensure_warm(s);
     changed |= super::playbar::settle(s, tx);
+    changed |= super::update::settle(s, tx);
 
     // Toasts: drop the expired ones, wake for the next expiry.
     let before = s.shell.toasts.len();
@@ -498,6 +520,8 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             }
             s.shell.translators = hello.translators.clone();
             s.shell.zero_shot_vc = hello.zero_shot_vc;
+            s.shell.components = Some(hello.components.clone());
+            s.redub.can_separate = hello.components.iter().any(|c| c == "music_removal");
             reset_warm(s);
             refresh_voices(s);
         }
@@ -641,6 +665,12 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let fit = HeaderFit { compact, tight: header_w < 1120.0, balance };
     let page = body_page(s, cx);
     let mut body = col().key("body").w_full().grow(1.0).min_h(0.0).pt(14.0).gap(12.0);
+    if let Some(b) = super::update::banner(s, p) {
+        body = body.child(b);
+    }
+    if let Some(b) = super::onboarding::runtime_banner(s, p) {
+        body = body.child(b);
+    }
     if let Some(b) = engine_banner(s, p) {
         body = body.child(b);
     }
@@ -738,7 +768,8 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
     let brand = row().key("brand").gap(10.0).center_y().window_drag()
         .child(mark)
         .child(text("Mimvox").font(ty::TITLE).color(p.text))
-        .child(text("early version").font(ty::CAPTION).color(p.warn).help("Early version: expect bugs. Report problems on the project's GitHub page."));
+        .child(text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(ty::CAPTION).color(p.text_faint)
+            .help("Early version: expect bugs. Report problems on the project's GitHub page."));
     let right = row().key("right").gap(8.0).center_y().window_drag().child(engine_pill(s, p, fit.tight)).child(voice_pill(s, p));
     let bar = col().key("header").w_full().h(HEADER_HEIGHT).fill(p.glass).gradient(p.glass_top, p.glass_bottom)
         .backdrop_blur(24.0).shadow(6.0, 24.0, p.shadow_soft).window_drag()
@@ -830,7 +861,9 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
         EngineStatus::Ready { tts, rvc, .. } => {
             let loading = [tts, rvc].iter().any(|m| m.as_deref() == Some("loading"));
             let paused = [tts, rvc].iter().any(|m| m.as_deref() == Some("paused"));
-            let missing = [tts, rvc].iter().any(|m| m.as_deref() == Some("missing"));
+            // RVC is "missing" by design when voice training is not installed.
+            let rvc_needed = super::setuprun::has(s, "training");
+            let missing = tts.as_deref() == Some("missing") || (rvc_needed && rvc.as_deref() == Some("missing"));
             if missing {
                 (Tone::Danger, "Models missing".to_owned(), false, false)
             } else if paused {
@@ -841,6 +874,8 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
                 (Tone::Success, "Ready".to_owned(), false, false)
             }
         }
+        // Before setup: nothing is wrong and nothing to retry.
+        EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED => (Tone::Neutral, "Not installed".to_owned(), false, false),
         EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => (Tone::Danger, "Engine stopped".to_owned(), false, true),
     };
     let mut pill = glass_edge(p, row().key("engine-pill").role("status").label(label.clone()).h(32.0).px(13.0).gap(8.0).center().radius(16.0)
@@ -849,7 +884,7 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
         .motion(motion::UI)
         .child(status_dot(p, tone, pulse))
         .children((!tight).then(|| text(label.clone()).font(ty::LABEL).color(p.text).a11y_hidden()));
-    pill = pill.help(engine_help(&s.shell.engine));
+    pill = pill.help(engine_help(&s.shell.engine, super::setuprun::has(s, "training")));
     if retry {
         pill = pill.hover(p.glass_hover).focusable(true)
             .on_press(|s: &mut AppState| restart_engine(s))
@@ -859,7 +894,7 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
 }
 
 /// The status pill's tooltip: what the state means, the device, and each model's state.
-fn engine_help(engine: &EngineStatus) -> String {
+fn engine_help(engine: &EngineStatus, training: bool) -> String {
     let model = |m: &Option<String>| match m.as_deref() {
         Some("ready") => "ready".to_owned(),
         Some("loading") => "loading…".to_owned(),
@@ -874,7 +909,8 @@ fn engine_help(engine: &EngineStatus) -> String {
         }
         EngineStatus::Ready { device, tts, rvc } => {
             let any = |want: &str| [tts, rvc].iter().any(|m| m.as_deref() == Some(want));
-            let summary = if any("missing") {
+            let missing = tts.as_deref() == Some("missing") || (training && rvc.as_deref() == Some("missing"));
+            let summary = if missing {
                 "Some models are not installed: run setup again."
             } else if any("paused") {
                 "A voice is training: the speech models are paused so training has the GPU. They come back when training ends or pauses."
@@ -887,7 +923,8 @@ fn engine_help(engine: &EngineStatus) -> String {
             if let Some(d) = device {
                 t.push_str(&format!("\nDevice: {d}"));
             }
-            t.push_str(&format!("\nSpeech model: {}\nVoice conversion: {}", model(tts), model(rvc)));
+            let conversion = if training { model(rvc) } else { "not installed (voice training is not part of this install)".to_owned() };
+            t.push_str(&format!("\nSpeech model: {}\nVoice conversion: {conversion}", model(tts)));
             t
         }
         EngineStatus::Stopped { code, detail } => {
@@ -965,7 +1002,9 @@ fn engine_banner(s: &AppState, p: Palette) -> Option<El> {
             "The voice engine stopped".to_owned(),
             if detail.is_empty() { code.map(|c| format!("Exit code {c}.")).unwrap_or_default() } else { detail.clone() },
         ),
-        EngineStatus::Unavailable { reason } => ("The voice engine is not set up yet".to_owned(), format!("{reason} Run setup.sh (setup.cmd on Windows), then press Retry.")),
+        // The start screen shows setup itself; elsewhere point there.
+        EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED || s.screen == Screen::Onboarding || super::setuprun::running(s) => return None,
+        EngineStatus::Unavailable { reason } => ("The voice engine is not set up yet".to_owned(), format!("{reason} Run setup on the start screen.")),
         _ => return None,
     };
     let row_ = row().key("engine-banner").w_full().px(14.0).py(9.0).gap(12.0).center_y()

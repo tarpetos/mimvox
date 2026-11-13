@@ -90,9 +90,20 @@ def existing_parent(path: Path) -> Path:
     return path
 
 
+# Top-level folders a move leaves behind (and deletes with the old folder): uv's package cache and the temporary
+# files, both made again when needed. Copying the cache to another drive would also undo its hard links.
+NOT_MOVED = ("cache", "tmp")
+
+
+def _prune_top(root: Path, dirpath: str, dirs: list[str]) -> None:
+    if Path(dirpath) == root:
+        dirs[:] = [d for d in dirs if d not in NOT_MOVED]
+
+
 def tree_size(root: Path) -> int:
     total = 0
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        _prune_top(root, dirpath, dirs)
         for name in files:
             try:
                 total += os.lstat(os.path.join(dirpath, name)).st_size
@@ -111,6 +122,7 @@ def _inside(child: Path, parent: Path) -> bool:
 def _walk_files(root: Path):
     """Yield ``(relative path, is_symlink)`` of every file and symlink, and directories as ``(rel, None)``."""
     for dirpath, dirs, files in os.walk(root):
+        _prune_top(root, dirpath, dirs)
         rel_dir = Path(dirpath).relative_to(root)
         for d in list(dirs):
             if os.path.islink(os.path.join(dirpath, d)):  # a symlinked directory is copied as a link

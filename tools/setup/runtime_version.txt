@@ -1,0 +1,5 @@
+# The runtime version this copy of Mimvox needs. Bump it in the same change that makes setup install something new
+# (Python packages, a model, the Applio commit) that the new app or engine depends on. Setup writes it to runtime.toml
+# ([setup] runtime_version); an app whose number here is higher than the installed one asks the user to run setup
+# again (setup installs only what changed). Runtimes set up before this file existed count as version 1.
+1

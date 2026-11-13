@@ -1,0 +1,192 @@
+# Builds the desktop installers on GitHub-hosted runners (free for public repositories) with the scripts in
+# scripts/build/, and publishes them as a GitHub Release when a version tag is pushed.
+#
+#   git tag v0.1.6 && git push origin v0.1.6   build every installer and publish the release "v0.1.6" (notes:
+#                                              that version's section of CHANGELOG.md) with latest.json, the manifest
+#                                              the app's updater reads (src/update.rs)
+#   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
+#
+# Targets: Windows x64 (setup .exe, Inno Setup), Linux x64 (AppImage and .deb), macOS
+# Apple Silicon (.dmg; Intel Macs cannot run the speech engine, current PyTorch has no builds for them). The installers
+# carry only the app and the engine sources; the
+# app's first-run setup downloads Python, PyTorch and the models.
+#
+# Updates: with the CARGO_PACKAGER_SIGN_PRIVATE_KEY(_PASSWORD) secrets, cargo-packager signs every installer (and packs
+# the macOS .app into a signed .app.tar.gz); the release job lists the signed installers per platform in latest.json.
+# The key pair was made with `cargo packager signer generate`; its public half is PUBKEY in app/src/update.rs. Builds
+# without the secrets (a run in a fork) are simply unsigned.
+name: Build installers
+
+on:
+  # Only for a release (a version tag on master) or when started by hand: never on every push or pull request.
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # GitHub's standard runners have 4 cores (3 on Apple Silicon); the scripts default to 6 jobs.
+  CARGO_BUILD_JOBS: "4"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            kind: windows
+          # 22.04 (glibc 2.35) so the AppImage also runs on older distributions.
+          - name: Linux x64
+            os: ubuntu-22.04
+            kind: linux
+          - name: macOS Apple Silicon
+            os: macos-latest
+            kind: macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.kind == 'macos' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+          key: ${{ matrix.os }}
+
+      - name: uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Linux build dependencies
+        if: matrix.kind == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev file
+
+      - name: Signing key
+        shell: bash
+        env:
+          KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "CARGO_PACKAGER_SIGN_PRIVATE_KEY=$KEY" >> "$GITHUB_ENV"
+            echo "CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "No signing key: the installers are not signed for updates."
+          fi
+
+      - name: Build (Windows)
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        # The setup .exe (Inno Setup, dark, in the app's colours); the .msi is no longer shipped.
+        run: ./scripts/build/build-win.ps1 -Format setup
+
+      - name: Build (Linux)
+        if: matrix.kind == 'linux'
+        run: ./scripts/build/build-linux.sh
+
+      - name: Build (macOS)
+        if: matrix.kind == 'macos'
+        run: ./scripts/build/build-mac.sh --formats app,dmg
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: installers-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.dmg
+            dist/*.app.tar.gz
+            dist/*.sig
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches the app version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' app/Cargo.toml | head -n1)"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match app/Cargo.toml version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: installers-*
+          path: out
+          merge-multiple: true
+
+      - name: Release notes, update manifest and checksums
+        run: |
+          awk -v v="## $VERSION" '$0 == v {on = 1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "See CHANGELOG.md." > notes.md; fi
+          cd out
+          # The macOS update bundle gets a versioned name; signatures only the updater uses are dropped.
+          if [ -f Mimvox.app.tar.gz ]; then
+            mv Mimvox.app.tar.gz "Mimvox_${VERSION}_aarch64.app.tar.gz"
+            mv Mimvox.app.tar.gz.sig "Mimvox_${VERSION}_aarch64.app.tar.gz.sig"
+          fi
+          rm -f ./*.deb.sig ./*.dmg.sig
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          # One manifest entry: <os>-<arch>, a file
+          # pattern and the updater's format for it.
+          entry() {
+            f="$(ls $2 2>/dev/null | head -n1)"
+            if [ -z "$f" ] || [ ! -f "$f.sig" ]; then
+              echo "::warning::No signed $2: $1 gets no automatic update."
+              return
+            fi
+            jq -n --arg k "$1" --arg url "$base/$f" --arg sig "$(cat "$f.sig")" --arg fmt "$3" \
+              '{($k): {url: $url, signature: $sig, format: $fmt}}'
+          }
+          {
+            entry windows-x86_64 '*_x64-setup.exe' nsis   # an Inno Setup .exe: the updater runs it with its args
+            entry linux-x86_64 '*_x86_64.AppImage' appimage
+            entry macos-aarch64 '*_aarch64.app.tar.gz' app
+          } | jq -s 'add // {}' > ../platforms.json
+          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile n ../notes.md \
+            --slurpfile p ../platforms.json '{version: $v, notes: $n, pub_date: $d, platforms: $p[0]}' > latest.json
+          sha256sum -- * > SHA256SUMS.txt
+          jq . latest.json
+          ls -l
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          else
+            # A full release, not a pre-release: the updater reads releases/latest, which skips pre-releases.
+            gh release create "$GITHUB_REF_NAME" out/* --latest --title "$GITHUB_REF_NAME" --notes-file notes.md
+          fi

@@ -1,0 +1,35 @@
+# Checks a pull request's title against the commit convention (CONTRIBUTING.md, "Commit messages"). Pull requests are
+# squash-merged and the title becomes the commit on master, so this is what keeps master's history uniform. The check
+# is required by the repository's ruleset.
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Conventional title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          types='feat|fix|perf|refactor|docs|build|ci|chore|revert'
+          scopes='app|engine|setup|build|ci|docs|release|deps'
+          pattern="^(${types})(\((${scopes})\))?!?: [a-z0-9\`].*[^.]$"
+          echo "Title: $TITLE"
+          if ! [[ "$TITLE" =~ $pattern ]]; then
+            echo "::error::The title must look like 'type(scope): summary', for example 'fix(app): keep the player bar on Stop'."
+            echo "Types: ${types//|/, }. Scopes (optional): ${scopes//|/, }."
+            echo "The summary starts in lower case and has no full stop at the end. See CONTRIBUTING.md, 'Commit messages'."
+            exit 1
+          fi
+          if [ "${#TITLE}" -gt 72 ]; then
+            echo "::error::The title is ${#TITLE} characters long; keep it to 72 (details go in the description)."
+            exit 1
+          fi

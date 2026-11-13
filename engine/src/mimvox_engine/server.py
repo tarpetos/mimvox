@@ -272,9 +272,27 @@ def _zero_shot_vc(ctx: Server) -> bool:
     return zsvc.installed(ctx.runtime, ctx.data_dir)
 
 
+def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list[str]:
+    """The installed parts of the runtime (setup's COMPONENTS), from the files on disk: the app offers to install the
+    others where they are needed."""
+    from . import rvc, speech  # noqa: PLC0415
+    from .backends import omnivoice  # noqa: PLC0415
+    found = {
+        "speech": omnivoice.installed(ctx.runtime),
+        "training": rvc.available(ctx.runtime),
+        "translation": "nllb-600m" in translators,
+        "better_translation": "nllb-1.3b" in translators,
+        "native_accent": zero_shot_vc,
+        "music_removal": os.path.isfile(speech.separator_path(ctx.data_dir)),
+    }
+    return [name for name, ok in found.items() if ok]
+
+
 def hello_info(ctx: Server) -> dict[str, Any]:
+    translators, zero_shot_vc = _translators(ctx), _zero_shot_vc(ctx)
     return {"version": __version__, "device": ctx.device, "models": _models(), "languages": speech_languages(),
-            "translators": _translators(ctx), "zero_shot_vc": _zero_shot_vc(ctx)}
+            "translators": translators, "zero_shot_vc": zero_shot_vc,
+            "components": _components(ctx, translators, zero_shot_vc)}
 
 
 @method("hello")

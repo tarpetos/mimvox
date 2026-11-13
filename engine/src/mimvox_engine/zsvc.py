@@ -27,7 +27,7 @@ import sys
 from typing import Any
 
 from . import config
-from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env
+from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 
 log = logging.getLogger("mimvox.zsvc")
 
@@ -69,7 +69,7 @@ class ZsvcWorker:
     def __init__(self, code: str, models: str, device: str) -> None:
         env = child_env(TRANSFORMERS_OFFLINE="1", HF_HUB_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
         # -I: do not put the script directory (engine modules such as config.py) on sys.path.
-        self.client = WorkerClient("zsvc", [sys.executable, "-I", WORKER, "--seed-vc", code, "--models", models,
+        self.client = WorkerClient("zsvc", [sys.executable, *isolated(), WORKER, "--seed-vc", code, "--models", models,
                                             "--device", device], env, start_timeout=120.0)
         self.warm_refs: set[tuple] = set()   # reference states whose prompt the worker has built (cleared on exit)
 

@@ -115,7 +115,7 @@ pub fn set_language(s: &mut AppState, code: &str) {
 
 /// "Remove background music": the remembered choice, else on when the engine has a CUDA GPU.
 pub fn remove_music(s: &AppState) -> bool {
-    s.voices.refclip.media.remove_music.unwrap_or(s.shell.gpu)
+    super::setuprun::has(s, "music_removal") && s.voices.refclip.media.remove_music.unwrap_or(s.shell.gpu)
 }
 
 /// The remembered choice only (`None` when the user never set it: the engine then decides, `"auto"`).
@@ -475,9 +475,13 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
 
     let over = s.formats.over && s.screen == Screen::Voices;
     c = c.child(drop_well(s, p, over));
-    c = c.child(col().key("refmedia-music").w_full().gap(2.0)
-        .child(kit::checkbox(p, remove_music(s), "Remove background music", toggle_music))
-        .child(text("Cleaner reference from videos with music; a little slower.").font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
+    c = c.child(if super::setuprun::has(s, "music_removal") {
+        col().key("refmedia-music").w_full().gap(2.0)
+            .child(kit::checkbox(p, remove_music(s), "Remove background music", toggle_music))
+            .child(text("Cleaner reference from videos with music; a little slower.").font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
+    } else {
+        super::setuprun::install_line(s, *p, "music_removal", "Removing background music")
+    });
     if let Some(o) = st.outcome.as_ref().filter(|_| mine) {
         let mut res = row().key("refmedia-done").w_full().gap(10.0).center_y();
         if let Some(path) = o.preview_path.clone().filter(|_| o.applied) {

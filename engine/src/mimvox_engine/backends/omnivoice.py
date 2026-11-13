@@ -34,7 +34,7 @@ from typing import Any
 
 from .. import config
 from ..registry import EngineError
-from ..workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env
+from ..workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 from . import SynthParams, TtsBackend
 
 log = logging.getLogger("mimvox.omnivoice")
@@ -96,9 +96,8 @@ def omnivoice_model_dir(runtime: dict[str, Any]) -> str | None:
 
 
 def _runtime_root(runtime: dict[str, Any]) -> str | None:
-    """``<data>/runtime``: the parent of the Applio checkout named in runtime.toml."""
-    d = config.applio_dir(runtime)
-    return os.path.dirname(d) if d else None
+    """``<data>/runtime`` (see ``config.runtime_root``)."""
+    return config.runtime_root(runtime)
 
 
 def installed(runtime: dict[str, Any]) -> bool:
@@ -129,7 +128,7 @@ class OmniVoiceBackend(TtsBackend):
             py, model = omnivoice_python(runtime), omnivoice_model_dir(runtime)
             whisper_dir = os.path.join(os.path.dirname(model), "whisper") if model else ""
             device = config.backend(runtime)
-            argv = [py, "-I", WORKER, "--model-dir", model, "--whisper-dir", whisper_dir,
+            argv = [py, *isolated(), WORKER, "--model-dir", model, "--whisper-dir", whisper_dir,
                     "--device", device if device in ("cuda", "mps", "cpu") else "cuda", "--prompt-cache", str(PROMPT_CACHE)]
             if self.unload_after_s > 0:
                 argv += ["--unload-after", str(self.unload_after_s)]

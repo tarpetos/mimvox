@@ -1024,7 +1024,11 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         s.book.read_titles = !s.book.read_titles;
         s.book.settings_dirty = true;
     });
-    let opts = col().key("book-opts").w_full().gap(10.0).child(m4b).child(titles);
+    // Each checkbox in its own keyed slot (the checkbox's own key is the same for both); a little inset so the
+    // scroll area's clip never cuts the boxes' border.
+    let opts = col().key("book-opts").w_full().pl(2.0).gap(10.0)
+        .child(el().key("book-opt-m4b").w_full().child(m4b))
+        .child(el().key("book-opt-titles").w_full().child(titles));
     let mut list = col().w_full().gap(6.0);
     let shown = s.book.project.as_ref().map(|b| b.id.as_str());
     for b in s.book.recent.iter().take(12) {

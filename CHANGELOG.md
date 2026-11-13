@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0
+
+* **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage
+  and .deb) and macOS on Apple Silicon (.dmg), built by GitHub Actions for every release.
+* **Updates from inside the app:** a new version shows a banner under the header. **Update** downloads it, checks its
+  signature and installs it when the app closes, or at once with **Restart now** (a running training or book pauses
+  and continues). A `.deb` install gets a link to the download page. `"check_updates": false` in settings.json turns
+  the check off. An updated AppImage named after the old version is renamed after the new one.
+* **Dark Windows installer:** the setup `.exe` is now built with Inno Setup in the app's palette (the banner with the
+  app's light fields, our icon, an accent progress bar), with one settings page (folder, desktop shortcut, Start menu).
+  The uninstaller asks what to remove: only the app, also the speech engine and its models, or everything. The `.msi`
+  is no longer shipped.
+* **Install only what you need:** the welcome screen lists the parts of the runtime with their sizes: Speech
+  (required, about 13 GB: Speak, Book, Re-speak), Voice training (12 GB), Translation (2.5 GB), Better translation
+  (2.7 GB), Native accent (2 GB) and Music removal (0.3 GB). A part left out installs later in one click where it is
+  needed (Train, Redub's modes, the accent, voice match, music options), with its progress there; the engine restarts
+  by itself afterwards. Setup takes `--components` / `--add` and keeps the chosen set for later runs; Windows without
+  voice training gets a portable ffmpeg.
+* **Runtime check:** when a new version needs newer engine packages or models, a banner asks to run setup again
+  (it installs only what changed) and the engine restarts when setup is done.
+* **Setup runs inside the app:** **Run setup** on the welcome screen installs the engine and the models in the app's
+  window, with the steps, a progress bar and the log; no terminal, no script and no administrator rights (git and
+  ffmpeg are downloaded where missing). **Cancel** stops it, and the next run continues where it stopped. The
+  installers carry `uv` for it; `setup.sh` / `setup.cmd` are for developers working in the repository. Without a
+  runtime the engine is no longer started (no "cannot read runtime.toml" error).
 ## 0.1.5
 
 * **Audiobooks:** Speak has a Book mode. Open an EPUB, FB2, DOCX, ODT, RTF, PDF (with a text layer), HTML, Markdown,

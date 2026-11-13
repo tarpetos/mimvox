@@ -209,6 +209,10 @@ pub struct Hello {
     /// engine that does not say).
     #[serde(default)]
     pub zero_shot_vc: bool,
+    /// The installed parts of the runtime (`speech`, `training`, `translation`, `better_translation`, `native_accent`,
+    /// `music_removal`); see `ui::setuprun::COMPONENTS`.
+    #[serde(default)]
+    pub components: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -80,6 +80,9 @@ decency expects it.
 - Setup downloads the toolchains, the Python packages and the models from their public sources (for example GitHub,
   PyPI, Hugging Face and ModelScope). Those services see the download requests, under their own terms. After setup the
   app works offline.
+- An installed app asks GitHub once per launch whether a newer version exists (it downloads `latest.json` from the
+  project's releases; nothing about you or your data is sent). An update is downloaded only when you choose
+  **Update**. Set `"check_updates": false` in `settings.json` in the data folder to turn the check off.
 - To remove a voice, delete it in the app (**Voices**), or delete its folder in the data folder (see
   `docs/architecture.md`). Delete the data folder to remove everything the app made.
 

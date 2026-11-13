@@ -277,7 +277,7 @@ pub fn accent_applies(s: &AppState, lang: &str) -> bool {
 /// Whether the active voice can use the native accent: trained (its RVC model gives the timbre), or the engine has
 /// the zero-shot converter (it takes the timbre from the reference clip, no training).
 pub fn native_possible(s: &AppState) -> bool {
-    shell::active_voice(s).is_some_and(|v| v.trained || s.shell.zero_shot_vc)
+    shell::active_voice(s).is_some_and(|v| (v.trained && super::setuprun::has(s, "training")) || s.shell.zero_shot_vc)
 }
 
 /// The `accent` of a speech request in `lang`: the native speaker when the native accent applies, is chosen and is
@@ -830,6 +830,8 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     c = c.child(speed).child(expr).child(m).child(quality);
     if !trained && shell::active_voice(s).is_some() {
         c = c.child(text("Voice match applies once this voice is trained.").font(ty::CAPTION).color(p.text_faint).wrap());
+    } else if trained && !super::setuprun::has(s, "training") {
+        c = c.child(super::setuprun::install_line(s, p, "training", "Voice match"));
     }
     c
 }
@@ -925,14 +927,15 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
         let hint = if possible {
             "Pick Native, or add an English reference clip in Voices."
         } else {
-            "Run setup to install the zero-shot voice converter, or train this voice, to speak English without an accent (Native accent); or add an English reference clip in Voices."
+            "Install the native accent, or train this voice, to speak English without an accent; or add an English reference clip in Voices."
         };
         c = c.child(col().key(format!("{key}-hint")).w_full().gap(8.0).padding(10.0).radius(theme::radius::CONTROL)
             .fill(p.warn.alpha(0.08)).border(1.0, p.warn.alpha(0.25))
             .child(text(hint).font(ty::CAPTION).color(if possible { p.text_dim } else { p.warn }).wrap())
             .child(row().gap(8.0)
                 .child(Button::new("Add an English clip").small().icon(&icons::MIC).key(format!("{key}-add-en"))
-                    .on_press(|s| add_reference(s, "en")).build(p))));
+                    .on_press(|s| add_reference(s, "en")).build(p)))
+            .children((!s.shell.zero_shot_vc).then(|| super::setuprun::install_line(s, p, "native_accent", "The native accent"))));
     }
     if native {
         let v = s.speak.native_voice;

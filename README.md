@@ -18,6 +18,27 @@ on your computer: your recordings, your voice models and the generated speech ar
 > badly, or may change between versions, and setup may fail on systems it was not tried on. Keep your own copies of
 > recordings that matter. Bug reports are welcome: open an issue.
 
+## Platforms and hardware
+
+Where Mimvox runs, and what it computes on. Speech, training and Redub all run on the GPU when there is a supported
+one; without one they run on the processor, which works but is several times slower (training a voice takes many hours).
+
+| System | NVIDIA GPU | AMD GPU | Apple GPU | Intel GPU | Processor only (Intel or AMD) |
+| --- | --- | --- | --- | --- | --- |
+| **Windows** x64 | **Yes** (CUDA; developed on an RTX 4070) | Processor only | n/a | Processor only | Yes, slow |
+| **Linux** x64 | **Yes** (CUDA) | **Yes** (ROCm, new; tested on an RX 9070 XT) | n/a | Processor only | Yes, slow |
+| **macOS** Apple Silicon (M1 and later) | n/a | n/a | Best effort (MPS), not validated | n/a | n/a |
+
+Intel Macs are not supported: the official PyTorch builds for them stopped at 2.2, and the speech engine needs 2.8 or
+newer. ARM64 Windows and Linux (Snapdragon laptops, ARM boards) are not built: their GPUs are not supported by
+PyTorch, so everything would run on the processor, and nobody has tried them.
+
+- **Installers:** Windows `setup.exe`, Linux `.AppImage` and `.deb` (all x64), and a macOS `.dmg` for Apple Silicon;
+  every [release](https://github.com/tarpetos/mimvox/releases/latest) has them all.
+- **Video memory:** 8 GB or more is recommended (the speech model needs about 4-5 GB, voice training more).
+- **What was tried:** Windows 11 with an NVIDIA RTX 4070 (daily), Arch Linux with an AMD RX 9070 XT. Everything else
+  is built for, but less tested: reports are welcome.
+
 ## Consent and legal: read this first
 
 > **Clone only your own voice, or a voice whose owner has given you explicit permission.** Voice cloning can be used
@@ -75,7 +96,8 @@ recordings joined with short pauses).
 | **History and export** | Every result is saved as one file in the format you pick (WAV by default, or MP3, FLAC, OGG, Opus, M4A, AIFF). Play it again, or export it to another format. |
 | **Several voices** | Keep more than one voice (for example "Studio" and "Casual"), rename or delete them, and see how much data each one has. |
 | **Two sliders** | **Expressiveness** and **Voice match**. The validated defaults are already set; you do not need to touch anything else. |
-| **Private by design** | No account, no cloud, no telemetry. Setup downloads the models once; after that the app works offline. |
+| **Private by design** | No account, no cloud, no telemetry. Setup downloads the models once; after that the app works offline. The only request of its own is a check for a new version at launch (it can be turned off). |
+| **Updates from inside the app** | A new version shows a banner: **Update** downloads it, checks its signature and installs it when you close the app or press **Restart now** (Windows, macOS, AppImage; a `.deb` gets a link to the download page). |
 
 ---
 
@@ -128,27 +150,32 @@ More: [docs/architecture.md](docs/architecture.md).
 
 ## Quick start
 
+1. Download the installer for your system from the
+   [latest release](https://github.com/tarpetos/mimvox/releases/latest): Windows (`setup.exe`), macOS
+   (`.dmg`, Apple Silicon), Linux (`.AppImage`, or `.deb` for Debian and Ubuntu); Windows and Linux on x64.
+2. Start Mimvox, choose what to install and press **Run setup**. The app installs the speech engine and the models
+   by itself, with a progress list in its window: about 13 GB for speech alone, about 33 GB for everything (voice
+   training, translation, native accent, music removal). A part left out installs later in one click, on the screen
+   that needs it.
+3. Choose a preset (or paste your own text), record, press **Train**, and start typing.
+
+The [usage guide](docs/usage.md#1-install-and-first-start) covers the details (the first-run warnings of unsigned
+installers, the install location, updates).
+
+### From the source code
+
+For working on Mimvox itself:
+
 ```bash
 git clone https://github.com/tarpetos/mimvox.git
 cd mimvox
-./setup.sh          # Linux and macOS
+./setup.sh          # Linux and macOS (.\setup.cmd on Windows)
+cd app && cargo run --release
 ```
 
-```powershell
-.\setup.cmd         # Windows
-```
-
-Setup installs what is missing (the Rust and Python toolchains), builds the two Python environments (the engine with
-OmniVoice, and Applio), downloads the models and writes `runtime.toml`. It can be run again at
-any time; it skips what is already done. Then start the app:
-
-```bash
-cd app
-cargo run --release
-```
-
-On first start the welcome screen checks that setup has run. Then choose a
-preset (or paste your own text), record, press **Train**, and start typing.
+The setup script also installs the toolchains the app is built with (Rust, a C/C++ compiler), builds the two Python
+environments (the engine with OmniVoice, and Applio), downloads the models and writes `runtime.toml`. It can be run
+again at any time; it skips what is already done.
 
 ## Usage
 
@@ -186,7 +213,7 @@ engine/                Python engine (mimvox_engine), runs in the engine virtual
     training/          RVC training driver
 presets/<lang>/        the guided reading texts (Quick, Standard, Pro) per language: en uk de fr es pl
 contract/              engine-protocol.md: the app <-> engine protocol and data layout
-tools/setup/           setup.py (called by setup.sh and setup.cmd)
+tools/setup/           setup.py (run by the app on first start, and by setup.sh / setup.cmd for developers)
 tools/release/         icons and release helpers
 scripts/build/         installer builds per operating system
 docs/                  architecture, recording guide, performance, screenshots

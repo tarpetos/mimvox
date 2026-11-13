@@ -5,6 +5,7 @@
 mod audio;
 mod engine;
 mod state;
+mod update;
 mod ui;
 
 use rune::{App, AppSpec, Titlebar};
@@ -17,7 +18,57 @@ const NOTO_BOLD: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold.ttf");
 /// macOS. On Windows the executable also carries it as a resource for Explorer (see `build.rs`).
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
+/// An AppImage's launcher (AppRun) points `PYTHONHOME` into the image and puts the image's folders first in `PATH`,
+/// `LD_LIBRARY_PATH`, `PYTHONPATH`, `XDG_DATA_DIRS` and a few more. Every process the app starts inherits them: the
+/// setup's and the engine's Python then cannot find their standard library, and a terminal or `xdg-open` may load the
+/// wrong libraries. The image bundles no libraries the app needs at run time, so the entries inside it are dropped
+/// before anything starts (still one thread here, so changing the environment is sound).
+fn leave_appimage_env() {
+    let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) else { return };
+    let appdir = std::path::PathBuf::from(appdir);
+    let inside = |p: &std::path::Path| p.starts_with(&appdir);
+    for var in ["PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "XDG_DATA_DIRS", "PERLLIB", "QT_PLUGIN_PATH",
+        "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0", "GSETTINGS_SCHEMA_DIR", "PYTHONHOME"] {
+        let Some(value) = std::env::var_os(var) else { continue };
+        let kept: Vec<_> = std::env::split_paths(&value).filter(|p| !p.as_os_str().is_empty() && !inside(p)).collect();
+        // SAFETY: called first thing in `main`, before any other thread exists.
+        unsafe {
+            match std::env::join_paths(&kept) {
+                Ok(joined) if !kept.is_empty() => std::env::set_var(var, joined),
+                _ => std::env::remove_var(var),
+            }
+        }
+    }
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("PYTHONDONTWRITEBYTECODE") };
+}
+
+/// The app's id: the single-instance pipe (`rune::single_instance`) and the Windows mutex below are named after it.
+const APP_ID: &str = "io.github.tarpetos.mimvox";
+/// Held while the app runs (Windows): the installer and the uninstaller check it (scripts/build/inno.py, APP_MUTEX) and
+/// install or remove nothing while it is held.
+#[cfg(windows)]
+const APP_MUTEX: &str = "Local\\Mimvox-running";
+
+#[cfg(windows)]
+fn hold_app_mutex() {
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = APP_MUTEX.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a NUL-terminated name; the handle is never closed, so the mutex lives as long as the process.
+    let _ = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+}
+
 fn main() {
+    leave_appimage_env();
+    // One Mimvox at a time: a second launch brings the running one's window forward and ends here. Headless runs
+    // (snapshots, scripted recordings) open no window and may run beside the app.
+    if !rune::is_headless() {
+        if !rune::single_instance(APP_ID) {
+            return;
+        }
+        #[cfg(windows)]
+        hold_app_mutex();
+    }
     // Before `run`: every window opened afterwards shows it. A failure only costs the icon.
     let _ = rune::set_app_icon(ICON_PNG);
     let spec = AppSpec::<AppState> {
@@ -49,9 +100,13 @@ fn main() {
     // Background threads (engine, audio, dialogs) reach the UI through this handle (`ui::events`).
     ui::events::init(app.handle());
     app.run();
+    // A setup still running stops with the app (it resumes on the next run).
+    ui::setuprun::stop_on_exit();
     // The window is gone: now wait for the engine a quit asked to exit (it is killed after a grace period).
     if let Some(mut engine) = ui::train::take_closing_engine() {
         engine.shutdown();
     }
+    // An update downloaded this session installs now that the app and the engine are gone.
+    update::install_pending();
     ui::stats::write();
 }

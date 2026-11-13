@@ -7,8 +7,8 @@ One script per OS builds the Rust app (`app/`) and packages it with
 | OS | Script | Output |
 | --- | --- | --- |
 | Linux | `./scripts/build/build-linux.sh` | `.AppImage` + `.deb` |
-| macOS | `./scripts/build/build-mac.sh` (`--universal` for arm64 + Intel) | `.app` + `.dmg` |
-| Windows | `.\scripts\build\build-win.ps1` (`-Format msi` for an MSI) | NSIS setup `.exe` (default) or `.msi` |
+| macOS | `./scripts/build/build-mac.sh` (Apple Silicon; `--universal` adds Intel, which the engine cannot use) | `.app` + `.dmg` |
+| Windows | `.\scripts\build\build-win.ps1` (`-Format msi` for an MSI) | setup `.exe` (Inno Setup, default) or `.msi` |
 
 Run them from anywhere; they locate the repo from their own path. Pass `--help` (Linux/macOS) to see the options.
 Installers are built on the OS they target (no cross-compiling).
@@ -65,8 +65,13 @@ sudo apt install build-essential pkg-config libasound2-dev libxkbcommon-dev libw
   `winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`
 - `uv`: `powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"`
 - If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope Process -Bypass` once in that window.
-- NSIS and the WiX toolset are downloaded by cargo-packager on first use; nothing to install by hand.
-- The NSIS installer is per-user (no admin rights); the MSI is the choice for managed deployment.
+- The setup `.exe` is built with Inno Setup by `scripts/build/inno.py`: a pinned, portable Inno Setup is downloaded
+  once (checked against its SHA-256) into `app\target\inno` (`$env:MIMVOX_INNO_CACHE` overrides). The wizard is dark
+  in the app's palette, its pictures are drawn at build time from the app icon, and the uninstaller asks what to remove
+  (the app, also the speech engine, or everything). The installer is per-user (no admin rights).
+- The `.msi` (`-Format msi`) is made by cargo-packager with WiX (downloaded on first use); it is not shipped in releases.
+- With `$env:CARGO_PACKAGER_SIGN_PRIVATE_KEY` (and `_PASSWORD`) set, the setup `.exe` gets the `.sig` the app's
+  updater checks.
 
 ## Releasing a new version
 

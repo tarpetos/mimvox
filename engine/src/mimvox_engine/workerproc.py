@@ -280,6 +280,13 @@ class WorkerClient:
             self._queue.put_nowait(None)
 
 
+def isolated() -> list[str]:
+    """Interpreter flags for a worker: ``-I`` (isolated: no user site, no PYTHON* variables), plus the engine's bytecode
+    cache folder (``PYTHONPYCACHEPREFIX``, which ``-I`` would ignore), so no ``__pycache__`` lands next to the sources."""
+    prefix = sys.pycache_prefix
+    return ["-I", "-X", f"pycache_prefix={prefix}"] if prefix else ["-I"]
+
+
 def child_env(**extra: str) -> dict[str, str]:
     """Environment of a worker: UTF-8, unbuffered, and without the engine's PYTHONPATH (it imports nothing from here)."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1", **extra)

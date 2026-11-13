@@ -52,6 +52,10 @@ pub struct AppState {
     pub trash: crate::ui::trash::TrashState,
     /// Speak's and Redub's Results from earlier sessions (see `ui::history`).
     pub history: crate::ui::history::HistoryState,
+    /// A newer release and its download (see `ui::update`).
+    pub update: crate::ui::update::UpdateState,
+    /// Setup run from inside the app (see `ui::setuprun`).
+    pub setup: crate::ui::setuprun::SetupRunState,
 }
 
 impl Default for AppState {
@@ -60,12 +64,19 @@ impl Default for AppState {
         // The recorder writes into the same data dir as the engine: one source of truth on the shell.
         let mut record = RecordState::default();
         record.data_dir = shell.data_dir.clone();
+        // Set up already: no welcome screen. Speak when a voice exists, else Voices (where "Get started" leads).
+        let onboarding = OnboardingState::default();
+        let screen = if onboarding.runtime_present && !crate::ui::shell::headless_run() {
+            if has_voices(&shell.data_dir) { Screen::Speak } else { Screen::Voices }
+        } else {
+            Screen::default()
+        };
         AppState {
-            screen: Screen::default(),
+            screen,
             shell,
             engine: None,
             player: None,
-            onboarding: OnboardingState::default(),
+            onboarding,
             voices: VoicesState::default(),
             record,
             train: TrainState::default(),
@@ -78,6 +89,15 @@ impl Default for AppState {
             playbar: Default::default(),
             trash: Default::default(),
             history: Default::default(),
+            update: Default::default(),
+            setup: Default::default(),
         }
     }
+}
+
+/// Whether the data folder holds at least one voice (`voices/<id>/voice.json`), read once at start.
+fn has_voices(data_dir: &std::path::Path) -> bool {
+    std::fs::read_dir(data_dir.join("voices"))
+        .map(|dir| dir.flatten().any(|e| e.path().join("voice.json").is_file()))
+        .unwrap_or(false)
 }
