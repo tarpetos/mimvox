@@ -3,7 +3,7 @@
 ## Unreleased
 
 * **Installers for every platform:** Windows x64 and ARM64 (setup .exe), Linux x64 and ARM64 (AppImage
-  and .deb) and one macOS app for Apple Silicon and Intel, built by GitHub Actions for every release.
+  and .deb) and macOS on Apple Silicon (.dmg), built by GitHub Actions for every release.
 * **Updates from inside the app:** a new version shows a banner under the header. **Update** downloads it, checks its
   signature and installs it when the app closes, or at once with **Restart now** (a running training or book pauses
   and continues). A `.deb` install gets a link to the download page. `"check_updates": false` in settings.json turns

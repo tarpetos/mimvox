@@ -7,7 +7,8 @@
 #   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
 #
 # Targets: Windows x64 and ARM64 (setup .exe, Inno Setup), Linux x64 and ARM64 (AppImage and .deb), macOS
-# universal (one .dmg for Apple Silicon and Intel). The installers carry only the app and the engine sources; the
+# Apple Silicon (.dmg; Intel Macs cannot run the speech engine, current PyTorch has no builds for them). The installers
+# carry only the app and the engine sources; the
 # app's first-run setup downloads Python, PyTorch and the models.
 #
 # Updates: with the CARGO_PACKAGER_SIGN_PRIVATE_KEY(_PASSWORD) secrets, cargo-packager signs every installer (and packs
@@ -57,7 +58,7 @@ jobs:
           - name: Linux ARM64
             os: ubuntu-22.04-arm
             kind: linux
-          - name: macOS universal
+          - name: macOS Apple Silicon
             os: macos-latest
             kind: macos
     steps:
@@ -109,7 +110,7 @@ jobs:
 
       - name: Build (macOS)
         if: matrix.kind == 'macos'
-        run: ./scripts/build/build-mac.sh --universal --formats app,dmg
+        run: ./scripts/build/build-mac.sh --formats app,dmg
 
       - name: Upload installers
         uses: actions/upload-artifact@v7
@@ -158,8 +159,8 @@ jobs:
           cd out
           # The macOS update bundle gets a versioned name; signatures only the updater uses are dropped.
           if [ -f Mimvox.app.tar.gz ]; then
-            mv Mimvox.app.tar.gz "Mimvox_${VERSION}_universal.app.tar.gz"
-            mv Mimvox.app.tar.gz.sig "Mimvox_${VERSION}_universal.app.tar.gz.sig"
+            mv Mimvox.app.tar.gz "Mimvox_${VERSION}_aarch64.app.tar.gz"
+            mv Mimvox.app.tar.gz.sig "Mimvox_${VERSION}_aarch64.app.tar.gz.sig"
           fi
           rm -f ./*.deb.sig ./*.dmg.sig
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
@@ -179,8 +180,7 @@ jobs:
             entry windows-aarch64 '*_arm64-setup.exe' nsis
             entry linux-x86_64 '*_x86_64.AppImage' appimage
             entry linux-aarch64 '*_aarch64.AppImage' appimage
-            entry macos-x86_64 '*_universal.app.tar.gz' app
-            entry macos-aarch64 '*_universal.app.tar.gz' app
+            entry macos-aarch64 '*_aarch64.app.tar.gz' app
           } | jq -s 'add // {}' > ../platforms.json
           jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile n ../notes.md \
             --slurpfile p ../platforms.json '{version: $v, notes: $n, pub_date: $d, platforms: $p[0]}' > latest.json

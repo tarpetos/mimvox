@@ -7,7 +7,7 @@ One script per OS builds the Rust app (`app/`) and packages it with
 | OS | Script | Output |
 | --- | --- | --- |
 | Linux | `./scripts/build/build-linux.sh` | `.AppImage` + `.deb` |
-| macOS | `./scripts/build/build-mac.sh` (`--universal` for arm64 + Intel) | `.app` + `.dmg` |
+| macOS | `./scripts/build/build-mac.sh` (Apple Silicon; `--universal` adds Intel, which the engine cannot use) | `.app` + `.dmg` |
 | Windows | `.\scripts\build\build-win.ps1` (`-Format msi` for an MSI) | setup `.exe` (Inno Setup, default) or `.msi` |
 
 Run them from anywhere; they locate the repo from their own path. Pass `--help` (Linux/macOS) to see the options.
