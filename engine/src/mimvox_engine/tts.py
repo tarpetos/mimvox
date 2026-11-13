@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from . import accent, aio, backends, config, media, reflang, rvc, speech, voices, zsvc
+from . import accent, aio, backends, config, media, reflang, results, rvc, speech, voices, zsvc
 from . import audio_util as au
 from .backends import SynthParams
 from .backends.omnivoice import OMNIVOICE
@@ -446,9 +446,12 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if not segs:
         raise EngineError("bad_request", "nothing to say in this text")
     # (no await between the busy check in start_exclusive and taking the slot: the loop makes it atomic)
+    # What the result's sidecar records (results.py), so it comes back after a restart.
+    about = {"kind": "speak", "voice_id": voice_id, "voice_name": str(meta.get("name") or voice_id), "text": text,
+             "language": lang}
     job = start_exclusive(ctx, lambda j: _generate(ctx, j, data, backend, lang, ref, segs, temperature, quality, pth,
                                                    idx, rvc_rate, worker, duration_factor_for(speed), out_fmt,
-                                                   choice, index_rate, zs),
+                                                   choice, index_rate, zs, about),
                           "another generation is running")
     return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], **choice.fields(),
             **ref_fields}
@@ -490,10 +493,11 @@ def _chunk_from(src: str, i: int, last: bool, pause: int, jobdir: str) -> tuple[
 async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backends.TtsBackend, lang: str, ref: str,
                     segs: list[tuple[str, int]], temperature: float, quality: str, pth: str, idx: str,
                     index_rate: float, worker: rvc.RvcWorker | None, duration_factor: float, out_fmt: str,
-                    choice: accent.Choice | None = None, voice_match: float = 1.0, zs: zsvc.Bound | None = None) -> None:
+                    choice: accent.Choice | None = None, voice_match: float = 1.0, zs: zsvc.Bound | None = None,
+                    about: dict[str, Any] | None = None) -> None:
     """``ref`` is the voice's reference; with a ``native-us`` ``choice`` OmniVoice speaks from the native clip instead
     and RVC gets the native index rate and pitch, or (``zs``, an untrained voice) the zero-shot converter turns each
-    segment into the timbre of ``ref`` (accent.py)."""
+    segment into the timbre of ``ref`` (accent.py). ``about`` goes into the result's sidecar (results.py)."""
     t_start = time.time()
     choice = choice or accent.Choice("own")
 
@@ -560,7 +564,10 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         saved = await aio.run_io(media.save_result, data, full, au.OUT_SR, "", out_fmt)
         # Read again: the first synthesis from a new clip has just transcribed it (and detected its language).
         ref_fields = await aio.run_io(reflang.fields, ref, lang, native is not None)
-        finish("tts.done", {**saved, "duration_s": au.duration_s(full), "elapsed_s": round(time.time() - t_start, 2),
+        duration_s, elapsed_s = au.duration_s(full), round(time.time() - t_start, 2)
+        await aio.run_io(results.record, saved, {**(about or {"kind": "speak"}), "accent": choice.accent,
+                                                 "duration_s": duration_s, "elapsed_s": elapsed_s})
+        finish("tts.done", {**saved, "duration_s": duration_s, "elapsed_s": elapsed_s,
                             **choice.fields(), **(native.fields() if native else {}), **ref_fields})
         log.info("job %s done in %.1fs (first chunk %.1fs)", job, time.time() - t_start,
                  first_chunk_at[0] if first_chunk_at else -1)

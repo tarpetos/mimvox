@@ -190,10 +190,12 @@ the quick check, and only then delete the old directory.
                                              #  wav; 44.1 kHz mono, opus 48 kHz; a `_2`, `_3` suffix on a name clash)
 <data>/outputs/redub_<YYYYMMDD_HHMMSS>.<ext> # Redub results (same rules); a video output adds
                                              #  redub_<same stamp>.<mp4|mov|m4v|mkv|webm|avi> next to it
+<data>/outputs/<same stem>.result.json       # the sidecar of every Speak / Redub result (what made it), see Saved results
 <data>/tmp/redub_sep_<key>/                  # Redub's voice / background stems of one source (vocals.npy, background.npy:
                                              #  float32 (channels, n) at 44.1 kHz); only the latest file is kept
 <data>/tmp/play/<name>.wav                   # playback WAV of a result saved in another format than wav (the app plays WAV
-                                             #  only; same name as the saved file; gone at the next engine start)
+                                             #  only; same name as the saved file; written with the result or by
+                                             #  outputs.play; gone at the next engine start)
 <data>/runtime/models/whisper/               # Whisper turbo (large-v3-turbo.pt, 1.6 GB), fetched by setup (else on the first Redub)
 <data>/runtime/models/nllb-200-distilled-600M/  # NLLB-200 translation model (2.5 GB), fetched by setup with `hf download`; never auto-downloaded
 <data>/runtime/models/nllb-200-distilled-1.3B/  # optional better translation model (fp16 model.safetensors, 2.7 GB; a 5.5 GB fp32
@@ -682,12 +684,53 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   in `settings.json`, default `wav`); it lists the formats of `formats.list` `export`. The app plays `path_play`, and
   "Show in folder", "Open file" and "Export as..." use `path` (an export encodes from `path_play` while it exists).
   Fields `path_wav` / `path_mp3` of earlier versions are gone.
+- **Sidecar.** Next to every saved result the engine writes `<same stem>.result.json` (atomically: a temporary file,
+  then a rename; a failure is logged and the result kept), so the result comes back after a restart (`outputs.list`):
+  `{"version":1,"created":<unix s>,"kind":"speak|redub","voice_id","voice_name","language","accent","duration_s",
+  "elapsed_s","format","path","video_path"}` plus, for Speak, `"text"` (the whole text), and for Redub `"mode"`
+  (`dub` | `convert` | `respeak`; a `redub.render` with `"result_mode":"dub"` records `dub`), `"source_name"` (the
+  source file's name), `"to"` (the language spoken: a dub's target, a respeak's text language) and `"language"` (a
+  dub: the detected source language; a respeak: the text language; a convert: `null`). `path` / `video_path` are the
+  absolute paths at save time; `outputs.list` uses the files found next to the sidecar, so a moved data folder still
+  works. `outputs.delete` deletes the sidecar with its result.
 - **Pre-buffer rule (client).** Chunk 0 is played as soon as it arrives and later chunks are queued gaplessly behind
   it; the segment growth schedule keeps `rtf` of the later chunks near 1 (measured 1.05-1.4). A client that wants to
   avoid underruns on slower hardware estimates the total speech `S = duration_s(chunk 0) * sum(segment_chars) /
   segment_chars[0]` and holds chunk 0 back for `max(0, rtf * (S - duration_s(chunk 0)) - S)` seconds, taking `rtf`
   from chunk 0 (a first estimate) and refining it with each new chunk. With `rtf <= 1` this is 0: start at once.
 
+
+### `outputs.list` (the saved results, after a restart too)
+`{"kind"?:"speak|redub","limit"?:50,"before"?:<unix s>}` -> `{"results":[<entry>, ...],"more":false}`
+- The results in `<data>/outputs` (top level only: `books/` and other folders are skipped), newest first by `created`,
+  at most `limit` (default 50, at most 500; not a positive integer is `bad_request`), only those of `kind` when given,
+  only those with `created` < `before` when given (the next page: `before` = the last entry's `created`). `more` says
+  older ones exist.
+- One entry per result: the files with one stem are one entry (`redub_<stamp>.mp3` + `redub_<stamp>.mp4` + its
+  sidecar). `{"id":"<stem>","kind","legacy":false,"name":"<saved file name>","created","path","path_play",
+  "video_path","duration_s","elapsed_s","format"}` plus the sidecar's `voice_id`, `voice_name`, `text`, `language`,
+  `accent`, `mode`, `source_name`, `to` when it has them.
+- A result saved before sidecars (`legacy: true`) is recognised by its name only: `<YYYYMMDD_HHMMSS>[_N]` is Speak,
+  `redub_<YYYYMMDD_HHMMSS>[_N]` is Redub; any other file without a sidecar is not a result (a file the user put there,
+  an export) and is skipped. It gets `name`, `created` (the file's mtime), `duration_s` (read from the file:
+  libsndfile, else ffprobe; cached for the session by path, mtime and size) and `format`; `elapsed_s` and the sidecar
+  fields are `null` / absent. A sidecar whose files are gone is skipped.
+- `path` is the audio file (a video-only result: the video); `path_play` is a WAV that plays it now without decoding
+  (`path` itself for a WAV, or this session's copy in `tmp/play`), else `null`: then ask `outputs.play`.
+- **App side:** once the engine is ready Speak and Redub each ask for their kind (`limit` 50) and fill their Results
+  panels; results finished this session go on top. "Show older" at the bottom (shown while `more`) asks with
+  `before`. A legacy entry shows its file name as the title (and, on Redub, "Redubbed" for its unknown mode). After an
+  engine restart the list is asked again and merged by file name.
+
+### `outputs.play` (a WAV to play a saved result)
+`{"path":"<absolute path>"}` -> `{"path","path_play"}`
+- Like `book.play` for a Speak / Redub result: `path_play` is `path` itself for a WAV, else a decoded copy (16-bit,
+  44.1 kHz, the file's channels) in `<data>/tmp/play/<stem>.wav`, made once and reused for the rest of the session
+  (tmp is emptied at every engine start). A video path plays its first audio track.
+- `path` must be absolute and inside `<data>/outputs` (resolved through symlinks) else `bad_request`; a missing file
+  is `not_found`; an undecodable one `bad_request` / `internal`.
+- **App side:** the play button of a take and Redub's "Result" ask for it when their play path is not a WAV on disk
+  (a result from an earlier session, or after an engine restart), then play the answer and keep it for the card.
 
 ### `outputs.delete` (delete a saved result)
 `{"path":"<absolute path>","path_play"?:"<absolute path>"}` -> `{"deleted":["<absolute path>", ...]}`
@@ -697,7 +740,8 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   anything is removed, so one path outside those folders, a relative path or a folder refuses the whole request with
   `bad_request` and deletes nothing.
 - Files in `<data>/outputs` with the same name as `path` and another extension go too: they belong to the same result
-  (a Redub of a video saves `redub_<stamp>.<audio ext>` and `redub_<stamp>.<video ext>` side by side).
+  (a Redub of a video saves `redub_<stamp>.<audio ext>` and `redub_<stamp>.<video ext>` side by side), and so does
+  its sidecar `<stamp>.result.json`.
 - A file that is already gone is not an error (it is simply not listed in `deleted`). A file that cannot be removed
   (permissions, held open by another program on Windows) is `internal` with the reason.
 - **App side:** the trash button on a Speak take card and on a Redub Results row asks "Delete this result?" inline,
@@ -1219,7 +1263,9 @@ importable format, also video) and convert it themselves: the app never has to.
 ### `redub.render`
 `{"voice_id","path","mode":"convert|respeak","segments"?:[{"start","end","text"}],"language"?:"uk","translated"?:false,
 "voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"timing"?:"keep","output_format"?:"wav",
-"output"?:"audio","keep_background"?:false}` -> `{"job"}`
+"output"?:"audio","keep_background"?:false,"result_mode"?:"dub"}` -> `{"job"}`
+- `result_mode: "dub"` (with `respeak`) only changes what the result's sidecar records: the finish of a reviewed
+  Translate & dub is a respeak the app lists as a dub.
 - `convert`: the voice's RVC model is run over the **whole source** (voice, noise and music alike) in chunks of about
   15-30 s cut at the quietest point (a pause), then joined. With `output:"video"` or `keep_background:true` it runs
   over the **separated voice** instead and the background is mixed back in (or left out), see

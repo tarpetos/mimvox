@@ -26,6 +26,9 @@
 //! whole book with these same Style settings. While a book is being read, Generate waits (the book holds the engine's
 //! generation slot).
 //!
+//! The Results list survives restarts: once the engine is ready it is filled from `outputs.list` (see `ui::history`),
+//! and a result from an earlier session plays through `outputs.play`.
+//!
 //! Playback is pre-buffered: a single-segment job plays at once; for longer text the finished segments are held
 //! back until, by the engine's real-time factor, the segments still to come will arrive before the buffered audio
 //! runs out (see [`can_start`]). So it starts as early as it can without ever stuttering, and never later than
@@ -48,19 +51,33 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// One finished generation in the history list (newest first).
+/// One finished generation in the history list (newest first): made this session, or loaded with `outputs.list`.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct Take {
     pub id: u64,
+    /// The text spoken (a result saved before sidecars: its file name).
     pub text: String,
     pub voice: String,
     /// The saved file (`<data>/outputs`, in the chosen format): Show in folder, Open file, Export.
     pub path: PathBuf,
-    /// A WAV of it to play (the saved file itself when that is a WAV).
+    /// A WAV of it to play (the saved file itself when that is a WAV). A loaded result in another format has none
+    /// until its play button asks the engine for one (`outputs.play`; this is the saved file meanwhile).
     pub play: PathBuf,
     pub duration_s: f32,
-    pub elapsed_s: f32,
+    /// `None` for a result saved before sidecars.
+    pub elapsed_s: Option<f32>,
+    /// Unix time it was saved (the list's order).
+    pub created: f64,
+}
+
+impl Take {
+    /// A result from `outputs.list`.
+    pub fn from_entry(id: u64, e: protocol::OutputEntry) -> Take {
+        let text = e.text.filter(|t| !t.trim().is_empty() && !e.legacy).unwrap_or_else(|| e.name.clone());
+        let play = e.path_play.filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| e.path.clone());
+        Take { id, text, voice: e.voice_name.unwrap_or_default(), path: e.path, play, duration_s: e.duration_s.unwrap_or(0.0), elapsed_s: e.elapsed_s, created: e.created }
+    }
 }
 
 /// A generation in flight.
@@ -219,6 +236,12 @@ impl SpeakState {
     pub fn is_generating(&self) -> bool {
         matches!(self.gen_, Gen::Active(_))
     }
+
+    /// The id of a new take card.
+    pub fn new_take_id(&mut self) -> u64 {
+        self.next_take += 1;
+        self.next_take
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -364,8 +387,14 @@ pub fn cancel(s: &mut AppState) {
     s.speak.gen_ = Gen::Idle;
 }
 
-/// A take's play button: play it, or pause / resume it in the player bar.
-fn toggle_take(s: &mut AppState, id: u64) {
+/// A take's play button: play it, or pause / resume it in the player bar. A result without a WAV to play (from an
+/// earlier session, saved in another format) first gets one from the engine (`ui::history`), which then comes back here.
+pub(crate) fn toggle_take(s: &mut AppState, id: u64) {
+    let Some(t) = s.speak.takes.iter().find(|t| t.id == id) else { return };
+    let (file, play) = (t.path.clone(), t.play.clone());
+    if super::history::fetch_play(s, trash::Kind::Speak, id, &file, &play) {
+        return;
+    }
     let Some(t) = s.speak.takes.iter().find(|t| t.id == id) else { return };
     let (path, title) = (t.play.clone(), one_line(&t.text));
     if let Err(e) = playbar::toggle(s, &path, title, "Speak · result", playbar::Source::Speak) {
@@ -440,20 +469,19 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             EngineEvent::TtsDone { done, .. } => {
                 flush_held(s, &mut a);
                 let play = done.play_path();
-                s.speak.next_take += 1;
                 let take = Take {
-                    id: s.speak.next_take,
+                    id: s.speak.new_take_id(),
                     text: a.text.clone(),
                     voice: a.voice.clone(),
                     path: done.path.clone(),
                     play,
                     duration_s: done.duration_s,
-                    elapsed_s: if ev.data.get("elapsed_s").is_some() { done.elapsed_s } else { (s.shell.now - a.started) as f32 },
+                    elapsed_s: Some(if ev.data.get("elapsed_s").is_some() { done.elapsed_s } else { (s.shell.now - a.started) as f32 }),
+                    created: super::history::now_unix(),
                 };
                 // What streamed is this take now: the player bar names it and its card shows it playing.
                 playbar::finish_live(s, Some((&take.play, one_line(&take.text))));
                 s.speak.takes.insert(0, take);
-                s.speak.takes.truncate(50);
                 s.speak.gen_ = Gen::Idle;
                 // A clip transcribed for the first time by this job: its language is known only now.
                 note_reference(s, &a.voice_id, &a.lang, &done.reference);
@@ -932,20 +960,22 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     c
 }
 
-/// The right end of a Results header (Speak and Redub): the count badge, when there are results, and the "Save as"
-/// chip. Pinned beside the title, so the header is as tall as Style's.
-pub(crate) fn results_head(s: &AppState, p: Palette, count: usize, chip_key: &str) -> El {
+/// The right end of a Results header (Speak and Redub): the count badge, when there are results ("50+" while older
+/// ones are not loaded yet), and the "Save as" chip. Pinned beside the title, so the header is as tall as Style's.
+pub(crate) fn results_head(s: &AppState, p: Palette, count: usize, more: bool, chip_key: &str) -> El {
     row().key(format!("{chip_key}-head")).pin(None, Some(16.5), Some(22.0), None).gap(8.0).center_y()
-        .children((count > 0).then(|| badge(p, &format!("{count}"), Tone::Neutral)))
+        .children((count > 0).then(|| badge(p, &format!("{count}{}", if more { "+" } else { "" }), Tone::Neutral)))
         .child(super::formats::output_chip(s, p, chip_key))
 }
 
 fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
-    let head = results_head(s, p, s.speak.takes.len(), "speak-outfmt");
+    let more = super::history::has_older(s, trash::Kind::Speak);
+    let head = results_head(s, p, s.speak.takes.len(), more, "speak-outfmt");
     let body = if s.speak.takes.is_empty() {
         col().key("takes-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here."))
     } else {
-        let list = col().w_full().gap(8.0).children(s.speak.takes.iter().map(|t| take_row(s, p, t)));
+        let list = col().w_full().gap(8.0).children(s.speak.takes.iter().map(|t| take_row(s, p, t)))
+            .children(more.then(|| super::history::older_button(s, p, trash::Kind::Speak)));
         if own_scroll {
             col().key("takes").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(list)
         } else {
@@ -984,7 +1014,10 @@ fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
             shell::toast(s, Tone::Danger, e);
         }
     });
-    let meta = format!("{} · made in {:.1} s", fmt_time(t.duration_s), t.elapsed_s);
+    let meta = match t.elapsed_s {
+        Some(e) => format!("{} · made in {:.1} s", fmt_time(t.duration_s), e),
+        None => fmt_time(t.duration_s),
+    };
     let export = super::formats::export_button(p, format!("export-take{id}"), &t.path, &t.play, true);
     glass_card(p).key(format!("take{id}")).w_full().padding(10.0).gap(10.0)
         .child(row().w_full().gap(10.0).center_y()
@@ -1017,7 +1050,7 @@ fn demo_voice(s: &mut AppState, trained: bool) {
 }
 
 fn demo_takes(s: &mut AppState) {
-    let mk = |id, text: &str, d, e| Take { id, text: text.into(), voice: "My voice".into(), path: format!("/tmp/out{id}.wav").into(), play: format!("/tmp/out{id}.wav").into(), duration_s: d, elapsed_s: e };
+    let mk = |id, text: &str, d, e| Take { id, text: text.into(), voice: "My voice".into(), path: format!("/tmp/out{id}.wav").into(), play: format!("/tmp/out{id}.wav").into(), duration_s: d, elapsed_s: Some(e), created: 0.0 };
     s.speak.takes = vec![
         mk(3, "Welcome back. In a few seconds this paragraph will be read in my own voice.\n\nA second paragraph follows after an empty line, and a third one after it.\n\nThat is all.", 14.2, 9.1),
         mk(2, "The quick brown fox jumps over the lazy dog.", 3.8, 2.6),
@@ -1051,6 +1084,39 @@ fn demo_voice_uk(s: &mut AppState, trained: bool) {
     }
     s.speak.languages.insert("me".into(), "en".into());
     s.speak.text = TextEdit::new(SAMPLE);
+}
+
+/// After a restart: Results loaded with `outputs.list` (as the engine answers it) under a take made this session, a
+/// result from before sidecars (its file name as the title), and "Show older" at the bottom.
+pub fn scene_history(s: &mut AppState) {
+    demo_voice(s, true);
+    let id = s.speak.new_take_id();
+    s.speak.takes.push(Take {
+        id,
+        text: "Good morning! This one was made just now, after the restart.".into(),
+        voice: "My voice".into(),
+        path: "/data/outputs/20261113_150102.mp3".into(),
+        play: "/data/tmp/play/20261113_150102.wav".into(),
+        duration_s: 4.2,
+        elapsed_s: Some(3.1),
+        created: 1_794_582_062.0,
+    });
+    let page = json!({ "more": true, "results": [
+        { "id": "20261113_141500", "kind": "speak", "legacy": false, "name": "20261113_141500.mp3", "created": 1_794_578_900.5,
+          "path": "/data/outputs/20261113_141500.mp3", "path_play": null, "video_path": null, "duration_s": 14.2, "elapsed_s": 9.1,
+          "format": "mp3", "voice_id": "me", "voice_name": "My voice", "language": "en", "accent": "own",
+          "text": "Welcome back. In a few seconds this paragraph will be read in my own voice.\n\nA second paragraph follows." },
+        { "id": "20261113_101010", "kind": "speak", "legacy": false, "name": "20261113_101010.wav", "created": 1_794_564_610.0,
+          "path": "/data/outputs/20261113_101010.wav", "path_play": "/data/outputs/20261113_101010.wav", "video_path": null,
+          "duration_s": 3.8, "elapsed_s": 2.6, "format": "wav", "voice_id": "me", "voice_name": "My voice", "language": "uk",
+          "text": "Привіт! Це перевірка мого голосу." },
+        { "id": "20261112_193613", "kind": "speak", "legacy": true, "name": "20261112_193613.mp3", "created": 1_794_512_173.0,
+          "path": "/data/outputs/20261112_193613.mp3", "path_play": null, "video_path": null, "duration_s": 81.37, "elapsed_s": null, "format": "mp3" },
+        { "id": "20261112_182807", "kind": "speak", "legacy": true, "name": "20261112_182807.mp3", "created": 1_794_508_087.0,
+          "path": "/data/outputs/20261112_182807.mp3", "path_play": null, "video_path": null, "duration_s": 81.41, "elapsed_s": null, "format": "mp3" }
+    ]});
+    let page: protocol::OutputsPage = serde_json::from_value(page).expect("scene page");
+    super::history::scene_page(s, trash::Kind::Speak, page.results, page.more);
 }
 
 pub fn scene_accent_native(s: &mut AppState) {

@@ -11,6 +11,7 @@ pub mod caption;
 pub mod components;
 pub mod events;
 pub mod formats;
+pub mod history;
 pub mod lang;
 pub mod onboarding;
 pub mod playbar;
@@ -71,6 +72,7 @@ pub const SCENES: &[(&str, fn(&mut AppState))] = &[
     ("speak_buffering", speak::scene_buffering),
     ("speak_preparing", speak::scene_preparing),
     ("speak_done", speak::scene_done),
+    ("speak_history", speak::scene_history),
     ("speak_trash_confirm", speak::scene_trash_confirm),
     ("speak_toast_long", speak::scene_toast_long),
     ("speak_export_menu", speak::scene_export_menu),

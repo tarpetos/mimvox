@@ -417,6 +417,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     changed |= super::speak::settle(s);
     changed |= super::book::settle(s);
     changed |= super::redub::settle(s);
+    changed |= super::history::settle(s);
     changed |= super::formats::settle(s);
     if super::train::take_quit(s, tx) {
         return true;
@@ -482,6 +483,7 @@ fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     super::redub::on_engine(s, &m);
     super::formats::on_engine(s, &m);
     super::trash::on_engine(s, &m);
+    super::history::on_engine(s, &m);
 }
 
 /// The shell's own share of engine messages: engine status, the voice list and voice warm-up.

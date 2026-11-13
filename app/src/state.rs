@@ -50,6 +50,8 @@ pub struct AppState {
     pub playbar: crate::ui::playbar::PlaybarState,
     /// Deleting saved results (see `ui::trash`).
     pub trash: crate::ui::trash::TrashState,
+    /// Speak's and Redub's Results from earlier sessions (see `ui::history`).
+    pub history: crate::ui::history::HistoryState,
 }
 
 impl Default for AppState {
@@ -75,6 +77,7 @@ impl Default for AppState {
             langpick: Default::default(),
             playbar: Default::default(),
             trash: Default::default(),
+            history: Default::default(),
         }
     }
 }

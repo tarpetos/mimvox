@@ -1401,3 +1401,81 @@ pub fn book_id_request(method: &'static str, id: &str) -> Request {
 pub fn book_play(id: &str, index: u32) -> Request {
     ("book.play", json!({ "id": id, "index": index }))
 }
+
+// ---- saved results (outputs.list / outputs.play) ----
+
+/// One saved Speak or Redub result (`outputs.list`), from its sidecar (`<stem>.result.json`) or, for a result saved
+/// before sidecars (`legacy`), from the file alone: then only `name`, `created`, `duration_s`, `format` and the paths
+/// are known.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct OutputEntry {
+    /// The file stem, unique in the outputs folder.
+    pub id: String,
+    /// `speak` | `redub`.
+    pub kind: String,
+    #[serde(default)]
+    pub legacy: bool,
+    /// The saved file's name (what a legacy entry shows as its title).
+    #[serde(default)]
+    pub name: String,
+    /// Unix time in seconds; the list is sorted by it, newest first (`before` pages by it).
+    #[serde(default)]
+    pub created: f64,
+    pub path: PathBuf,
+    /// A WAV that plays it now (the file itself, or this session's copy in `<data>/tmp/play`); `None` until
+    /// `outputs.play` makes one.
+    #[serde(default)]
+    pub path_play: Option<PathBuf>,
+    #[serde(default)]
+    pub video_path: Option<PathBuf>,
+    #[serde(default)]
+    pub duration_s: Option<f32>,
+    #[serde(default)]
+    pub elapsed_s: Option<f32>,
+    #[serde(default)]
+    pub format: String,
+    #[serde(default)]
+    pub voice_id: Option<String>,
+    #[serde(default)]
+    pub voice_name: Option<String>,
+    /// Speak: the whole text.
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// Redub: `dub` | `convert` | `respeak`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub source_name: Option<String>,
+    /// Redub: the language a dub was spoken in.
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+/// The answer of `outputs.list`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct OutputsPage {
+    #[serde(default)]
+    pub results: Vec<OutputEntry>,
+    /// Older results exist (ask again with `before` = the last entry's `created`).
+    #[serde(default)]
+    pub more: bool,
+}
+
+/// `outputs.list`: the saved results of `kind` (`speak` | `redub`), newest first, `limit` of them, older than
+/// `before` (a `created`) when given.
+pub fn outputs_list(kind: &str, limit: u32, before: Option<f64>) -> Request {
+    let mut params = json!({ "kind": kind, "limit": limit });
+    if let Some(b) = before {
+        params["before"] = json!(b);
+    }
+    ("outputs.list", params)
+}
+
+/// `outputs.play`: a WAV to play a saved result with (`{path, path_play}`).
+pub fn outputs_play(path: &std::path::Path) -> Request {
+    ("outputs.play", json!({ "path": path }))
+}

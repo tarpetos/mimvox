@@ -503,7 +503,11 @@ Each finished phrase appears under **Results** with its length and how long it t
   message says so and the result stays in the list.
 
 Every result is also saved automatically as one file in the `outputs` folder of your data folder
-(`outputs/<date>_<time>.wav`). The Results list itself shows the phrases made since the app was started.
+(`outputs/<date>_<time>.wav`), with a small `<date>_<time>.result.json` next to it that remembers the text, the voice
+and the settings. So the Results list survives a restart: when the app starts it shows your latest 50 results, newest
+first, and **Show older** at the bottom of the list loads more. Results saved by an older version of the app (without
+that file) appear with their file name as the title and without "made in". After a restart a result saved as MP3 (or
+any format other than WAV) takes a moment to start the first time you play it: the app makes a playback copy first.
 
 **Save as** (the chip next to the Results title, "Save as WAV" at first) chooses the format of that file: WAV, MP3,
 FLAC, OGG, Opus, M4A or AIFF, each with a one-line description. The choice is remembered and shared with Redub, and
@@ -802,6 +806,9 @@ it.
   in `outputs` and its playback copy are removed and the row leaves the list. The original file you dropped is never
   touched.
 - **Original** and **Result** play in the [player bar](#the-player-bar); press one again to pause it.
+- The Results list survives a restart, as on Speak: your latest 50 redubs, **Show older** for more. **Original** plays
+  only for redubs made since the app started (the original file is not kept). A redub saved by an older version of
+  the app shows its file name and "Redubbed".
 
 Redub uses the GPU like Speak: only one job runs at a time, and Redub is unavailable while a voice trains.
 
@@ -870,7 +877,8 @@ Everything the app makes lives in one folder (the one you chose during setup; se
       reference_media.wav        optional combined media for "Reference from media"
       dataset/part1.wav ...      your recorded parts
       rvc/model.pth, model.index the trained voice model (after training)
-  outputs/                       every generated phrase and redub, one file each (WAV unless "Save as" says otherwise)
+  outputs/                       every generated phrase and redub, one file each (WAV unless "Save as" says otherwise),
+                                 each with a <name>.result.json that lets the Results lists come back after a restart
   logs/engine.log                the engine log
   tmp/                           scratch files, emptied at every engine start
   settings.json                  your app settings (microphone, last choices, "Save as" format, "Remove background music")

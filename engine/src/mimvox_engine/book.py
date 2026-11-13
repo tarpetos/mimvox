@@ -534,18 +534,7 @@ def _playable(data: config.DataDir, bid: str, k: int, path: str) -> str:
     dst = os.path.join(data.tmp, media.PLAY_DIR, f"book-{bid}-{k + 1:03d}.wav")
     if os.path.isfile(dst) and os.path.getmtime(dst) >= os.path.getmtime(path):
         return dst
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    exe = media.ffmpeg_path()
-    if exe:  # streams: a long chapter never sits in memory
-        part = f"{dst}.part.wav"
-        res = media._run([exe, "-nostdin", "-v", "error", "-y", "-i", path, "-vn", "-ac", "1", "-ar", str(SR),
-                          "-c:a", "pcm_s16le", part])
-        if res.returncode != 0 or not os.path.isfile(part):
-            raise EngineError("internal", f"could not decode the chapter ({media._tail(res.stderr)})")
-        os.replace(part, dst)
-    else:
-        media.decode_to_wav(path, dst, SR)
-    return dst
+    return media.play_wav(path, dst, SR, channels=1)  # streams: a long chapter never sits in memory
 
 
 # ------------------------------------------------------------------------------------------- the job

@@ -28,8 +28,9 @@
 //!
 //! The file comes from a drop anywhere on the window (see `formats::window_drops`) or "Choose file..." (rfd on its
 //! own thread). The voice is the header's active voice; Voice match, Expressiveness and Quality are the Speak
-//! screen's own controls and state. Results land in a session history with A/B playback and the shared
-//! "Export as..." control. Requests and events follow `contract/engine-protocol.md` (`redub.*`).
+//! screen's own controls and state. Results land in the history with A/B playback and the shared "Export as..."
+//! control; it survives restarts (filled from `outputs.list` once the engine is ready, see `ui::history`; "Original"
+//! plays only for this session's results). Requests and events follow `contract/engine-protocol.md` (`redub.*`).
 
 use super::components::{
     Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel, segmented_help, status_dot, well,
@@ -160,26 +161,58 @@ enum Job {
     Rendering { run: Run, mode: RedubMode, source: String, voice: String },
 }
 
-/// One finished redub in the session history (newest first).
+/// One finished redub in the history (newest first): made this session, or loaded with `outputs.list`.
 #[derive(Clone, Debug)]
 pub struct Redub {
     pub id: u64,
+    /// The source file's name (a result saved before sidecars: its own file name).
     pub name: String,
     pub voice: String,
-    pub mode: RedubMode,
+    /// `None` for a result saved before sidecars (the mode was not recorded).
+    pub mode: Option<RedubMode>,
     /// The saved file (`<data>/outputs`, in the chosen format): Show in folder, Open file, Export.
     pub path: PathBuf,
-    /// A WAV of it to play ("Result"; the saved file itself when that is a WAV).
+    /// A WAV of it to play ("Result"; the saved file itself when that is a WAV). A loaded result in another format
+    /// has none until "Result" asks the engine for one (`outputs.play`; this is the saved file meanwhile).
     pub play: PathBuf,
+    /// The original's playback WAV ("Original"; this session only).
     pub preview: Option<PathBuf>,
     pub duration_s: f32,
-    pub elapsed_s: f32,
+    /// `None` for a result saved before sidecars.
+    pub elapsed_s: Option<f32>,
     /// Seconds the spoken result ran past the original (a dub only; `None` when it did not).
     pub drift_s: Option<f32>,
     /// The language a dub was spoken in.
     pub to: Option<String>,
     /// The video with the new voice (a video output), next to `path`.
     pub video: Option<PathBuf>,
+    /// Unix time it was saved (the list's order).
+    pub created: f64,
+}
+
+impl Redub {
+    /// A result from `outputs.list`.
+    pub fn from_entry(id: u64, e: protocol::OutputEntry) -> Redub {
+        let name = e.source_name.filter(|n| !n.trim().is_empty() && !e.legacy).unwrap_or_else(|| e.name.clone());
+        let mode = e.mode.as_deref().and_then(mode_from_key);
+        let play = e.path_play.filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| e.path.clone());
+        let to = e.to.filter(|l| !l.is_empty() && mode == Some(RedubMode::Dub));
+        Redub {
+            id,
+            name,
+            voice: e.voice_name.unwrap_or_default(),
+            mode,
+            path: e.path,
+            play,
+            preview: None,
+            duration_s: e.duration_s.unwrap_or(0.0),
+            elapsed_s: e.elapsed_s,
+            drift_s: None,
+            to,
+            video: e.video_path.filter(|v| !v.as_os_str().is_empty()),
+            created: e.created,
+        }
+    }
 }
 
 pub struct RedubState {
@@ -254,6 +287,12 @@ impl Default for RedubState {
 }
 
 impl RedubState {
+    /// The id of a new history row.
+    pub fn new_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
     /// A transcription or render is running.
     pub fn busy(&self) -> bool {
         !matches!(self.job, Job::Idle)
@@ -680,7 +719,7 @@ fn start_render(s: &mut AppState) {
         RedubMode::Respeak => respeak_lang(&s.redub).and_then(|l| speak::accent_param(s, &l)),
         RedubMode::Convert => None,
     };
-    let (method, params) = protocol::redub_render(
+    let (method, mut params) = protocol::redub_render(
         &voice.id,
         &src.path,
         wire,
@@ -695,6 +734,9 @@ fn start_render(s: &mut AppState) {
         timing(&s.redub),
         output(&s.redub),
     );
+    if mode == RedubMode::Dub {
+        params["result_mode"] = json!("dub"); // the saved result is recorded as a dub (`outputs.list`)
+    }
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
         return;
@@ -721,6 +763,20 @@ fn cancel(s: &mut AppState) {
 
 fn remove_segment(s: &mut AppState, key: u64) {
     s.redub.segments.retain(|g| g.key != key);
+}
+
+/// "Result" of a history row or the result card: play it, or pause / resume it. A result without a WAV to play (from
+/// an earlier session, saved in another format) first gets one from the engine (`ui::history`), which then comes back
+/// here.
+pub(crate) fn play_result(s: &mut AppState, id: u64) {
+    let Some(r) = s.redub.history.iter().find(|r| r.id == id) else { return };
+    let (file, play) = (r.path.clone(), r.play.clone());
+    if super::history::fetch_play(s, trash::Kind::Redub, id, &file, &play) {
+        return;
+    }
+    let Some(r) = s.redub.history.iter().find(|r| r.id == id) else { return };
+    let (path, name) = (r.play.clone(), r.name.clone());
+    toggle_play(s, &path, name, "Redub · result");
 }
 
 /// A play button (the original, a result): play it, or pause / resume it in the player bar.
@@ -937,11 +993,10 @@ fn on_done(s: &mut AppState, done: RedubDone) {
     let video = done.video_path.clone().filter(|v| !v.as_os_str().is_empty());
     let (path, play) = (done.path.clone(), done.play_path());
     let preview = s.redub.file.as_ref().filter(|f| f.name == source).and_then(Source::preview);
-    s.redub.next_id += 1;
-    let id = s.redub.next_id;
+    let id = s.redub.new_id();
     let elapsed = if done.elapsed_s > 0.0 { done.elapsed_s } else { (s.shell.now - run.started) as f32 };
-    s.redub.history.insert(0, Redub { id, name: source, voice, mode, path, play, preview, duration_s: done.duration_s, elapsed_s: elapsed, drift_s: done.drift_s.filter(|d| d.abs() >= 0.5), to, video });
-    s.redub.history.truncate(50);
+    let created = super::history::now_unix();
+    s.redub.history.insert(0, Redub { id, name: source, voice, mode: Some(mode), path, play, preview, duration_s: done.duration_s, elapsed_s: Some(elapsed), drift_s: done.drift_s.filter(|d| d.abs() >= 0.5), to, video, created });
     s.redub.result = Some(id);
 }
 
@@ -1490,6 +1545,7 @@ fn ab_buttons(s: &AppState, p: Palette, r: &Redub, tag: &str) -> El {
         }
         let (name, what) = (r.name.clone(), if lead { "Redub · result" } else { "Redub · original" });
         match path {
+            Some(_) if lead => b.on_press(move |s| play_result(s, id)).build(p),
             Some(path) => b.on_press(move |s| toggle_play(s, &path, name.clone(), what)).build(p),
             None => b.disabled(true).build(p),
         }
@@ -1499,12 +1555,13 @@ fn ab_buttons(s: &AppState, p: Palette, r: &Redub, tag: &str) -> El {
         .child(mk("Result", format!("ab-res-{tag}{id}"), Some(r.play.clone()), true))
 }
 
-/// "dubbed to Ukrainian", "converted" or "re-spoken".
+/// "dubbed to Ukrainian", "converted" or "re-spoken" ("redubbed" when not recorded).
 fn mode_past(r: &Redub) -> String {
     match r.mode {
-        RedubMode::Dub => format!("dubbed to {}", lang_name(r.to.as_deref().unwrap_or("en"))),
-        RedubMode::Convert => "converted".to_owned(),
-        RedubMode::Respeak => "re-spoken".to_owned(),
+        Some(RedubMode::Dub) => format!("dubbed to {}", lang_name(r.to.as_deref().unwrap_or("en"))),
+        Some(RedubMode::Convert) => "converted".to_owned(),
+        Some(RedubMode::Respeak) => "re-spoken".to_owned(),
+        None => "redubbed".to_owned(),
     }
 }
 
@@ -1515,7 +1572,8 @@ fn capitalize(s: &str) -> String {
 
 fn result_card(s: &AppState, p: Palette, r: &Redub) -> El {
     let (reveal, open) = open_reveal(p, r.id, "main", r);
-    let mut meta = format!("{} · made in {:.1} s · {}", fmt_time(r.duration_s), r.elapsed_s, mode_past(r));
+    let made = r.elapsed_s.map(|e| format!(" · made in {e:.1} s")).unwrap_or_default();
+    let mut meta = format!("{}{made} · {}", fmt_time(r.duration_s), mode_past(r));
     if let Some(d) = r.drift_s {
         meta = format!("{meta} · {d:.1} s longer than the original");
     }
@@ -1607,11 +1665,13 @@ fn action_bar(s: &AppState, p: Palette) -> El {
 
 fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let h = &s.redub.history;
-    let head = speak::results_head(s, p, h.len(), "redub-outfmt");
+    let more = super::history::has_older(s, trash::Kind::Redub);
+    let head = speak::results_head(s, p, h.len(), more, "redub-outfmt");
     let body = if h.is_empty() {
-        col().key("redubs-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &ICON, "No redubs yet", "Finished redubs from this session appear here."))
+        col().key("redubs-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &ICON, "No redubs yet", "Finished redubs appear here."))
     } else {
-        let list = col().w_full().gap(8.0).children(h.iter().map(|r| history_row(s, p, r)));
+        let list = col().w_full().gap(8.0).children(h.iter().map(|r| history_row(s, p, r)))
+            .children(more.then(|| super::history::older_button(s, p, trash::Kind::Redub)));
         if own_scroll {
             col().key("redubs").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(list)
         } else {
@@ -1623,13 +1683,19 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
 
 fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
     let (reveal, open) = open_reveal(p, r.id, "h", r);
-    let meta = format!("{} · {} · {:.0} s", capitalize(&mode_past(r)), fmt_time(r.duration_s), r.elapsed_s);
+    let mut meta = format!("{} · {}", capitalize(&mode_past(r)), fmt_time(r.duration_s));
+    if let Some(e) = r.elapsed_s {
+        meta = format!("{meta} · {e:.0} s");
+    }
+    if !r.voice.is_empty() {
+        meta = format!("{meta} · {}", r.voice);
+    }
     glass_card(p).key(format!("redub{}", r.id)).w_full().padding(10.0).gap(8.0)
         .child(col().w_full().gap(1.0)
             .child(row().w_full().gap(8.0).center_y()
                 .child(text(r.name.clone()).font(ty::LABEL).color(p.text).truncate().grow(1.0).min_w(0.0))
                 .children(r.video.is_some().then(|| badge(p, "Video", Tone::Accent))))
-            .child(text(format!("{meta} · {}", r.voice)).font(ty::CAPTION).color(p.text_faint).truncate()))
+            .child(text(meta).font(ty::CAPTION).color(p.text_faint).truncate()))
         .child(ab_buttons(s, p, r, "h"))
         .child(if trash::confirming(s, trash::Kind::Redub, r.id) {
             trash::confirm_row(s, p, trash::Kind::Redub, r.id, &r.path, &r.play)
@@ -1704,7 +1770,7 @@ fn demo_segments(s: &mut AppState) {
 }
 
 fn demo_history(s: &mut AppState) {
-    let mk = |id, name: &str, mode, d, e| Redub { id, name: name.into(), voice: "My voice".into(), mode, path: format!("/tmp/redub{id}.wav").into(), play: format!("/tmp/redub{id}.wav").into(), preview: Some(format!("/tmp/orig{id}.wav").into()), duration_s: d, elapsed_s: e, drift_s: None, to: None, video: None };
+    let mk = |id, name: &str, mode, d, e| Redub { id, name: name.into(), voice: "My voice".into(), mode: Some(mode), path: format!("/tmp/redub{id}.wav").into(), play: format!("/tmp/redub{id}.wav").into(), preview: Some(format!("/tmp/orig{id}.wav").into()), duration_s: d, elapsed_s: Some(e), drift_s: None, to: None, video: None, created: 0.0 };
     s.redub.history = vec![
         mk(2, "podcast-intro.wav", RedubMode::Respeak, 48.0, 31.0),
         mk(1, "interview-take-1.mp3", RedubMode::Convert, 161.0, 74.0),
@@ -1719,6 +1785,30 @@ fn scene_empty(s: &mut AppState) {
 fn scene_file(s: &mut AppState) {
     demo(s, true);
     demo_file(s);
+}
+
+/// After a restart: the history loaded with `outputs.list` (as the engine answers it), a result from before sidecars
+/// (its file name, no mode) among them, and "Show older" at the bottom.
+fn scene_history(s: &mut AppState) {
+    demo(s, true);
+    let page = serde_json::json!({ "more": true, "results": [
+        { "id": "redub_20261113_140210", "kind": "redub", "legacy": false, "name": "redub_20261113_140210.mp3", "created": 1_794_578_530.2,
+          "path": "/data/outputs/redub_20261113_140210.mp3", "path_play": null, "video_path": "/data/outputs/redub_20261113_140210.mp4",
+          "duration_s": 119.4, "elapsed_s": 88.0, "format": "mp3", "voice_id": "me", "voice_name": "My voice", "mode": "dub",
+          "source_name": "game-tour.mp4", "language": "uk", "to": "en", "accent": "native-us" },
+        { "id": "redub_20261113_120501", "kind": "redub", "legacy": false, "name": "redub_20261113_120501.wav", "created": 1_794_571_501.0,
+          "path": "/data/outputs/redub_20261113_120501.wav", "path_play": "/data/outputs/redub_20261113_120501.wav", "video_path": null,
+          "duration_s": 161.0, "elapsed_s": 70.2, "format": "wav", "voice_id": "me", "voice_name": "My voice", "mode": "convert",
+          "source_name": "interview-take-1.mp3" },
+        { "id": "redub_20261113_013139", "kind": "redub", "legacy": true, "name": "redub_20261113_013139.mp3", "created": 1_794_533_499.0,
+          "path": "/data/outputs/redub_20261113_013139.mp3", "path_play": null, "video_path": "/data/outputs/redub_20261113_013139.mp4",
+          "duration_s": 119.403, "elapsed_s": null, "format": "mp3" },
+        { "id": "redub_20261112_194055", "kind": "redub", "legacy": true, "name": "redub_20261112_194055.mp3", "created": 1_794_512_455.0,
+          "path": "/data/outputs/redub_20261112_194055.mp3", "path_play": null, "video_path": null,
+          "duration_s": 29.274, "elapsed_s": null, "format": "mp3" }
+    ]});
+    let page: protocol::OutputsPage = serde_json::from_value(page).expect("scene page");
+    super::history::scene_page(s, trash::Kind::Redub, page.results, page.more);
 }
 
 fn scene_transcribing(s: &mut AppState) {
@@ -1760,7 +1850,7 @@ fn scene_done(s: &mut AppState) {
     demo_file(s);
     s.redub.mode = RedubMode::Convert;
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Convert, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 161.0, elapsed_s: 68.4, drift_s: None, to: None, video: None });
+    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: Some(RedubMode::Convert), path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 161.0, elapsed_s: Some(68.4), drift_s: None, to: None, video: None, created: 0.0 });
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1888,15 +1978,16 @@ fn scene_dub_done_video(s: &mut AppState) {
         id: 3,
         name: "game-tour.mp4".into(),
         voice: "My voice".into(),
-        mode: RedubMode::Dub,
+        mode: Some(RedubMode::Dub),
         path: "/tmp/redub3.mp3".into(),
         play: "/tmp/redub3.wav".into(),
         preview: Some("/tmp/game-tour-preview.wav".into()),
         duration_s: 119.4,
-        elapsed_s: 96.0,
+        elapsed_s: Some(96.0),
         drift_s: None,
         to: Some("en".into()),
         video: Some("/tmp/redub3.mp4".into()),
+        created: 0.0,
     });
     s.redub.next_id = 3;
     s.redub.result = Some(3);
@@ -1949,7 +2040,7 @@ fn scene_dub_review(s: &mut AppState) {
 fn scene_dub_done(s: &mut AppState) {
     demo_dub_file(s);
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 163.2, elapsed_s: 92.0, drift_s: Some(2.2), to: Some("en".into()), video: None });
+    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: Some(RedubMode::Dub), path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 163.2, elapsed_s: Some(92.0), drift_s: Some(2.2), to: Some("en".into()), video: None, created: 0.0 });
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1962,7 +2053,7 @@ fn scene_dub_to_uk(s: &mut AppState) {
     s.redub.from = "en".into();
     s.redub.to = "uk".into();
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "podcast-intro.wav".into(), voice: "My voice".into(), mode: RedubMode::Dub, path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/orig3.wav".into()), duration_s: 49.5, elapsed_s: 41.0, drift_s: None, to: Some("uk".into()), video: None });
+    s.redub.history.insert(0, Redub { id: 3, name: "podcast-intro.wav".into(), voice: "My voice".into(), mode: Some(RedubMode::Dub), path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/orig3.wav".into()), duration_s: 49.5, elapsed_s: Some(41.0), drift_s: None, to: Some("uk".into()), video: None, created: 0.0 });
     s.redub.next_id = 3;
 }
 
@@ -2095,6 +2186,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("redub_empty", scene_empty),
         ("redub_drop_hover", scene_drop_hover),
         ("redub_file", scene_file),
+        ("redub_history", scene_history),
         ("redub_transcribing", scene_transcribing),
         ("redub_transcript", scene_transcript),
         ("redub_rendering", scene_rendering),
