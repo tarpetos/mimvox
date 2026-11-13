@@ -96,10 +96,19 @@ if [ ! -x "$TARGET_DIR/release/$BIN_NAME" ]; then
     exit 1
 fi
 
+# cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
+# --binaries-dir points elsewhere, so a build into another CARGO_TARGET_DIR is copied there first.
+RELEASE_DIR="$TARGET_DIR/release"
+if [ "$(realpath "$RELEASE_DIR")" != "$(realpath -m "$APP_DIR/target/release")" ]; then
+    mkdir -p "$APP_DIR/target/release"
+    cp -f "$RELEASE_DIR/$BIN_NAME" "$APP_DIR/target/release/$BIN_NAME"
+    RELEASE_DIR="$APP_DIR/target/release"
+fi
+
 mkdir -p "$DIST_DIR"
 echo "[build-linux] Packaging ($FORMATS)..." >&2
 "${LOCK[@]}" cargo packager --config Packager.toml --formats "$FORMATS" \
-    --binaries-dir "$TARGET_DIR/release" --out-dir "$DIST_DIR"
+    --binaries-dir "$RELEASE_DIR" --out-dir "$DIST_DIR"
 
 echo "[build-linux] Done. Installers in $DIST_DIR:" >&2
 ls -lh "$DIST_DIR" | sed 's/^/  /' >&2

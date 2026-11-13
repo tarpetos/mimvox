@@ -103,6 +103,15 @@ if (-not (Test-Path (Join-Path $releaseDir "$binName.exe"))) {
     exit 1
 }
 
+# cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
+# --binaries-dir points elsewhere, so a build into another CARGO_TARGET_DIR is copied there first.
+$appRelease = Join-Path $appDir "target\release"
+if ((Resolve-Path $releaseDir).Path -ne (Join-Path (Resolve-Path $appDir).Path "target\release")) {
+    New-Item -ItemType Directory -Force -Path $appRelease | Out-Null
+    Copy-Item -Force (Join-Path $releaseDir "$binName.exe") (Join-Path $appRelease "$binName.exe")
+    $releaseDir = $appRelease
+}
+
 $formats = switch ($Format) { "nsis" { "nsis" } "msi" { "wix" } "both" { "nsis,wix" } }
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 Write-Host "[build-win] Packaging ($formats)..."

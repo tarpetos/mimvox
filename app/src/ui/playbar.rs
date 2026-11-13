@@ -355,7 +355,9 @@ pub fn view(s: &AppState, p: Palette) -> Option<El> {
         .child(text(speed_label(speed)).font(ty::NUM).color(if speed != 1.0 { p.accent } else { p.text }))
         .child(icon_el(&icons::CHEVRON_DOWN, 11.0, p.text_dim));
     let close = round_button(p, "pb-close", &icons::CLOSE, "Close the player", false, stop);
-    let bar = row().key("playbar").role("group").label("Player").w_full().h(BAR_H).pl(9.0).pr(10.0).gap(10.0).center_y()
+    // instant_changes: the position moves 20 times a second; animating each move with the layout springs kept the
+    // window redrawing (and its blurs) at the display's full rate for as long as anything played.
+    let bar = row().key("playbar").role("group").label("Player").instant_changes().w_full().h(BAR_H).pl(9.0).pr(10.0).gap(10.0).center_y()
         .radius(radius::PANEL + 4.0).continuous_corners()
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.9))
         .gradient(p.glass_top, p.glass_bottom)
