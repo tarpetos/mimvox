@@ -171,6 +171,132 @@ def uninstall_key(app_id: str) -> str:
 ENGINE_ENTRIES = ("runtime", "cache", "tmp", "runtime.toml")
 USER_ENTRIES = ("voices", "outputs", "books", "logs", "settings.json")
 
+# Setup and Uninstall: whether the app runs (its mutex), the timer that watches it, and Setup's window that waits for
+# the app to close (the same look as the uninstaller's: a red line, Continue disabled until the app is gone).
+RUNNING_CODE = r"""
+function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: Longword): Longword;
+  external 'SetTimer@user32.dll stdcall';
+function KillTimer(hWnd, nIDEvent: Longword): Bool;
+  external 'KillTimer@user32.dll stdcall';
+
+function AppRunning(): Boolean;
+begin
+  Result := CheckForMutexes('@MUTEX@');
+end;
+
+var
+  WaitForm: TSetupForm;
+  WaitContinue: TNewButton;
+  WaitNotice: TNewStaticText;
+  WaitAccepted: Boolean;
+
+{ Red while the app runs; once it is closed, a plain line and Continue enabled. }
+procedure ShowWaitState();
+begin
+  if AppRunning() then
+  begin
+    WaitNotice.Caption := 'Mimvox is running. Close it to continue: this window notices by itself.';
+    WaitNotice.Font.Color := @BAD@;
+    WaitContinue.Enabled := False;
+  end
+  else
+  begin
+    WaitNotice.Caption := 'Mimvox is closed. Click Continue to install.';
+    WaitNotice.Font.Color := @TEXT@;
+    WaitContinue.Enabled := True;
+  end;
+end;
+
+procedure WaitTimerProc(Arg1, Arg2, Arg3, Arg4: Longword);
+begin
+  if WaitForm <> nil then ShowWaitState();
+end;
+
+procedure WaitContinueClick(Sender: TObject);
+begin
+  if AppRunning() then exit;
+  WaitAccepted := True;
+  WaitForm.Close();
+end;
+
+{ Asks to close the running app; True once it is closed and Continue was pressed, False on Cancel. }
+function AskToCloseApp(): Boolean;
+var
+  CancelButton: TNewButton;
+  ButtonWidth, ButtonsTop: Integer;
+  Timer: Longword;
+begin
+  Result := False;
+  WaitForm := CreateCustomForm(ScaleX(480), ScaleY(150), True, True);
+  try
+    WaitForm.ClientWidth := ScaleX(480);
+    WaitForm.Caption := 'Setup - Mimvox';
+    WaitNotice := TNewStaticText.Create(WaitForm);
+    WaitNotice.Parent := WaitForm;
+    WaitNotice.WordWrap := True;
+    WaitNotice.Left := ScaleX(24);
+    WaitNotice.Top := ScaleY(24);
+    WaitNotice.Width := WaitForm.ClientWidth - ScaleX(48);
+    WaitNotice.Caption := 'Mimvox is running. Close it to continue: this window notices by itself.';
+    WaitNotice.AdjustHeight();
+    WaitNotice.AutoSize := False;
+    WaitNotice.StyleElements := WaitNotice.StyleElements - [seFont];
+    ButtonsTop := WaitNotice.Top + WaitNotice.Height + ScaleY(24);
+    ButtonWidth := WaitForm.CalculateButtonWidth(['Continue', 'Cancel']);
+    CancelButton := TNewButton.Create(WaitForm);
+    CancelButton.Parent := WaitForm;
+    CancelButton.Caption := 'Cancel';
+    CancelButton.Width := ButtonWidth;
+    CancelButton.Height := ScaleY(25);
+    CancelButton.Top := ButtonsTop;
+    CancelButton.Left := WaitForm.ClientWidth - ScaleX(24) - ButtonWidth;
+    CancelButton.ModalResult := mrCancel;
+    CancelButton.Cancel := True;
+    WaitContinue := TNewButton.Create(WaitForm);
+    WaitContinue.Parent := WaitForm;
+    WaitContinue.Caption := 'Continue';
+    WaitContinue.Width := ButtonWidth;
+    WaitContinue.Height := ScaleY(25);
+    WaitContinue.Top := ButtonsTop;
+    WaitContinue.Left := CancelButton.Left - ScaleX(10) - ButtonWidth;
+    WaitContinue.OnClick := @WaitContinueClick;
+    WaitContinue.Default := True;
+    ShowWaitState();
+    WaitForm.ClientHeight := ButtonsTop + WaitContinue.Height + ScaleY(20);
+    PaintTitleBar(WaitForm.Handle);
+    Timer := SetTimer(0, 0, 700, CreateCallback(@WaitTimerProc));
+    WaitAccepted := False;
+    WaitForm.ShowModal();
+    Result := WaitAccepted;
+  finally
+    KillTimer(0, Timer);
+    WaitForm.Free();
+    WaitForm := nil;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Waited: Integer;
+begin
+  Result := True;
+  if not AppRunning() then exit;
+  { An update waits up to 30 s for the app it closed; a person gets the window. }
+  if WizardSilent then
+  begin
+    for Waited := 1 to 60 do
+    begin
+      if not AppRunning() then exit;
+      Sleep(500);
+    end;
+    Result := not AppRunning();
+    if not Result then Log('Mimvox is still running: Setup stops');
+    exit;
+  end;
+  Result := AskToCloseApp();
+end;
+"""
+
 # The uninstaller's one window (Pascal). "Apps & features" runs it with /SILENT (RegisterOneWindowUninstall), so Inno's
 # own "Remove ...?" box never shows; /VERYSILENT (a tool removing apps unattended) keeps every bit of data. The choice:
 # 0 the app only, 1 also the speech engine and models, 2 everything; /REMOVE=<n> answers it without the form. A run
@@ -187,16 +313,6 @@ var
   FormButtonsTop: Integer;
   RunningTimer: Longword;
   PointerUsed: Boolean;
-
-function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: Longword): Longword;
-  external 'SetTimer@user32.dll stdcall';
-function KillTimer(hWnd, nIDEvent: Longword): Bool;
-  external 'KillTimer@user32.dll stdcall';
-
-function AppRunning(): Boolean;
-begin
-  Result := CheckForMutexes('@MUTEX@');
-end;
 
 { The app's files are held while it runs: nothing is removed until it is closed. The form watches it live. }
 procedure ShowRunningState();
@@ -523,7 +639,7 @@ end;
 def uninstall_code(app_id: str) -> str:
     def lines(entries: tuple[str, ...]) -> str:
         return "\n".join(f"  RemoveEntry(Data, '{name}');" for name in entries)
-    return (UNINSTALL_CODE.replace("@KEY@", uninstall_key(app_id)).replace("@MUTEX@", APP_MUTEX).replace("@DIM@", colorref(TEXT_DIM))
+    return (UNINSTALL_CODE.replace("@KEY@", uninstall_key(app_id)).replace("@DIM@", colorref(TEXT_DIM))
             .replace("@BAD@", colorref(BAD)).replace("@ENGINE@", lines(ENGINE_ENTRIES))
             .replace("@USER@", lines(USER_ENTRIES)))
 
@@ -618,33 +734,7 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "",
         "var",
         "  DesktopCheck, StartMenuCheck: TNewCheckBox;",
-        "  WizardSilentWaited: Integer;",
         "  BarTrack, BarFill: TBitmapImage;",
-        "",
-        "function InitializeSetup(): Boolean;",
-        "begin",
-        "  Result := True;",
-        "  { Nothing is installed over a running Mimvox: an update waits for it to close, a person is asked. }",
-        f"  while CheckForMutexes('{APP_MUTEX}') do",
-        "  begin",
-        "    if WizardSilent then",
-        "    begin",
-        "      Sleep(500);",
-        "      if WizardSilentWaited >= 60 then",
-        "      begin",
-        "        Log('Mimvox is still running: Setup stops');",
-        "        Result := False;",
-        "        exit;",
-        "      end;",
-        "      WizardSilentWaited := WizardSilentWaited + 1;",
-        "    end",
-        f"    else if MsgBox('{APP} is running. Close it, then click OK to continue.', mbError, MB_OKCANCEL) = IDCANCEL then",
-        "    begin",
-        "      Result := False;",
-        "      exit;",
-        "    end;",
-        "  end;",
-        "end;",
         "",
         "function DesktopWanted: Boolean;",
         "begin",
@@ -679,6 +769,8 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "  end;",
         "end;",
         "",
+        *RUNNING_CODE.replace("@MUTEX@", APP_MUTEX).replace("@BAD@", colorref(BAD)).replace("@TEXT@", colorref(TEXT))
+        .split("\n"),
         "procedure InitializeWizard;",
         "begin",
         "  { The app's palette: the header strip is smoked glass, titles in the text colour, the rest dimmer. }",
