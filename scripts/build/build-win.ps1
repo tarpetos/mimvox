@@ -91,7 +91,9 @@ if (-not (Get-Command cargo-packager -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "[build-win] Staging bundled resources..."
-uv run --no-project python (Join-Path $repoRoot "scripts\build\stage_resources.py")
+# The app runs setup with the bundled uv.
+$uvTarget = if ($hostLine -match "aarch64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
+uv run --no-project python (Join-Path $repoRoot "scripts\build\stage_resources.py") --uv $uvTarget
 Check-Exit "Staging resources"
 
 if (-not $SkipCompile) {

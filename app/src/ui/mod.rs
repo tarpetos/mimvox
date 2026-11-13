@@ -20,6 +20,7 @@ pub mod refclip;
 pub mod refmedia;
 pub mod redub;
 pub mod relocate;
+pub mod setuprun;
 pub mod shell;
 pub mod speak;
 pub mod stats;

@@ -54,6 +54,8 @@ pub struct AppState {
     pub history: crate::ui::history::HistoryState,
     /// A newer release and its download (see `ui::update`).
     pub update: crate::ui::update::UpdateState,
+    /// Setup run from inside the app (see `ui::setuprun`).
+    pub setup: crate::ui::setuprun::SetupRunState,
 }
 
 impl Default for AppState {
@@ -81,6 +83,7 @@ impl Default for AppState {
             trash: Default::default(),
             history: Default::default(),
             update: Default::default(),
+            setup: Default::default(),
         }
     }
 }

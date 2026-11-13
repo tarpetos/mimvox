@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.request
@@ -154,6 +155,8 @@ SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 34
 UV_HTTP_TIMEOUT = "600"
+# Records the commit of a source tree that came as an archive (no git): see Setup._fetch_archive.
+ARCHIVE_MARKER = ".mimvox-commit"
 
 # Linux packages: a C/C++ toolchain and the libraries Rune (wgpu, winit, cpal, fontconfig) builds and runs against,
 # plus ffmpeg and libsndfile for the Python side. Keys are the package managers' names.
@@ -197,8 +200,19 @@ class SetupError(RuntimeError):
     """A step could not complete; the message is the one line the user sees."""
 
 
+# Run by the app (--gui): progress goes out as "@@mimvox {json}" lines next to the readable ones (see event()).
+GUI = False
+
+
 def say(line: str) -> None:
     print(f"[setup] {line}", flush=True)
+
+
+def event(**fields: object) -> None:
+    """A progress line for the app's setup screen (only with --gui): ``plan`` (the steps that will run), ``step``
+    (one step starts, succeeds or fails) and ``done``. The app shows the readable lines as the log."""
+    if GUI:
+        print("@@mimvox " + json.dumps(fields), flush=True)
 
 
 def warn(line: str) -> None:
@@ -628,9 +642,10 @@ class Setup:
     def toolchains(self) -> None:
         """Rust and the C/C++ toolchain the app is built with, plus git."""
         if self.skip_toolchain:
+            # No system packages (no sudo): git is optional (the sources come as archives without it) and ffmpeg
+            # comes as a portable copy where the system has none.
             say("Skipping the toolchain install (--skip-toolchain).")
-            if not shutil.which("git"):
-                raise SetupError("git is not installed and is needed to fetch Applio; install it.")
+            self._portable_ffmpeg()
             return
         failed: list[str] = []
         for step in (self._git, self._compiler, self._rust, self._ffmpeg):
@@ -746,6 +761,49 @@ class Setup:
             raise SetupError(f"ffmpeg and ffprobe are needed for audio and video files; install them with {how}.")
         say("ffmpeg: installed.")
 
+    def ffmpeg_dir(self) -> Path:
+        """Where a portable ffmpeg goes (the engine looks there too: media._find)."""
+        return self.runtime / "ffmpeg"
+
+    def _portable_ffmpeg(self) -> None:
+        """ffmpeg + ffprobe without system packages: present on PATH or in the runtime, else a static build on Linux,
+        Homebrew's on macOS when Homebrew is there. Windows uses Applio's copies (see ``applio_models``)."""
+        exe = ".exe" if self.plat == "windows" else ""
+        if self.plat == "windows" or (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+            return
+        if all((self.ffmpeg_dir() / f"{name}{exe}").is_file() for name in ("ffmpeg", "ffprobe")):
+            say("ffmpeg: present (portable).")
+            return
+        if self.plat == "macos":
+            if shutil.which("brew"):
+                say("Installing ffmpeg with Homebrew...")
+                self.run(["brew", "install", "ffmpeg"])
+            if not shutil.which("ffmpeg"):
+                warn("ffmpeg is missing: video files and some audio formats cannot be opened. Install Homebrew "
+                     "(https://brew.sh), run 'brew install ffmpeg', then run setup again.")
+            return
+        arch = "arm64" if self.arch == "arm64" else "amd64"
+        url = f"https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-{arch}-static.tar.xz"
+        say(f"ffmpeg: downloading a portable build ({url})...")
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "ffmpeg.tar.xz"
+            self._download(url, archive)
+            self.ffmpeg_dir().mkdir(parents=True, exist_ok=True)
+            with tarfile.open(archive) as tar:
+                for member in tar.getmembers():
+                    name = Path(member.name).name
+                    if member.isfile() and name in ("ffmpeg", "ffprobe"):
+                        source = tar.extractfile(member)
+                        if source is None:
+                            continue
+                        target = self.ffmpeg_dir() / name
+                        with source, open(target, "wb") as out:
+                            shutil.copyfileobj(source, out)
+                        target.chmod(0o755)
+        if not (self.ffmpeg_dir() / "ffmpeg").is_file():
+            raise SetupError("The portable ffmpeg could not be unpacked; install ffmpeg with your package manager.")
+        say(f"ffmpeg: installed in {self.ffmpeg_dir()}.")
+
     def _cargo(self) -> str | None:
         found = shutil.which("cargo")
         if found:
@@ -801,10 +859,18 @@ class Setup:
     # ---- step 3: runtime -------------------------------------------------------------------------------------
 
     def ensure_repo(self, name: str, url: str, commit: str, dest: Path) -> None:
-        """Make ``dest`` a checkout of ``commit`` (shallow, resumable); re-running with the right commit is a no-op."""
-        head = self.read(self.git("rev-parse", "HEAD"), dest).strip() if (dest / ".git").exists() else ""
+        """Make ``dest`` a checkout of ``commit`` (shallow, resumable); re-running with the right commit is a no-op.
+        Without git (an installed app on a system without it) the commit comes as a GitHub archive instead."""
+        marker = dest / ARCHIVE_MARKER
+        if (dest / ".git").exists() and shutil.which("git"):
+            head = self.read(self.git("rev-parse", "HEAD"), dest).strip()
+        else:
+            head = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
         if head == commit:
             say(f"{name}: at the pinned commit {commit[:9]}.")
+            return
+        if not shutil.which("git") or marker.is_file():
+            self._fetch_archive(name, url, commit, dest)
             return
         if dest.exists() and not (dest / ".git").exists() and any(dest.iterdir()):
             raise SetupError(f"{dest} exists and is not a git checkout; move it away.")
@@ -818,6 +884,40 @@ class Setup:
             self.must(self.git("fetch", "--quiet", "origin"), f"Fetching {name}", cwd=dest)
         self.must(self.git("checkout", "--quiet", "--force", commit), f"Checking out {name}", cwd=dest)
         say(f"{name}: checked out {commit[:9]}.")
+
+    def _fetch_archive(self, name: str, url: str, commit: str, dest: Path) -> None:
+        """``commit`` of a GitHub repository as a .tar.gz, unpacked over ``dest`` (files it already has, like a venv or
+        downloaded models, stay); ``ARCHIVE_MARKER`` records the commit."""
+        if dest.exists() and any(dest.iterdir()) and not (dest / ARCHIVE_MARKER).is_file():
+            raise SetupError(f"{dest} exists and holds something else; move it away.")
+        repo = url.removeprefix("https://github.com/").removesuffix(".git")
+        archive_url = f"https://codeload.github.com/{repo}/tar.gz/{commit}"
+        say(f"{name}: downloading {repo} @ {commit[:9]} (no git needed)...")
+        dest.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "source.tar.gz"
+            self._download(archive_url, archive)
+            with tarfile.open(archive) as tar:
+                for member in tar.getmembers():
+                    parts = Path(member.name).parts[1:]  # drop the "<repo>-<commit>/" folder
+                    if not parts or member.issym() or member.islnk():
+                        continue
+                    target = dest.joinpath(*parts)
+                    if not target.resolve().is_relative_to(dest.resolve()):
+                        raise SetupError(f"The {name} archive holds a path outside its folder: {member.name}")
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    elif member.isfile():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        source = tar.extractfile(member)
+                        if source is None:
+                            continue
+                        with source, open(target, "wb") as out:
+                            shutil.copyfileobj(source, out)
+                        if member.mode & 0o111:
+                            target.chmod(0o755)
+        (dest / ARCHIVE_MARKER).write_text(commit, encoding="utf-8")
+        say(f"{name}: unpacked {commit[:9]}.")
 
     def _stamp(self, venv_dir: Path) -> Path:
         return venv_dir / ".mimvox-setup-ok"
@@ -1350,6 +1450,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                         help=f"data directory (default: ${DATA_ENV}, else asked for; the default is the local app data dir + "
                              f"{APP_DIR_NAME}, or the one in location.toml)")
     parser.add_argument("--skip-toolchain", action="store_true", help="do not install Rust / compilers / system packages")
+    parser.add_argument("--gui", action="store_true",
+                        help="run by the app: no questions and no system packages (no sudo; implies --yes and "
+                             "--skip-toolchain), plus '@@mimvox {json}' progress lines for its setup screen")
     parser.add_argument("--skip-models", action="store_true", help="set the environments up but download no models")
     parser.add_argument("--cpu", action="store_true", help="ignore any GPU and set up the CPU backend")
     parser.add_argument("--yes", "-y", action="store_true",
@@ -1362,7 +1465,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                         help="only (re)write runtime.toml for a runtime that already exists in the data directory")
     parser.add_argument("--move-to", metavar="DIR",
                         help="move the installed data directory (from --data-dir, location.toml or the default) to DIR: "
-                             "renames on the same volume, else copies with '[move] 37% 11.4/31.0 GB' progress lines, "
+                             "renames on the same volume, else copies with '[move] 37%% 11.4/31.0 GB' progress lines, "
                              "fixes the paths inside the virtual environments, rewrites runtime.toml and location.toml, "
                              "checks the result and only then deletes the old copy")
     parser.add_argument("--no-check", action="store_true", help="with --move-to: skip the quick check (testing)")
@@ -1426,6 +1529,11 @@ def ask_data_dir(plat: str, default: Path) -> Path:
 
 
 def build_setup(args: argparse.Namespace) -> Setup:
+    global GUI  # noqa: PLW0603 - set once, before any output
+    if args.gui:
+        GUI = True
+        args.yes = True
+        args.skip_toolchain = True
     plat = host_platform()
     root = Path(__file__).resolve().parents[2]
     data_dir = choose_data_dir(args, plat)
@@ -1515,28 +1623,69 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     setup.confirm()
     failed: list[str] = []
+    models = not args.skip_models
+    better = models and setup.wants_better_translation()
+    zero_shot = setup.zero_shot_vc
+    plan = [("toolchain", "System tools"), ("applio_source", "Voice training tools: source"),
+            ("engine_env", "Speech engine")]
+    if models:
+        plan += [("omnivoice", "Speech model"), ("speech_models", "Transcription and translation models")]
+        if better:
+            plan.append(("better_translation", "Better translation model"))
+        plan.append(("separation", "Music removal model"))
+    if zero_shot:
+        plan.append(("zero_shot_vc", "Native accent converter"))
+    plan.append(("applio_env", "Voice training tools: environment"))
+    if models:
+        plan.append(("applio_models", "Voice training models"))
+    plan.append(("runtime_toml", "Finishing"))
+    labels = dict(plan)
+    event(event="plan", steps=[{"id": i, "label": label} for i, label in plan])
 
-    def attempt(step) -> bool:  # noqa: ANN001 - a bound method
+    def attempt(step_id: str, step) -> bool:  # noqa: ANN001 - a bound method
+        event(event="step", id=step_id, state="run")
+        say(f"== {labels.get(step_id, step_id)} ==")
         try:
             step()
-            return True
         except SetupError as error:
             say(f"Failed: {error}")
             failed.append(str(error))
+            event(event="step", id=step_id, state="fail", message=str(error))
             return False
+        event(event="step", id=step_id, state="ok")
+        return True
 
-    attempt(setup.toolchains)
-    applio_cloned = attempt(lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
-    if attempt(setup.engine_env) and not args.skip_models:
-        if attempt(setup.omnivoice_models):
-            if attempt(setup.speech_models) and setup.wants_better_translation():
-                attempt(setup.better_translation_model)
-        attempt(setup.separation_model)
-    if setup.zero_shot_vc and setup.engine_python().exists():
-        attempt(setup.zero_shot_vc_runtime)
-    if applio_cloned and attempt(setup.applio_venv) and not args.skip_models:
-        attempt(setup.applio_models)
-    attempt(setup.write_runtime_toml)
+    def skipped(*step_ids: str) -> None:
+        for step_id in step_ids:
+            if step_id in labels:
+                event(event="step", id=step_id, state="skip")
+
+    attempt("toolchain", setup.toolchains)
+    applio_cloned = attempt("applio_source", lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
+    if attempt("engine_env", setup.engine_env):
+        if models:
+            if attempt("omnivoice", setup.omnivoice_models):
+                if attempt("speech_models", setup.speech_models) and better:
+                    attempt("better_translation", setup.better_translation_model)
+                else:
+                    skipped("better_translation")
+            else:
+                skipped("speech_models", "better_translation")
+            attempt("separation", setup.separation_model)
+    else:
+        skipped("omnivoice", "speech_models", "better_translation", "separation")
+    if zero_shot and setup.engine_python().exists():
+        attempt("zero_shot_vc", setup.zero_shot_vc_runtime)
+    else:
+        skipped("zero_shot_vc")
+    if applio_cloned and attempt("applio_env", setup.applio_venv):
+        if models:
+            attempt("applio_models", setup.applio_models)
+    else:
+        if not applio_cloned:
+            skipped("applio_env")
+        skipped("applio_models")
+    attempt("runtime_toml", setup.write_runtime_toml)
     if not failed:
         setup.offer_legacy_removal(args.remove_indextts)
     if args.skip_models:
@@ -1546,7 +1695,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         say(f"Setup finished with {len(failed)} step(s) failed; fix them and run it again (it resumes):")
         for line in failed:
             say(f"  - {line}")
+        event(event="done", ok=False, failed=failed)
         return 1
+    event(event="done", ok=True)
     for line in setup.ready_lines():
         say(line)
     return 0

@@ -6,8 +6,8 @@ of mp4, mkv, mov, webm, avi. Plain WAV / FLAC / AIFF files are read natively (no
 anything libsndfile refuses, is decoded by ffmpeg.
 
 ffmpeg lookup order: ``MIMVOX_FFMPEG`` (a file or a folder), the Applio runtime root (``paths.applio`` in
-runtime.toml; Applio's prerequisites put ``ffmpeg.exe`` / ``ffprobe.exe`` there on Windows), then ``PATH``
-(Linux / macOS: the system ffmpeg that setup installs or verifies).
+runtime.toml; Applio's prerequisites put ``ffmpeg.exe`` / ``ffprobe.exe`` there on Windows), ``<runtime>/ffmpeg``
+(the portable build setup downloads on Linux when the system has none), then ``PATH`` (the system ffmpeg).
 """
 from __future__ import annotations
 
@@ -93,9 +93,11 @@ def _find(name: str) -> str | None:
             return cand
     applio = config.applio_dir(_runtime) if _runtime else None
     if applio:
-        cand = os.path.join(applio, name + _EXE)
-        if os.path.isfile(cand):
-            return cand
+        # Applio's own copies (Windows), then the portable build setup puts in <runtime>/ffmpeg when the system has none
+        for folder in (applio, os.path.join(os.path.dirname(os.path.normpath(applio)), "ffmpeg")):
+            cand = os.path.join(folder, name + _EXE)
+            if os.path.isfile(cand):
+                return cand
     return shutil.which(name)
 
 

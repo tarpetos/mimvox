@@ -76,6 +76,8 @@ fn main() {
     // Background threads (engine, audio, dialogs) reach the UI through this handle (`ui::events`).
     ui::events::init(app.handle());
     app.run();
+    // A setup still running stops with the app (it resumes on the next run).
+    ui::setuprun::stop_on_exit();
     // The window is gone: now wait for the engine a quit asked to exit (it is killed after a grace period).
     if let Some(mut engine) = ui::train::take_closing_engine() {
         engine.shutdown();

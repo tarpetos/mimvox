@@ -85,7 +85,12 @@ if ! command -v cargo-packager >/dev/null 2>&1; then
 fi
 
 echo "[build-linux] Staging bundled resources..." >&2
-uv run --no-project python "$REPO_ROOT/scripts/build/stage_resources.py"
+# The app runs setup with the bundled uv (a static musl build runs on every distribution).
+case "$(uname -m)" in
+    aarch64|arm64) UV_TARGET=aarch64-unknown-linux-musl ;;
+    *) UV_TARGET=x86_64-unknown-linux-musl ;;
+esac
+uv run --no-project python "$REPO_ROOT/scripts/build/stage_resources.py" --uv "$UV_TARGET"
 
 if [ "$SKIP_COMPILE" = "0" ]; then
     echo "[build-linux] Compiling the release binary..." >&2

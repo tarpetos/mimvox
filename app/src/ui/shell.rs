@@ -405,7 +405,13 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
             tx.wake_at(ENGINE_START_DELAY);
         } else {
             start_audio(s);
-            restart_engine(s);
+            // Without a runtime there is nothing to start: the start screen offers setup, which starts the engine
+            // when it finishes (`setuprun::on_exit`).
+            if s.onboarding.runtime_present {
+                restart_engine(s);
+            } else {
+                s.shell.engine = EngineStatus::Unavailable { reason: "The speech engine is not installed yet.".into() };
+            }
             changed = true;
         }
     }
@@ -972,7 +978,9 @@ fn engine_banner(s: &AppState, p: Palette) -> Option<El> {
             "The voice engine stopped".to_owned(),
             if detail.is_empty() { code.map(|c| format!("Exit code {c}.")).unwrap_or_default() } else { detail.clone() },
         ),
-        EngineStatus::Unavailable { reason } => ("The voice engine is not set up yet".to_owned(), format!("{reason} Run setup.sh (setup.cmd on Windows), then press Retry.")),
+        // The start screen shows setup itself; elsewhere point there.
+        EngineStatus::Unavailable { .. } if s.screen == Screen::Onboarding || super::setuprun::running(s) => return None,
+        EngineStatus::Unavailable { reason } => ("The voice engine is not set up yet".to_owned(), format!("{reason} Run setup on the start screen.")),
         _ => return None,
     };
     let row_ = row().key("engine-banner").w_full().px(14.0).py(9.0).gap(12.0).center_y()

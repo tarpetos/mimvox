@@ -18,7 +18,7 @@ use crate::state::AppState;
 use rune::{El, col, el, row, text};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+
 
 /// What the move subprocess reported so far (its output lines arrive as events).
 #[derive(Default)]
@@ -155,9 +155,12 @@ fn run(s: &mut AppState) {
     if blocked(s, &target).is_some() {
         return;
     }
-    let Some(root) = super::onboarding::find_setup_root() else {
-        s.relocate.phase = Phase::Failed("Could not find setup.sh / setup.cmd next to the app.".into());
-        return;
+    let mut cmd = match super::setuprun::command(&["--move-to".into(), target.clone().into_os_string(), "--yes".into()]) {
+        Ok(c) => c,
+        Err(e) => {
+            s.relocate.phase = Phase::Failed(e);
+            return;
+        }
     };
     // Stop the engine first: it holds files in the data folder open.
     if let Some(mut old) = s.engine.take() {
@@ -166,21 +169,6 @@ fn run(s: &mut AppState) {
     s.shell.engine = EngineStatus::Starting { since: shell::clock_now(s) };
     s.shell.preparing = None;
 
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/c", "setup.cmd"]);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("setup.sh");
-        c
-    };
-    cmd.arg("--move-to").arg(&target).arg("--yes").current_dir(&root).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {

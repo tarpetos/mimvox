@@ -89,7 +89,10 @@ if ! command -v cargo-packager >/dev/null 2>&1; then
 fi
 
 echo "[build-mac] Staging bundled resources..." >&2
-uv run --no-project python "$REPO_ROOT/scripts/build/stage_resources.py"
+# The app runs setup with the bundled uv: both architectures in one binary for a universal build.
+UV_TARGETS=aarch64-apple-darwin
+if [ "$UNIVERSAL" = "1" ]; then UV_TARGETS=aarch64-apple-darwin,x86_64-apple-darwin; fi
+uv run --no-project python "$REPO_ROOT/scripts/build/stage_resources.py" --uv "$UV_TARGETS"
 
 ARM=aarch64-apple-darwin
 X86=x86_64-apple-darwin

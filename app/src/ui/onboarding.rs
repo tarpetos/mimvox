@@ -280,27 +280,48 @@ fn runtime_outdated() -> bool {
 
 /// "Run setup" from the banner: setup again into the current data folder (it installs only what changed).
 fn run_setup_update(s: &mut AppState) {
-    match launch_setup(&data_dir().display().to_string()) {
-        Ok(m) => super::shell::toast(s, Tone::Accent, m),
-        Err(e) => super::shell::toast(s, Tone::Danger, e),
-    }
+    super::setuprun::start(s, &data_dir().display().to_string());
 }
 
-/// Under the header while the runtime is older than this version needs.
+/// Under the header while the runtime is older than this version needs, and while that setup runs.
 pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
-    if !s.onboarding.runtime_outdated || s.screen == Screen::Onboarding {
+    use super::components::{Button, glass_card, icon_el, icons, progress_bar};
+    use super::setuprun;
+    let running = setuprun::running(s);
+    if !(s.onboarding.runtime_outdated || running) || s.screen == Screen::Onboarding {
         return None;
     }
-    use super::components::{Button, glass_card, icon_el, icons};
-    let row_ = row().key("runtime-banner").w_full().px(14.0).py(9.0).gap(12.0).center_y()
-        .child(icon_el(&icons::ALERT, 16.0, p.warn))
-        .child(col().grow(1.0).min_w(0.0).gap(2.0)
-            .child(text("This version needs a setup update").font(ty::LABEL).color(p.text))
-            .child(text(format!(
+    let (title, detail) = if running {
+        let step = setuprun::current(s).map(|st| st.label.clone()).unwrap_or_else(|| "Starting…".into());
+        (format!("Updating the runtime: {step}"), setuprun::last_line(s).unwrap_or("").to_owned())
+    } else if let setuprun::Phase::Error(e) = &s.setup.phase {
+        ("The setup update stopped".to_owned(), e.clone())
+    } else if let setuprun::Phase::Finished(false) = &s.setup.phase {
+        ("The setup update did not finish".to_owned(), "Some steps failed; run it again to retry them.".to_owned())
+    } else {
+        (
+            "This version needs a setup update".to_owned(),
+            format!(
                 "Mimvox {} uses newer engine packages or models. Setup installs only what changed; your voices and results stay as they are.",
                 env!("CARGO_PKG_VERSION")
-            )).font(ty::CAPTION).color(p.text_dim).wrap().max_lines(2)))
-        .child(Button::new("Run setup").primary().small().icon(&icons::REFRESH).key("runtime-setup").on_press(run_setup_update).build(p));
+            ),
+        )
+    };
+    let mut info = col().grow(1.0).min_w(0.0).gap(2.0)
+        .child(text(title).font(ty::LABEL).color(p.text))
+        .child(text(detail).font(ty::CAPTION).color(p.text_dim).wrap().max_lines(2));
+    if running {
+        info = info.child(el().w_full().pt(4.0).child(progress_bar(p, Some(setuprun::progress(s)))));
+    }
+    let button = if running {
+        Button::new("Cancel").ghost().small().key("runtime-cancel").on_press(setuprun::cancel).build(p)
+    } else {
+        Button::new("Run setup").primary().small().icon(&icons::REFRESH).key("runtime-setup").on_press(run_setup_update).build(p)
+    };
+    let row_ = row().key("runtime-banner").w_full().px(14.0).py(9.0).gap(12.0).center_y()
+        .child(icon_el(&icons::ALERT, 16.0, p.warn))
+        .child(info)
+        .child(button);
     Some(el().w_full().px(16.0).child(glass_card(p).w_full().child(row_)))
 }
 
@@ -362,142 +383,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
 // Running the setup script in a terminal window
 // ---------------------------------------------------------------------------------------------
 
-/// Finds the repo or bundle root that holds `setup.sh` / `setup.cmd`. An installed app keeps it with the other bundled
-/// resources, which are not above the executable on Linux (`usr/bin` vs `usr/lib/mimvox`) or macOS (`Contents/MacOS`
-/// vs `Contents/Resources`), so the resources root the engine uses is tried first.
-pub(crate) fn find_setup_root() -> Option<PathBuf> {
-    let script = if cfg!(windows) { "setup.cmd" } else { "setup.sh" };
-    if let Some(res) = crate::engine::find_resources().filter(|r| r.join(script).is_file()) {
-        return Some(res);
-    }
-    let mut starts: Vec<PathBuf> = Vec::new();
-    if let Some(p) = std::env::var_os("MIMVOX_ROOT") {
-        starts.push(PathBuf::from(p));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        starts.push(exe);
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        starts.push(cwd);
-    }
-    starts.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    for start in starts {
-        for dir in start.ancestors().take(7) {
-            if dir.join(script).is_file() {
-                return Some(dir.to_path_buf());
-            }
-        }
-    }
-    None
-}
-
-/// An AppImage's files exist only while the app runs (the image is mounted for it), so a setup started from it would
-/// break when the app is closed. Its setup files (`setup.sh`, `tools/setup/`) are copied to a temp folder first.
-fn outside_appimage(root: PathBuf) -> Result<PathBuf, String> {
-    if std::env::var_os("APPIMAGE").is_none() {
-        return Ok(root);
-    }
-    fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(to)?;
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            let target = to.join(entry.file_name());
-            if entry.file_type()?.is_dir() {
-                if entry.file_name() != "__pycache__" {
-                    copy_dir(&entry.path(), &target)?;
-                }
-            } else {
-                std::fs::copy(entry.path(), &target)?;
-            }
-        }
-        Ok(())
-    }
-    let dest = std::env::temp_dir().join("mimvox-setup");
-    let _ = std::fs::remove_dir_all(&dest);
-    copy_dir(&root.join("tools").join("setup"), &dest.join("tools").join("setup"))
-        .and_then(|()| std::fs::copy(root.join("setup.sh"), dest.join("setup.sh")).map(|_| ()))
-        .map_err(|e| format!("Could not copy the setup files to {}: {e}", dest.display()))?;
-    Ok(dest)
-}
-
-/// Opens a terminal window running the setup script. Returns a message for the user.
-/// The terminal process is waited for on its own thread; when it ends, `runtime.toml` is checked again (terminals that
-/// hand the window to another process end at once: then the check on focus or "Check again" sees the result).
-fn launch_setup(location: &str) -> Result<String, String> {
-    let root = find_setup_root().ok_or_else(|| {
-        "Could not find setup.sh / setup.cmd next to the app. Run it from the project folder by hand.".to_string()
-    })?;
-    let root = outside_appimage(root)?;
-    let mut child = spawn_terminal(&root, location)?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-        events::post_if(recheck);
-    });
-    Ok(format!("Setup is running in a terminal window ({}). This can take a while.", root.display()))
-}
-
-#[cfg(windows)]
-fn spawn_terminal(root: &std::path::Path, location: &str) -> Result<std::process::Child, String> {
-    Command::new("cmd")
-        .args(["/c", "start", "Mimvox setup", "cmd", "/k", "setup.cmd"])
-        .args(setup_args(location))
-        .current_dir(root)
-        .spawn()
-        .map_err(|e| format!("Could not open a terminal: {e}. Run setup.cmd by hand."))
-}
-
-#[cfg(target_os = "macos")]
-fn spawn_terminal(root: &std::path::Path, location: &str) -> Result<std::process::Child, String> {
-    let quote = |v: &str| format!("'{}'", v.replace('\'', "'\\''"));
-    let args: Vec<String> = setup_args(location).iter().map(|a| quote(a)).collect();
-    let cmd = format!("cd {} && /bin/sh ./setup.sh {}", quote(&root.display().to_string()), args.join(" "));
-    let script = format!("tell application \"Terminal\" to do script \"{}\"", cmd.replace('"', "\\\""));
-    Command::new("osascript")
-        .args(["-e", &script, "-e", "tell application \"Terminal\" to activate"])
-        .spawn()
-        .map_err(|e| format!("Could not open Terminal: {e}. Run ./setup.sh by hand."))
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn spawn_terminal(root: &std::path::Path, location: &str) -> Result<std::process::Child, String> {
-    // `sh ./setup.sh`, not `./setup.sh`: the script needs no executable bit (an unpacked archive may lose it).
-    let inner = "sh ./setup.sh \"$@\"; echo; echo 'Setup finished. Press Enter to close this window.'; read _";
-    // The user's choice first ($TERMINAL, common on Arch and tiling setups), then the usual emulators; each with the
-    // flag after which it runs a command.
-    let preferred = std::env::var("TERMINAL").ok().filter(|t| !t.trim().is_empty());
-    let mut terminals: Vec<(String, Vec<&str>)> = preferred.into_iter().map(|t| (t, vec!["-e"])).collect();
-    terminals.extend([
-        ("x-terminal-emulator", vec!["-e"]),
-        ("gnome-terminal", vec!["--"]),
-        ("kgx", vec!["--"]),
-        ("ptyxis", vec!["--"]),
-        ("konsole", vec!["-e"]),
-        ("xfce4-terminal", vec!["-x"]),
-        ("kitty", vec![]),
-        ("alacritty", vec!["-e"]),
-        ("wezterm", vec!["start", "--"]),
-        ("foot", vec![]),
-        ("ghostty", vec!["-e"]),
-        ("tilix", vec!["-e"]),
-        ("terminator", vec!["-x"]),
-        ("xterm", vec!["-e"]),
-    ].into_iter().map(|(t, pre)| (t.to_owned(), pre)));
-    for (term, pre) in terminals {
-        let mut c = Command::new(&term);
-        c.args(&pre).args(["bash", "-c", inner, "setup"]).args(setup_args(location)).current_dir(root);
-        if let Ok(child) = c.spawn() {
-            return Ok(child);
-        }
-    }
-    Err("No terminal emulator found. Open a terminal in the project folder and run ./setup.sh.".into())
-}
-
-/// `--data-dir <path>` for the setup script (the install location chosen on this screen).
-fn setup_args(location: &str) -> Vec<String> {
-    let loc = location.trim();
-    if loc.is_empty() { Vec::new() } else { vec!["--data-dir".to_owned(), loc.to_owned()] }
-}
-
 /// Opens the system folder picker on its own thread (the frame loop never waits for it).
 fn pick_location(s: &mut AppState) {
     if s.onboarding.picking || s.shell.scripted() {
@@ -522,13 +407,8 @@ fn pick_location(s: &mut AppState) {
 
 fn run_setup(s: &mut AppState) {
     let location = s.onboarding.location.text.clone();
-    s.onboarding.setup_note = Some(match launch_setup(&location) {
-        Ok(m) => {
-            s.onboarding.setup_started = true;
-            (Tone::Accent, m)
-        }
-        Err(e) => (Tone::Danger, e),
-    });
+    s.onboarding.setup_started = true;
+    super::setuprun::start(s, &location);
 }
 
 fn finish(s: &mut AppState) {
@@ -636,34 +516,52 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
     let mut card = kit::card(p).gap(14.0).child(text("Engine and device").font(ty::TITLE).color(p.text));
 
     // Runtime
-    let (badge, line) = if o.runtime_present {
+    let (badge, line) = if super::setuprun::running(s) {
+        (kit::badge(p, "Setting up", Tone::Accent), "Installing the speech engine and its models.")
+    } else if o.runtime_present {
         (kit::badge(p, "Runtime found", Tone::Success), "The speech engine is installed.")
     } else {
         (kit::badge(p, "Runtime missing", Tone::Warning), "The speech engine is not installed yet.")
     };
     card = card.child(row().w_full().gap(10.0).center_y().child(badge).child(text(line).font(ty::BODY).color(p.text_dim)));
 
-    if !o.runtime_present {
-        card = card
-            .child(kit::notice(p, Tone::Warning, SETUP_SIZE_WARNING))
-            .child(
-                text(
-                    "Setup downloads the speech models and creates the runtime (runtime.toml). A terminal window opens and \
-                     shows the progress; this screen updates when it is done.",
+    let run = &s.setup;
+    let running = super::setuprun::running(s);
+    if !o.runtime_present || running || run.phase != super::setuprun::Phase::Idle {
+        if !o.runtime_present && run.phase == super::setuprun::Phase::Idle {
+            card = card
+                .child(kit::notice(p, Tone::Warning, SETUP_SIZE_WARNING))
+                .child(
+                    text("Setup downloads the speech engine and its models into the folder below. It runs here, in this window; \
+                          you can leave it running and come back. If it stops, it continues where it stopped.")
+                        .font(ty::CAPTION)
+                        .color(p.text_dim)
+                        .wrap(),
                 )
-                .font(ty::CAPTION)
-                .color(p.text_dim)
-                .wrap(),
-            )
-            .child(location_block(p, o))
-            .child(
-                row()
-                    .gap(10.0)
-                    .child(kit::button(p, if o.setup_started { "Run setup again" } else { "Run setup" }, BtnKind::Primary, true, run_setup))
-                    .child(kit::button(p, "Check again", BtnKind::Glass, true, |s: &mut AppState| {
-                        recheck(s);
-                    })),
-            );
+                .child(location_block(p, o));
+        } else {
+            card = card.child(super::setuprun::panel(s, *p));
+        }
+        match &run.phase {
+            super::setuprun::Phase::Error(e) => card = card.child(kit::notice(p, Tone::Danger, e)),
+            super::setuprun::Phase::Finished(true) => card = card.child(kit::notice(p, Tone::Success, "Setup finished.")),
+            super::setuprun::Phase::Finished(false) => {
+                card = card.child(kit::notice(p, Tone::Danger, "Some steps failed (see above). Run setup again: it retries them and keeps what is done."))
+            }
+            _ => {}
+        }
+        let mut buttons = row().gap(10.0);
+        if running {
+            buttons = buttons.child(kit::button(p, "Cancel", BtnKind::Glass, true, super::setuprun::cancel));
+        } else if !o.runtime_present || !matches!(run.phase, super::setuprun::Phase::Finished(true)) {
+            let label = if o.setup_started { "Run setup again" } else { "Run setup" };
+            buttons = buttons.child(kit::button(p, label, BtnKind::Primary, true, run_setup));
+        }
+        if !run.log.is_empty() {
+            let label = if run.show_log { "Hide details" } else { "Show details" };
+            buttons = buttons.child(kit::button(p, label, BtnKind::Glass, true, super::setuprun::toggle_log));
+        }
+        card = card.child(buttons);
     }
     if let Some((tone, msg)) = &o.setup_note {
         card = card.child(kit::notice(p, *tone, msg));
@@ -766,8 +664,12 @@ fn scene_welcome(s: &mut AppState) {
 }
 fn scene_setup_missing(s: &mut AppState) {
     base(s);
-    s.onboarding.setup_note = Some((Tone::Accent, "Setup is running in a terminal window. This can take a while.".into()));
+}
+
+fn scene_setup_running(s: &mut AppState) {
+    base(s);
     s.onboarding.setup_started = true;
+    super::setuprun::scene_running(s);
 }
 fn scene_ready_gpu(s: &mut AppState) {
     base(s);
@@ -790,6 +692,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
     &[
         ("onboarding-welcome", scene_welcome),
         ("onboarding-setup", scene_setup_missing),
+        ("onboarding-setup-running", scene_setup_running),
         ("onboarding-ready", scene_ready_gpu),
         ("onboarding-cpu", scene_cpu_warning),
         ("onboarding-stopped", scene_engine_stopped),
