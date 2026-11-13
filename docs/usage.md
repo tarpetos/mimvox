@@ -156,7 +156,7 @@ buttons, and messages pop up just above it.
 
 ![The player bar under Speak](screenshots/usage-player.png)
 
-- **Play / Pause**, and **Stop**, which ends playback and hides the bar. The **×** at the right end does the same.
+- **Play / Pause**, and **Stop**, which halts the track and rewinds it to the start (the bar stays; Play starts it again). The **×** at the right end ends playback and hides the bar.
 - The **title** of what plays (the start of the text, the file name, the clip) and where it comes from
   (*Speak · result*, *Redub · original*, *Voices · My voice*, *Record*).
 - The **time** played and the total, with a **seek bar**: click or drag anywhere on it to jump. With the seek bar

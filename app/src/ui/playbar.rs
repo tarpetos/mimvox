@@ -258,6 +258,23 @@ pub fn stop(s: &mut AppState) {
     s.playbar.speed_menu = false;
 }
 
+/// The bar's Stop: halts the track and rewinds it to the start, the bar stays (play starts it again from 0:00).
+/// Live Speak playback cannot be rewound while it is still arriving: there Stop ends it, as Close does.
+fn stop_rewind(s: &mut AppState) {
+    if s.playbar.now.as_ref().is_none_or(|n| n.live) {
+        stop(s);
+        return;
+    }
+    if s.playbar.now.as_ref().is_some_and(|n| n.status == Status::Playing) {
+        pause(s);
+    }
+    seek(s, 0.0);
+    if let Some(n) = s.playbar.now.as_mut() {
+        n.status = Status::Paused;
+        n.pos_s = 0.0;
+    }
+}
+
 /// Stops playback started from `source` (leaves anything else playing).
 pub fn stop_from(s: &mut AppState, source: Source) {
     if s.playbar.now.as_ref().is_some_and(|n| n.source == source) {
@@ -382,7 +399,7 @@ pub fn view(s: &AppState, p: Palette) -> Option<El> {
         .on_press(toggle_pause)
         .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 16.0, p.on_accent));
     let play = accent_glass(p, play);
-    let stop_b = round_button(p, "pb-stop", &icons::STOP, "Stop", false, stop);
+    let stop_b = round_button(p, "pb-stop", &icons::STOP, "Stop (back to the start)", false, stop_rewind);
     let title = col().key("pb-title").w(230.0).min_w(0.0).gap(1.0)
         .child(text(n.title.clone()).font(ty::LABEL).color(p.text).truncate())
         .child(text(n.what.clone()).font(ty::CAPTION).color(p.text_faint).truncate());
