@@ -5,7 +5,6 @@
 #                                              that version's section of CHANGELOG.md) with latest.json, the manifest
 #                                              the app's updater reads (src/update.rs)
 #   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
-#   a pull request that touches the build      build every installer as a check (nothing is published)
 #
 # Targets: Windows x64 and ARM64 (setup .exe, Inno Setup), Linux x64 and ARM64 (AppImage and .deb), macOS
 # universal (one .dmg for Apple Silicon and Intel). The installers carry only the app and the engine sources; the
@@ -14,28 +13,21 @@
 # Updates: with the CARGO_PACKAGER_SIGN_PRIVATE_KEY(_PASSWORD) secrets, cargo-packager signs every installer (and packs
 # the macOS .app into a signed .app.tar.gz); the release job lists the signed installers per platform in latest.json.
 # The key pair was made with `cargo packager signer generate`; its public half is PUBKEY in app/src/update.rs. Builds
-# without the secrets (pull requests from forks) are simply unsigned.
+# without the secrets (a run in a fork) are simply unsigned.
 name: Build installers
 
 on:
+  # Only for a release (a version tag on master) or when started by hand: never on every push or pull request.
   push:
     tags: ["v*"]
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/build.yml"
-      - "scripts/build/**"
-      - "app/Cargo.toml"
-      - "app/Cargo.lock"
-      - "app/Packager.toml"
-      - "app/build.rs"
 
 permissions:
   contents: read
 
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
