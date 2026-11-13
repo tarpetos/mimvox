@@ -35,6 +35,18 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 APP_DIR_NAME = "mimvox"
+
+
+def runtime_version() -> int:
+    """The runtime version this copy needs (tools/setup/runtime_version.txt; the app reads the same file)."""
+    path = Path(__file__).with_name("runtime_version.txt")
+    try:
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+        return int(next(line for line in lines if line and not line.startswith("#")))
+    except (OSError, StopIteration, ValueError):
+        return 1
+
+
 DATA_ENV = "MIMVOX_DATA"
 LOCATION_FILE = "location.toml"
 UV_ENV = "MIMVOX_UV"
@@ -1090,6 +1102,8 @@ class Setup:
             text += f'vendor = "{self.gpu.vendor}"\n'
         if self.gpu.vendor == "amd":
             text += f"name = {toml_str(self.gpu.name)}\nvram_gb = {self.gpu.vram_gb}\n"
+        # What this runtime was set up for: the app asks for setup again when it needs a newer one.
+        text += f"\n[setup]\nruntime_version = {runtime_version()}\n"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.runtime_toml.with_suffix(".toml.tmp")
         tmp.write_text(text, encoding="utf-8", newline="\n")

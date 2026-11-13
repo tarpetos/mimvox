@@ -106,6 +106,10 @@ vendor  = "nvidia" # nvidia | amd, with the cuda backend (optional)
 # With vendor "amd" setup also writes the card's name and VRAM:
 # name    = "AMD Radeon RX 9070 XT"
 # vram_gb = 15.9
+
+[setup]
+runtime_version = 1 # tools/setup/runtime_version.txt at setup time (missing: 1). Read by the app only: when the
+                    # bundled file is higher, the app asks to run setup again.
 ```
 
 An AMD GPU (Linux only) uses the `cuda` backend: the ROCm build of PyTorch uses the `torch.cuda` API and the `cuda`

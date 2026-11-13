@@ -24,6 +24,9 @@ Opening a pull request means you agree to these terms.
   to the UI; the engine runs on one asyncio loop (see [docs/architecture.md](docs/architecture.md)).
 - The engine protocol in [contract/engine-protocol.md](contract/engine-protocol.md) is the source of truth: change it
   together with the app and the engine.
+- A change that makes setup install something new the app or engine depends on (a Python package, a model, the Applio
+  commit) also bumps `tools/setup/runtime_version.txt`: installed apps that update to it then ask the user to run setup
+  again.
 - The app must stay usable for its purpose only: cloning your own voice, or a voice you have explicit permission for
   (see [DISCLAIMER.md](DISCLAIMER.md)).
 

@@ -153,6 +153,8 @@ impl DeviceInfo {
 
 pub struct OnboardingState {
     pub runtime_present: bool,
+    /// The runtime was set up for an older version of the app than this one needs (see [`runtime_outdated`]).
+    pub runtime_outdated: bool,
     pub device: Option<DeviceInfo>,
     /// Result of the last "Run setup" press (a hint or an error).
     pub setup_note: Option<(Tone, String)>,
@@ -208,6 +210,7 @@ impl Default for OnboardingState {
     fn default() -> Self {
         OnboardingState {
             runtime_present: runtime_toml_path().is_file(),
+            runtime_outdated: runtime_outdated(),
             device: None,
             setup_note: None,
             setup_started: false,
@@ -234,6 +237,14 @@ pub fn backend(s: &AppState) -> Option<&str> {
 /// Re-checks `runtime.toml` now. Done on "Check again", when the window gets the focus back (setup ran in a
 /// terminal window), when a setup terminal that can be waited for ends, and after a data move. True when it changed.
 pub fn recheck(s: &mut AppState) -> bool {
+    let was_outdated = s.onboarding.runtime_outdated;
+    s.onboarding.runtime_outdated = runtime_outdated();
+    if was_outdated && !s.onboarding.runtime_outdated {
+        // Setup brought the runtime up to date: the running engine still has the old packages loaded.
+        super::shell::restart_engine(s);
+        super::shell::toast(s, Tone::Success, "Setup finished: the engine restarted with the updated runtime.");
+        return true;
+    }
     let was = s.onboarding.runtime_present;
     s.onboarding.runtime_present = runtime_toml_path().is_file();
     if s.onboarding.runtime_present && !was {
@@ -246,9 +257,56 @@ pub fn recheck(s: &mut AppState) -> bool {
     s.onboarding.runtime_present != was
 }
 
+/// The runtime version this copy of the app needs: `tools/setup/runtime_version.txt` in the bundled resources (or the
+/// repo), the file setup also reads. `None` when it cannot be found (nothing to compare).
+fn required_runtime() -> Option<u32> {
+    let text = std::fs::read_to_string(crate::engine::find_resources()?.join("tools").join("setup").join("runtime_version.txt")).ok()?;
+    text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#'))?.parse().ok()
+}
+
+/// The runtime version setup wrote to `runtime.toml` (`[setup] runtime_version`); runtimes from before it count as 1.
+fn installed_runtime() -> u32 {
+    std::fs::read_to_string(runtime_toml_path())
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("setup")?.get("runtime_version")?.as_integer())
+        .map_or(1, |v| v.max(0) as u32)
+}
+
+/// An installed runtime older than this app needs (after an update that brought new packages or models).
+fn runtime_outdated() -> bool {
+    runtime_toml_path().is_file() && required_runtime().is_some_and(|need| installed_runtime() < need)
+}
+
+/// "Run setup" from the banner: setup again into the current data folder (it installs only what changed).
+fn run_setup_update(s: &mut AppState) {
+    match launch_setup(&data_dir().display().to_string()) {
+        Ok(m) => super::shell::toast(s, Tone::Accent, m),
+        Err(e) => super::shell::toast(s, Tone::Danger, e),
+    }
+}
+
+/// Under the header while the runtime is older than this version needs.
+pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
+    if !s.onboarding.runtime_outdated || s.screen == Screen::Onboarding {
+        return None;
+    }
+    use super::components::{Button, glass_card, icon_el, icons};
+    let row_ = row().key("runtime-banner").w_full().px(14.0).py(9.0).gap(12.0).center_y()
+        .child(icon_el(&icons::ALERT, 16.0, p.warn))
+        .child(col().grow(1.0).min_w(0.0).gap(2.0)
+            .child(text("This version needs a setup update").font(ty::LABEL).color(p.text))
+            .child(text(format!(
+                "Mimvox {} uses newer engine packages or models. Setup installs only what changed; your voices and results stay as they are.",
+                env!("CARGO_PKG_VERSION")
+            )).font(ty::CAPTION).color(p.text_dim).wrap().max_lines(2)))
+        .child(Button::new("Run setup").primary().small().icon(&icons::REFRESH).key("runtime-setup").on_press(run_setup_update).build(p));
+    Some(el().w_full().px(16.0).child(glass_card(p).w_full().child(row_)))
+}
+
 /// The window got the focus back.
 pub fn on_focus(s: &mut AppState) {
-    if !s.onboarding.runtime_present && !s.shell.scripted() {
+    if (!s.onboarding.runtime_present || s.onboarding.runtime_outdated) && !s.shell.scripted() {
         recheck(s);
     }
 }

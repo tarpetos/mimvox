@@ -7,7 +7,9 @@
 * **Updates from inside the app:** a new version shows a banner under the header. **Update** downloads it, checks its
   signature and installs it when the app closes, or at once with **Restart now** (a running training or book pauses
   and continues). A `.deb` install gets a link to the download page. `"check_updates": false` in settings.json turns
-  the check off.
+  the check off. An updated AppImage named after the old version is renamed after the new one.
+* **Runtime check:** when a new version needs newer engine packages or models, a banner asks to run setup again
+  (it installs only what changed) and the engine restarts when setup is done.
 * **Setup from an installed app:** **Run setup** finds the setup script in AppImage, .deb and macOS installs, the
   AppImage's launcher settings no longer break the setup's and the engine's Python, closing the app no longer stops a
   setup started from an AppImage, and more terminal emulators are found (`$TERMINAL` first).

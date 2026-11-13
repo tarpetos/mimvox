@@ -645,6 +645,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if let Some(b) = super::update::banner(s, p) {
         body = body.child(b);
     }
+    if let Some(b) = super::onboarding::runtime_banner(s, p) {
+        body = body.child(b);
+    }
     if let Some(b) = engine_banner(s, p) {
         body = body.child(b);
     }

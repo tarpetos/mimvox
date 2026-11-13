@@ -146,11 +146,13 @@ afterwards), or it installs by itself when you close the app.
 | Installed from | How it updates |
 | --- | --- |
 | Windows setup `.exe` / `.msi` | the installer runs with only a progress bar |
-| Linux AppImage | the new AppImage replaces the file you started |
+| Linux AppImage | the new AppImage replaces the file you started (a name with the old version, as downloaded, gets the new version) |
 | macOS `.dmg` | the new Mimvox.app replaces the one in Applications |
 | Linux `.deb` | **Download** opens the release page; install the new `.deb` as before |
 
-Your voices, results and the engine runtime are not touched by an update. To turn the check off, set
+Your voices, results and the engine runtime are not touched by an update. When a new version needs newer engine
+packages or models, a second banner says **This version needs a setup update**: **Run setup** runs setup again into
+the same data folder, which installs only what changed, and the engine restarts by itself when it is done. To turn the check off, set
 `"check_updates": false` in `settings.json` in your data folder.
 
 ## 2. The window at a glance

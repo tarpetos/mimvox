@@ -8,7 +8,8 @@
 //!
 //! * Windows (setup .exe, or .msi when installed from one): the installer runs without questions; it starts the app
 //!   again when the user chose "Restart now".
-//! * Linux AppImage: the new AppImage replaces the file the app was started from.
+//! * Linux AppImage: the new AppImage replaces the file the app was started from; a file named after the old version
+//!   (`mimvox_0.1.5_x86_64.AppImage`) is renamed after the new one.
 //! * macOS: the new `Mimvox.app` replaces the installed one.
 //!
 //! A `.deb` install, a loose binary or an app bundle outside an `.app` cannot replace itself: the app only says that
@@ -128,18 +129,39 @@ pub fn install_pending() {
     let Some((mut update, bytes)) = READY.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
     let relaunch = RELAUNCH.load(Ordering::Relaxed);
     update.config = config(relaunch);
+    let new_version = update.version.clone();
     if let Err(e) = update.install(bytes) {
         eprintln!("mimvox: the update could not be installed: {e}");
         return;
     }
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from).map(|path| rename_appimage(path, &new_version));
     if relaunch {
         let started = if cfg!(target_os = "macos") {
             app_bundle().map(|app| std::process::Command::new("open").arg("-n").arg(app).spawn())
         } else {
-            std::env::var_os("APPIMAGE").map(|image| std::process::Command::new(image).spawn())
+            appimage.map(|image| std::process::Command::new(image).spawn())
         };
         if let Some(Err(e)) = started {
             eprintln!("mimvox: the updated app could not be started: {e}");
+        }
+    }
+}
+
+/// The updated AppImage keeps its file, so a name that carries the old version (`mimvox_0.1.5_x86_64.AppImage`, as
+/// downloaded) is changed to the new one. Any other name (`Mimvox.AppImage`, chosen by the user) stays. Returns the
+/// path the AppImage has now.
+fn rename_appimage(path: PathBuf, new_version: &str) -> PathBuf {
+    let old = format!("_{}_", env!("CARGO_PKG_VERSION"));
+    let Some(name) = path.file_name().and_then(|n| n.to_str()).filter(|n| n.contains(&old)) else { return path };
+    let renamed = path.with_file_name(name.replacen(&old, &format!("_{new_version}_"), 1));
+    if renamed.exists() {
+        return path; // never overwrite another file
+    }
+    match std::fs::rename(&path, &renamed) {
+        Ok(()) => renamed,
+        Err(e) => {
+            eprintln!("mimvox: the updated AppImage keeps its old name ({e})");
+            path
         }
     }
 }
