@@ -151,12 +151,11 @@ jobs:
           awk -v v="## $VERSION" '$0 == v {on = 1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then echo "See CHANGELOG.md." > notes.md; fi
           cd out
-          # The macOS update bundle gets a versioned name; signatures only the updater uses are dropped.
+          # The macOS update bundle gets a versioned name.
           if [ -f Mimvox.app.tar.gz ]; then
             mv Mimvox.app.tar.gz "Mimvox_${VERSION}_aarch64.app.tar.gz"
             mv Mimvox.app.tar.gz.sig "Mimvox_${VERSION}_aarch64.app.tar.gz.sig"
           fi
-          rm -f ./*.deb.sig ./*.dmg.sig
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           # One manifest entry: <os>-<arch>, a file
           # pattern and the updater's format for it.
@@ -176,6 +175,8 @@ jobs:
           } | jq -s 'add // {}' > ../platforms.json
           jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile n ../notes.md \
             --slurpfile p ../platforms.json '{version: $v, notes: $n, pub_date: $d, platforms: $p[0]}' > latest.json
+          # The updater reads each signature from latest.json, so the .sig files are not published.
+          rm -f ./*.sig
           sha256sum -- * > SHA256SUMS.txt
           jq . latest.json
           ls -l
