@@ -68,6 +68,11 @@ pub struct Now {
 
 pub struct PlaybarState {
     pub now: Option<Now>,
+    /// A track just started: (its player id, app clock deadline). If it has not moved by then, the output device is
+    /// stale (the PC slept, the device changed) and the player is reopened once (`settle`).
+    watch: Option<(u64, f64)>,
+    /// The output was reopened for this track already (no second retry).
+    retried: Option<u64>,
     pub looped: bool,
     pub speed: f32,
     /// The speed menu is open.
@@ -76,7 +81,7 @@ pub struct PlaybarState {
 
 impl Default for PlaybarState {
     fn default() -> Self {
-        PlaybarState { now: None, looped: false, speed: 1.0, speed_menu: false }
+        PlaybarState { now: None, watch: None, retried: None, looped: false, speed: 1.0, speed_menu: false }
     }
 }
 
@@ -96,6 +101,10 @@ fn player_do(s: &AppState, f: impl FnOnce(&crate::audio::Player)) {
 }
 
 fn start(s: &mut AppState, path: &Path, title: String, what: String, source: Source, live: bool) -> Result<(), String> {
+    // A stream that reported an error (the device went away) cannot play: open the output again first.
+    if s.player.as_ref().is_some_and(|p| shell::guard(|| p.error()).ok().flatten().is_some()) {
+        shell::restart_audio(s);
+    }
     let (looped, speed) = (s.playbar.looped, s.playbar.speed);
     let (track, len_s) = player_call(s, |p| {
         p.set_loop(looped);
@@ -103,7 +112,41 @@ fn start(s: &mut AppState, path: &Path, title: String, what: String, source: Sou
         p.play(path, live)
     })?;
     s.playbar.now = Some(Now { path: path.to_path_buf(), title, what, source, status: Status::Playing, pos_s: 0.0, len_s, live, track });
+    s.playbar.watch = Some((track, shell::clock_now(s) + STALL_S));
     Ok(())
+}
+
+/// How long a started track may stay at 0:00 before the output is taken for stale.
+const STALL_S: f64 = 1.5;
+
+/// The stall check of a just-started track (a one-shot deadline handed to `Tx::wake_at`, cleared by its first
+/// progress report): a stale output device is reopened and the track started again, once.
+pub fn settle(s: &mut AppState, tx: &mut rune::Tx) -> bool {
+    let Some((track, due)) = s.playbar.watch else { return false };
+    let now = shell::clock_now(s);
+    if now < due {
+        tx.wake_at(due);
+        return false;
+    }
+    s.playbar.watch = None;
+    let Some(n) = s.playbar.now.clone().filter(|n| n.track == track && n.status == Status::Playing && n.pos_s <= 0.0) else {
+        return false;
+    };
+    if s.playbar.retried == Some(track) {
+        shell::toast(s, Tone::Danger, "The audio output does not respond. Check the sound device in the system settings.");
+        return true;
+    }
+    shell::restart_audio(s);
+    let source = n.source;
+    match start(s, &n.path, n.title.clone(), n.what.clone(), source, n.live) {
+        Ok(()) => {
+            if let Some(m) = &s.playbar.now {
+                s.playbar.retried = Some(m.track);
+            }
+        }
+        Err(e) => shell::toast(s, Tone::Danger, e),
+    }
+    true
 }
 
 /// Stops what plays and plays `path`. `title` names it in the bar, `what` says what it is ("Redub · original").
@@ -271,6 +314,9 @@ fn on_progress(s: &mut AppState, track: u64, pos_s: f32, len_s: f32) -> bool {
     let changed = (n.pos_s - pos_s).abs() > 1e-3 || (n.len_s - len_s).abs() > 1e-3;
     n.pos_s = pos_s;
     n.len_s = len_s;
+    if pos_s > 0.0 && s.playbar.watch.is_some_and(|(t, _)| t == track) {
+        s.playbar.watch = None; // it plays: the output is alive
+    }
     changed
 }
 

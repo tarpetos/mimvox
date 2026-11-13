@@ -348,6 +348,14 @@ pub fn restart_engine(s: &mut AppState) {
     }
 }
 
+/// Drops the audio output and opens the default device again: after the PC slept, or the output device changed,
+/// the old stream stays open but never asks for sound (nothing plays, the position stays at 0).
+pub fn restart_audio(s: &mut AppState) {
+    s.player = None;
+    s.shell.audio_error = None;
+    start_audio(s);
+}
+
 fn start_audio(s: &mut AppState) {
     if s.player.is_some() {
         return;
@@ -413,6 +421,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
         return true;
     }
     changed |= ensure_warm(s);
+    changed |= super::playbar::settle(s, tx);
 
     // Toasts: drop the expired ones, wake for the next expiry.
     let before = s.shell.toasts.len();
