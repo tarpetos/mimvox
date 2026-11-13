@@ -1,7 +1,7 @@
 # Builds the desktop installers on GitHub-hosted runners (free for public repositories) with the scripts in
 # scripts/build/, and publishes them as a GitHub Release when a version tag is pushed.
 #
-#   git tag v0.1.6 && git push origin v0.1.6   build every installer and publish the release "Mimvox 0.1.6" (notes:
+#   git tag v0.1.6 && git push origin v0.1.6   build every installer and publish the release "v0.1.6" (notes:
 #                                              that version's section of CHANGELOG.md) with latest.json, the manifest
 #                                              the app's updater reads (src/update.rs)
 #   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
@@ -207,5 +207,5 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" out/* --clobber
           else
             # A full release, not a pre-release: the updater reads releases/latest, which skips pre-releases.
-            gh release create "$GITHUB_REF_NAME" out/* --latest --title "Mimvox $VERSION" --notes-file notes.md
+            gh release create "$GITHUB_REF_NAME" out/* --latest --title "$GITHUB_REF_NAME" --notes-file notes.md
           fi
