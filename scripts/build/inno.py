@@ -423,7 +423,9 @@ begin
   RemoveChoice := 0;
   UserStarted := False;
   { /REMOVE=0|1|2 answers the question up front (scripts, tests). }
-  if UninstallSilent() and AppRunning() and not WaitForAppToClose() then
+  { A script's run (/VERYSILENT) or a handed-over one (/REMOVE) waits for the app; the person's run shows the form,
+    which says the app runs and waits for it live. }
+  if (VerySilentRun() or (ExpandConstant('{param:REMOVE|}') <> '')) and AppRunning() and not WaitForAppToClose() then
   begin
     Log('Mimvox is still running: nothing is removed');
     Result := False;
