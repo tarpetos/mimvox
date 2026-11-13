@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-* **Installers for every platform:** Windows x64 and ARM64 (setup .exe), Linux x64 and ARM64 (AppImage
+* **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage
   and .deb) and macOS on Apple Silicon (.dmg), built by GitHub Actions for every release.
 * **Updates from inside the app:** a new version shows a banner under the header. **Update** downloads it, checks its
   signature and installs it when the app closes, or at once with **Restart now** (a running training or book pauses

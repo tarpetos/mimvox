@@ -41,10 +41,9 @@ Download the installer for your system from the [latest release](https://github.
 | System | File | How to install |
 | --- | --- | --- |
 | Windows (x64) | `mimvox_<version>_x64-setup.exe` | Run it. No administrator rights needed. |
-| Windows (ARM) | `mimvox_<version>_arm64-setup.exe` | Run it. |
 | macOS (Apple Silicon) | `Mimvox_<version>_aarch64.dmg` | Open it and drag **Mimvox** into **Applications**. |
-| Linux (any distribution) | `mimvox_<version>_x86_64.AppImage` (`aarch64` on ARM) | Make it executable (`chmod +x`), then run it. |
-| Debian, Ubuntu | `mimvox_<version>_amd64.deb` (`arm64` on ARM) | `sudo apt install ./mimvox_<version>_amd64.deb` |
+| Linux (any distribution) | `mimvox_<version>_x86_64.AppImage` | Make it executable (`chmod +x`), then run it. |
+| Debian, Ubuntu | `mimvox_<version>_amd64.deb` | `sudo apt install ./mimvox_<version>_amd64.deb` |
 
 The installers are not signed with a paid certificate yet, so the system warns the first time:
 

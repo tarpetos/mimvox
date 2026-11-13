@@ -6,7 +6,7 @@
 #                                              the app's updater reads (src/update.rs)
 #   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
 #
-# Targets: Windows x64 and ARM64 (setup .exe, Inno Setup), Linux x64 and ARM64 (AppImage and .deb), macOS
+# Targets: Windows x64 (setup .exe, Inno Setup), Linux x64 (AppImage and .deb), macOS
 # Apple Silicon (.dmg; Intel Macs cannot run the speech engine, current PyTorch has no builds for them). The installers
 # carry only the app and the engine sources; the
 # app's first-run setup downloads Python, PyTorch and the models.
@@ -48,15 +48,9 @@ jobs:
           - name: Windows x64
             os: windows-latest
             kind: windows
-          - name: Windows ARM64
-            os: windows-11-arm
-            kind: windows
           # 22.04 (glibc 2.35) so the AppImage also runs on older distributions.
           - name: Linux x64
             os: ubuntu-22.04
-            kind: linux
-          - name: Linux ARM64
-            os: ubuntu-22.04-arm
             kind: linux
           - name: macOS Apple Silicon
             os: macos-latest
@@ -67,7 +61,7 @@ jobs:
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.kind == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.kind == 'macos' && 'aarch64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -177,9 +171,7 @@ jobs:
           }
           {
             entry windows-x86_64 '*_x64-setup.exe' nsis   # an Inno Setup .exe: the updater runs it with its args
-            entry windows-aarch64 '*_arm64-setup.exe' nsis
             entry linux-x86_64 '*_x86_64.AppImage' appimage
-            entry linux-aarch64 '*_aarch64.AppImage' appimage
             entry macos-aarch64 '*_aarch64.app.tar.gz' app
           } | jq -s 'add // {}' > ../platforms.json
           jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile n ../notes.md \

@@ -26,16 +26,15 @@ one; without one they run on the processor, which works but is several times slo
 | System | NVIDIA GPU | AMD GPU | Apple GPU | Intel GPU | Processor only (Intel or AMD) |
 | --- | --- | --- | --- | --- | --- |
 | **Windows** x64 | **Yes** (CUDA; developed on an RTX 4070) | Processor only | n/a | Processor only | Yes, slow |
-| **Windows** ARM64 | n/a | n/a | n/a | n/a | Experimental, not tried yet |
 | **Linux** x64 | **Yes** (CUDA) | **Yes** (ROCm, new; tested on an RX 9070 XT) | n/a | Processor only | Yes, slow |
-| **Linux** ARM64 | Not supported | n/a | n/a | n/a | Experimental, not tried yet |
 | **macOS** Apple Silicon (M1 and later) | n/a | n/a | Best effort (MPS), not validated | n/a | n/a |
 
 Intel Macs are not supported: the official PyTorch builds for them stopped at 2.2, and the speech engine needs 2.8 or
-newer.
+newer. ARM64 Windows and Linux (Snapdragon laptops, ARM boards) are not built: their GPUs are not supported by
+PyTorch, so everything would run on the processor, and nobody has tried them.
 
-- **Installers:** Windows `setup.exe` (x64, ARM64), Linux `.AppImage` and `.deb` (x64, ARM64), one macOS `.dmg` for
-  Apple Silicon; every [release](https://github.com/tarpetos/mimvox/releases/latest) has them all.
+- **Installers:** Windows `setup.exe`, Linux `.AppImage` and `.deb` (all x64), and a macOS `.dmg` for Apple Silicon;
+  every [release](https://github.com/tarpetos/mimvox/releases/latest) has them all.
 - **Video memory:** 8 GB or more is recommended (the speech model needs about 4-5 GB, voice training more).
 - **What was tried:** Windows 11 with an NVIDIA RTX 4070 (daily), Arch Linux with an AMD RX 9070 XT. Everything else
   is built for, but less tested: reports are welcome.
@@ -153,7 +152,7 @@ More: [docs/architecture.md](docs/architecture.md).
 
 1. Download the installer for your system from the
    [latest release](https://github.com/tarpetos/mimvox/releases/latest): Windows (`setup.exe`), macOS
-   (`.dmg`, Apple Silicon), Linux (`.AppImage`, or `.deb` for Debian and Ubuntu); x64 and ARM.
+   (`.dmg`, Apple Silicon), Linux (`.AppImage`, or `.deb` for Debian and Ubuntu); Windows and Linux on x64.
 2. Start Mimvox, choose what to install and press **Run setup**. The app installs the speech engine and the models
    by itself, with a progress list in its window: about 13 GB for speech alone, about 33 GB for everything (voice
    training, translation, native accent, music removal). A part left out installs later in one click, on the screen
