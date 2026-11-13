@@ -18,6 +18,26 @@ on your computer: your recordings, your voice models and the generated speech ar
 > badly, or may change between versions, and setup may fail on systems it was not tried on. Keep your own copies of
 > recordings that matter. Bug reports are welcome: open an issue.
 
+## Platforms and hardware
+
+Where Mimvox runs, and what it computes on. Speech, training and Redub all run on the GPU when there is a supported
+one; without one they run on the processor, which works but is several times slower (training a voice takes many hours).
+
+| System | NVIDIA GPU | AMD GPU | Apple GPU | Intel GPU | Processor only (Intel or AMD) |
+| --- | --- | --- | --- | --- | --- |
+| **Windows** x64 | **Yes** (CUDA; developed on an RTX 4070) | Processor only | n/a | Processor only | Yes, slow |
+| **Windows** ARM64 | n/a | n/a | n/a | n/a | Experimental, not tried yet |
+| **Linux** x64 | **Yes** (CUDA) | **Yes** (ROCm, new; tested on an RX 9070 XT) | n/a | Processor only | Yes, slow |
+| **Linux** ARM64 | Not supported | n/a | n/a | n/a | Experimental, not tried yet |
+| **macOS** Apple Silicon (M1 and later) | n/a | n/a | Best effort (MPS), not validated | n/a | n/a |
+| **macOS** Intel | Not supported: current PyTorch has no Intel Mac builds, so the speech engine cannot be set up | | | | |
+
+- **Installers:** Windows `setup.exe` (x64, ARM64), Linux `.AppImage` and `.deb` (x64, ARM64), one macOS `.dmg` for
+  Apple Silicon and Intel; every [release](https://github.com/tarpetos/mimvox/releases/latest) has them all.
+- **Video memory:** 8 GB or more is recommended (the speech model needs about 4-5 GB, voice training more).
+- **What was tried:** Windows 11 with an NVIDIA RTX 4070 (daily), Arch Linux with an AMD RX 9070 XT. Everything else
+  is built for, but less tested: reports are welcome.
+
 ## Consent and legal: read this first
 
 > **Clone only your own voice, or a voice whose owner has given you explicit permission.** Voice cloning can be used
@@ -130,7 +150,7 @@ More: [docs/architecture.md](docs/architecture.md).
 ## Quick start
 
 1. Download the installer for your system from the
-   [latest release](https://github.com/tarpetos/mimvox/releases/latest): Windows (`setup.exe` or `.msi`), macOS
+   [latest release](https://github.com/tarpetos/mimvox/releases/latest): Windows (`setup.exe`), macOS
    (`.dmg`, Apple Silicon and Intel), Linux (`.AppImage`, or `.deb` for Debian and Ubuntu); x64 and ARM.
 2. Start Mimvox, choose what to install and press **Run setup**. The app installs the speech engine and the models
    by itself, with a progress list in its window: about 13 GB for speech alone, about 33 GB for everything (voice

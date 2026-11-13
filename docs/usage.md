@@ -40,7 +40,7 @@ Download the installer for your system from the [latest release](https://github.
 
 | System | File | How to install |
 | --- | --- | --- |
-| Windows (x64) | `mimvox_<version>_x64-setup.exe` (or the `.msi`) | Run it. No administrator rights needed. |
+| Windows (x64) | `mimvox_<version>_x64-setup.exe` | Run it. No administrator rights needed. |
 | Windows (ARM) | `mimvox_<version>_arm64-setup.exe` | Run it. |
 | macOS (Apple Silicon and Intel) | `Mimvox_<version>_universal.dmg` | Open it and drag **Mimvox** into **Applications**. |
 | Linux (any distribution) | `mimvox_<version>_x86_64.AppImage` (`aarch64` on ARM) | Make it executable (`chmod +x`), then run it. |
@@ -51,6 +51,19 @@ The installers are not signed with a paid certificate yet, so the system warns t
 - **Windows:** "Windows protected your PC": press **More info**, then **Run anyway**.
 - **macOS:** "Mimvox cannot be opened": right-click the app in Applications, choose **Open**, then **Open** again. If
   macOS still refuses, run `xattr -dr com.apple.quarantine /Applications/Mimvox.app` once.
+
+On Windows, the folder page also has **Create a desktop shortcut** and **Add to the Start menu** (both ticked).
+
+**Uninstalling on Windows** (Settings > Apps, or the Start menu entry) asks what to remove:
+
+| Choice | What goes | What stays |
+| --- | --- | --- |
+| **Only the app** (default) | the app | the speech engine, your voices, results and settings: installing again continues where you left off |
+| **The app, the speech engine and its models** | the app, `runtime/`, `cache/`, `tmp/` | your voices, recordings, results and settings |
+| **Everything** | all of the above, plus your voices, recordings, trained models, results, audiobooks and settings | anything else you keep in that folder |
+
+It removes only what Mimvox made in the data folder. A scripted `unins000.exe /VERYSILENT` keeps all data;
+`/REMOVE=0`, `1` or `2` picks a choice without the window.
 
 ### First launch: setup in the app
 
@@ -151,7 +164,7 @@ afterwards), or it installs by itself when you close the app.
 
 | Installed from | How it updates |
 | --- | --- |
-| Windows setup `.exe` / `.msi` | the installer runs with only a progress bar |
+| Windows setup `.exe` | the installer runs with only a progress bar, then the app starts again |
 | Linux AppImage | the new AppImage replaces the file you started (a name with the old version, as downloaded, gets the new version) |
 | macOS `.dmg` | the new Mimvox.app replaces the one in Applications |
 | Linux `.deb` | **Download** opens the release page; install the new `.deb` as before |
