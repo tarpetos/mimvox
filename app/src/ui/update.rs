@@ -373,23 +373,35 @@ fn notes_view(p: Palette, notes: &str) -> El {
 // ---- views -------------------------------------------------------------------------------------------------------
 
 /// The version in the header, a glass pill like the header's others: opens the Updates dialog. A newer version waiting
-/// adds a star (the update banner's sparkle, centred to sit level with the version) and turns the version accent.
+/// adds a small glint at the version's top right and turns the version accent.
 pub fn version_button(s: &AppState, p: Palette) -> El {
     let waiting = s.update.found.as_ref().is_some_and(|f| update::compare(&f.version) == Ordering::Greater);
     let help = match &s.update.found {
         Some(f) if waiting => format!("Mimvox {} is available: updates and what's new", f.version),
         _ => "Updates and what's new".to_owned(),
     };
-    let pill = row().key("version-button").role("button").label("Updates").h(28.0).px(11.0).gap(6.0).center().radius(14.0)
+    let pill = row().key("version-button").role("button").label("Updates").h(28.0).pl(11.0).pr(if waiting { 8.0 } else { 11.0 }).center()
+        .radius(14.0)
         .fill(if s.update.dialog { p.glass_hover } else { p.glass }).gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, if waiting { p.accent.alpha(0.45) } else { p.rim_bottom })
         .shadow(3.0, 10.0, p.shadow_soft);
+    let version = text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(rune::TextStyle::new(11.5, 600.0).lh(15.0))
+        .color(if waiting { p.accent } else { p.text_dim }).a11y_hidden();
     super::components::glass_edge(p, pill)
         .hover(p.glass_hover).focusable(true).cursor(rune::Cursor::Pointer).motion(super::theme::motion::UI).help(help)
         .on_press(|s: &mut AppState| open_dialog(s, None))
-        .children(waiting.then(|| icon_el(&icons::STAR, 13.0, p.accent)))
-        .child(text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(rune::TextStyle::new(11.5, 600.0).lh(15.0))
-            .color(if waiting { p.accent } else { p.text_dim }).a11y_hidden())
+        .child(row().items_start().gap(1.0).child(version).children(waiting.then(|| glint(p))))
+}
+
+/// The "new version" mark: a small filled glint at the version's top right, in a faint glow of the accent.
+fn glint(p: Palette) -> El {
+    const SIZE: f32 = 9.0;
+    const GLOW: f32 = 2.0 * SIZE;
+    let offset = (SIZE - GLOW) / 2.0;
+    el().size(SIZE, SIZE).mt(-4.0)
+        .child(el().pin(Some(offset), Some(offset), None, None).size(GLOW, GLOW).inert()
+            .radial_gradient([0.5, 0.5], [GLOW / 2.0, GLOW / 2.0], [(0.0, p.accent.alpha(0.28)), (1.0, p.accent.alpha(0.0))]))
+        .child(icon_el(&icons::GLINT, SIZE, p.accent))
 }
 
 pub fn banner(s: &AppState, p: Palette) -> Option<El> {
