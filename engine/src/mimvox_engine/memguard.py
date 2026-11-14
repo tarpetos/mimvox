@@ -1,10 +1,15 @@
 """Host memory guard: Mimvox must never run the computer out of memory.
 
 Windows: the engine puts itself in a Job Object at start-up; every worker it starts (and their children: training,
-ffmpeg) lands in the same job. The job caps the memory all of them may commit together (``JOB_OBJECT_LIMIT_JOB_MEMORY``,
-75 % of the installed RAM by default, ``MIMVOX_RAM_LIMIT_GB`` to override). Past the cap an allocation fails inside a
-Mimvox process (the op fails or the worker restarts, the app says why) instead of the system commit limit filling up,
-where other programs crash and the desktop breaks. The job also ends with the engine (``KILL_ON_JOB_CLOSE``), so a
+ffmpeg) lands in the same job. The job caps the memory all of them may commit together (``JOB_OBJECT_LIMIT_JOB_MEMORY``):
+the system's commit limit (RAM + page file) minus what every other program has committed, minus a reserve (10 % of the
+limit, at least 4 GB). It is set at start-up and recomputed before every worker op (``refresh``), so it shrinks when
+other programs grow and grows when they shrink; ``MIMVOX_RAM_LIMIT_GB`` fixes it instead. Not a share of the RAM: under WDDM every GPU
+allocation is charged to the process's commit too (so it can be paged out), so a worker with 6 GB on the card commits
+6 GB plus its own RAM (measured: a PyTorch process holding 2 GB of VRAM commits 3.6 GB; the engine with OmniVoice, RVC
+and the zero-shot converter peaked at 18.9 GB on a 12 GB card). Past the cap an allocation fails inside a Mimvox
+process (the op fails or the worker restarts, the app says why) instead of the system commit limit filling up, where
+other programs crash and the desktop breaks. The job also ends with the engine (``KILL_ON_JOB_CLOSE``), so a
 crashed engine never leaves a worker holding VRAM and RAM.
 
 Linux: the kernel's OOM killer picks the process with the highest score when memory runs out; the engine raises its
@@ -14,13 +19,16 @@ macOS: nothing to set (memory pressure handling is the system's).
 """
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import sys
 
 log = logging.getLogger("mimvox.memory")
 
-DEFAULT_SHARE = 0.75          # of the installed RAM, for everything Mimvox's engine runs
+RESERVE_SHARE = 0.10          # of the system commit limit, left to everything else
+RESERVE_MIN_GB = 4.0
+LOW_CAP_GB = 12.0             # below this, warn: generation with voice match may not fit
 LINUX_OOM_SCORE_ADJ = 500     # 0..1000 added to the OOM killer's score (raising it needs no privileges)
 
 _job: dict[str, object] = {}  # Windows: {"handle", "limit"} once the job is set up
@@ -35,6 +43,22 @@ def setup() -> None:
             _setup_linux()
     except Exception:  # the guard must not stop the engine
         log.exception("could not set up the memory guard")
+
+
+def refresh() -> None:
+    """Windows: recompute the cap from the system's commit now (cheap; a no-op elsewhere or with a fixed cap)."""
+    if "handle" not in _job or os.environ.get("MIMVOX_RAM_LIMIT_GB"):
+        return
+    try:
+        commit_limit, committed = _system_commit()
+        ours = _job_commit()
+        old, new = int(_job["limit"]), _limit_bytes(commit_limit, committed - ours)
+        _set_limit(new)
+        if abs(new - old) >= 2**30:
+            log.info("memory cap now %.1f GB (Mimvox uses %.1f GB, other programs %.1f GB of the %.1f GB limit)",
+                     new / 2**30, ours / 2**30, (committed - ours) / 2**30, commit_limit / 2**30)
+    except Exception:  # keep the previous cap
+        log.debug("could not refresh the memory cap", exc_info=True)
 
 
 def peak_gb() -> float | None:
@@ -52,6 +76,7 @@ def report(when: str) -> None:
 
 # --------------------------------------------------------------------------------------------------- Windows
 
+@functools.cache
 def _structs():  # type: ignore[no-untyped-def]
     import ctypes
     from ctypes import wintypes
@@ -72,70 +97,138 @@ def _structs():  # type: ignore[no-untyped-def]
                     ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
                     ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
-    class MemStatus(ctypes.Structure):
-        _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD), ("ullTotalPhys", ctypes.c_uint64),
-                    ("ullAvailPhys", ctypes.c_uint64), ("ullTotalPageFile", ctypes.c_uint64),
-                    ("ullAvailPageFile", ctypes.c_uint64), ("ullTotalVirtual", ctypes.c_uint64),
-                    ("ullAvailVirtual", ctypes.c_uint64), ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+    class PerfInfo(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("CommitTotal", ctypes.c_size_t), ("CommitLimit", ctypes.c_size_t),
+                    ("CommitPeak", ctypes.c_size_t), ("PhysicalTotal", ctypes.c_size_t),
+                    ("PhysicalAvailable", ctypes.c_size_t), ("SystemCache", ctypes.c_size_t),
+                    ("KernelTotal", ctypes.c_size_t), ("KernelPaged", ctypes.c_size_t),
+                    ("KernelNonpaged", ctypes.c_size_t), ("PageSize", ctypes.c_size_t),
+                    ("HandleCount", wintypes.DWORD), ("ProcessCount", wintypes.DWORD), ("ThreadCount", wintypes.DWORD)]
 
-    return ctypes, wintypes, Extended, MemStatus
+    return ctypes, wintypes, Extended, PerfInfo
 
 
+JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 JOB_OBJECT_LIMIT_JOB_MEMORY = 0x200
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 
 
-def _setup_windows() -> None:
-    ctypes, wintypes, Extended, MemStatus = _structs()
+@functools.cache
+def _k32():  # type: ignore[no-untyped-def]
+    ctypes, wintypes, _, _ = _structs()
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.CreateJobObjectW.restype = wintypes.HANDLE
     k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
     k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                              ctypes.c_void_p]
     k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
     k32.GetCurrentProcess.restype = wintypes.HANDLE
-    k32.GlobalMemoryStatusEx.argtypes = [ctypes.c_void_p]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k32
 
-    ms = MemStatus()
-    ms.dwLength = ctypes.sizeof(ms)
-    if not k32.GlobalMemoryStatusEx(ctypes.byref(ms)):
-        raise OSError(ctypes.get_last_error(), "GlobalMemoryStatusEx failed")
-    limit = _limit_bytes(ms.ullTotalPhys)
 
-    job = k32.CreateJobObjectW(None, None)
-    if not job:
-        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+def _system_commit() -> tuple[int, int]:
+    """(commit limit, committed now) of the whole system, in bytes."""
+    ctypes, wintypes, _, PerfInfo = _structs()
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    psapi.GetPerformanceInfo.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    pi = PerfInfo()
+    pi.cb = ctypes.sizeof(pi)
+    if not psapi.GetPerformanceInfo(ctypes.byref(pi), pi.cb):
+        raise OSError(ctypes.get_last_error(), "GetPerformanceInfo failed")
+    return pi.CommitLimit * pi.PageSize, pi.CommitTotal * pi.PageSize
+
+
+def _job_commit() -> int:
+    """What the job's processes have committed now (their private bytes), in bytes."""
+    ctypes, wintypes, _, _ = _structs()
+    k32 = _k32()
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+
+    class PidList(ctypes.Structure):
+        _fields_ = [("NumberOfAssignedProcesses", wintypes.DWORD), ("NumberOfProcessIdsInList", wintypes.DWORD),  # noqa: RUF012
+                    ("ProcessIdList", ctypes.c_size_t * 256)]
+
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),  # noqa: RUF012 - ctypes layout
+                    *[(n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                                     "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                                     "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
+                                                     "PrivateUsage")]]
+
+    ids = PidList()
+    if not k32.QueryInformationJobObject(_job["handle"], JOB_OBJECT_BASIC_PROCESS_ID_LIST, ctypes.byref(ids),
+                                         ctypes.sizeof(ids), None):
+        raise OSError(ctypes.get_last_error(), "QueryInformationJobObject failed")
+    total = 0
+    for pid in ids.ProcessIdList[:ids.NumberOfProcessIdsInList]:
+        h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            continue
+        try:
+            c = Counters()
+            c.cb = ctypes.sizeof(c)
+            if psapi.GetProcessMemoryInfo(h, ctypes.byref(c), c.cb):
+                total += c.PrivateUsage
+        finally:
+            k32.CloseHandle(h)
+    return total
+
+
+def _set_limit(limit: int) -> None:
+    ctypes, _, Extended, _ = _structs()
     info = Extended()
     info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     info.JobMemoryLimit = limit
-    if not k32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info),
-                                       ctypes.sizeof(info)):
+    if not _k32().SetInformationJobObject(_job["handle"], JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info),
+                                          ctypes.sizeof(info)):
         raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+    _job["limit"] = limit
+
+
+def _setup_windows() -> None:
+    ctypes, _, _, _ = _structs()
+    k32 = _k32()
+    commit_limit, committed = _system_commit()
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+    _job["handle"] = job  # stays open for the engine's life (closing it ends the job and its processes)
+    limit = _limit_bytes(commit_limit, committed)
+    _set_limit(limit)
     if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
+        _job.clear()
         raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
-    _job.update(handle=job, limit=limit)  # the handle stays open for the engine's life (closing it ends the job)
-    log.info("memory cap for the engine and its workers: %.1f GB (%.1f GB RAM installed)", limit / 2**30,
-             ms.ullTotalPhys / 2**30)
+    log.info("memory cap for the engine and its workers: %.1f GB (system commit limit %.1f GB, %.1f GB in use at "
+             "start)", limit / 2**30, commit_limit / 2**30, committed / 2**30)
+    if limit < LOW_CAP_GB * 2**30:
+        log.warning("little memory is free (%.1f GB for Mimvox): close other programs or enlarge the page file, "
+                    "or longer jobs may stop with 'not enough free memory'", limit / 2**30)
 
 
-def _limit_bytes(total_phys: int) -> int:
+def _limit_bytes(commit_limit: int, others: int) -> int:
+    """The cap: the commit limit minus what the other programs have committed and the reserve; 1 GB at the least."""
     override = os.environ.get("MIMVOX_RAM_LIMIT_GB")
     if override:
         return int(float(override) * 2**30)
-    return int(total_phys * DEFAULT_SHARE)
+    reserve = max(RESERVE_MIN_GB * 2**30, RESERVE_SHARE * commit_limit)
+    return int(max(2**30, commit_limit - others - reserve))
 
 
 def _query():  # type: ignore[no-untyped-def]
     if "handle" not in _job:
         return None
     try:
-        ctypes, wintypes, Extended, _ = _structs()
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
-                                                  ctypes.c_void_p]
+        ctypes, _, Extended, _ = _structs()
         info = Extended()
-        if not k32.QueryInformationJobObject(_job["handle"], JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info),
-                                             ctypes.sizeof(info), None):
+        if not _k32().QueryInformationJobObject(_job["handle"], JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                                                ctypes.byref(info), ctypes.sizeof(info), None):
             return None
         return info
     except Exception:  # noqa: BLE001

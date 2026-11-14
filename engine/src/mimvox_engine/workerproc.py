@@ -136,6 +136,7 @@ class WorkerClient:
     async def _call_once(self, op: str, params: dict[str, Any] | None, progress: Progress | None,
                          timeout: float | None, start: bool) -> dict[str, Any]:
         req = _Request(next(self._ids), {"op": op, **(params or {})}, progress, timeout, start)
+        memguard.refresh()  # the memory cap follows what the other programs use now (Windows)
         self._ensure_owner()
         assert self._queue is not None
         self._queue.put_nowait(req)

@@ -7,8 +7,9 @@
   of memory, other programs crashed and the desktop lost its wallpaper and screenshots. Now every engine process caps
   its GPU use at what is free beyond a reserve for the desktop and other programs (1.5 GB, `MIMVOX_VRAM_RESERVE_GB`); an
   operation that does not fit makes the other idle models step aside and is retried once, else it stops with a clear
-  message. On Windows the engine and all its workers share a memory cap (75 % of the RAM, `MIMVOX_RAM_LIMIT_GB`) and
-  end with the engine; on Linux the system stops Mimvox first if memory runs out.
+  message. On Windows the engine and all its workers share a memory cap that follows the system: the commit limit
+  (RAM + page file) minus what other programs use and a reserve (10 %, at least 4 GB; `MIMVOX_RAM_LIMIT_GB` fixes
+  it), and they end with the engine; on Linux the system stops Mimvox first if memory runs out.
 * **Reference transcription:** Whisper for a new reference clip loads at half size (1.6 GB instead of 3.2 GB) on the
   GPU only when it fits, otherwise on the processor, and moves to the processor if the GPU runs out midway.
 

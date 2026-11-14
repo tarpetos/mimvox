@@ -70,8 +70,9 @@ flowchart LR
   allocator at what it holds plus what the card has free beyond a reserve for the desktop (`worker_kit.gpu_fence`):
   on Windows the NVIDIA driver would otherwise move an overflow into system RAM until the whole system runs out. An op
   that does not fit fails with `no_vram`; the engine asks the idle workers to drop their models and retries it once
-  (`workerproc.make_room`). On Windows the engine and its workers share one Job Object with a memory cap (75 % of the
-  RAM) that also ends them with the engine; on Linux the engine raises its OOM score, so the kernel stops Mimvox first
+  (`workerproc.make_room`). On Windows the engine and its workers share one Job Object whose memory cap is the system's
+  commit limit minus what other programs use and a reserve, recomputed before every worker op (GPU memory counts
+  against commit under WDDM, so a share of the RAM would be wrong); the job also ends them with the engine; on Linux the engine raises its OOM score, so the kernel stops Mimvox first
   (`memguard.py`).
 - **A persistent engine.** Loading the models is the slow part. The engine starts once with the app and keeps OmniVoice
   and the RVC worker loaded in GPU memory, so each phrase pays only for synthesis (see
