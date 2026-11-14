@@ -117,6 +117,25 @@ pub fn glass_edge(p: Palette, e: El) -> El {
         .box_shadow(Shadow { x: -1.0, y: -1.0, blur: 10.0, spread: 0.0, color: p.highlight.alpha(p.highlight.a * 0.14), inset: true })
 }
 
+/// A panel that opens over the page next to the element keyed `anchor` (below it, or above when there is no room),
+/// `width` points wide; a press outside it runs `close`. Add it at the root, above the screens. The page under it
+/// does not move: sections that unfolded in place pushed everything below them down and jumped under the pointer.
+/// A panel taller than the window scrolls.
+pub fn popover(p: Palette, key: &str, anchor: &str, width: f32, align: Align, close: impl Fn(&mut AppState) + 'static, content: El) -> El {
+    // The page dims a little, so the panel reads as the thing in front; the panel is opaque (text under a
+    // translucent one showed through).
+    let scrim = el().key(format!("{key}-scrim")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.22)).on_press(close);
+    let panel = col().key(format!("{key}-panel")).w(width).min_h(0.0).padding(14.0).radius(radius::PANEL)
+        .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0))
+        .gradient(p.glass_top, p.glass_bottom)
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
+        .shadow(18.0, 50.0, p.shadow)
+        .anchored_fit(anchor.to_owned(), rune::Side::Bottom, align, 6.0)
+        .transition(Transition::scale(0.98))
+        .child(col().key(format!("{key}-body")).w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).child(content));
+    el().key(format!("{key}-layer")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(glass_edge(p, panel))
+}
+
 /// Accent-tinted luminous glass (the primary button, the active tab lens, the play button): a translucent
 /// accent fill with a bright top, a white-to-accent rim and a soft accent glow. Apply to a sized element.
 pub fn accent_glass(p: Palette, e: El) -> El {

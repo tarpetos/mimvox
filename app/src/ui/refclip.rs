@@ -158,6 +158,15 @@ pub struct LangRef {
     importing: bool,
 }
 
+/// The extra sections under the reference clip, folded until asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum More {
+    /// "Use other recordings": the reference from media files.
+    Media,
+    /// Reference clips in other languages.
+    Languages,
+}
+
 #[derive(Default)]
 pub struct RefState {
     pending: HashMap<u64, Kind>,
@@ -172,6 +181,8 @@ pub struct RefState {
     pub loading: bool,
     pub applying: bool,
     pub open: bool,
+    /// Which of the card's extra sections is unfolded (one at a time, so the card stays short).
+    pub more: Option<More>,
     pub error: Option<String>,
     /// A language reference being added (record / import, check, save).
     pub adding: Option<LangRef>,
@@ -304,6 +315,7 @@ fn first_sentences(text: &str, est_s: f32, secs: f32) -> String {
 pub fn start_language(s: &mut AppState, code: &str) {
     stop_preview(s);
     cancel_adding(s);
+    s.voices.refclip.more = Some(More::Languages); // the panel the new clip is recorded in
     let code = lang::base(code);
     let sample = SAMPLES.iter().find(|(c, _)| *c == code).map(|(_, t)| (*t).to_owned());
     let voice = s.shell.active_voice.clone().unwrap_or_default();
@@ -694,7 +706,6 @@ fn languages_block(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let busy = r.adding.as_ref().is_some_and(|a| a.phase != AddPhase::Ready && a.phase != AddPhase::Checked);
     let head = row().w_full().gap(10.0).center_y().justify_between()
         .child(col().gap(1.0).min_w(0.0).grow(1.0)
-            .child(text("Other languages").font(ty::LABEL).color(p.text))
             .child(text(format!("Recorded in {own}. A short clip in another language makes speech in it sound native.")).font(ty::CAPTION).color(p.text_faint).wrap()))
         .child(lang::chip(p, "refclip-add-lang", "Add a language", lang::Target::Reference, !busy));
     let mut c = col().key("refclip-langs").w_full().gap(8.0).child(head);
@@ -907,11 +918,82 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
             c = c.child(list);
         }
     }
-    c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(super::refmedia::block(s, p, info, r.pool.is_some()));
+    // The two extra sections are one line each: all of it open at once was more than anyone could take in. A press
+    // opens the section in a panel over the page ([`more_overlay`]), so the card and the voices under it do not
+    // move. The line says what is going on in a section that is closed.
+    let media = &r.media;
+    let mine = media.voice.as_deref() == Some(info.id.as_str());
+    let media_note = if mine && media.busy() {
+        "Working on your files…"
+    } else if mine && media.error.is_some() {
+        "The files could not be used: open to see why"
+    } else if mine && media.outcome.is_some() {
+        "A new reference is ready: open to listen"
+    } else if r.pool.is_some() {
+        "Combined files are in use"
+    } else {
+        "Combine files of the same speaker into a cleaner reference"
+    };
+    c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(p, "more-media", "Use other recordings", media_note, media_open(s), More::Media));
     if r.current.is_some() || !info.references.is_empty() || r.adding.is_some() {
-        c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(languages_block(s, p, info));
+        let have: Vec<String> = info.references.iter().map(|c| super::lang::label(c)).collect();
+        let note = match &r.adding {
+            Some(a) => format!("Adding {}: open to go on", super::lang::label(&a.lang)),
+            None if have.is_empty() => "A short clip in another language makes speech in it sound native".to_owned(),
+            None => have.join(", "),
+        };
+        c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(p, "more-langs", "Other languages", &note, r.more == Some(More::Languages), More::Languages));
     }
     el().w_full().padding(12.0).radius(radius::CONTROL).fill(p.well).border(1.0, p.well_rim).child(c)
+}
+
+/// Whether "Use other recordings" is open: asked for, or files are being dragged over the Voices screen.
+fn media_open(s: &AppState) -> bool {
+    s.voices.refclip.more == Some(More::Media) || (s.formats.over && s.screen == Screen::Voices)
+}
+
+/// The line of an extra section: its name, what it holds, and "Open". A press opens it in a panel over the page.
+fn more_row(p: &Palette, key: &str, title: &str, note: &str, open: bool, which: More) -> El {
+    row().key(key.to_owned()).role("button").label(title.to_owned()).w_full().gap(10.0).center_y().px(6.0).py(7.0).radius(radius::CONTROL)
+        .fill(if open { p.glass_hover } else { rune::Color::TRANSPARENT })
+        .hover(p.glass_hover).focusable(true)
+        .on_press(move |s: &mut AppState| {
+            let r = &mut s.voices.refclip;
+            r.more = if r.more == Some(which) { None } else { Some(which) };
+        })
+        .child(text(title.to_owned()).font(ty::LABEL).color(p.text).a11y_hidden())
+        .child(text(note.to_owned()).font(ty::CAPTION).color(p.text_faint).grow(1.0).min_w(0.0).truncate().a11y_hidden())
+        .child(text("Open").font(ty::CAPTION).color(p.accent).a11y_hidden())
+}
+
+/// The open extra section of the active voice, in a panel over the page under its line (added at the root by the
+/// shell). `None` when neither is open.
+pub fn more_overlay(s: &AppState, p: &Palette) -> Option<El> {
+    if s.screen != Screen::Voices {
+        return None;
+    }
+    let r = &s.voices.refclip;
+    let info = shell::active_voice(s)?;
+    let which = if media_open(s) { More::Media } else { r.more? };
+    let (anchor, title, body) = match which {
+        More::Media => ("more-media", "Use other recordings", super::refmedia::block(s, p, info, r.pool.is_some())),
+        More::Languages => ("more-langs", "Other languages", languages_block(s, p, info)),
+    };
+    let content = col().w_full().gap(12.0)
+        .child(row().w_full().center_y().justify_between()
+            .child(text(title).font(ty::TITLE).color(p.text))
+            .child(kit::button(p, "Done", BtnKind::Glass, true, close_more)))
+        .child(body);
+    Some(crate::ui::components::popover(*p, "voice-more", anchor, 640.0, rune::Align::Start, close_more, content))
+}
+
+/// Closes the open section's panel. A clip that is being recorded keeps it open: the recording would go on unseen.
+fn close_more(s: &mut AppState) {
+    let r = &mut s.voices.refclip;
+    if r.more == Some(More::Languages) && r.adding.as_ref().is_some_and(|a| a.recorder.is_some()) {
+        return;
+    }
+    r.more = None;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1005,6 +1087,7 @@ fn scene_none(s: &mut AppState) {
 /// References in Ukrainian and German, and a Polish one checked and ready to save.
 fn scene_langs(s: &mut AppState) {
     demo(s);
+    s.voices.refclip.more = Some(More::Languages);
     s.shell.voices[0].references = vec!["uk".into(), "de".into()];
     s.voices.refclip.adding = Some(LangRef {
         voice: "my-voice".into(),
@@ -1021,6 +1104,7 @@ fn scene_langs(s: &mut AppState) {
 /// Recording a Ukrainian reference (live meter).
 fn scene_langs_recording(s: &mut AppState) {
     demo(s);
+    s.voices.refclip.more = Some(More::Languages);
     s.shell.voices[0].references = vec!["de".into()];
     s.voices.refclip.adding = Some(LangRef {
         voice: "my-voice".into(),
@@ -1037,6 +1121,7 @@ fn scene_langs_recording(s: &mut AppState) {
 /// The language picker open on "Add a language".
 fn scene_langs_picker(s: &mut AppState) {
     demo(s);
+    s.voices.refclip.more = Some(More::Languages);
     s.shell.voices[0].references = vec!["uk".into()];
     s.langpick.open = Some((lang::Target::Reference, "refclip-add-lang".into()));
 }

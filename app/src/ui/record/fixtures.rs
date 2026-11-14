@@ -77,6 +77,38 @@ pub fn scene_picker(s: &mut AppState) {
     base(s);
 }
 
+/// The start page with "This is for: a new voice".
+pub fn scene_new_voice(s: &mut AppState) {
+    base(s);
+    s.record.for_new = true;
+    s.record.new_name = rune::TextEdit::new("Anna");
+}
+
+/// Files hover over the start page.
+pub fn scene_files_hover(s: &mut AppState) {
+    base(s);
+    s.record.import_over = true;
+}
+
+/// The "whose voice is it" dialog after files were dropped.
+pub fn scene_files_ask(s: &mut AppState) {
+    base(s);
+    s.record.files_offer(vec![PathBuf::from("/home/me/interview-part-1.mp3"), PathBuf::from("/home/me/interview-part-2.mp3")], false);
+}
+
+pub fn scene_files_working(s: &mut AppState) {
+    base(s);
+    s.record.files.stage = super::FilesStage::Working { voice: "Interview part 1".into(), note: "Checking and cleaning 2 files…".into() };
+}
+
+pub fn scene_files_done(s: &mut AppState) {
+    base(s);
+    s.record.files.stage = super::FilesStage::Done {
+        voice: "Interview part 1".into(), minutes: 4.6, level: Level::Trainable,
+        notes: vec!["Left out: intro.mp4 (no clear speech).".into(), "Background music removed from 1 file.".into()],
+    };
+}
+
 pub fn scene_own_text(s: &mut AppState) {
     base(s);
     s.record.phase = Phase::Own;

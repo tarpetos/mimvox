@@ -8,6 +8,27 @@
   with 22 % and Hungarian with 39 % (both already in the list). Record has Romanian reading texts too (Quick,
   Standard and Pro, written for Romanian, not translated), with the analysis that says which sounds a text covers:
   a voice can be recorded and trained in Romanian from start to finish.
+* **A voice from recordings you already have:** Record's start page now begins with a card for audio or video
+  files of one person (drop them or press **Choose files…**): no reading and no preset. A dialog asks whose voice it
+  is, **a new voice** (named after the first file, the default) or **more recordings of the active one**, and the
+  card then says how much clean speech the voice has, with **Speak with it** and **Train a closer copy**. Files
+  dropped on Speak or Train go the same way; they used to replace the active voice's reference without asking, so
+  the selected voice suddenly spoke as somebody else.
+* **Record says what it is for:** **This is for** chooses the active voice or **A new voice** (with its name) for a
+  reading. The voice menu's **New voice** opens Record set to a new voice (it did nothing when Record was already
+  open), and creating an empty voice on the Voices screen goes on to Record for it.
+* **The window remembers its size and place,** and opens in the middle of the main display, not maximized, the
+  first time. A window closed maximized opens maximized, on the display it was closed on (not on the one the app
+  was started from).
+* **The app opens on the tab it was closed on** (Speak the first time).
+* **Less on screen at once.** Settings that are set once and rarely touched are one line that says what is chosen.
+  A press opens the choices in a panel over the page, so nothing on the page moves or jumps. Voices: **Use other
+  recordings** and **Other languages** under the reference clip (they filled the card). Redub: the mode's options appear once a file is chosen; **Accent** and
+  **Output** (video or audio, the background, the timing) are a line each; Re-speak first asks only what transcribing
+  needs, and once there is a transcript its settings fold into **Transcription**, **Accent** and **Output**, so the
+  transcript gets the room.
+* **Clearer empty states:** Train and Speak without a voice offer **Add a voice**; Speak's "Reference from media…"
+  is **More recordings of this voice…**.
 * **Much lighter on memory:** an idle Mimvox held 19 GB of memory and 4 GB of the graphics card; now the models leave
   after 10 idle minutes (`MIMVOX_IDLE_EXIT_S`) and the engine keeps 0.3 GB and nothing on the card; the next
   generation loads them again (about 10 s). Voice match starts only for a trained voice, not with the app. Each

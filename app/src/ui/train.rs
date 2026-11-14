@@ -257,6 +257,10 @@ pub fn clock_origin(s: &AppState) -> Option<f64> {
 /// keeps going. While a training runs the window is shown again with the "Training is running" dialog; otherwise the
 /// engine is stopped and the app quits. A quit that is not the user's close (system shutdown) goes straight through.
 pub fn on_close(s: &mut AppState, tx: &mut Tx) {
+    super::winplace::save(); // where the window was, for the next start
+    if let Some(tab) = s.screen.key() {
+        super::onboarding::save_setting("screen", serde_json::json!(tab)); // and the tab that was open
+    }
     if is_training(s) && !rune::quitting() {
         if s.train.close == CloseDialog::Hidden {
             s.train.close = CloseDialog::Ask;
@@ -610,9 +614,11 @@ fn no_voice(p: &Palette) -> El {
     kit::panel(p)
         .items_center()
         .gap(12.0)
-        .child(text("Pick a voice first").font(ty::TITLE).color(p.text))
-        .child(text("Training needs a voice with recordings. Create or select one on the Voices screen.").font(ty::BODY).color(p.text_dim).wrap())
-        .child(kit::button(p, "Go to Voices", BtnKind::Primary, true, |s: &mut AppState| s.screen = Screen::Voices))
+        .child(text("There is no voice to train yet").font(ty::TITLE).color(p.text))
+        .child(text("Training makes a voice sound closer to the person. It needs a voice with three minutes or more of recordings: add one from files or by reading aloud.").font(ty::BODY).color(p.text_dim).wrap())
+        .child(row().gap(10.0)
+            .child(kit::button(p, "Add a voice", BtnKind::Primary, true, super::record::start_new_voice))
+            .child(kit::button(p, "Your voices", BtnKind::Ghost, true, |s: &mut AppState| s.screen = Screen::Voices)))
 }
 
 fn stat(p: &Palette, label: &str, value: String) -> El {

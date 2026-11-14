@@ -24,6 +24,25 @@ pub enum Screen {
     Redub,
 }
 
+impl Screen {
+    /// The tab's name in `settings.json` (`screen`: the tab open when the app was closed). The welcome screen is not
+    /// a tab to come back to.
+    pub fn key(self) -> Option<&'static str> {
+        Some(match self {
+            Screen::Onboarding => return None,
+            Screen::Voices => "voices",
+            Screen::Record => "record",
+            Screen::Train => "train",
+            Screen::Speak => "speak",
+            Screen::Redub => "redub",
+        })
+    }
+
+    pub fn from_key(key: &str) -> Option<Screen> {
+        [Screen::Voices, Screen::Record, Screen::Train, Screen::Speak, Screen::Redub].into_iter().find(|s| s.key() == Some(key))
+    }
+}
+
 pub struct AppState {
     pub screen: Screen,
     /// Chrome state: theme, engine status, voice list, toasts (see `ui::shell`).
@@ -64,10 +83,11 @@ impl Default for AppState {
         // The recorder writes into the same data dir as the engine: one source of truth on the shell.
         let mut record = RecordState::default();
         record.data_dir = shell.data_dir.clone();
-        // Set up already: no welcome screen. Speak when a voice exists, else Voices (where "Get started" leads).
+        // Set up already: no welcome screen. With a voice, the tab that was open when the app was closed (Speak the
+        // first time); without one, Voices (where "Get started" leads).
         let onboarding = OnboardingState::default();
         let screen = if onboarding.runtime_present && !crate::ui::shell::headless_run() {
-            if has_voices(&shell.data_dir) { Screen::Speak } else { Screen::Voices }
+            if has_voices(&shell.data_dir) { last_screen(crate::ui::onboarding::setting("screen").as_ref()) } else { Screen::Voices }
         } else {
             Screen::default()
         };
@@ -96,8 +116,30 @@ impl Default for AppState {
 }
 
 /// Whether the data folder holds at least one voice (`voices/<id>/voice.json`), read once at start.
+/// The tab saved at the last close; Speak when nothing (or nothing known) is saved.
+fn last_screen(saved: Option<&serde_json::Value>) -> Screen {
+    saved.and_then(serde_json::Value::as_str).and_then(Screen::from_key).unwrap_or(Screen::Speak)
+}
+
 fn has_voices(data_dir: &std::path::Path) -> bool {
     std::fs::read_dir(data_dir.join("voices"))
         .map(|dir| dir.flatten().any(|e| e.path().join("voice.json").is_file()))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_last_tab_comes_back_and_anything_else_is_speak() {
+        for tab in [Screen::Voices, Screen::Record, Screen::Train, Screen::Speak, Screen::Redub] {
+            assert_eq!(last_screen(Some(&json!(tab.key().unwrap()))), tab);
+        }
+        assert_eq!(Screen::Onboarding.key(), None);
+        assert_eq!(last_screen(None), Screen::Speak);
+        assert_eq!(last_screen(Some(&json!("onboarding"))), Screen::Speak);
+        assert_eq!(last_screen(Some(&json!(3))), Screen::Speak);
+    }
 }
