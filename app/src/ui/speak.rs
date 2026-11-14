@@ -1,38 +1,4 @@
 //! Speak screen: type text, press Generate, hear it in your voice while it is still being made.
-//!
-//! Flow: `tts.generate` -> `tts.chunk` per text segment -> `tts.done` (the result lands in the history list with
-//! play / open / reveal actions). Each result is saved as one file in the format of the "Save as" chip in the Results
-//! header (`output_format`, shared with Redub; see `formats::output_chip`); a non-WAV result plays from the engine's
-//! playback WAV.
-//!
-//! The output language (a chip in the Style panel, any language the engine speaks) defaults to the language the active
-//! voice was recorded in and is remembered per voice (`speak_languages` in `settings.json`); `tts.generate` sends it as
-//! `language`. Another language than the voice's own shows a hint about per-language reference clips; Ukrainian
-//! shows how to fix a wrong word stress ("+" before the vowel, see `backends/omnivoice_stress.py`).
-//!
-//! English output without an English reference clip (no `reference_en.wav`, and `reference.wav` is detected as another
-//! language, or, while its language is not known yet, the voice was recorded in another one) shows an "Accent" choice
-//! (see [`accent_block`], shared with Redub's Translate & dub and Re-speak): "Native (American)" sends
-//! `accent: "native-us"` (a native reference voice speaks; a trained voice's RVC model brings the user's timbre back,
-//! an untrained voice gets it from its reference clip through the engine's zero-shot converter), "Like my recordings"
-//! the voice's own reference. Native is the default. An untrained voice needs the zero-shot converter (`hello` ->
-//! `zero_shot_vc`, installed by setup): without it the choice is shown disabled with a way to add an English clip
-//! instead. The choice and the native speaker override are remembered in `settings.json` (`accent`, `native_voice`)
-//! once the user changes them. A job spoken from a clip in another language than its text (`reference_note`) shows a
-//! warning toast.
-//!
-//! "Open text file…" (and a text file dropped on the window) reads a document with `text.import`: a short text lands in
-//! the editor, a long one opens in Book mode (the Text / Book switch at the top right; see `ui::book`), which reads a
-//! whole book with these same Style settings. While a book is being read, Generate waits (the book holds the engine's
-//! generation slot).
-//!
-//! The Results list survives restarts: once the engine is ready it is filled from `outputs.list` (see `ui::history`),
-//! and a result from an earlier session plays through `outputs.play`.
-//!
-//! Playback is pre-buffered: a single-segment job plays at once; for longer text the finished segments are held
-//! back until, by the engine's real-time factor, the segments still to come will arrive before the buffered audio
-//! runs out (see [`can_start`]). So it starts as early as it can without ever stuttering, and never later than
-//! the end of the generation.
 
 use super::components::{
     Button, Slider, TextArea, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel,
@@ -51,28 +17,25 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// One finished generation in the history list (newest first): made this session, or loaded with `outputs.list`.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct Take {
     pub id: u64,
-    /// The text spoken (a result saved before sidecars: its file name).
+    /// For a result saved before sidecars: its file name.
     pub text: String,
     pub voice: String,
-    /// The saved file (`<data>/outputs`, in the chosen format): Show in folder, Open file, Export.
     pub path: PathBuf,
-    /// A WAV of it to play (the saved file itself when that is a WAV). A loaded result in another format has none
-    /// until its play button asks the engine for one (`outputs.play`; this is the saved file meanwhile).
+    /// A WAV of it to play. A loaded result in another format has none until its play button asks `outputs.play`
+    /// (this is the saved file meanwhile).
     pub play: PathBuf,
     pub duration_s: f32,
     /// `None` for a result saved before sidecars.
     pub elapsed_s: Option<f32>,
-    /// Unix time it was saved (the list's order).
+    /// Unix seconds.
     pub created: f64,
 }
 
 impl Take {
-    /// A result from `outputs.list`.
     pub fn from_entry(id: u64, e: protocol::OutputEntry) -> Take {
         let text = e.text.filter(|t| !t.trim().is_empty() && !e.legacy).unwrap_or_else(|| e.name.clone());
         let play = e.path_play.filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| e.path.clone());
@@ -80,27 +43,22 @@ impl Take {
     }
 }
 
-/// A generation in flight.
 #[derive(Clone, Debug)]
 struct Active {
     /// The `tts.generate` request; its answer carries the job id.
     req: u64,
     job: Option<String>,
     started: f64,
-    /// Segments received so far.
     chunks: usize,
     /// Segments expected: the engine's number when it tells us (`exact`), else an estimate from the text.
     total: usize,
     exact: bool,
-    /// Characters per segment as reported by `tts.generate` (weights for progress and the buffering estimate).
+    /// Characters per segment from `tts.generate`: the weights for progress and the buffering estimate.
     seg_chars: Vec<u32>,
-    /// Seconds of audio received so far.
     audio_s: f32,
-    /// Generation seconds per audio second, from the latest chunk (0 = unknown).
+    /// Generation seconds per audio second from the latest chunk; 0 = unknown.
     rtf: f32,
-    /// Segments waiting for playback to start (see [`can_start`]).
     held: Vec<PathBuf>,
-    /// Playback has been released: new segments are queued on the player at once.
     audible: bool,
     /// `play()` has been called for this job (later segments use `enqueue`).
     began: bool,
@@ -139,15 +97,13 @@ impl Active {
         }
     }
 
-    /// Whether finished segments are being held back for a smooth start.
     fn buffering(&self) -> bool {
         !self.audible && !self.held.is_empty()
     }
 }
 
-/// Whether playback can start with `buffered_s` seconds of audio ready while the segments in `remaining_s`
-/// (estimated audio seconds each) are still being generated at `rtf` (generation seconds per audio second).
-/// True when every remaining segment is done before the audio before it has played out.
+/// Whether playback can start with `buffered_s` of audio ready while the `remaining_s` segments are still being
+/// generated at `rtf`: true when every remaining segment is done before the audio before it has played out.
 fn can_start(buffered_s: f32, rtf: f32, remaining_s: &[f32]) -> bool {
     let (mut need, mut audio) = (0.0f32, buffered_s);
     for d in remaining_s {
@@ -160,7 +116,6 @@ fn can_start(buffered_s: f32, rtf: f32, remaining_s: &[f32]) -> bool {
     true
 }
 
-/// Playback start decision for a job that has `a.chunks` of `a.total` segments ready.
 fn should_start(a: &Active) -> bool {
     if a.chunks >= a.total || a.rtf <= 0.0 || a.audio_s <= 0.0 {
         return true;
@@ -190,17 +145,16 @@ pub struct SpeakState {
     pub voice_match: f32,
     /// Best (32 decoding steps) or Fast (16).
     pub quality: Quality,
-    /// 0.8..=1.3, speaking speed (engine `duration_factor = 1 / speed`); persisted as `speed` in settings.json.
+    /// 0.8..=1.3; the engine's `duration_factor = 1 / speed`.
     pub speed: f32,
     speed_loaded: bool,
     speed_dirty: bool,
-    /// Output language per voice id, when it is not the voice's own language (`speak_languages` in settings.json).
+    /// Per voice id, only when it is not the voice's own language.
     pub languages: HashMap<String, String>,
     languages_dirty: bool,
-    /// "Native (American)" accent for English from a voice recorded in another language (default on; `accent` in
-    /// settings.json: `native-us` | `own`). Shared with Redub.
+    /// Native (American) accent for English from a voice recorded in another language. Shared with Redub.
     pub native_accent: bool,
-    /// Which native speaker (`native_voice` in settings.json; `Auto` picks by the voice's pitch).
+    /// `Auto` picks by the voice's pitch.
     pub native_voice: NativeVoice,
     accent_dirty: bool,
     gen_: Gen,
@@ -237,18 +191,12 @@ impl SpeakState {
         matches!(self.gen_, Gen::Active(_))
     }
 
-    /// The id of a new take card.
     pub fn new_take_id(&mut self) -> u64 {
         self.next_take += 1;
         self.next_take
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Actions
-// -------------------------------------------------------------------------------------------------
-
-/// The output language for the active voice: the one picked for it, else the language it was recorded in.
 pub fn language(s: &AppState) -> String {
     match shell::active_voice(s) {
         Some(v) => s.speak.languages.get(&v.id).cloned().unwrap_or_else(|| v.lang().to_owned()),
@@ -256,7 +204,7 @@ pub fn language(s: &AppState) -> String {
     }
 }
 
-/// The picker chose `code` for the active voice (the voice's own language is stored as "no choice").
+/// The voice's own language is stored as "no choice".
 pub fn set_language(s: &mut AppState, code: &str) {
     let Some(v) = shell::active_voice(s).cloned() else { return };
     if code == v.lang() {
@@ -267,41 +215,35 @@ pub fn set_language(s: &mut AppState, code: &str) {
     s.speak.languages_dirty = true;
 }
 
-/// Whether the Accent choice applies to speech in `lang` with the active voice: English output with no English
-/// reference clip, so the voice's clip in another language would lend English its accent (see
-/// [`VoiceInfo::has_reference_in`]: a `reference_en.wav`, or a `reference.wav` detected as English).
+/// English output with no English reference clip, so the voice's clip in another language would lend English
+/// its accent.
 pub fn accent_applies(s: &AppState, lang: &str) -> bool {
     shell::active_voice(s).is_some_and(|v| lang::base(lang) == "en" && !v.has_reference_in("en"))
 }
 
-/// Whether the active voice can use the native accent: trained (its RVC model gives the timbre), or the engine has
-/// the zero-shot converter (it takes the timbre from the reference clip, no training).
+/// Trained (its RVC model gives the timbre), or the engine has the zero-shot converter (timbre from the clip).
 pub fn native_possible(s: &AppState) -> bool {
     shell::active_voice(s).is_some_and(|v| (v.trained && super::setuprun::has(s, "training")) || s.shell.zero_shot_vc)
 }
 
-/// The `accent` of a speech request in `lang`: the native speaker when the native accent applies, is chosen and is
-/// possible (an untrained voice without the zero-shot converter would lose its timbre), else `None` (the voice's own
-/// reference).
+/// `None` (the voice's own reference) unless the native accent applies, is chosen and is possible: an untrained
+/// voice without the zero-shot converter would lose its timbre.
 pub fn accent_param(s: &AppState, lang: &str) -> Option<NativeVoice> {
     (accent_applies(s, lang) && native_possible(s) && s.speak.native_accent).then_some(s.speak.native_voice)
 }
 
-/// The `accent` to warm the active voice with (`voices.warm`): native when chosen and possible and the voice has no
-/// English reference clip (its English output would use it).
+/// Native when chosen and possible and the voice has no English reference clip (its English output would use it).
 pub fn warm_accent(s: &AppState) -> Option<NativeVoice> {
     let v = shell::active_voice(s)?;
     (native_possible(s) && !v.has_reference_in("en") && s.speak.native_accent).then_some(s.speak.native_voice)
 }
 
-/// Opens Voices with "Add a language" set to `code`: record or import a reference clip in that language.
 pub fn add_reference(s: &mut AppState, code: &str) {
     super::refclip::start_language(s, code);
     shell::set_screen(s, Screen::Voices);
 }
 
-/// The warning toast of a job's start answer: why the native accent was not used and/or that the clip speaking is in
-/// another language (`accent_note`, `reference_note`). True when the reference warning was part of it.
+/// True when the reference warning was part of the toast.
 pub(crate) fn job_notes(s: &mut AppState, accent_note: Option<&str>, reference_note: Option<&str>) -> bool {
     let notes: Vec<&str> = [accent_note, reference_note].into_iter().flatten().filter(|n| !n.is_empty()).collect();
     if !notes.is_empty() {
@@ -310,8 +252,8 @@ pub(crate) fn job_notes(s: &mut AppState, accent_note: Option<&str>, reference_n
     reference_note.is_some_and(|n| !n.is_empty())
 }
 
-/// After a speech job: the detected language of `reference.wav` when that clip spoke (not the native clip, not a
-/// `reference_<lang>.wav`), so the Accent choice and the Voices screen follow a clip transcribed for the first time.
+/// Records the detected language of `reference.wav` when that clip spoke (not the native clip, not a
+/// `reference_<lang>.wav`).
 pub(crate) fn note_reference(s: &mut AppState, voice_id: &str, lang: &str, used: &protocol::ReferenceUse) {
     if used.accent.as_deref() == Some("native-us") || used.reference_language.is_none() {
         return;
@@ -323,7 +265,6 @@ pub(crate) fn note_reference(s: &mut AppState, voice_id: &str, lang: &str, used:
     }
 }
 
-/// Why Generate cannot run right now (shown next to the button), or `None` when it can.
 fn blocker(s: &AppState) -> Option<&'static str> {
     match &s.shell.engine {
         EngineStatus::Idle | EngineStatus::Starting { .. } => return Some("Waiting for the engine to start…"),
@@ -339,7 +280,6 @@ fn blocker(s: &AppState) -> Option<&'static str> {
     None
 }
 
-/// Starts generating the current text with the selected voice.
 pub fn generate(s: &mut AppState) {
     if s.speak.is_generating() {
         return;
@@ -368,7 +308,6 @@ pub fn generate(s: &mut AppState) {
     s.speak.gen_ = Gen::Active(a);
 }
 
-/// Stops the running generation (and the audio that is streaming from it).
 pub fn cancel(s: &mut AppState) {
     let job = match &mut s.speak.gen_ {
         Gen::Active(a) => match a.job.clone() {
@@ -387,8 +326,6 @@ pub fn cancel(s: &mut AppState) {
     s.speak.gen_ = Gen::Idle;
 }
 
-/// A take's play button: play it, or pause / resume it in the player bar. A result without a WAV to play (from an
-/// earlier session, saved in another format) first gets one from the engine (`ui::history`), which then comes back here.
 pub(crate) fn toggle_take(s: &mut AppState, id: u64) {
     let Some(t) = s.speak.takes.iter().find(|t| t.id == id) else { return };
     let (file, play) = (t.path.clone(), t.play.clone());
@@ -402,7 +339,6 @@ pub(crate) fn toggle_take(s: &mut AppState, id: u64) {
     }
 }
 
-/// The engine deleted a take's files (`ui::trash`): drop it from the list.
 pub fn remove_take(s: &mut AppState, id: u64) {
     s.speak.takes.retain(|t| t.id != id);
 }
@@ -431,10 +367,6 @@ fn friendly_error(code: &str, message: &str) -> String {
         _ => message.to_owned(),
     }
 }
-
-// -------------------------------------------------------------------------------------------------
-// Engine messages and events
-// -------------------------------------------------------------------------------------------------
 
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     let Gen::Active(mut a) = s.speak.gen_.clone() else { return };
@@ -479,7 +411,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     elapsed_s: Some(if ev.data.get("elapsed_s").is_some() { done.elapsed_s } else { (s.shell.now - a.started) as f32 }),
                     created: super::history::now_unix(),
                 };
-                // What streamed is this take now: the player bar names it and its card shows it playing.
                 playbar::finish_live(s, Some((&take.play, one_line(&take.text))));
                 s.speak.takes.insert(0, take);
                 s.speak.gen_ = Gen::Idle;
@@ -497,7 +428,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     shell::toast(s, Tone::Danger, text);
                 }
                 s.speak.gen_ = Gen::Idle;
-                // What arrived can still be played to its end.
                 playbar::finish_live(s, None);
             }
             _ => {}
@@ -510,7 +440,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// A segment finished: hold it for a smooth start, or queue it on the player when playback is already released.
 fn on_chunk(s: &mut AppState, mut a: Active, chunk: TtsChunk) {
     a.chunks += 1;
     if chunk.segments > 0 {
@@ -536,7 +465,6 @@ fn on_chunk(s: &mut AppState, mut a: Active, chunk: TtsChunk) {
     s.speak.gen_ = Gen::Active(a);
 }
 
-/// Queues what was held back (the first segment of the job starts playback, the rest follow gaplessly).
 fn release(s: &mut AppState, a: &mut Active) {
     for path in std::mem::take(&mut a.held) {
         let first = !a.began;
@@ -552,7 +480,7 @@ fn release(s: &mut AppState, a: &mut Active) {
     }
 }
 
-/// The job ended with segments still held (an engine without exact counts): play them now.
+/// Only an engine without exact counts ends a job with segments still held.
 fn flush_held(s: &mut AppState, a: &mut Active) {
     if !a.held.is_empty() {
         a.audible = true;
@@ -560,7 +488,6 @@ fn flush_held(s: &mut AppState, a: &mut Active) {
     }
 }
 
-/// After every event: the saved speed and output languages once, then every change of them.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
     if !s.shell.scripted() {
@@ -596,7 +523,6 @@ pub fn settle(s: &mut AppState) -> bool {
     changed
 }
 
-/// The start of the running generation (its elapsed time ticks on the Speak screen).
 pub fn clock_origin(s: &AppState) -> Option<f64> {
     match &s.speak.gen_ {
         Gen::Active(a) => Some(a.started),
@@ -604,7 +530,6 @@ pub fn clock_origin(s: &AppState) -> Option<f64> {
     }
 }
 
-/// Window-level keys: Ctrl/Cmd+Enter generates from anywhere on the Speak screen.
 pub fn on_key(s: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
     if s.screen == Screen::Speak && ev.key == Key::Enter && ev.mods.cmd {
         generate(s);
@@ -613,15 +538,10 @@ pub fn on_key(s: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
     false
 }
 
-// -------------------------------------------------------------------------------------------------
-// OS integration
-// -------------------------------------------------------------------------------------------------
-
 fn spawn(mut cmd: std::process::Command) -> Result<(), String> {
     cmd.spawn().map(|_| ()).map_err(|e| format!("Could not open it: {e}"))
 }
 
-/// Opens a file with the system's default application.
 pub fn open_file(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut c = std::process::Command::new("explorer");
@@ -633,7 +553,6 @@ pub fn open_file(path: &Path) -> Result<(), String> {
     spawn(c)
 }
 
-/// Shows a file in the system file manager (selected where the platform supports it).
 pub fn reveal_file(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -655,10 +574,6 @@ pub fn reveal_file(path: &Path) -> Result<(), String> {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// View
-// -------------------------------------------------------------------------------------------------
-
 fn fmt_time(secs: f32) -> String {
     let t = secs.max(0.0).round() as u32;
     format!("{}:{:02}", t / 60, t % 60)
@@ -673,13 +588,10 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     r.child(text_panel(s, p)).child(side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
 }
 
-/// The Results panel never gets shorter than this: below it, the side column scrolls instead.
 const RESULTS_MIN_H: f32 = 240.0;
 
-/// The right-hand column of Speak and Redub: Style on top, Results filling the rest. In a short window, where
-/// Results would be squeezed below `RESULTS_MIN_H`, the column scrolls and Results keeps that height.
-/// `results(own_scroll)` builds the Results panel: with `own_scroll` its list scrolls inside the panel; without it
-/// the list grows and the whole column scrolls (one scroller, so the wheel works anywhere over the column).
+/// With `own_scroll` the Results list scrolls inside its panel; without it the whole column scrolls (one scroller,
+/// so the wheel works anywhere over it).
 pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, results: impl Fn(bool) -> El) -> El {
     let side_h = cx.layout_with("side", |r| r[3]);
     let style_h = cx.layout_with("side-style", |r| r[3]).unwrap_or(0.0);
@@ -769,8 +681,6 @@ fn action_bar(s: &AppState, p: Palette) -> El {
     }
 }
 
-/// The small line under "Speaking as": why Generate is off, "Preparing voice…" while the engine loads the voice,
-/// or the keyboard hint.
 fn hint_line(s: &AppState, p: Palette, block: Option<&'static str>) -> El {
     if let Some(b) = block {
         return text(b).font(ty::CAPTION).color(p.warn);
@@ -783,7 +693,6 @@ fn hint_line(s: &AppState, p: Palette, block: Option<&'static str>) -> El {
     text("Ctrl+Enter to generate").font(ty::CAPTION).color(p.text_faint)
 }
 
-/// Ukrainian is the language and the Ukrainian speech component (HolosTTS: exact word stress) is installed.
 fn exact_ukrainian(s: &AppState) -> bool {
     language(s) == "uk" && super::setuprun::has(s, "ukrainian")
 }
@@ -795,7 +704,7 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
             s.speak.speed = (v * 100.0).round() / 100.0;
             s.speak.speed_dirty = true;
         }).build(p);
-    // Book mode keeps its own, calmer expressiveness (a steady narrator; `ui::book`).
+    // Book mode keeps its own, calmer expressiveness.
     let book = s.screen == Screen::Speak && s.book.shown;
     let expr = Slider::new("expr", "Expressiveness", if book { s.book.expressiveness } else { s.speak.expressiveness }, 0.4, 1.0).step(0.05)
         .ends("Steady", "Lively")
@@ -848,7 +757,6 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     c
 }
 
-/// "Language" with the picker chip, and the hint when it is not the language the voice was recorded in.
 fn language_row(s: &AppState, p: Palette) -> El {
     let code = language(s);
     let voice = shell::active_voice(s);
@@ -858,8 +766,8 @@ fn language_row(s: &AppState, p: Palette) -> El {
             .child(text("What the text is written in").font(ty::CAPTION).color(p.text_faint)))
         .child(lang::chip(&p, "speak-lang-chip", &lang::label(&code), lang::Target::Speak, voice.is_some()));
     let mut c = col().w_full().gap(8.0).child(head);
-    // With the Ukrainian speech component the engine reads Ukrainian from phonemes with the stress of a dictionary and
-    // the sentence (HolosTTS); without it OmniVoice guesses, and a "+" before a vowel is a hint it often follows.
+    // With HolosTTS the engine reads Ukrainian with dictionary stress; without it OmniVoice guesses, and a "+"
+    // before a vowel is a hint it often follows.
     if exact_ukrainian(s) {
         c = c.child(text("Exact stress: every word as the dictionary and the sentence say. A + before a vowel changes one: співак+ом.")
             .font(ty::CAPTION).color(p.text_faint).wrap());
@@ -896,7 +804,6 @@ fn language_row(s: &AppState, p: Palette) -> El {
     c
 }
 
-/// The accent in a few words ("Native (American) · male speaker"), for a one-line row.
 pub(crate) fn accent_summary(s: &AppState) -> String {
     if !native_possible(s) {
         return "Like my recordings · the native accent is not set up yet".to_owned();
@@ -912,16 +819,10 @@ pub(crate) fn accent_summary(s: &AppState) -> String {
     format!("Native (American) · {who}")
 }
 
-/// The "Accent" choice (Speak's Style panel, Redub's Translate & dub to English and Re-speak in English): "Native
-/// (American)" or "Like my recordings"; with Native, the native speaker (Auto / Male / Female). A trained voice gets
-/// Native through its RVC model, an untrained one through the engine's zero-shot converter; an untrained voice on an
-/// engine without that converter shows it disabled, with the other ways to English without an accent: install it,
-/// train the voice, or add an English clip ("Add an English clip" opens Voices on it).
 pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     let voice = shell::active_voice(s);
     let trained = voice.is_some_and(|v| v.trained);
     let possible = native_possible(s);
-    // The language the voice's clip is in: detected, else the one it was recorded in.
     let rec = voice.map(|v| lang::name(v.reference_lang())).unwrap_or_default();
     let detected = voice.is_some_and(|v| v.reference_language.is_some());
     let native = possible && s.speak.native_accent;
@@ -943,8 +844,6 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
             s.speak.accent_dirty = true;
         },
     );
-    // Whose accent English gets from the voice's own clip: "your Ukrainian reference clip" once its language is
-    // detected, else the recording language.
     let source = if detected { format!("your {rec} reference clip") } else { format!("your {rec} recordings") };
     let caption = if native && trained && !s.shell.zero_shot_vc {
         "A native American speaker says it; your trained voice model keeps your timbre.".to_owned()
@@ -997,8 +896,6 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     c
 }
 
-/// The right end of a Results header (Speak and Redub): the count badge, when there are results ("50+" while older
-/// ones are not loaded yet), the refresh button (the list read again from disk) and the "Save as" chip. Pinned beside the title, so the header is as tall as Style's.
 pub(crate) fn results_head(s: &AppState, p: Palette, kind: trash::Kind, count: usize, more: bool, chip_key: &str) -> El {
     row().key(format!("{chip_key}-head")).pin(None, Some(16.5), Some(22.0), None).gap(8.0).center_y()
         .children((count > 0).then(|| badge(p, &format!("{count}{}", if more { "+" } else { "" }), Tone::Neutral)))
@@ -1023,7 +920,7 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     section_panel(p, "Results").key("results-panel").w_full().grow(1.0).min_h(0.0).gap(10.0).child(head).child(body)
 }
 
-/// A take's text as one short line for its card: line breaks would make the truncated label as tall as the paragraph.
+/// Line breaks would make the truncated label as tall as the paragraph.
 fn one_line(text: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match flat.char_indices().nth(140) {
@@ -1070,10 +967,6 @@ fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
         })
 }
 
-// -------------------------------------------------------------------------------------------------
-// Headless scenes
-// -------------------------------------------------------------------------------------------------
-
 const SAMPLE: &str = "Welcome back. In a few seconds this paragraph will be read in my own voice, one sentence after another, \
 starting to play before the last sentence has even been generated.";
 
@@ -1107,20 +1000,17 @@ pub fn scene_typed(s: &mut AppState) {
 
 const SAMPLE_UK: &str = "Привіт! За хвилину цей абзац прозвучить моїм власним голосом, речення за реченням, і почне грати ще до того, як буде готове останнє.";
 
-/// Speaking Ukrainian with a voice recorded in English: the language chip and the reference hint.
 pub fn scene_language_uk(s: &mut AppState) {
     demo_voice(s, true);
     s.speak.text = TextEdit::new(SAMPLE_UK);
     s.speak.languages.insert("me".into(), "uk".into());
 }
 
-/// Ukrainian without the Ukrainian speech component: OmniVoice guesses the stress; the Style panel offers the component.
 pub fn scene_language_uk_no_extension(s: &mut AppState) {
     scene_language_uk(s);
     s.shell.components = Some(["speech", "training", "translation", "native_accent", "music_removal"].map(String::from).to_vec());
 }
 
-/// A voice recorded in Ukrainian, speaking English: the Accent choice, native by default.
 fn demo_voice_uk(s: &mut AppState, trained: bool) {
     demo_voice(s, trained);
     for v in &mut s.shell.voices {
@@ -1130,8 +1020,6 @@ fn demo_voice_uk(s: &mut AppState, trained: bool) {
     s.speak.text = TextEdit::new(SAMPLE);
 }
 
-/// After a restart: Results loaded with `outputs.list` (as the engine answers it) under a take made this session, a
-/// result from before sidecars (its file name as the title), and "Show older" at the bottom.
 pub fn scene_history(s: &mut AppState) {
     demo_voice(s, true);
     let id = s.speak.new_take_id();
@@ -1168,27 +1056,21 @@ pub fn scene_accent_native(s: &mut AppState) {
     demo_takes(s);
 }
 
-/// "Like my recordings" chosen: the language hint about an English reference clip is back.
 pub fn scene_accent_own(s: &mut AppState) {
     demo_voice_uk(s, true);
     s.speak.native_accent = false;
 }
 
-/// An untrained voice on an engine without the zero-shot converter: the choice is disabled with the hint to install
-/// it or train the voice.
 pub fn scene_accent_untrained(s: &mut AppState) {
     demo_voice_uk(s, false);
 }
 
-/// An untrained voice with the zero-shot converter installed: Native is on by default, from the reference clip.
 pub fn scene_accent_zero_shot(s: &mut AppState) {
     demo_voice_uk(s, false);
     s.shell.zero_shot_vc = true;
     demo_takes(s);
 }
 
-/// The owner's case: a voice set to English whose reference clip was detected as Ukrainian speech, not trained. The
-/// Accent choice shows (English would carry the clip's accent), disabled, with "Add an English clip".
 pub fn scene_accent_foreign_ref(s: &mut AppState) {
     demo_voice(s, false);
     s.shell.voices[0].reference_language = Some("uk".into());
@@ -1196,20 +1078,17 @@ pub fn scene_accent_foreign_ref(s: &mut AppState) {
     s.speak.text = TextEdit::new(SAMPLE);
 }
 
-/// The owner's case with the zero-shot converter installed: Native is on without training.
 pub fn scene_accent_foreign_ref_zero_shot(s: &mut AppState) {
     scene_accent_foreign_ref(s);
     s.shell.zero_shot_vc = true;
 }
 
-/// The same voice trained: Native is on.
 pub fn scene_accent_foreign_ref_trained(s: &mut AppState) {
     scene_accent_foreign_ref(s);
     s.shell.voices[0].trained = true;
     s.shell.voices[0].trained_epochs = 300;
 }
 
-/// The output-language picker open.
 pub fn scene_language_picker(s: &mut AppState) {
     scene_language_uk(s);
     s.langpick.open = Some((lang::Target::Speak, "speak-lang-chip".into()));
@@ -1228,7 +1107,6 @@ pub fn scene_generating(s: &mut AppState) {
     super::playbar::scene_live(s, &one_line(SAMPLE), 3.4, 9.0);
 }
 
-/// A long job whose first segments are held back for a smooth start.
 pub fn scene_buffering(s: &mut AppState) {
     demo_voice(s, true);
     s.speak.text = TextEdit::new(SAMPLE);
@@ -1242,7 +1120,6 @@ pub fn scene_buffering(s: &mut AppState) {
     s.speak.gen_ = Gen::Active(a);
 }
 
-/// The active voice is still being prepared by the engine (`voices.warm`).
 pub fn scene_preparing(s: &mut AppState) {
     demo_voice(s, true);
     s.speak.text = TextEdit::new(SAMPLE);
@@ -1255,7 +1132,6 @@ pub fn scene_done(s: &mut AppState) {
     demo_takes(s);
 }
 
-/// "Delete this result?" on the second take, while the first one plays in the player bar.
 pub fn scene_trash_confirm(s: &mut AppState) {
     scene_done(s);
     trash::scene_confirm(s, trash::Kind::Speak, 2);
@@ -1264,13 +1140,11 @@ pub fn scene_trash_confirm(s: &mut AppState) {
     playbar::scene_now(s, &path, &title, "Speak · result", playbar::Source::Speak, playbar::Status::Playing, 4.0, 14.2);
 }
 
-/// A long warning toast wraps instead of being cut off.
 pub fn scene_toast_long(s: &mut AppState) {
     scene_done(s);
     shell::toast(s, Tone::Warning, "The reference clip is Ukrainian speech, so the English carries a Ukrainian accent. Add an English clip under Other languages in Voices, or choose Native (American) in Accent.");
 }
 
-/// The shared "Export as..." menu open on a take.
 pub fn scene_export_menu(s: &mut AppState) {
     demo_voice(s, true);
     s.formats.scene_ready();
@@ -1280,7 +1154,6 @@ pub fn scene_export_menu(s: &mut AppState) {
     s.formats.format = "opus".into();
 }
 
-/// Results saved as MP3, with the "Save results as" menu open.
 pub fn scene_output_menu(s: &mut AppState) {
     demo_voice(s, true);
     s.formats.scene_ready();

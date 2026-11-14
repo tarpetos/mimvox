@@ -1,7 +1,3 @@
-//! Windows only: embeds the app icon and version info into the .exe as resources, so Explorer, the taskbar and the
-//! installer show the icon. It needs the MSVC resource compiler (`rc.exe`, part of the Windows SDK in the Build
-//! Tools). On Linux and macOS this does nothing.
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/icon.ico");
@@ -9,13 +5,12 @@ fn main() {
         return;
     }
     let mut res = winresource::WindowsResource::new();
-    // Resource id 1: the first icon, which Explorer shows.
     res.set_icon("assets/icon.ico");
     res.set("ProductName", "Mimvox");
     res.set("FileDescription", "Mimvox");
     res.set("CompanyName", "tarpetos");
-    // The supported systems: without this Windows runs the app in its Vista compatibility mode, where a child window
-    // cannot be layered (the seek strip, src/ui/seekstrip.rs).
+    // Without a supported-OS manifest Windows runs the app in Vista compatibility mode, where a child window
+    // cannot be layered.
     res.set_manifest(
         r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">

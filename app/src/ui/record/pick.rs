@@ -19,7 +19,6 @@ fn page_scroll(content: El) -> El {
     col().w_full().h_full().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).items_center().py(24.0).px(28.0).child(content)
 }
 
-/// The languages with reading presets (the engine's list, else the seven it ships with).
 fn rec_languages(r: &RecordState) -> Vec<RecLang> {
     if !r.languages.is_empty() {
         return r.languages.clone();
@@ -27,7 +26,6 @@ fn rec_languages(r: &RecordState) -> Vec<RecLang> {
     ["en", "uk", "de", "fr", "es", "pl", "ro"].iter().map(|c| RecLang { code: (*c).into(), name: lang::name(c), native: lang::label(c) }).collect()
 }
 
-/// The reading language as a row of native names.
 fn language_strip(r: &RecordState, p: Pal) -> El {
     let langs = rec_languages(r);
     let labels: Vec<String> = langs.iter().map(|l| if l.native.is_empty() { l.name.clone() } else { l.native.clone() }).collect();
@@ -43,7 +41,6 @@ fn language_strip(r: &RecordState, p: Pal) -> El {
         }))
 }
 
-/// "Use my own text": detect the language, or one of the preset languages.
 fn own_language_strip(r: &RecordState, p: Pal) -> El {
     let langs = rec_languages(r);
     let mut labels = vec!["Detect".to_owned()];
@@ -62,7 +59,6 @@ fn own_language_strip(r: &RecordState, p: Pal) -> El {
         }))
 }
 
-/// The start page's "This is for": the active voice or a new one (with its name).
 fn target_strip(s: &AppState, p: Pal) -> El {
     let r = &s.record;
     let active = crate::ui::shell::active_voice(s);

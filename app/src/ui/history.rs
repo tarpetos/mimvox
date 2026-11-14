@@ -1,15 +1,4 @@
 //! Speak's and Redub's Results across restarts.
-//!
-//! Every result the engine saves has a sidecar (`<stem>.result.json` in `<data>/outputs`), so once the engine is
-//! ready each list asks `outputs.list` for its kind (newest first, [`PAGE`] at a time) and fills its Results panel;
-//! results made this session go on top as they finish. "Show older" at the bottom asks for the next page (`before` =
-//! the oldest `created` shown). After an engine restart the list is asked again and merged by file name, so the
-//! results already shown keep their cards.
-//!
-//! The engine's playback WAVs (`<data>/tmp/play`) are emptied at every engine start, so a result from an earlier
-//! session saved in another format than WAV has nothing to play yet: its play button asks `outputs.play`, which
-//! decodes one (once per session), and plays it when the answer comes ([`fetch_play`]). Trash, Export, Show in folder,
-//! Open and "Open video" work on the saved files as for any result.
 
 use super::components::Button;
 use super::components::Tone;
@@ -25,14 +14,12 @@ use rune::El;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-/// Results asked for at a time.
 pub const PAGE: u32 = 50;
 
 #[derive(Default)]
 struct Listing {
     /// The `outputs.list` request waiting for its answer, and whether it asks for older results.
     req: Option<(u64, bool)>,
-    /// Asked since the engine became ready.
     listed: bool,
     /// The engine has older results than the ones loaded.
     more: bool,
@@ -44,7 +31,7 @@ pub struct HistoryState {
     redub: Listing,
     /// `outputs.play` requests waiting for their answer: (request id, list, result id).
     play: Vec<(u64, Kind, u64)>,
-    /// The screen at the last settle: opening Speak or Redub asks its list again, so files deleted on disk leave it.
+    /// Opening Speak or Redub asks its list again, so files deleted on disk leave it.
     seen_screen: Option<crate::state::Screen>,
 }
 
@@ -71,12 +58,10 @@ fn kind_str(kind: Kind) -> &'static str {
     }
 }
 
-/// Now as Unix seconds (the `created` of a result made this session).
 pub fn now_unix() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
 
-/// The engine has older results of `kind` than the list shows.
 pub fn has_older(s: &AppState, kind: Kind) -> bool {
     s.history.get(kind).more
 }
@@ -89,27 +74,23 @@ fn request(s: &mut AppState, kind: Kind, before: Option<f64>) {
     l.listed = true;
 }
 
-/// The refresh button: the list read again from the outputs folder now, so a file copied in, renamed or deleted on
-/// disk shows (or leaves) at once. Does nothing while a page of this list is on its way.
+/// Does nothing while a page of this list is on its way.
 pub fn refresh(s: &mut AppState, kind: Kind) {
     if s.history.get(kind).req.is_none() && shell::engine_ready(s) {
         request(s, kind, None);
     }
 }
 
-/// A page of this list is on its way (the refresh button dims meanwhile).
 pub fn loading(s: &AppState, kind: Kind) -> bool {
     s.history.get(kind).req.is_some()
 }
 
-/// The round ↻ button of a Results header.
 pub fn refresh_button(s: &AppState, p: Palette, kind: Kind) -> El {
     let b = super::components::icon_button(p, &format!("{}-refresh", kind_str(kind)), &super::components::icons::REFRESH,
         "Reload from the outputs folder (files added or removed on disk)", move |s| refresh(s, kind));
     if loading(s, kind) { b.opacity(0.5) } else { b }
 }
 
-/// "Show older": the next page, older than the oldest result shown.
 pub fn show_older(s: &mut AppState, kind: Kind) {
     if s.history.get(kind).req.is_some() {
         return;
@@ -121,7 +102,6 @@ pub fn show_older(s: &mut AppState, kind: Kind) {
     request(s, kind, oldest.is_finite().then_some(oldest));
 }
 
-/// The "Show older" button at the bottom of a Results list ("Loading…" while the page is on its way).
 pub fn older_button(s: &AppState, p: Palette, kind: Kind) -> El {
     let loading = s.history.get(kind).req.is_some_and(|(_, older)| older);
     Button::new(if loading { "Loading…" } else { "Show older" })
@@ -133,12 +113,10 @@ pub fn older_button(s: &AppState, p: Palette, kind: Kind) -> El {
         .build(p)
 }
 
-/// After every event: ask for both lists once the engine is ready.
 pub fn settle(s: &mut AppState) -> bool {
     if s.shell.scripted() || !shell::engine_ready(s) {
         return false;
     }
-    // Entering Speak or Redub: refresh its list (a fresh list drops results whose files were deleted meanwhile).
     if s.history.seen_screen != Some(s.screen) {
         s.history.seen_screen = Some(s.screen);
         let kind = match s.screen {
@@ -161,14 +139,12 @@ pub fn settle(s: &mut AppState) -> bool {
     false
 }
 
-/// Whether `play` is a WAV on disk the player can open now.
 fn playable_now(play: &Path) -> bool {
     play.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav")) && play.is_file()
 }
 
-/// Before playing a result: when it has no WAV to play (`play` is gone or is not a WAV), ask the engine for one
-/// (`outputs.play` with the saved `file`) and return true; the answer updates the result and plays it. False when it
-/// can play at once.
+/// When the result has no WAV to play (playback WAVs are emptied at every engine start), asks the engine for one
+/// and returns true; the answer plays it. False when it can play at once.
 pub fn fetch_play(s: &mut AppState, kind: Kind, id: u64, file: &Path, play: &Path) -> bool {
     if playable_now(play) {
         return false;
@@ -179,7 +155,7 @@ pub fn fetch_play(s: &mut AppState, kind: Kind, id: u64, file: &Path, play: &Pat
         return true;
     }
     if s.history.play.iter().any(|(_, k, i)| *k == kind && *i == id) {
-        return true; // already asked
+        return true;
     }
     let (m, p) = protocol::outputs_play(file);
     match shell::request(s, m, p) {
@@ -192,7 +168,6 @@ pub fn fetch_play(s: &mut AppState, kind: Kind, id: u64, file: &Path, play: &Pat
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
         EngineMsg::Ready(_) => {
-            // A (re)started engine: ask again (merged with what is shown).
             for kind in [Kind::Speak, Kind::Redub] {
                 let l = s.history.listing(kind);
                 l.listed = false;
@@ -212,7 +187,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     match result.clone().and_then(protocol::parse_result::<OutputsPage>) {
                         Ok(page) => apply(s, kind, page, older),
                         Err(e) if older => shell::toast(s, Tone::Danger, format!("Could not load older results: {}", e.message)),
-                        Err(_) => {} // the list stays as this session made it
+                        Err(_) => {}
                     }
                     return;
                 }
@@ -233,7 +208,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                         }
                     }
                     Err(e) if e.code == "not_found" => {
-                        // Deleted on disk: the result leaves the list.
                         drop_result(s, kind, item);
                         shell::toast(s, Tone::Warning, "That result's file was deleted, so it was removed from the list.");
                     }
@@ -245,7 +219,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// Removes a result from its list (its files are gone).
 pub fn drop_result(s: &mut AppState, kind: Kind, id: u64) {
     match kind {
         Kind::Speak => s.speak.takes.retain(|t| t.id != id),
@@ -272,9 +245,8 @@ fn same_file(a: &Path, b: &Path) -> bool {
     a == b || (a.file_name().is_some() && a.file_name() == b.file_name())
 }
 
-/// Merges a page of `outputs.list` into a list: a result already shown keeps its card (and what this session knows of
-/// it, like the original's preview); new ones are added; the whole list is sorted newest first. A fresh list (not
-/// "older") also drops results whose file is gone.
+/// A result already shown keeps its card; the list is sorted newest first. A fresh list (not `older`) also drops
+/// results whose file is gone.
 pub fn apply(s: &mut AppState, kind: Kind, page: OutputsPage, older: bool) {
     s.history.listing(kind).more = page.more;
     match kind {
@@ -309,7 +281,6 @@ pub fn apply(s: &mut AppState, kind: Kind, page: OutputsPage, older: bool) {
     }
 }
 
-/// Scene helper: a page as the engine answers `outputs.list`.
 pub fn scene_page(s: &mut AppState, kind: Kind, entries: Vec<OutputEntry>, more: bool) {
     apply(s, kind, OutputsPage { results: entries, more }, false);
 }

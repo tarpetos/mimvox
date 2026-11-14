@@ -1,25 +1,4 @@
-//! The shared mini player: one track plays at a time, from any screen, and a compact glass bar docked at the bottom
-//! of the window shows it (title, time, play/pause, stop, seek, loop, speed, close).
-//!
-//! Screens start sound through [`play`] / [`toggle`] (a file) or [`play_live`] / [`enqueue`] / [`finish_live`]
-//! (Speak's streaming playback) and draw their own play buttons from [`playing`], so a card's button and the bar
-//! always agree: pressing a card's button again pauses, and once more resumes. Only the shell's audio player makes
-//! sound (see `audio::Player`); this module keeps what the UI shows.
-//!
-//! Event-driven: the audio thread reports the position about [`crate::audio::PROGRESS_HZ`] times a second while
-//! sound plays and once when a track ends; nothing is reported while paused or stopped. A report that changes the
-//! clock goes to the UI thread (through `events::Latest`, so a busy UI thread never queues reports up); the knob
-//! glides on from the last report 60 times a second without a view run: on Windows in a small window of its own
-//! (`seekstrip`, a window timer), elsewhere by live values on a timer deadline (`glide`).
-//!
-//! * Speed (0.5x..2x) keeps the pitch: WSOLA time-stretch in the audio callback (`audio::stretch`); a change applies
-//!   within one 16 ms frame, without a reset.
-//! * Live playback (Speak, while the text is still being generated): the bar shows what has arrived so far and
-//!   seeking is off until the job ends (the end of the arrived audio moves, and a jump past it would only wait).
-//!   Loop applies once the job is done. When it ends the track becomes the finished take (its card shows it playing).
-//! * After a track plays out the bar stays (play starts it again); Stop and Close end playback and hide the bar.
-//! * Keyboard: Space toggles play/pause while focus is in the bar (on Record's session it stays the record key);
-//!   Left/Right on the focused seek bar jump 5 s.
+//! The shared mini player: one track plays at a time, from any screen.
 
 use super::components::{Tone, accent_glass, glass_edge, icon_el, icons};
 use super::shell;
@@ -28,13 +7,10 @@ use crate::state::{AppState, Screen};
 use rune::{Align, Color, Drag, El, Key, Phase, Side, col, el, row, text};
 use std::path::{Path, PathBuf};
 
-/// The speeds offered.
 pub const SPEEDS: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-/// Seconds the arrow keys move on the seek bar.
 const STEP_S: f32 = 5.0;
 
-/// Where a track was started (stopping "my" playback, the bar's caption).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Speak,
@@ -50,19 +26,16 @@ pub enum Status {
     Ended,
 }
 
-/// The track the bar shows.
 #[derive(Clone, Debug)]
 pub struct Now {
     /// The file; for a live stream its first chunk until [`finish_live`] names the finished take.
     pub path: PathBuf,
     pub title: String,
-    /// The caption under the title ("Speak · result").
     pub what: String,
     pub source: Source,
     pub status: Status,
     pub pos_s: f32,
     pub len_s: f32,
-    /// Still being generated (Speak): the length grows, seeking is off.
     pub live: bool,
     /// The audio player's id of this track (reports about another one are ignored).
     track: u64,
@@ -70,16 +43,14 @@ pub struct Now {
 
 pub struct PlaybarState {
     pub now: Option<Now>,
-    /// A track just started: (its player id, app clock deadline). If it has not moved by then, the output device is
-    /// stale (the PC slept, the device changed) and the player is reopened once (`settle`).
+    /// (player id, deadline): if the track has not moved by then, the output device is stale (the PC slept, the
+    /// device changed) and the player is reopened once.
     watch: Option<(u64, f64)>,
-    /// The output was reopened for this track already (no second retry).
     retried: Option<u64>,
     /// The seek knob is being dragged: whether the track was playing when it was grabbed.
     scrub: Option<bool>,
     pub looped: bool,
     pub speed: f32,
-    /// The speed menu is open.
     pub speed_menu: bool,
 }
 
@@ -88,10 +59,6 @@ impl Default for PlaybarState {
         PlaybarState { now: None, watch: None, retried: None, scrub: None, looped: false, speed: 1.0, speed_menu: false }
     }
 }
-
-// -------------------------------------------------------------------------------------------------
-// Actions (the guarded way to the audio player)
-// -------------------------------------------------------------------------------------------------
 
 fn player_call<T>(s: &AppState, f: impl FnOnce(&crate::audio::Player) -> anyhow::Result<T>) -> Result<T, String> {
     let p = s.player.as_ref().ok_or_else(|| shell::audio_unavailable(s))?;
@@ -124,8 +91,6 @@ fn start(s: &mut AppState, path: &Path, title: String, what: String, source: Sou
 /// How long a started track may stay at 0:00 before the output is taken for stale.
 const STALL_S: f64 = 1.5;
 
-/// The stall check of a just-started track (a one-shot deadline handed to `Tx::wake_at`, cleared by its first
-/// progress report): a stale output device is reopened and the track started again, once.
 pub fn settle(s: &mut AppState, tx: &mut rune::Tx) -> bool {
     glide(s, tx);
     let Some((track, due)) = s.playbar.watch else { return false };
@@ -155,12 +120,10 @@ pub fn settle(s: &mut AppState, tx: &mut rune::Tx) -> bool {
     true
 }
 
-/// Stops what plays and plays `path`. `title` names it in the bar, `what` says what it is ("Redub · original").
 pub fn play(s: &mut AppState, path: &Path, title: impl Into<String>, what: impl Into<String>, source: Source) -> Result<(), String> {
     start(s, path, title.into(), what.into(), source, false)
 }
 
-/// A screen's play button: plays `path`, or pauses / resumes it when it is the track loaded already.
 pub fn toggle(s: &mut AppState, path: &Path, title: impl Into<String>, what: impl Into<String>, source: Source) -> Result<(), String> {
     if s.playbar.now.as_ref().is_some_and(|n| n.path == path && !n.live) {
         toggle_pause(s);
@@ -169,17 +132,15 @@ pub fn toggle(s: &mut AppState, path: &Path, title: impl Into<String>, what: imp
     play(s, path, title, what, source)
 }
 
-/// Whether `path` is the track loaded and audible (not paused, not ended): its play button shows "pause".
+/// Loaded and audible (not paused, not ended).
 pub fn playing(s: &AppState, path: &Path) -> bool {
     s.playbar.now.as_ref().is_some_and(|n| n.status == Status::Playing && n.path == path)
 }
 
-/// Starts Speak's streaming playback with its first chunk.
 pub fn play_live(s: &mut AppState, first: &Path, title: impl Into<String>) -> Result<(), String> {
     start(s, first, title.into(), "Speak · playing as it is generated".into(), Source::Speak, true)
 }
 
-/// Appends a chunk to the live track.
 pub fn enqueue(s: &mut AppState, path: &Path) -> Result<(), String> {
     if !s.playbar.now.as_ref().is_some_and(|n| n.live) {
         return Err("Nothing is streaming.".into());
@@ -194,8 +155,7 @@ pub fn enqueue(s: &mut AppState, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The live job ended: the track is complete. With `take` (the finished take's playback file and title) the bar and
-/// the take's card show it as that take.
+/// With `take` (the finished take's playback file and title) the bar shows the track as that take.
 pub fn finish_live(s: &mut AppState, take: Option<(&Path, String)>) {
     if !s.playbar.now.as_ref().is_some_and(|n| n.live) {
         return;
@@ -229,7 +189,7 @@ pub fn pause(s: &mut AppState) {
     }
 }
 
-/// Continues a paused track; an ended one starts again from the beginning.
+/// An ended track starts again from the beginning.
 pub fn resume(s: &mut AppState) {
     let Some(status) = s.playbar.now.as_ref().map(|n| n.status) else { return };
     if status == Status::Playing {
@@ -258,28 +218,24 @@ pub fn toggle_pause(s: &mut AppState) {
     }
 }
 
-/// Stops playback and hides the bar.
 pub fn stop(s: &mut AppState) {
     player_do(s, |p| p.stop());
     s.playbar.now = None;
     s.playbar.speed_menu = false;
 }
 
-/// Stops playback started from `source` (leaves anything else playing).
 pub fn stop_from(s: &mut AppState, source: Source) {
     if s.playbar.now.as_ref().is_some_and(|n| n.source == source) {
         stop(s);
     }
 }
 
-/// Stops playback when one of `paths` is loaded (it is about to be deleted).
 pub fn stop_path(s: &mut AppState, paths: &[&Path]) {
     if s.playbar.now.as_ref().is_some_and(|n| paths.contains(&n.path.as_path())) {
         stop(s);
     }
 }
 
-/// The seek knob is grabbed: the sound pauses (once) while it moves.
 fn begin_scrub(s: &mut AppState) {
     if s.playbar.scrub.is_some() {
         return;
@@ -291,7 +247,7 @@ fn begin_scrub(s: &mut AppState) {
     s.playbar.scrub = Some(was_playing);
 }
 
-/// The knob is let go at `at` (None: the drag was cancelled): one seek there, and playing again if it played.
+/// `at` is `None` when the drag was cancelled.
 fn end_scrub(s: &mut AppState, at: Option<f32>) {
     let Some(was_playing) = s.playbar.scrub.take() else {
         if let Some(at) = at {
@@ -307,7 +263,6 @@ fn end_scrub(s: &mut AppState, at: Option<f32>) {
     }
 }
 
-/// Jumps to `pos_s` seconds (not while live).
 pub fn seek(s: &mut AppState, pos_s: f32) {
     let Some(n) = s.playbar.now.as_ref().filter(|n| !n.live) else { return };
     let pos = pos_s.clamp(0.0, n.len_s);
@@ -332,15 +287,9 @@ pub fn set_speed(s: &mut AppState, speed: f32) {
     player_do(s, |p| p.set_speed(speed));
 }
 
-// -------------------------------------------------------------------------------------------------
-// Events from the audio thread
-// -------------------------------------------------------------------------------------------------
-
-/// The player sink: positions go through a coalescing feed, the end of a track as its own event.
 pub fn sink() -> crate::audio::PlaySink {
     let progress = super::events::Latest::new(|s: &mut AppState, (track, pos, len): (u64, f32, f32)| on_progress(s, track, pos, len));
-    // The audio thread reports 20 times a second: each report is where the knob glides on from (`glide`), and only
-    // one that changes the clock (`shows`) goes to the UI thread.
+    // Every report feeds the glide; only one that changes the clock (`shows`) goes to the UI thread.
     let sent = std::sync::Mutex::new((0u64, 0.0f32, 0.0f32));
     std::sync::Arc::new(move |ev| match ev {
         crate::audio::PlayEvent::Progress { track, pos_s, len_s } => {
@@ -356,24 +305,19 @@ pub fn sink() -> crate::audio::PlaySink {
     })
 }
 
-// The knob and the fill of the seek bar are placed by live values (`rune::Live`): the audio thread sets them while a
-// track plays, and a set draws one frame of the bar over the cached rest of the window, without running the view.
-// That is what lets the knob move at up to 60 frames a second for next to nothing; a view run per position cost
-// three whole-window frames each.
+// The knob and the fill are placed by live values (`rune::Live`): a set draws one frame of the bar without
+// running the view (a view run per position cost three whole-window frames).
 
-/// The seek rail's width in points, as last laid out (f32 bits; 0 until the bar has been laid out once).
+/// Points as f32 bits; 0 until the bar has been laid out once.
 static RAIL_W: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// The fraction of the track the bar shows now (f32 bits).
+/// The fraction of the track shown now, as f32 bits.
 static SHOWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// The knob moves when its place changes by this many points (a fraction of a pixel: it glides, also on a long
-/// track).
+/// A fraction of a pixel, so the knob glides also on a long track.
 const KNOB_STEP_PT: f32 = 0.05;
-/// The knob's frames a second while a track plays.
 const GLIDE_HZ: f64 = 60.0;
-/// The seek strip shows the fill and the knob (Windows, `seekstrip`), so the bar draws neither and does not glide.
+/// Windows: the seek strip draws the fill and the knob, so the bar draws neither and does not glide.
 static STRIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Where the sound is: a track, the seconds played of its length, and when that was true. The knob glides on from it.
 #[derive(Clone, Copy)]
 struct Heard {
     track: u64,
@@ -389,7 +333,6 @@ static QUIET_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mu
 /// Counts the jumps, so a glider takes the new place at once instead of easing towards it.
 static JUMPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The audio thread heard `track` at `pos_s` of `len_s`.
 fn report(track: u64, pos_s: f32, len_s: f32) {
     let now = std::time::Instant::now();
     if QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|until| now < until) {
@@ -398,7 +341,7 @@ fn report(track: u64, pos_s: f32, len_s: f32) {
     *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(Heard { track, pos_s, len_s, at: now });
 }
 
-/// The position changed at once (a track started, a seek, a resume): the knob goes there, no easing. UI thread.
+/// UI thread. The knob goes to the new position without easing.
 fn jump(track: u64, pos_s: f32, len_s: f32) {
     let now = std::time::Instant::now();
     *QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(now + std::time::Duration::from_millis(150));
@@ -406,9 +349,8 @@ fn jump(track: u64, pos_s: f32, len_s: f32) {
     JUMPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// A knob's glide: where it shows the track, moved on by the clock between the audio thread's reports. A report
-/// only corrects it gently (reports arrive in bursts a few milliseconds early or late; following each one made the
-/// knob hop back and forth), except after a jump or when it is far off, where it takes the new place at once.
+/// A report only corrects the glide gently (reports arrive in bursts a few ms early or late; following each one
+/// made the knob hop back and forth), except after a jump or when it is far off.
 pub(super) struct Glide {
     shown_s: f32,
     last: Option<std::time::Instant>,
@@ -421,7 +363,7 @@ impl Glide {
         Glide { shown_s: 0.0, last: None, track: 0, jumps: 0 }
     }
 
-    /// The fraction of the track to show now, at the playing `speed`; None before any report.
+    /// `None` before any report.
     pub(super) fn step(&mut self, speed: f32) -> Option<f32> {
         let h = (*HEARD.lock().unwrap_or_else(|e| e.into_inner())).filter(|h| h.len_s > 0.0)?;
         let now = std::time::Instant::now();
@@ -441,8 +383,6 @@ impl Glide {
     }
 }
 
-/// While a track plays, places the knob where the sound is now and asks for the next step on a 60-a-second grid: a
-/// timer deadline, like the app's other clocks. Each step is one frame of the bar (live values), no view run.
 fn glide(s: &mut AppState, tx: &mut rune::Tx) {
     static GLIDE: std::sync::Mutex<Glide> = std::sync::Mutex::new(Glide::new());
     let mut glide = GLIDE.lock().unwrap_or_else(|e| e.into_inner());
@@ -472,7 +412,7 @@ fn fill_at() -> &'static rune::Live<[f32; 2]> {
     L.get_or_init(|| rune::Live::new([0.0, 0.0]))
 }
 
-/// Shows the track at `frac` (0-1): any thread. Unless `force`d, a move of less than `KNOB_STEP_PT` is left out.
+/// Any thread. Unless `force`d, a move of less than `KNOB_STEP_PT` is left out.
 fn place(frac: f32, force: bool) {
     use std::sync::atomic::Ordering::Relaxed;
     let w = f32::from_bits(RAIL_W.load(Relaxed));
@@ -486,8 +426,7 @@ fn place(frac: f32, force: bool) {
     fill_at().set([(frac - 1.0) * w, 0.0]);
 }
 
-/// The view laid the rail out `w` points wide, with the track at `frac` when nothing plays (`Some`): keeps the live
-/// values right after a resize and wherever the position changes without the audio thread (pause, seek, drag, stop).
+/// Keeps the live values right after a resize and wherever the position changes without the audio thread.
 fn sync_rail(w: Option<f32>, frac: Option<f32>) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut force = false;
@@ -501,15 +440,12 @@ fn sync_rail(w: Option<f32>, frac: Option<f32>) {
     }
 }
 
-/// Whether the bar's clock at `pos_s` reads differently from the one at `shown_s`: its second changed, the track
-/// started or reached its end, or it jumped back. (The knob has its own, faster path: `place`.)
 fn shows(shown_s: f32, pos_s: f32, len_s: f32) -> bool {
     (shown_s <= 0.0 && pos_s > 0.0) || pos_s.floor() != shown_s.floor() || pos_s >= len_s - 1e-3
 }
 
 fn on_progress(s: &mut AppState, track: u64, pos_s: f32, len_s: f32) -> bool {
     let Some(n) = s.playbar.now.as_mut().filter(|n| n.track == track && n.status == Status::Playing) else { return false };
-    // The view runs when the clock reads differently (once a second); the knob does not need it.
     let moved = shows(n.pos_s, pos_s, len_s);
     let changed = moved || (n.len_s - len_s).abs() > 1e-3;
     if moved {
@@ -529,7 +465,6 @@ fn on_ended(s: &mut AppState, track: u64) -> bool {
     true
 }
 
-/// Space while focus is in the bar: play/pause, except on Record's session, where Space records.
 fn on_key(s: &mut AppState, ev: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
     if !matches!(&ev.key, Key::Text(t) if t == " ") || ev.mods.cmd || ev.mods.ctrl || ev.mods.alt {
         return false;
@@ -541,13 +476,7 @@ fn on_key(s: &mut AppState, ev: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
     true
 }
 
-// -------------------------------------------------------------------------------------------------
-// View
-// -------------------------------------------------------------------------------------------------
-
-/// Height of the docked bar (without the margin under it).
 pub const BAR_H: f32 = 56.0;
-/// Room the dock takes at the bottom of the window (the toasts move up by this).
 pub const DOCK_H: f32 = BAR_H + 12.0;
 
 fn clock(secs: f32) -> String {
@@ -561,7 +490,6 @@ fn speed_label(v: f32) -> String {
     format!("{t}×")
 }
 
-/// A round 32 pt control of the bar.
 fn round_button(p: Palette, key: &str, glyph: &'static rune::Icon, label: &str, on: bool, f: impl Fn(&mut AppState) + 'static) -> El {
     let b = el().key(key.to_owned()).role("button").label(label.to_owned()).help(label.to_owned()).size(32.0, 32.0).radius(16.0).center()
         .focusable(true).motion(motion::UI).on_press(f);
@@ -573,17 +501,14 @@ fn round_button(p: Palette, key: &str, glyph: &'static rune::Icon, label: &str, 
     b.child(icon_el(glyph, 15.0, if on { p.accent } else { p.text_dim }))
 }
 
-/// The docked bar, while a track is loaded: a full-width strip under the screen (the screen gets shorter, so it
-/// never covers the Speak / Redub action bars or anything else).
-/// `rail`: the seek rail's place (x, y, width, height in window points) from the last layout (`RAIL`), None before
-/// the bar's first one; `scale`: the window's; `covered`: a menu or a dialog is open over the window.
+/// `rail`: the seek rail's place (x, y, width, height in window points) from the last layout, `None` before
+/// the first; `covered`: a menu or a dialog is open over the window.
 pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covered: bool) -> Option<El> {
     let Some(n) = s.playbar.now.as_ref() else {
         strip(None);
         return None;
     };
     let on = n.status == Status::Playing;
-    // While it plays the knob glides from the audio thread's reports; otherwise the state's position is the exact one.
     let frac = if n.len_s > 0.0 { (n.pos_s / n.len_s).clamp(0.0, 1.0) } else { 0.0 };
     let native = strip(rail.filter(|_| !covered && !s.shell.scripted()).map(|rail| (rail, scale, p, n, s.playbar.speed, frac)));
     sync_rail(rail.map(|r| r[2]), (!on || s.shell.scripted()).then_some(frac)); // (a scripted run has no audio thread)
@@ -611,8 +536,8 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
         .child(text(speed_label(speed)).font(ty::NUM).color(if speed != 1.0 { p.accent } else { p.text }))
         .child(icon_el(&icons::CHEVRON_DOWN, 11.0, p.text_dim));
     let close = round_button(p, "pb-close", &icons::CLOSE, "Close the player", false, stop);
-    // instant_changes: the position moves a few times a second; animating each move with the layout springs kept the
-    // window redrawing (and its blurs) at the display's full rate for as long as anything played.
+    // instant_changes: animating each position move with the layout springs kept the window (and its blurs)
+    // redrawing at the display's full rate while anything played.
     let bar = row().key("playbar").role("group").label("Player").instant_changes().w_full().h(BAR_H).pl(9.0).pr(10.0).gap(10.0).center_y()
         .radius(radius::PANEL + 4.0).continuous_corners()
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.9))
@@ -631,8 +556,7 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
     Some(row().key("playbar-dock").w_full().px(16.0).pb(12.0).child(glass_edge(p, bar)))
 }
 
-/// Shows the seek strip over the rail (Windows) or hides it (`None`, and always elsewhere). True when the strip
-/// shows the fill and the knob, so the bar must not.
+/// Windows only. True when the strip shows the fill and the knob, so the bar must not.
 #[allow(unused_variables)]
 fn strip(over: Option<([f32; 4], f32, Palette, &Now, f32, f32)>) -> bool {
     #[cfg(windows)]
@@ -656,23 +580,18 @@ fn strip(over: Option<([f32; 4], f32, Palette, &Now, f32, f32)>) -> bool {
     shown
 }
 
-/// The key of the seek rail (its laid-out width places the knob: `shell::view` reads it for [`view`]).
 pub const RAIL: &str = "pb-rail";
 
-/// The seek bar: click or drag to jump; Left/Right when focused. Off (dimmed) while the track is live.
 fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
     const TRACK: f32 = 5.0;
     const KNOB: f32 = 14.0;
     let len = n.len_s;
-    // The fill is as wide as the rail and slides in from the left under the track's rounded clip; the knob slides
-    // along the rail. Both by live offsets (`place`), so a move draws without laying anything out.
     let knob = el().key("pb-knob").size(KNOB, KNOB).pin(Some(-KNOB / 2.0), Some((TRACK - KNOB) / 2.0), None, None).radius(KNOB / 2.0)
         .fill(Color::WHITE.alpha(0.85)).border(1.0, p.accent.alpha(0.6)).shadow(2.0, 6.0, Color::BLACK.alpha(0.5))
         .live_offset(knob_at());
     let fill = el().key("pb-fill").h(TRACK).w_full().radius(TRACK / 2.0).gradient(p.accent_top, p.accent).live_offset(fill_at());
     let groove = el().key("pb-track").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).radius(TRACK / 2.0).fill(p.well).border(1.0, p.well_rim)
         .clip_rounded(TRACK / 2.0).child(fill);
-    // With the seek strip (Windows) the groove is all the bar draws here.
     let groove = if native { el().key("pb-track").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).radius(TRACK / 2.0).fill(p.well).border(1.0, p.well_rim) } else { groove };
     let track = el().key(RAIL).w_full().h(TRACK).child(groove).children((!n.live && !native).then_some(knob));
     let hit = col().key("pb-seek").role("slider").label("Position").w_full().h(28.0).px(KNOB / 2.0).justify_center().grow(1.0).min_w(60.0)
@@ -708,7 +627,6 @@ fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
         })
 }
 
-/// The speed menu above its chip (drawn at the window root, over everything).
 pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
     if !s.playbar.speed_menu || s.playbar.now.is_none() {
         return None;
@@ -744,16 +662,10 @@ static LOOP: rune::Icon = rune::Icon {
     body: r#"<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 7.4V6.6A2.4 2.4 0 0 1 5.2 4.2H12.4M10.6 2.4L12.4 4.2L10.6 6"/><path d="M13.2 8.6V9.4A2.4 2.4 0 0 1 10.8 11.8H3.6M5.4 10L3.6 11.8L5.4 13.6"/></g>"#,
 };
 
-// -------------------------------------------------------------------------------------------------
-// Headless scenes
-// -------------------------------------------------------------------------------------------------
-
-/// Scene helper: show `path` in the bar as if it were loaded.
 pub fn scene_now(s: &mut AppState, path: &str, title: &str, what: &str, source: Source, status: Status, pos_s: f32, len_s: f32) {
     s.playbar.now = Some(Now { path: path.into(), title: title.into(), what: what.into(), source, status, pos_s, len_s, live: false, track: 0 });
 }
 
-/// Scene helper: Speak's live stream in the bar.
 pub fn scene_live(s: &mut AppState, title: &str, pos_s: f32, len_s: f32) {
     scene_now(s, "/tmp/job1/chunk0.wav", title, "Speak · playing as it is generated", Source::Speak, Status::Playing, pos_s, len_s);
     if let Some(n) = s.playbar.now.as_mut() {

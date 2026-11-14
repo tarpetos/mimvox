@@ -1,10 +1,5 @@
-//! Root application state. Each screen owns its sub-state struct in its own `ui/<screen>.rs` file.
-//!
-//! The root also owns the two long-lived backends: the engine process client and the audio player.
-//! Both are `Option`s: `None` until the shell has started them (and for good if they cannot start,
-//! e.g. no engine installed or no audio device), so every screen must cope with `None` and show a
-//! friendly state instead of failing. Use the guarded helpers (`ui::shell::request`, `ui::playbar::play` and
-//! friends, `ui::shell::stop_audio`) rather than touching them directly.
+//! Root application state. `engine` and `player` stay `None` when they cannot start: use the guarded helpers
+//! (`ui::shell::request`, `ui::playbar::play`, `ui::shell::stop_audio`) rather than touching them directly.
 
 use crate::audio::Player;
 use crate::engine::EngineClient;
@@ -25,8 +20,7 @@ pub enum Screen {
 }
 
 impl Screen {
-    /// The tab's name in `settings.json` (`screen`: the tab open when the app was closed). The welcome screen is not
-    /// a tab to come back to.
+    /// The tab's name in `settings.json`; `None` for the welcome screen.
     pub fn key(self) -> Option<&'static str> {
         Some(match self {
             Screen::Onboarding => return None,
@@ -45,46 +39,32 @@ impl Screen {
 
 pub struct AppState {
     pub screen: Screen,
-    /// Chrome state: theme, engine status, voice list, toasts (see `ui::shell`).
     pub shell: ShellState,
-    /// The engine process; its messages arrive as events (see `ui::events`).
     pub engine: Option<EngineClient>,
-    /// Audio playback; `None` when no output device is available.
+    /// `None` when no output device is available.
     pub player: Option<Player>,
     pub onboarding: OnboardingState,
     pub voices: VoicesState,
     pub record: RecordState,
     pub train: TrainState,
     pub speak: SpeakState,
-    /// Speak's Book mode: imported books and the book being read (see `ui::book`).
     pub book: BookState,
     pub redub: RedubState,
-    /// Audio formats from the engine and the shared "Export as..." menu (see `ui::formats`).
     pub formats: FormatsState,
-    /// Moving the data folder to another location (see `ui::relocate`).
     pub relocate: RelocateState,
-    /// The shared language picker (see `ui::lang`).
     pub langpick: crate::ui::lang::PickerState,
-    /// What the shared player bar shows (see `ui::playbar`).
     pub playbar: crate::ui::playbar::PlaybarState,
-    /// Deleting saved results (see `ui::trash`).
     pub trash: crate::ui::trash::TrashState,
-    /// Speak's and Redub's Results from earlier sessions (see `ui::history`).
     pub history: crate::ui::history::HistoryState,
-    /// A newer release and its download (see `ui::update`).
     pub update: crate::ui::update::UpdateState,
-    /// Setup run from inside the app (see `ui::setuprun`).
     pub setup: crate::ui::setuprun::SetupRunState,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         let shell = ShellState::default();
-        // The recorder writes into the same data dir as the engine: one source of truth on the shell.
         let mut record = RecordState::default();
         record.data_dir = shell.data_dir.clone();
-        // Set up already: no welcome screen. With a voice, the tab that was open when the app was closed (Speak the
-        // first time); without one, Voices (where "Get started" leads).
         let onboarding = OnboardingState::default();
         let screen = if onboarding.runtime_present && !crate::ui::shell::headless_run() {
             if has_voices(&shell.data_dir) { last_screen(crate::ui::onboarding::setting("screen").as_ref()) } else { Screen::Voices }
@@ -115,8 +95,6 @@ impl Default for AppState {
     }
 }
 
-/// Whether the data folder holds at least one voice (`voices/<id>/voice.json`), read once at start.
-/// The tab saved at the last close; Speak when nothing (or nothing known) is saved.
 fn last_screen(saved: Option<&serde_json::Value>) -> Screen {
     saved.and_then(serde_json::Value::as_str).and_then(Screen::from_key).unwrap_or(Screen::Speak)
 }

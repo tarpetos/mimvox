@@ -1,17 +1,11 @@
-//! The window's caption buttons (minimize, maximize / restore, close) as round glass icon buttons, drawn by the app.
-//!
-//! Rune keeps everything native about them on Windows (the snap layouts flyout over maximize, hover and press
-//! tracking, the actions; see `main.rs` and `vendor/README.md`): it answers hit tests over invisible cells flush
-//! with the right edge as the system's caption buttons and reports where the pointer is (`ChromeInsets::caption`),
-//! and this module draws a button in each cell. The pointer never reaches these elements (the system takes it), so
-//! hover and press are drawn from that state, not from `.hover()` / `.press()`.
+//! The caption buttons, drawn by the app. On Windows the system takes the pointer over them (non-client hits), so
+//! hover and press are drawn from `ChromeInsets::caption`, not from `.hover()` / `.press()`.
 
 use super::components::{glass_edge, icon_el};
 use super::theme::{Palette, motion};
 use rune::{CaptionButton, CaptionView, Color, El, Icon, Tx, col, el, row};
 
-/// Width of one button's hit cell: the 32 pt circle on its left, 12 pt of room on its right (the gap to the next
-/// button, and the margin to the window's edge for the last one).
+/// The 32 pt circle plus 12 pt to the next button (or the window's edge).
 pub const CELL: f32 = 44.0;
 const DIAMETER: f32 = 32.0;
 
@@ -37,7 +31,6 @@ glyph!(
 );
 glyph!(CLOSE, "window-close", r#"<path d="M4.4 4.4L11.6 11.6M11.6 4.4L4.4 11.6"/>"#);
 
-/// The three buttons, pinned to the header's right end. `view` is where the pointer is with them.
 pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
     let cell = |button: CaptionButton| {
         let (key, label, glyph) = match button {
@@ -56,7 +49,6 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
             (false, true, false) => (p.glass_hover, p.text),
             _ => (Color::TRANSPARENT, p.text_dim),
         };
-        // The glass is the same as `icon_button`'s; the hover / press wash goes over it.
         let disc = glass_edge(
             p,
             el().key(format!("{key}-disc")).size(DIAMETER, DIAMETER).radius(DIAMETER / 2.0).center()
@@ -81,7 +73,6 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
         .child(cell(CaptionButton::Close))
 }
 
-/// Headless previews of the buttons (Linux and macOS draw none, so these fake the window's report).
 pub fn scenes() -> &'static [(&'static str, fn(&mut crate::state::AppState))] {
     &[
         ("caption_idle", |s| preview(s, CaptionView::default())),

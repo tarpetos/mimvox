@@ -1,16 +1,4 @@
 //! How work outside the UI thread reaches the UI. Everything is an event; nothing polls.
-//!
-//! * Background threads (the engine's stdout reader, audio callbacks, native file dialogs, the setup / move
-//!   subprocess readers, disk probes) call [`post`] / [`post_if`]. Rune's `AppHandle::update_if` queues the closure
-//!   and wakes the event loop; the closure runs on the UI thread, then `shell::settle` brings derived state up to
-//!   date (requests that were waiting for the engine, the timers below) and Rune draws one frame if anything
-//!   changed. While no event arrives the UI thread sleeps: no frames, no wake-ups.
-//! * Timers (a toast's expiry, the elapsed-time clock of a running job, a debounce) are deadlines on the app clock
-//!   handed to Rune with `Tx::wake_at`. When one comes due Rune runs the frame hook (`shell::on_frame`, the app's
-//!   `AppSpec::poll`), which settles the state like any other event. Nothing asks for a wake-up unless such a
-//!   deadline exists, so an idle window never wakes.
-//! * Feeds that can outpace the screen (a microphone level meter) go through [`Latest`]: the newest value replaces
-//!   one that is still queued, so at most one closure per feed waits for the UI thread.
 
 use crate::state::AppState;
 use rune::AppHandle;
@@ -23,7 +11,7 @@ pub fn init(handle: AppHandle<AppState>) {
     let _ = APP.set(handle);
 }
 
-/// The running app (window requests: open, quit, ...). `None` before `init`.
+/// The running app. `None` before [`init`].
 pub fn app() -> Option<&'static AppHandle<AppState>> {
     APP.get()
 }
@@ -37,7 +25,7 @@ pub fn post(f: impl FnOnce(&mut AppState) + Send + 'static) {
 }
 
 /// Runs `f` on the UI thread (from any thread). `f` returns whether it changed what the screen shows; the frame is
-/// drawn only then (or when the settle step after it changed something).
+/// drawn only then.
 pub fn post_if(f: impl FnOnce(&mut AppState) -> bool + Send + 'static) {
     let Some(app) = APP.get() else { return };
     app.update_if(move |s, tx| {

@@ -1,7 +1,4 @@
 //! Voices screen: list, create, rename, delete and select the active voice.
-//!
-//! Also hosts the small glass widget kit (`kit`) and the engine request plumbing (`Link`, `pump`)
-//! shared by the train and onboarding screens, so the three screens look and behave alike.
 
 use std::collections::HashMap;
 
@@ -15,10 +12,6 @@ use crate::ui::shell::{self, VoiceInfo};
 use crate::ui::theme::{self, Palette, radius, ty};
 
 use self::kit::BtnKind;
-
-// ---------------------------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 enum Tag {
@@ -41,7 +34,6 @@ pub struct VoicesState {
     last_screen: Option<Screen>,
     /// The voice saved in settings is re-selected once, when the first list arrives.
     restore: Option<String>,
-    /// The active voice's reference clip (see `refclip`).
     pub refclip: crate::ui::refclip::RefState,
 }
 
@@ -60,7 +52,7 @@ impl Default for VoicesState {
     }
 }
 
-/// Sends a request and remembers what it was for. Without an engine the user sees an error.
+/// Without an engine the user sees an error.
 fn send(s: &mut AppState, tag: Tag, method: &str, params: Value) {
     match shell::request(s, method, params) {
         Some(id) => {
@@ -70,7 +62,6 @@ fn send(s: &mut AppState, tag: Tag, method: &str, params: Value) {
     }
 }
 
-/// The voice every screen works on (the one picked here or in the header), if any.
 pub fn active_voice(s: &AppState) -> Option<&str> {
     s.shell.active_voice.as_deref()
 }
@@ -83,7 +74,6 @@ pub fn voice_name<'a>(s: &'a AppState, id: &str) -> Option<&'a str> {
     s.shell.voices.iter().find(|v| v.id == id).map(|v| v.name.as_str())
 }
 
-/// Selects `id` as the active voice and remembers it.
 pub fn select(s: &mut AppState, id: &str) {
     if s.shell.active_voice.as_deref() == Some(id) {
         return;
@@ -92,7 +82,6 @@ pub fn select(s: &mut AppState, id: &str) {
     crate::ui::onboarding::save_active_voice(Some(id));
 }
 
-/// After every event: refresh on screen entry, restore the saved selection.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
     if s.voices.last_screen != Some(s.screen) {
@@ -114,10 +103,6 @@ pub fn settle(s: &mut AppState) -> bool {
     crate::ui::refclip::settle(s) | changed
 }
 
-// ---------------------------------------------------------------------------------------------
-// Engine messages
-// ---------------------------------------------------------------------------------------------
-
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     crate::ui::refclip::on_engine(s, msg);
     match msg {
@@ -132,7 +117,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                         let id = info.id.clone();
                         s.shell.voices.push(info);
                         select(s, &id);
-                        // An empty voice is no use yet: straight on to giving it recordings (files or reading).
                         s.record.back_to_pick();
                         s.record.for_new = false;
                         shell::set_screen(s, Screen::Record);
@@ -157,10 +141,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
         _ => {}
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------------------------
 
 fn create(s: &mut AppState) {
     let name = s.voices.new_name.text.trim().to_string();
@@ -197,10 +177,6 @@ fn delete(s: &mut AppState, id: &str) {
     send(s, Tag::Delete(id.to_string()), "voices.delete", json!({ "id": id }));
 }
 
-// ---------------------------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------------------------
-
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     let v = &s.voices;
@@ -230,7 +206,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         list = list.child(voice_card(s, &p, info));
     }
 
-    // ↻: the voices folder read again (a voice copied in or deleted on disk shows or leaves at once).
     let refresh = super::components::icon_button(p, "voices-refresh", &super::components::icons::REFRESH,
         "Reload the voices from the data folder (voices added or removed on disk)", shell::refresh_voices);
     let mut body = col().w_full().gap(18.0).child(row().w_full().gap(12.0)
@@ -362,10 +337,6 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     card
 }
 
-// ---------------------------------------------------------------------------------------------
-// Scenes for headless snapshots
-// ---------------------------------------------------------------------------------------------
-
 fn demo_voices() -> Vec<VoiceInfo> {
     vec![
         VoiceInfo { preset: None, id: "my-voice".into(), name: "My voice".into(), dataset_minutes: 6.4, parts: 5, trained: true, trained_epochs: 300, ..Default::default() },
@@ -424,10 +395,6 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
     ]
 }
 
-// ---------------------------------------------------------------------------------------------
-// Glass widget kit (local; mirrors the shell's palette and type scale)
-// ---------------------------------------------------------------------------------------------
-
 pub(crate) mod kit {
     use super::*;
     use rune::Shape;
@@ -440,7 +407,6 @@ pub(crate) mod kit {
         Danger,
     }
 
-    /// Scrollable page body with the shared gutters; content is limited to a readable width.
     pub fn page(body: El) -> El {
         col()
             .w_full()
@@ -458,12 +424,10 @@ pub(crate) mod kit {
             .child(text(sub.to_string()).font(ty::BODY).color(p.text_dim).wrap())
     }
 
-    /// A glass card with the shared inner padding.
     pub fn card(p: &Palette) -> El {
         components::glass_card(*p).w_full().padding(18.0)
     }
 
-    /// The main content panel of a screen (one of the few blurred surfaces).
     pub fn panel(p: &Palette) -> El {
         components::glass_panel(*p).w_full().padding(24.0)
     }
@@ -479,7 +443,6 @@ pub(crate) mod kit {
         .build(*p)
     }
 
-    /// The big call-to-action button.
     pub fn big_button(p: &Palette, label: &str, enabled: bool, on_press: impl Fn(&mut AppState) + 'static) -> El {
         Button::new(label).primary().large().key(format!("big-{label}")).disabled(!enabled).on_press(on_press).build(*p)
     }
@@ -488,7 +451,6 @@ pub(crate) mod kit {
         components::badge(*p, label, tone)
     }
 
-    /// A banner with a tone-coloured accent for errors and warnings.
     pub fn notice(p: &Palette, tone: Tone, msg: &str) -> El {
         let c = tone.color(*p);
         row()
@@ -502,7 +464,6 @@ pub(crate) mod kit {
             .child(text(msg.to_string()).font(ty::BODY).color(p.text).wrap().grow(1.0).min_w(0.0))
     }
 
-    /// A single-line text field in an inset well. `access` returns the edit inside the app state.
     pub fn field(
         p: &Palette,
         edit: &TextEdit,

@@ -1,22 +1,9 @@
 //! Pitch-preserving playback speed: WSOLA (waveform-similarity overlap-add) on mono PCM, streaming.
-//!
-//! The output is built from Hann-windowed frames of the source, 50 % overlapped (`frame` about 32 ms, synthesis hop
-//! `hop` = half a frame). Each new frame is read about `hop * speed` source samples after the previous one, then
-//! nudged by up to `tol` (about 10 ms) to where the source looks most like the natural continuation of the previous
-//! frame (normalised cross-correlation over the overlap). So whole pitch periods are dropped (faster) or repeated
-//! (slower) and the waveform stays continuous: the pitch and the formants are kept, which is what speech needs. At
-//! 1x the frames are taken exactly one hop apart and the Hann windows sum to one, so the output is the source itself
-//! (apart from a 16 ms fade at the start and the end).
-//!
-//! The speed can change between any two frames without a reset (no click); [`Stretcher::reset`] (a seek) starts
-//! over with a 16 ms fade-in. Self-contained (no crate imports), so `examples/stretch_check.rs` checks it offline.
 
 #![allow(dead_code)]
 
-/// What stopped [`Stretcher::process`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flow {
-    /// `out` is full.
     Full,
     /// A live source has no more samples yet (the frame needs more than has arrived): call again when it grew.
     Starved,
@@ -38,12 +25,10 @@ pub struct Stretcher {
     pos: f64,
     /// Start of the previous frame (`None` after a reset: no continuation to match).
     prev: Option<usize>,
-    /// The tail of the last frame was flushed: the source is done.
     flushed: bool,
 }
 
 impl Stretcher {
-    /// A stretcher for audio at `rate` Hz.
     pub fn new(rate: u32) -> Stretcher {
         let rate = rate.max(8000) as f64;
         let hop = ((rate * 0.016).round() as usize).max(64);
@@ -54,7 +39,7 @@ impl Stretcher {
         Stretcher { frame, hop, tol, window, acc: vec![0.0; frame], ready: Vec::with_capacity(frame), ready_at: 0, pos: 0.0, prev: None, flushed: false }
     }
 
-    /// Start over at source sample `pos` (seek, loop, new track).
+    /// Start over at source sample `pos`.
     pub fn reset(&mut self, pos: f64) {
         self.pos = pos.max(0.0);
         self.prev = None;
@@ -69,9 +54,8 @@ impl Stretcher {
         self.pos
     }
 
-    /// Fills `out` from `src` played `speed` times as fast (0.25..4). `complete`: `src` will not grow (its end is
-    /// the end); otherwise a frame that would read past the end waits for more ([`Flow::Starved`]). Returns the
-    /// samples written and why it stopped.
+    /// Fills `out` from `src` played `speed` times as fast (0.25..4). `complete`: `src` will not grow; otherwise a
+    /// frame that would read past the end waits for more ([`Flow::Starved`]).
     pub fn process(&mut self, src: &[f32], speed: f32, complete: bool, out: &mut [f32]) -> (usize, Flow) {
         let speed = f64::from(speed.clamp(0.25, 4.0));
         let mut n = 0;
@@ -106,7 +90,6 @@ impl Stretcher {
         }
     }
 
-    /// Picks, windows and adds the next frame; `hop` finished samples go to `ready`.
     fn next_frame(&mut self, src: &[f32], speed: f64) {
         let (hop, frame) = (self.hop, self.frame);
         let nominal = self.pos.round() as usize;
@@ -129,9 +112,8 @@ impl Stretcher {
         self.pos += hop as f64 * speed;
     }
 
-    /// The start within `nominal ± tol` whose first `hop` samples correlate best with `src[target..target + hop]`
-    /// (the natural continuation of the previous frame): a coarse search on every 2nd offset over every 4th sample,
-    /// then a fine one around the winner.
+    /// The start within `nominal ± tol` whose first `hop` samples correlate best with `src[target..target + hop]`:
+    /// a coarse search on every 2nd offset over every 4th sample, then a fine one around the winner.
     fn best_match(&self, src: &[f32], target: usize, nominal: usize) -> usize {
         let len = self.hop;
         let at = |i: usize| src.get(i).copied().unwrap_or(0.0);
@@ -172,7 +154,6 @@ impl Stretcher {
     }
 }
 
-/// Stretches a whole clip (offline use: checks and tests). `speed` 2 gives about half as many samples.
 pub fn stretch_all(src: &[f32], rate: u32, speed: f32) -> Vec<f32> {
     let mut st = Stretcher::new(rate);
     let mut out = Vec::with_capacity((src.len() as f32 / speed) as usize + 4096);

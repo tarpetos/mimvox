@@ -1,10 +1,4 @@
-//! Spawns the engine, prints hello, lists voices, runs tts.generate and plays chunks as they arrive.
-//!
-//! Real engine:  cargo run --example engine_smoke -- --text "Hello there." [--voice ID]
-//!               (uses EngineConfig::discover(); override with --runtime, --data-dir, --engine-src)
-//! Fake engine:  cargo run --example engine_smoke -- --fake --text "One. Two. Three."
-//!               (examples/fake_engine.py through a shim package; needs python3 on PATH)
-//! Add --no-play to skip audio output.
+//! Usage: cargo run --example engine_smoke -- --text "Hello there." [--voice ID] [--fake] [--no-play]
 
 #[path = "../src/audio/mod.rs"]
 mod audio;
@@ -122,7 +116,6 @@ fn run() -> anyhow::Result<()> {
         }
     };
 
-    // Wait for `ready`.
     let started = Instant::now();
     let mut ready = false;
     let mut voices_req: Option<u64> = None;

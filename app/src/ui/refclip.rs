@@ -1,22 +1,4 @@
 //! "Reference clip" section of the active voice card (Voices screen).
-//!
-//! The speech model (OmniVoice) copies the tempo and manner of the voice's `reference.wav`, so the clip decides how fast
-//! and natural the cloned voice sounds. The engine picks one automatically; here the user sees which clip is in use and
-//! can open a glass list of the best candidates (`voices.reference_candidates`), play each one and switch with "Use this
-//! one" (`voices.set_reference`, which re-conditions the speaker; the engine warms the voice again by itself).
-//!
-//! **Per-language references.** For speech in another language than the one the voice was recorded in, a short clip in
-//! that language (`reference_<lang>.wav`, about 10 s) carries its accent over. "Add a language..." picks the language,
-//! shows a native sample text to read (from that language's presets, `presets.list`), records it with the same recorder
-//! and quality check as the Record screen (`recording.check`), or imports a file, and stores it with
-//! `voices.add_reference`; `voices.remove_reference` drops one. The voice list names the languages that have one.
-//!
-//! **Spoken language.** Under the clip in use, the language the engine detected in it (`voices.list`
-//! `reference_language`, e.g. "Ukrainian speech"); when it is not the language the voice was recorded in, a note that
-//! speech in that language carries the clip's accent, and how to avoid it.
-//!
-//! **Reference from media** (`refmedia`): many audio / video files of the same speaker are combined into a pool and its
-//! best window becomes the reference; the pool's other good windows join the candidate list (`source: "media"`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,13 +16,12 @@ use crate::ui::shell::{self, VoiceInfo};
 use crate::ui::theme::{Palette, motion, radius, ty};
 use crate::ui::voices::kit::{self, BtnKind};
 
-/// One clip of the recordings, as described by the engine.
 #[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
 pub struct Clip {
     /// `part` (a recorded part) or `media` (a window of the combined media files).
     pub source: String,
-    /// The media file the window comes from (1-based, in the order the files were given).
+    /// 1-based, in the order the files were given.
     pub file: Option<u32>,
     pub part: Option<u32>,
     pub title: Option<String>,
@@ -89,7 +70,6 @@ impl Clip {
     }
 }
 
-/// The combined media files of the voice (`voices.reference_candidates` -> `media`).
 #[derive(Clone, Debug, Default)]
 pub struct Pool {
     pub files: usize,
@@ -112,36 +92,27 @@ enum Kind {
     List(String),
     /// `voices.set_reference`; the language it wrote when it was a media clip for another language.
     Set(Option<String>),
-    /// `presets.list {language}` for the sample text of a language reference.
     Sample(String),
-    /// `recording.check` of a language reference take.
     Check(PathBuf),
-    /// `voices.add_reference`.
     Add(String, String),
-    /// `voices.remove_reference`.
     Remove(String, String),
 }
 
-/// Where adding a language reference stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AddPhase {
-    /// Showing the text to read: Record or Import.
     #[default]
     Ready,
     Recording,
     Checking,
-    /// The quality check answered: Save, or record again.
     Checked,
     Saving,
 }
 
-/// Adding a reference clip for one language.
 #[derive(Default)]
 pub struct LangRef {
-    /// The voice it is for.
     pub voice: String,
     pub lang: String,
-    /// Text in that language to read aloud (about 10 s), when one is known.
+    /// About 10 s of text in that language, when one is known.
     pub sample: Option<String>,
     pub phase: AddPhase,
     recorder: Option<Recorder>,
@@ -149,7 +120,6 @@ pub struct LangRef {
     pub level: f32,
     pub peak: f32,
     pub elapsed_s: f32,
-    /// The recorded or imported take.
     pub take: Option<PathBuf>,
     pub verdict: Option<String>,
     pub issues: Vec<String>,
@@ -158,38 +128,29 @@ pub struct LangRef {
     importing: bool,
 }
 
-/// The extra sections under the reference clip, folded until asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum More {
-    /// "Use other recordings": the reference from media files.
     Media,
-    /// Reference clips in other languages.
     Languages,
 }
 
 #[derive(Default)]
 pub struct RefState {
     pending: HashMap<u64, Kind>,
-    /// The voice the data below belongs to.
     voice: Option<String>,
-    /// The voice the last request was for (no request loop while the answer is missing).
+    /// The voice the last request was for, so a missing answer does not loop requests.
     asked: Option<String>,
-    /// Ask again when the next event settles (entering the screen, a clip was changed).
     stale: bool,
     pub current: Option<Clip>,
     pub candidates: Vec<Clip>,
     pub loading: bool,
     pub applying: bool,
     pub open: bool,
-    /// Which of the card's extra sections is unfolded (one at a time, so the card stays short).
     pub more: Option<More>,
     pub error: Option<String>,
-    /// A language reference being added (record / import, check, save).
     pub adding: Option<LangRef>,
     capture_seq: u64,
-    /// The combined media files, when the voice has them.
     pub pool: Option<Pool>,
-    /// "Reference from media" (see `refmedia`).
     pub media: super::refmedia::MediaState,
 }
 
@@ -198,10 +159,6 @@ impl RefState {
         self.stale = true;
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------------------------
 
 fn request_list(s: &mut AppState, id: &str) {
     s.voices.refclip.asked = Some(id.to_owned());
@@ -221,17 +178,14 @@ fn toggle_open(s: &mut AppState) {
     s.voices.refclip.error = None;
 }
 
-/// Stops a clip preview started on this screen (the player bar plays something else on).
 pub(super) fn stop_preview(s: &mut AppState) {
     playbar::stop_from(s, playbar::Source::Voices);
 }
 
-/// Whether the preview `path` is playing (its button shows "pause").
 pub(super) fn previewing(s: &AppState, path: &str) -> bool {
     playbar::playing(s, Path::new(path))
 }
 
-/// What the player bar calls a preview: the candidate's place, a language's clip, a fresh take.
 fn preview_title(s: &AppState, path: &str) -> String {
     if let Some(c) = s.voices.refclip.candidates.iter().find(|c| c.preview_path == path) {
         return where_line(c);
@@ -273,9 +227,7 @@ fn use_clip(s: &mut AppState, i: usize) {
     }
 }
 
-// ---- per-language references ----
-
-/// About 10 s of text in languages without reading presets (Latin and Cyrillic scripts; the app font draws them).
+/// Languages without reading presets; Latin and Cyrillic only, the app font draws them.
 const SAMPLES: &[(&str, &str)] = &[
     ("it", "Stamattina sono uscito presto per una passeggiata lungo il fiume. L'aria era fresca e il cielo limpido, e ho pensato che fosse il momento giusto per registrare la mia voce."),
     ("pt", "Esta manhã saí cedo para caminhar junto ao rio. O ar estava fresco e o céu limpo, e pensei que era o momento certo para gravar a minha voz."),
@@ -311,11 +263,10 @@ fn first_sentences(text: &str, est_s: f32, secs: f32) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Starts adding a reference for `code` (from the picker, or Speak's "Record a ... reference"): fetches the sample text.
 pub fn start_language(s: &mut AppState, code: &str) {
     stop_preview(s);
     cancel_adding(s);
-    s.voices.refclip.more = Some(More::Languages); // the panel the new clip is recorded in
+    s.voices.refclip.more = Some(More::Languages);
     let code = lang::base(code);
     let sample = SAMPLES.iter().find(|(c, _)| *c == code).map(|(_, t)| (*t).to_owned());
     let voice = s.shell.active_voice.clone().unwrap_or_default();
@@ -328,7 +279,6 @@ pub fn start_language(s: &mut AppState, code: &str) {
     }
 }
 
-/// Stops a running capture (the take is thrown away) and closes the panel.
 fn cancel_adding(s: &mut AppState) {
     if let Some(mut a) = s.voices.refclip.adding.take() {
         if let Some(r) = a.recorder.take() {
@@ -388,7 +338,6 @@ fn fail_adding(s: &mut AppState, msg: String) {
     }
 }
 
-/// The take goes through the same quality check as a recorded part.
 fn check_take(s: &mut AppState, path: PathBuf) {
     match shell::request(s, "recording.check", json!({ "path": path, "expected_s": 10.0 })) {
         Some(req) => {
@@ -403,7 +352,6 @@ fn check_take(s: &mut AppState, path: PathBuf) {
     }
 }
 
-/// "Import file...": an existing recording in that language.
 fn import_take(s: &mut AppState) {
     if s.shell.scripted() || s.voices.refclip.adding.as_ref().is_none_or(|a| a.importing || a.recorder.is_some()) {
         return;
@@ -448,7 +396,6 @@ fn remove_lang(s: &mut AppState, code: &str) {
     }
 }
 
-/// The voice's languages with a reference, as the engine just reported them.
 fn set_refs(s: &mut AppState, id: &str, v: &Value) {
     if let Some(list) = v.get("references").and_then(Value::as_array) {
         let refs: Vec<String> = list.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect();
@@ -458,7 +405,6 @@ fn set_refs(s: &mut AppState, id: &str, v: &Value) {
     }
 }
 
-/// A level event of the reference capture.
 fn on_capture(s: &mut AppState, seq: u64, ev: CaptureEvent) -> bool {
     let Some(a) = s.voices.refclip.adding.as_mut().filter(|a| a.seq == seq && a.recorder.is_some()) else { return false };
     match ev {
@@ -484,10 +430,6 @@ fn friendly(code: &str, message: &str) -> String {
         _ => message.to_owned(),
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Engine messages and events
-// ---------------------------------------------------------------------------------------------
 
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     super::refmedia::on_engine(s, msg);
@@ -574,7 +516,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// After every event: (re)load the clips of the voice shown, close the picker when leaving the screen.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
     if s.shell.scripted() {
@@ -587,7 +528,6 @@ pub fn settle(s: &mut AppState) -> bool {
             s.voices.refclip.open = false;
             changed = true;
         }
-        // Leaving the screen while recording a language reference: the take is thrown away.
         if s.voices.refclip.adding.as_ref().is_some_and(|a| a.recorder.is_some()) {
             cancel_adding(s);
             changed = true;
@@ -618,10 +558,6 @@ pub fn settle(s: &mut AppState) -> bool {
     }
     changed
 }
-
-// ---------------------------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------------------------
 
 fn clock(secs: f32) -> String {
     let t = secs.max(0.0).round() as u32;
@@ -699,7 +635,6 @@ fn clip_row(s: &AppState, p: &Palette, key: &str, c: &Clip, action: Option<El>) 
     glass_card(*p).key(key.to_owned()).w_full().padding(10.0).child(r)
 }
 
-/// "Other languages": the languages with their own clip (play, remove), "Add a language..." and the add panel.
 fn languages_block(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let r = &s.voices.refclip;
     let own = lang::name(info.lang());
@@ -745,7 +680,6 @@ fn verdict_badge(p: &Palette, v: Option<&str>) -> El {
     }
 }
 
-/// Recording (or importing) the clip for one language.
 fn adding_panel(s: &AppState, p: &Palette, a: &LangRef) -> El {
     let name = lang::name(&a.lang);
     let head = row().w_full().gap(10.0).center_y()
@@ -803,7 +737,6 @@ fn adding_panel(s: &AppState, p: &Palette, a: &LangRef) -> El {
     c
 }
 
-/// The heading above the media clips in the "Choose..." list.
 fn media_heading(p: &Palette, pool: Option<&Pool>, after_parts: bool) -> El {
     let mut line = "From your media".to_owned();
     if let Some(pool) = pool {
@@ -818,8 +751,6 @@ fn media_heading(p: &Palette, pool: Option<&Pool>, after_parts: bool) -> El {
     if after_parts { h.pt(6.0) } else { h }
 }
 
-/// The detected language of `reference.wav` ("Ukrainian speech") and, when it is not the voice's own language and
-/// that language has no clip of its own, what that means for speech in it.
 fn language_line(p: &Palette, info: &VoiceInfo, zero_shot_vc: bool) -> El {
     let Some(code) = info.reference_language.as_deref() else {
         return row().key("refclip-spoken").w_full().child(
@@ -841,8 +772,8 @@ fn language_line(p: &Palette, info: &VoiceInfo, zero_shot_vc: bool) -> El {
         format!("{own} will carry this clip's accent. Add {} {own} clip under Other languages.", if own.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" })
     };
     let mut c = col().w_full().gap(6.0).child(head).child(text(note).key("refclip-spoken-note").font(ty::CAPTION).color(p.warn).wrap());
-    // The voice's language says what it was recorded in: when the clip is clearly another language, offer to fix it
-    // (it decides which output counts as foreign: the accent choice, and how strongly the voice model applies).
+    // The voice's language decides which output counts as foreign (the accent choice, and how strongly the
+    // voice model applies).
     if lang::base(code) != lang::base(info.lang()) {
         let (id, to) = (info.id.clone(), lang::base(code));
         let label = format!("Set the voice to {}", lang::name(&to));
@@ -853,7 +784,6 @@ fn language_line(p: &Palette, info: &VoiceInfo, zero_shot_vc: bool) -> El {
     c
 }
 
-/// "Set the voice to <language>": the recording language follows the detected language of its clip.
 fn set_voice_language(s: &mut AppState, id: &str, code: &str) {
     if let Some(v) = s.shell.voices.iter_mut().find(|v| v.id == id) {
         v.language = code.to_owned();
@@ -866,7 +796,6 @@ fn set_voice_language(s: &mut AppState, id: &str, code: &str) {
     }
 }
 
-/// The section shown inside the active voice's card.
 pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let r = &s.voices.refclip;
     let head_action = if r.candidates.is_empty() && !r.open {
@@ -918,9 +847,6 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
             c = c.child(list);
         }
     }
-    // The two extra sections are one line each: all of it open at once was more than anyone could take in. A press
-    // opens the section in a panel over the page ([`more_overlay`]), so the card and the voices under it do not
-    // move. The line says what is going on in a section that is closed.
     let media = &r.media;
     let mine = media.voice.as_deref() == Some(info.id.as_str());
     let media_note = if mine && media.busy() {
@@ -947,12 +873,10 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     el().w_full().padding(12.0).radius(radius::CONTROL).fill(p.well).border(1.0, p.well_rim).child(c)
 }
 
-/// Whether "Use other recordings" is open: asked for, or files are being dragged over the Voices screen.
 fn media_open(s: &AppState) -> bool {
     s.voices.refclip.more == Some(More::Media) || (s.formats.over && s.screen == Screen::Voices)
 }
 
-/// The line of an extra section: its name, what it holds, and "Open". A press opens it in a panel over the page.
 fn more_row(p: &Palette, key: &str, title: &str, note: &str, open: bool, which: More) -> El {
     row().key(key.to_owned()).role("button").label(title.to_owned()).w_full().gap(10.0).center_y().px(6.0).py(7.0).radius(radius::CONTROL)
         .fill(if open { p.glass_hover } else { rune::Color::TRANSPARENT })
@@ -966,8 +890,6 @@ fn more_row(p: &Palette, key: &str, title: &str, note: &str, open: bool, which: 
         .child(text("Open").font(ty::CAPTION).color(p.accent).a11y_hidden())
 }
 
-/// The open extra section of the active voice, in a panel over the page under its line (added at the root by the
-/// shell). `None` when neither is open.
 pub fn more_overlay(s: &AppState, p: &Palette) -> Option<El> {
     if s.screen != Screen::Voices {
         return None;
@@ -987,7 +909,7 @@ pub fn more_overlay(s: &AppState, p: &Palette) -> Option<El> {
     Some(crate::ui::components::popover(*p, "voice-more", anchor, 640.0, rune::Align::Start, close_more, content))
 }
 
-/// Closes the open section's panel. A clip that is being recorded keeps it open: the recording would go on unseen.
+/// A clip that is being recorded keeps it open: the recording would go on unseen.
 fn close_more(s: &mut AppState) {
     let r = &mut s.voices.refclip;
     if r.more == Some(More::Languages) && r.adding.as_ref().is_some_and(|a| a.recorder.is_some()) {
@@ -995,10 +917,6 @@ fn close_more(s: &mut AppState) {
     }
     r.more = None;
 }
-
-// ---------------------------------------------------------------------------------------------
-// Scenes for headless snapshots
-// ---------------------------------------------------------------------------------------------
 
 fn clip(part: u32, title: &str, start: f32, end: f32, rate: f32, pauses: f32, hint: &str) -> Clip {
     Clip {
@@ -1033,12 +951,10 @@ fn scene_current(s: &mut AppState) {
     demo(s);
 }
 
-/// The reference section of the demo voice (for `refmedia`'s scenes).
 pub(super) fn scene_demo(s: &mut AppState) {
     demo(s);
 }
 
-/// The demo voice after combining media: the current clip comes from file 3, the list shows media clips too.
 pub(super) fn scene_demo_media(s: &mut AppState) {
     demo(s);
     let r = &mut s.voices.refclip;
@@ -1084,7 +1000,6 @@ fn scene_none(s: &mut AppState) {
     super::voices::scene_list(s);
 }
 
-/// References in Ukrainian and German, and a Polish one checked and ready to save.
 fn scene_langs(s: &mut AppState) {
     demo(s);
     s.voices.refclip.more = Some(More::Languages);
@@ -1101,7 +1016,6 @@ fn scene_langs(s: &mut AppState) {
     });
 }
 
-/// Recording a Ukrainian reference (live meter).
 fn scene_langs_recording(s: &mut AppState) {
     demo(s);
     s.voices.refclip.more = Some(More::Languages);
@@ -1118,7 +1032,6 @@ fn scene_langs_recording(s: &mut AppState) {
     });
 }
 
-/// The language picker open on "Add a language".
 fn scene_langs_picker(s: &mut AppState) {
     demo(s);
     s.voices.refclip.more = Some(More::Languages);
@@ -1126,7 +1039,6 @@ fn scene_langs_picker(s: &mut AppState) {
     s.langpick.open = Some((lang::Target::Reference, "refclip-add-lang".into()));
 }
 
-/// The owner's case: a voice set to English whose clip is Ukrainian speech (untrained): the warning note.
 fn scene_spoken_mismatch(s: &mut AppState) {
     demo(s);
     s.shell.voices[0].language = "en".into();
@@ -1135,13 +1047,11 @@ fn scene_spoken_mismatch(s: &mut AppState) {
     s.shell.voices[0].references = vec!["uk".into()];
 }
 
-/// The clip's language matches the voice's: just the badge.
 fn scene_spoken_match(s: &mut AppState) {
     demo(s);
     s.shell.voices[0].reference_language = Some("en".into());
 }
 
-/// A new clip the speech worker has not transcribed yet.
 fn scene_spoken_unknown(s: &mut AppState) {
     demo(s);
     s.shell.voices[0].reference_language = None;

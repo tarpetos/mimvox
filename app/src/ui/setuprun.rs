@@ -1,13 +1,4 @@
-//! Setup run by the app itself: no terminal window, no script to find or start by hand.
-//!
-//! The app starts `tools/setup/setup.py --gui` (from the bundled resources) with `uv` (bundled in the installers under
-//! `<resources>/bin`, else the one on PATH) and reads its output: readable lines become the log, and `@@mimvox {json}`
-//! lines (`plan`, `step`, `done`; see `event()` in setup.py) drive the step list and the progress bar. `--gui` asks no
-//! questions and installs no system packages, so nothing needs a terminal or administrator rights.
-//!
-//! Cancel stops the whole process tree (uv, Python and whatever they started); setup resumes where it stopped on the
-//! next run. Closing the app stops a running setup the same way ([`stop_on_exit`]).
-//! `setup.sh` / `setup.cmd` stay in the repository for developers only.
+//! Runs `tools/setup/setup.py --gui` with `uv`; its `@@mimvox {json}` lines are the wire format of `event()` in setup.py.
 
 use super::components::{Tone, icon_el, icons, progress_bar, status_dot};
 use super::events;
@@ -22,9 +13,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
-/// Python version setup runs on (uv downloads it when the system has none).
 const SETUP_PYTHON: &str = "3.12";
-/// Log lines kept for the details view.
 const LOG_KEEP: usize = 400;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,9 +37,8 @@ pub enum Phase {
     #[default]
     Idle,
     Running,
-    /// Setup ended: true when every step worked.
+    /// True when every step worked.
     Finished(bool),
-    /// Setup could not start, or ended without its final report.
     Error(String),
 }
 
@@ -60,13 +48,12 @@ pub struct SetupRunState {
     pub steps: Vec<Step>,
     pub log: VecDeque<String>,
     pub show_log: bool,
-    /// The component an "Install" button is adding (None: a full setup or a runtime update).
+    /// `None`: a full setup or a runtime update.
     pub adding: Option<String>,
-    /// Optional components unticked on the start screen (all are ticked at first).
     pub left_out: Vec<String>,
 }
 
-/// One part of the runtime that can be installed on its own (setup's COMPONENTS; the sizes match).
+/// Must match setup.py's COMPONENTS, sizes included.
 pub struct Component {
     pub id: &'static str,
     pub label: &'static str,
@@ -98,15 +85,13 @@ pub fn component(id: &str) -> Option<&'static Component> {
     COMPONENTS.iter().find(|c| c.id == id)
 }
 
-/// The engine has this component installed (true until the engine has said, so nothing flashes at start).
+/// True until the engine has said, so nothing flashes at start.
 pub fn has(s: &AppState, id: &str) -> bool {
     s.shell.components.as_ref().is_none_or(|c| c.iter().any(|x| x == id))
 }
 
-/// The running setup's process id (for Cancel and for closing the app).
 static RUNNING: Mutex<Option<u32>> = Mutex::new(None);
 
-/// The `uv` setup runs with: `MIMVOX_UV`, the installer's copy, then PATH and uv's usual install folders.
 fn uv_path() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "uv.exe" } else { "uv" };
     if let Some(p) = std::env::var_os("MIMVOX_UV").map(PathBuf::from).filter(|p| p.is_file()) {
@@ -151,8 +136,6 @@ fn unpack_uv(gz: &std::path::Path) -> Option<PathBuf> {
     Some(target)
 }
 
-/// `uv run ... python -u tools/setup/setup.py <args>` in the resources folder, with no console window and the output
-/// piped. Also used by the data-folder move (`ui::relocate`).
 pub fn command(args: &[OsString]) -> Result<Command, String> {
     let res = crate::engine::find_resources().ok_or("The app's setup files are missing (engine, tools). Reinstall Mimvox.")?;
     let script = res.join("tools").join("setup").join("setup.py");
@@ -167,7 +150,7 @@ pub fn command(args: &[OsString]) -> Result<Command, String> {
         .current_dir(&res)
         .env("MIMVOX_UV", &uv)
         .env("PYTHONUNBUFFERED", "1")
-        // No __pycache__ next to the installed sources (see the engine's spawn).
+        // No __pycache__ next to the installed sources.
         .env("PYTHONPYCACHEPREFIX", super::onboarding::data_dir().join("cache").join("pycache"))
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())
@@ -190,7 +173,6 @@ pub fn running(s: &AppState) -> bool {
     s.setup.phase == Phase::Running
 }
 
-/// The first setup from the start screen: into `data_dir`, with the components left ticked.
 pub fn start(s: &mut AppState, data_dir: &str) {
     let chosen: Vec<&str> = COMPONENTS.iter().map(|c| c.id).filter(|id| !s.setup.left_out.iter().any(|x| x == id)).collect();
     let mut args = base_args(data_dir);
@@ -199,13 +181,11 @@ pub fn start(s: &mut AppState, data_dir: &str) {
     start_with(s, args, None, data_dir);
 }
 
-/// Setup again with the components installed before (a runtime update).
 pub fn update_runtime(s: &mut AppState) {
     let dir = super::onboarding::data_dir().display().to_string();
     start_with(s, base_args(&dir), None, &dir);
 }
 
-/// Adds one component to the installed runtime (the "Install" buttons on the screens that need it).
 pub fn install(s: &mut AppState, id: &str) {
     let dir = super::onboarding::data_dir().display().to_string();
     let mut args = base_args(&dir);
@@ -223,7 +203,7 @@ fn base_args(data_dir: &str) -> Vec<OsString> {
     args
 }
 
-/// Starts setup with `args`. Does nothing while one runs.
+/// Does nothing while one runs.
 fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, data_dir: &str) {
     if running(s) || s.shell.scripted() {
         return;
@@ -231,7 +211,6 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, dat
     *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()) = false;
     let left_out = std::mem::take(&mut s.setup.left_out);
     s.setup = SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, adding, left_out, ..Default::default() };
-    // uv's cache in the data folder from the first command on (setup.py sets the same for what it runs).
     let cache = PathBuf::from(data_dir.trim()).join("cache").join("uv");
     let spawned = command(&args).and_then(|mut c| {
         if !data_dir.trim().is_empty() {
@@ -261,7 +240,7 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, dat
         .into_iter()
         .map(|stream| {
             std::thread::spawn(move || {
-                // Blocks on each line; progress bars rewrite a line with \r: only the last piece is kept.
+                // Progress bars rewrite a line with \r: only the last piece is kept.
                 for line in BufReader::new(stream).split(b'\n').map_while(Result::ok) {
                     let line = String::from_utf8_lossy(&line).into_owned();
                     let line = line.rsplit('\r').find(|p| !p.trim().is_empty()).unwrap_or("").trim_end().to_owned();
@@ -388,8 +367,7 @@ fn on_exit(s: &mut AppState, code: Option<i32>, signal: Option<i32>) {
     for step in s.setup.steps.iter_mut().filter(|st| st.state == StepState::Running) {
         step.state = StepState::Failed;
     }
-    // A runtime that is now there, up to date or with a new component: the onboarding screen and the engine follow
-    // (the engine reads what is installed when it starts).
+    // The engine reads what is installed only when it starts, so it is restarted.
     let ok = s.setup.phase == Phase::Finished(true);
     super::onboarding::recheck(s);
     if s.onboarding.runtime_present && (ok || !super::shell::engine_ready(s)) {
@@ -402,12 +380,11 @@ fn on_exit(s: &mut AppState, code: Option<i32>, signal: Option<i32>) {
     }
 }
 
-/// Stops the running setup and everything it started (it resumes on the next run).
 pub fn cancel(_s: &mut AppState) {
     stop_on_exit();
 }
 
-/// Cancel was pressed (the end of the process is then not a crash).
+/// Cancel was pressed, so the end of the process is not a crash.
 static CANCELLED: Mutex<bool> = Mutex::new(false);
 
 /// Called on Cancel and by `main` when the app closes.
@@ -442,24 +419,20 @@ fn weight(id: &str) -> f32 {
     }
 }
 
-/// Share of the plan that is done (0..1).
 pub fn progress(s: &AppState) -> f32 {
     let total: f32 = s.setup.steps.iter().map(|st| weight(&st.id)).sum();
     let done: f32 = s.setup.steps.iter().filter(|st| !matches!(st.state, StepState::Waiting | StepState::Running)).map(|st| weight(&st.id)).sum();
     if total > 0.0 { done / total } else { 0.0 }
 }
 
-/// The step that runs now.
 pub fn current(s: &AppState) -> Option<&Step> {
     s.setup.steps.iter().find(|st| st.state == StepState::Running)
 }
 
-/// The latest log line (what setup is doing right now).
 pub fn last_line(s: &AppState) -> Option<&str> {
     s.setup.log.iter().rev().map(String::as_str).find(|l| !l.trim().is_empty())
 }
 
-/// The step list, the progress bar, the latest line and (on request) the log.
 pub fn panel(s: &AppState, p: Palette) -> El {
     let mut list = col().key("setup-steps").w_full().gap(6.0);
     for st in &s.setup.steps {
@@ -511,7 +484,6 @@ pub fn toggle_log(s: &mut AppState) {
     s.setup.show_log = !s.setup.show_log;
 }
 
-/// Scene helper: setup halfway through, with the log open.
 pub fn scene_running(s: &mut AppState) {
     let states = [StepState::Ok, StepState::Ok, StepState::Ok, StepState::Running, StepState::Waiting, StepState::Waiting, StepState::Waiting, StepState::Waiting];
     let plan = [
@@ -537,12 +509,10 @@ pub fn scene_running(s: &mut AppState) {
     s.setup.show_log = true;
 }
 
-/// Disk use of the components ticked on the start screen.
 pub fn chosen_gb(s: &AppState) -> f32 {
     COMPONENTS.iter().filter(|c| c.id == "speech" || !s.setup.left_out.iter().any(|x| x == c.id)).map(|c| c.gb).sum()
 }
 
-/// The start screen's choice of components: Speech (always), the others ticked at first, and the total size.
 pub fn chooser(s: &AppState, p: Palette) -> El {
     use super::voices::kit;
     let mut list = col().key("setup-components").w_full().gap(10.0);
@@ -565,7 +535,6 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
                 s.setup.left_out.push(id.to_owned());
             }
         };
-        // Speech cannot be left out: a dimmed, fixed tick instead of a checkbox.
         let check = if required {
             row().w_full().gap(12.0).items_start().opacity(0.5).help("Always installed: everything else builds on it.")
                 .child(el().size(20.0, 20.0).radius(super::theme::radius::CONTROL * 0.4).fill(p.text_faint).center()
@@ -593,8 +562,6 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
         .child(text("Anything left out can be installed later in one click, on the screen that needs it.").font(ty::CAPTION).color(p.text_dim).wrap())
 }
 
-/// In place of a feature whose component is not installed: what it is, its size and an Install button; while it
-/// installs, the progress.
 pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El {
     use super::components::{Button, glass_card};
     let Some(c) = component(id) else { return el() };
@@ -638,7 +605,6 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
     glass_card(p).w_full().child(row_)
 }
 
-/// A component's name inside a sentence: lower case ("voice training"), except a language name ("Ukrainian speech").
 fn mid_sentence(label: &str) -> String {
     if label.starts_with("Ukrainian") {
         return label.to_owned();
@@ -647,7 +613,6 @@ fn mid_sentence(label: &str) -> String {
     chars.next().map(|c| c.to_lowercase().chain(chars).collect()).unwrap_or_default()
 }
 
-/// A small inline "Install" for an option that needs a component (a checkbox, a mode): one line with the button.
 pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
     use super::components::Button;
     let Some(c) = component(id) else { return el() };

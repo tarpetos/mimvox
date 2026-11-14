@@ -1,6 +1,4 @@
 //! Engine client: spawns the Python engine and speaks contract/engine-protocol.md over stdin/stdout.
-//! Event-driven: a reader thread hands every engine message to an [`EngineSink`] as it arrives; the UI never polls
-//! and never waits on the engine.
 
 #![allow(dead_code)]
 
@@ -22,15 +20,9 @@ use anyhow::{Context, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Folder name used inside the platform data dir.
 const APP_DIR: &str = "mimvox";
-/// Number of stderr lines kept for crash reports.
 const STDERR_TAIL_LINES: usize = 200;
 
-/// Where to find the engine and its runtime. `discover()` reads `<data dir>/runtime.toml`
-/// (or `MIMVOX_RUNTIME`), the engine sources (`<resources>/engine/src`, where `<resources>` is found via
-/// `MIMVOX_RESOURCES`, the install layout or a repo checkout; `MIMVOX_ENGINE_SRC` overrides only the sources)
-/// and the data dir (see [`default_data_dir`]: `MIMVOX_DATA`, the `location.toml` pointer, the platform default).
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub runtime_toml: PathBuf,
@@ -43,7 +35,6 @@ fn env_path(name: &str) -> Option<PathBuf> {
 }
 
 /// The fixed per-user folder of the pointer file (it never moves, so the data dir can).
-/// Windows: `%LOCALAPPDATA%`; macOS: Application Support; Linux: `~/.config`.
 fn pointer_base() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     return dirs::data_local_dir();
@@ -53,7 +44,6 @@ fn pointer_base() -> Option<PathBuf> {
     return dirs::config_dir();
 }
 
-/// The default data dir when nothing overrides it. Windows: `%LOCALAPPDATA%` (not the roaming profile).
 fn platform_data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     return dirs::data_local_dir();
@@ -66,8 +56,7 @@ struct LocationToml {
     data_dir: String,
 }
 
-/// The per-user data dir, in this order: `MIMVOX_DATA`; `data_dir = "<abs path>"` in the pointer file
-/// `<pointer base>/mimvox/location.toml` (written by setup); the platform default + `mimvox`.
+/// `MIMVOX_DATA`, else `data_dir` from the `location.toml` pointer written by setup, else the platform default.
 pub fn default_data_dir() -> Option<PathBuf> {
     if let Some(p) = env_path("MIMVOX_DATA") {
         return Some(p);
@@ -81,22 +70,15 @@ pub fn default_data_dir() -> Option<PathBuf> {
     pointed.or_else(|| platform_data_dir().map(|d| d.join(APP_DIR)))
 }
 
-/// True when `dir` is an engine source root (contains the `mimvox_engine` package).
 fn is_engine_src(dir: &Path) -> bool {
     dir.join("mimvox_engine").join("__init__.py").is_file()
 }
 
-/// True when `dir` is a resources root (contains `engine/src/mimvox_engine`).
 fn is_resources_root(dir: &Path) -> bool {
     is_engine_src(&dir.join("engine").join("src"))
 }
 
-/// Finds the resources root `<RES>` (the folder that holds `engine/`, `presets/`, `tools/`, `contract/`).
-/// First hit wins (see the header of `app/Packager.toml`):
-/// 1. `MIMVOX_RESOURCES`;
-/// 2. next to the executable: `<exe_dir>` (Windows), `<exe_dir>/../Resources` (macOS),
-///    `<exe_dir>/../lib/mimvox` (Linux deb / AppImage), `<exe_dir>/resources` (portable);
-/// 3. a repo checkout: walk up from the executable's folder, then from `CARGO_MANIFEST_DIR/..`.
+/// The folder that holds `engine/`, `presets/`, `tools/`, `contract/`; the layouts must match `app/Packager.toml`.
 pub(crate) fn find_resources() -> Option<PathBuf> {
     if let Some(p) = env_path("MIMVOX_RESOURCES") {
         return Some(p);
@@ -152,15 +134,10 @@ impl EngineConfig {
         Ok(Self { runtime_toml, engine_src, data_dir })
     }
 
-    /// Path of the engine log (stderr of the engine process).
     pub fn log_path(&self) -> PathBuf {
         self.data_dir.join("logs").join("engine.log")
     }
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// runtime.toml
-// ---------------------------------------------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 struct RuntimeToml {
@@ -197,11 +174,6 @@ fn read_engine_python(runtime_toml: &Path) -> anyhow::Result<PathBuf> {
     Ok(python)
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Client
-// ---------------------------------------------------------------------------------------------------------------
-
-/// Everything the engine can tell the app, in arrival order.
 #[derive(Debug)]
 pub enum EngineMsg {
     Ready(protocol::Hello),
@@ -210,8 +182,7 @@ pub enum EngineMsg {
     Exited { code: Option<i32>, stderr_tail: String },
 }
 
-/// Where the client delivers what the engine says: called on the client's reader thread for every message, in
-/// order (the app turns each call into a UI event, see `ui::events`). The `u64` is [`EngineClient::id`], so
+/// Called on the client's reader thread for every message, in order. The `u64` is [`EngineClient::id`], so
 /// messages from an engine that was replaced meanwhile can be told apart.
 pub type EngineSink = Arc<dyn Fn(u64, EngineMsg) + Send + Sync>;
 
@@ -230,13 +201,10 @@ fn push_tail(tail: &StderrTail, line: String) {
     t.push_back(line);
 }
 
-/// How long `shutdown` lets the engine exit by itself before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(2500);
 /// How long the exit report waits for the last stderr lines after the process is gone.
 const STDERR_FLUSH: Duration = Duration::from_millis(300);
 
-/// A running engine process. Event-driven: a reader thread blocks on the engine's stdout and hands every message to
-/// the [`EngineSink`] as it arrives; nothing polls. Requests are written to stdin right away and never wait.
 pub struct EngineClient {
     id: u64,
     child: Arc<Mutex<Child>>,
@@ -272,7 +240,6 @@ impl EngineClient {
         }
 
         let mut cmd = Command::new(&python);
-        // Presets live beside the engine sources in the resources root (`<RES>/engine/src` -> `<RES>/presets`).
         if std::env::var_os("MIMVOX_PRESETS").is_none_or(|v| v.is_empty()) {
             let presets = cfg.engine_src.parent().and_then(Path::parent).map(|r| r.join("presets"));
             if let Some(dir) = presets.filter(|d| d.is_dir()) {
@@ -287,8 +254,8 @@ impl EngineClient {
             .arg("--data-dir")
             .arg(&cfg.data_dir)
             .env("PYTHONPATH", pythonpath)
-            // Bytecode caches in the data folder, never next to the sources: an installed app's folder may be
-            // read-only, and its uninstaller should find only the files it installed.
+            // Bytecode caches in the data folder: an installed app's folder may be read-only, and its uninstaller should
+            // find only the files it installed.
             .env("PYTHONPYCACHEPREFIX", cfg.data_dir.join("cache").join("pycache"))
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONIOENCODING", "utf-8")
@@ -316,7 +283,6 @@ impl EngineClient {
         let (stderr_done_tx, stderr_done_rx) = mpsc::channel::<()>();
         let (exited_tx, exited_rx) = mpsc::channel::<()>();
 
-        // stderr: tail ring buffer + log file. Blocks on each line; ends at EOF.
         {
             let tail = stderr_tail.clone();
             let log_path = log_path.clone();
@@ -340,7 +306,6 @@ impl EngineClient {
                 .context("cannot start the stderr reader")?;
         }
 
-        // stdout: every protocol line becomes a message for the sink as soon as it is read; at EOF the exit is reported.
         {
             let sink = sink.clone();
             let child = child.clone();
@@ -390,8 +355,8 @@ impl EngineClient {
         self.id
     }
 
-    /// Sends a request and returns its id at once; the answer arrives later as `EngineMsg::Response`.
-    /// If the engine cannot be written to, an `internal` error response is delivered to the sink instead.
+    /// Returns the request id at once; the answer arrives as `EngineMsg::Response` (an `internal` error when stdin
+    /// cannot be written).
     pub fn request(&self, method: &str, params: serde_json::Value) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let line = serde_json::json!({ "id": id.to_string(), "method": method, "params": params }).to_string();
@@ -404,7 +369,6 @@ impl EngineClient {
         id
     }
 
-    /// Same as `request` for the typed builders in `protocol` (e.g. `engine.send(protocol::voices_list())`).
     pub fn send(&self, req: protocol::Request) -> u64 {
         self.request(req.0, req.1)
     }
@@ -419,20 +383,17 @@ impl EngineClient {
         stdin.flush()
     }
 
-    /// Last lines the engine wrote to stderr.
     pub fn stderr_tail(&self) -> String {
         tail_string(&self.stderr_tail)
     }
 
-    /// Log file with the engine's stderr (truncated at every start).
+    /// Truncated at every start.
     pub fn log_path(&self) -> &Path {
         &self.log_path
     }
 
-    /// Asks the engine to exit and waits (blocking, up to [`SHUTDOWN_GRACE`]) for the stdout reader to see it go;
-    /// kills it when it does not.
-    /// Asks the engine to exit (the shutdown request, then end of stdin) without waiting for it: for the UI
-    /// thread while the window is still on screen. [`EngineClient::shutdown`] (or dropping the client) finishes it.
+    /// Asks the engine to exit without waiting for it, for the UI thread. [`EngineClient::shutdown`] (or dropping the
+    /// client) finishes it.
     pub fn request_shutdown(&self) {
         let (method, params) = protocol::shutdown();
         let line = serde_json::json!({ "id": "0", "method": method, "params": params }).to_string();
@@ -440,6 +401,7 @@ impl EngineClient {
         self.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 
+    /// Blocks up to [`SHUTDOWN_GRACE`] for the engine to exit, then kills it.
     pub fn shutdown(&mut self) {
         if self.shut_down.swap(true, Ordering::SeqCst) {
             return;

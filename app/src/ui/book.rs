@@ -1,24 +1,4 @@
-//! Book mode of Speak: read a whole book (EPUB, DOCX, ODT, FB2, PDF with text, TXT, Markdown, HTML, RTF, subtitles)
-//! in the active voice, one file per chapter.
-//!
-//! A mode of Speak rather than a tab: a book uses exactly Speak's voice settings (the Style panel stays on the right:
-//! voice, language, accent, speed, expressiveness, voice match, quality), and the format chip of Speak's results.
-//! The left panel switches between "Text" and "Book"; in Book mode the right column shows the book's output options and
-//! the recent books instead of the take history.
-//!
-//! Flow: "Open book…" (or a text file dropped on the window, or "Open text file…" in Text mode) sends `text.import`;
-//! a short text (up to [`LONG_WORDS`] words) from Text mode goes into the editor, anything longer opens here as a
-//! draft: the chapters found in the file, each with an include box, a title that can be renamed and merge / split
-//! buttons. "Read the book" sends `book.start` with the included chapters; the engine reads them in one job and
-//! reports `book.progress` (after every segment), `book.chapter` (a chapter file is done), `book.done`,
-//! `book.paused` or `book.error`. Pause / Resume / Cancel map to `book.pause` / `book.resume` / `book.cancel`.
-//!
-//! The book's state lives in the engine (`<data>/books/<id>/`), so the app can close mid-book: after the engine
-//! starts, `book.list` names the books, and the most recent unfinished one is shown again, ready to resume. A book
-//! holds the engine's one generation slot, so Text mode's Generate is blocked while one is read.
-//!
-//! Finished chapters play in the shared player bar (`book.play` returns a WAV to play; the chapter file itself when it
-//! is a WAV).
+//! Book mode of Speak: read a whole book in the active voice, one file per chapter.
 
 use super::components::{Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel, segmented, status_dot};
 use super::playbar;
@@ -32,19 +12,18 @@ use rune::{El, ScrollSpec, TextEdit, col, el, row, text};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-/// Texts longer than this many words open in Book mode instead of the Speak editor.
+/// Longer texts open in Book mode instead of the Speak editor.
 pub const LONG_WORDS: u32 = 5000;
 
-/// File types `text.import` reads.
+/// File types the engine's `text.import` reads.
 pub const TEXT_EXTS: &[&str] = &["txt", "md", "markdown", "html", "htm", "xhtml", "epub", "docx", "odt", "rtf", "fb2", "pdf", "srt", "vtt"];
 
-/// Generation seconds per audio second assumed before a book has measured its own (an RTX 4070 measured 0.2-0.4 with
-/// Best for an untrained voice; voice conversion adds to it, so the estimate stays on the safe side).
+/// Generation seconds per audio second until a book has measured its own (an RTX 4070 measured 0.2-0.4 with
+/// Best for an untrained voice; voice conversion adds to it).
 fn guess_rtf(quality: protocol::Quality) -> f32 {
     if quality == protocol::Quality::Fast { 0.3 } else { 0.5 }
 }
 
-/// Whether `text.import` can read this file (by its extension).
 pub fn is_text_path(p: &Path) -> bool {
     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
     name.ends_with(".fb2.zip") || p.extension().and_then(|e| e.to_str()).is_some_and(|e| TEXT_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
@@ -52,13 +31,11 @@ pub fn is_text_path(p: &Path) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Purpose {
-    /// From Text mode or a drop: a short text goes into the editor, a long one opens as a book.
+    /// A short text goes into the editor, a long one opens as a book.
     Auto,
-    /// From Book mode: always a book.
     Book,
 }
 
-/// A chapter of the draft (an imported file not started yet).
 #[derive(Clone, Debug)]
 pub struct DraftChapter {
     pub title: String,
@@ -68,14 +45,13 @@ pub struct DraftChapter {
     pub include: bool,
 }
 
-/// An imported file, before "Read the book".
 #[derive(Clone, Debug)]
 pub struct Draft {
     pub file: TextImport,
     pub chapters: Vec<DraftChapter>,
-    /// The engine's suggested split (`text.import` `parts`): how it was found, and the chapters.
+    /// The engine's suggested split: how it was found, and the chapters.
     pub auto: Option<(String, Vec<DraftChapter>)>,
-    /// The chapters before "Split automatically", for "Undo split" (edits made since are dropped with it).
+    /// For "Undo split"; edits made since are dropped with it.
     pub before_split: Option<Vec<DraftChapter>>,
 }
 
@@ -84,12 +60,10 @@ fn draft_chapters(list: &[protocol::TextChapter]) -> Vec<DraftChapter> {
 }
 
 pub struct BookState {
-    /// Speak shows Book mode (else Text mode).
     pub shown: bool,
     picking: bool,
     importing: Option<(u64, Purpose)>,
     pub draft: Option<Draft>,
-    /// The book project shown (from `book.start`, `book.get` or the list), with its chapters.
     pub project: Option<BookSummary>,
     /// "Pausing…" / "Cancelling…" until the job's end event arrives.
     stopping: Option<&'static str>,
@@ -98,26 +72,20 @@ pub struct BookState {
     get_req: Option<u64>,
     list_req: Option<u64>,
     play_req: Option<(u64, u32)>,
-    /// `book.list` was asked since the engine became ready.
     listed: bool,
-    /// The first list after the engine started: it may bring back an unfinished book.
+    /// The first list after the engine started may bring back an unfinished book.
     first_list: bool,
     pub recent: Vec<BookSummary>,
-    /// Also make one M4B with chapter marks (`m4b`; settings.json `book_m4b`).
     pub m4b: bool,
-    /// Read each chapter's title before it (`read_titles`; settings.json `book_read_titles`).
     pub read_titles: bool,
-    /// A book's own expressiveness, calmer than Speak's by default (settings.json `book_expressiveness`); the Style
-    /// panel's slider sets it in Book mode.
     pub expressiveness: f32,
     settings_loaded: bool,
     pub(crate) settings_dirty: bool,
     renaming: Option<(usize, TextEdit)>,
-    /// The engine is making the whole-book M4B (the last step).
     m4b_making: bool,
 }
 
-/// The engine's default for books (`narration.EXPRESSIVENESS`): a steady narrator.
+/// Must match the engine's `narration.EXPRESSIVENESS`.
 pub const EXPRESSIVENESS: f32 = 0.6;
 
 impl Default for BookState {
@@ -149,17 +117,12 @@ impl Default for BookState {
 }
 
 impl BookState {
-    /// A book is being read by the engine (it holds the generation slot).
     pub fn running(&self) -> bool {
         self.project.as_ref().is_some_and(|p| p.status == "running") || self.start_req.is_some() || self.resume_req.is_some()
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Opening files
-// -------------------------------------------------------------------------------------------------
-
-/// "Open book…" / "Open text file…": the native picker on its own thread; the answer arrives as an event.
+/// The native picker runs on its own thread; the answer arrives as an event.
 pub fn choose_file(s: &mut AppState, book: bool) {
     if s.book.picking || s.shell.scripted() {
         return;
@@ -180,8 +143,6 @@ pub fn choose_file(s: &mut AppState, book: bool) {
     });
 }
 
-/// A text file dropped on the window: it opens on Speak (a short text in the editor, a long one as a book; in Book
-/// mode always as a book).
 pub fn drop_file(s: &mut AppState, path: PathBuf) {
     let purpose = if s.screen == Screen::Speak && s.book.shown { Purpose::Book } else { Purpose::Auto };
     shell::set_screen(s, Screen::Speak);
@@ -206,7 +167,6 @@ pub fn set_mode(s: &mut AppState, book: bool) {
 }
 
 fn opened(s: &mut AppState, file: TextImport, purpose: Purpose) {
-    // The text's language becomes the output language of the active voice (the Style panel shows it).
     if !file.language.is_empty() && s.shell.languages.iter().any(|l| l.code == file.language) && file.language != super::speak::language(s) {
         super::speak::set_language(s, &file.language);
         if file.language_detected {
@@ -237,10 +197,6 @@ fn opened(s: &mut AppState, file: TextImport, purpose: Purpose) {
     s.book.shown = true;
 }
 
-// -------------------------------------------------------------------------------------------------
-// Chapter editing (draft)
-// -------------------------------------------------------------------------------------------------
-
 fn toggle_include(s: &mut AppState, i: usize) {
     if let Some(c) = s.book.draft.as_mut().and_then(|d| d.chapters.get_mut(i)) {
         c.include = !c.include;
@@ -266,7 +222,6 @@ fn commit_rename(s: &mut AppState) {
     }
 }
 
-/// "Split automatically": the engine's suggested chapters replace the current ones (kept for "Undo split").
 fn auto_split(s: &mut AppState) {
     commit_rename(s);
     let Some(d) = s.book.draft.as_mut() else { return };
@@ -276,7 +231,6 @@ fn auto_split(s: &mut AppState) {
     }
 }
 
-/// "Undo split": the chapters as they were before "Split automatically".
 fn undo_split(s: &mut AppState) {
     s.book.renaming = None;
     if let Some(d) = s.book.draft.as_mut() {
@@ -286,7 +240,6 @@ fn undo_split(s: &mut AppState) {
     }
 }
 
-/// What "Split automatically" found, for the line above the chapters.
 fn split_how(how: &str) -> &'static str {
     match how {
         "headings" => "at the chapter titles found in the text",
@@ -296,7 +249,6 @@ fn split_how(how: &str) -> &'static str {
     }
 }
 
-/// The line between the totals and the chapter list: the offer to split, or the split with its undo.
 fn split_line(p: Palette, d: &Draft) -> Option<El> {
     let (how, parts) = d.auto.as_ref()?;
     let (msg, button) = if d.before_split.is_some() {
@@ -316,7 +268,7 @@ fn split_line(p: Palette, d: &Draft) -> Option<El> {
         .child(button.build(p)))
 }
 
-/// Joins chapter `i + 1` into chapter `i` (its title becomes a paragraph of the text).
+/// Joins chapter `i + 1` into chapter `i`; its title becomes a paragraph of the text.
 fn merge_next(s: &mut AppState, i: usize) {
     commit_rename(s);
     let Some(d) = s.book.draft.as_mut() else { return };
@@ -351,11 +303,6 @@ fn split(s: &mut AppState, i: usize) {
     d.chapters.splice(i..=i, [first, second]);
 }
 
-// -------------------------------------------------------------------------------------------------
-// Book actions
-// -------------------------------------------------------------------------------------------------
-
-/// Why "Read the book" cannot run now, or `None`.
 fn start_blocker(s: &AppState) -> Option<&'static str> {
     match &s.shell.engine {
         EngineStatus::Ready { .. } => {}
@@ -483,7 +430,6 @@ fn open_folder(s: &mut AppState) {
     }
 }
 
-/// A done chapter's play button: ask the engine for a WAV to play (or pause / resume it when it is the one playing).
 fn play_chapter(s: &mut AppState, index: u32) {
     let Some(p) = s.book.project.as_ref() else { return };
     let Some(c) = p.chapter_list.iter().find(|c| c.index == index) else { return };
@@ -518,10 +464,6 @@ fn toggle_play(s: &mut AppState, path: &Path, title: String, index: u32) {
 fn chapter_playing(s: &AppState, index: u32) -> bool {
     s.playbar.now.as_ref().is_some_and(|n| n.what == chapter_caption(index) && n.status == playbar::Status::Playing)
 }
-
-// -------------------------------------------------------------------------------------------------
-// Engine messages
-// -------------------------------------------------------------------------------------------------
 
 fn friendly(e: &protocol::EngineError) -> String {
     match e.code.as_str() {
@@ -615,7 +557,6 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
         let list: Vec<BookSummary> = result.as_ref().ok().and_then(|v| v.get("books")).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
         b.recent = list;
         if std::mem::replace(&mut b.first_list, false) {
-            // After an engine start: refresh the book shown, or bring back the latest unfinished one.
             let want = match &b.project {
                 Some(p) => Some(p.id.clone()),
                 None if b.draft.is_none() => b.recent.iter().find(|r| unfinished(r)).map(|r| r.id.clone()),
@@ -744,7 +685,6 @@ fn request_list(s: &mut AppState) {
     s.book.listed = true;
 }
 
-/// After every event: the saved options once, their changes, and the book list once the engine is ready.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
     // A click anywhere else takes the focus from the title field: that ends the rename, as Enter does.
@@ -772,10 +712,6 @@ pub fn settle(s: &mut AppState) -> bool {
     changed
 }
 
-// -------------------------------------------------------------------------------------------------
-// View
-// -------------------------------------------------------------------------------------------------
-
 /// "3 h 05 min", "12 min", "40 s".
 pub fn fmt_len(secs: f32) -> String {
     let t = secs.max(0.0).round() as u64;
@@ -801,12 +737,10 @@ fn group(n: u32) -> String {
     out
 }
 
-/// The Text / Book switch at the top right of Speak's left panel.
 pub fn mode_switch(s: &AppState, p: Palette) -> El {
     segmented(p, "speak-mode", &["Text", "Book"], usize::from(s.book.shown), |s, i| set_mode(s, i == 1))
 }
 
-/// The left panel in Book mode.
 pub fn panel(s: &AppState, p: Palette) -> El {
     let head = row().key("book-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y().child(mode_switch(s, p));
     let mut c = section_panel(p, "Book").key("book-panel").grow(1.0).min_w(0.0).h_full().gap(12.0).child(head);
@@ -831,7 +765,6 @@ fn empty_view(s: &AppState, p: Palette) -> El {
         .child(text("or drop the file on this window").font(ty::CAPTION).color(p.text_faint))
 }
 
-/// File name, format and language, with Open another / Close.
 fn file_card(p: Palette, title: &str, sub: String, right: El) -> El {
     glass_card(p).key("book-file").w_full().padding(12.0)
         .child(row().w_full().gap(12.0).center_y()
@@ -1086,7 +1019,6 @@ fn project_bar(s: &AppState, p: Palette, b: &BookSummary) -> El {
     r
 }
 
-/// The right column's lower panel in Book mode: the output options and the recent books.
 pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let head = row().key("book-side-head").pin(None, Some(16.5), Some(22.0), None).gap(8.0).center_y()
         .child(super::formats::output_chip(s, p, "book-outfmt"));
@@ -1098,8 +1030,7 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         s.book.read_titles = !s.book.read_titles;
         s.book.settings_dirty = true;
     });
-    // Each checkbox in its own keyed slot (the checkbox's own key is the same for both); a little inset so the
-    // scroll area's clip never cuts the boxes' border.
+    // Keyed slots: both checkboxes have the same own key. The inset keeps the scroll area's clip off their border.
     let opts = col().key("book-opts").w_full().pl(2.0).gap(10.0)
         .child(el().key("book-opt-m4b").w_full().child(m4b))
         .child(el().key("book-opt-titles").w_full().child(titles));
@@ -1149,10 +1080,6 @@ static SPLIT: rune::Icon = rune::Icon {
     view: 16.0,
     body: r#"<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5V7M8 7L4 11V13.5M8 7L12 11V13.5"/></g>"#,
 };
-
-// -------------------------------------------------------------------------------------------------
-// Headless scenes
-// -------------------------------------------------------------------------------------------------
 
 // A public-domain book (Herman Melville, 1851) for the snapshots.
 const CHAPTERS: [(&str, u32); 9] = [
@@ -1245,7 +1172,6 @@ fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
     ];
 }
 
-/// A book just imported: the chapters found, with include boxes and the totals.
 pub fn scene_imported(s: &mut AppState) {
     scene_base(s);
     let chapters = CHAPTERS.iter().enumerate().map(|(i, (t, w))| DraftChapter { title: (*t).into(), text: String::new(), words: *w, est_s: *w as f32 / 145.0 * 60.0, include: i > 0 }).collect();
@@ -1253,7 +1179,6 @@ pub fn scene_imported(s: &mut AppState) {
     s.book.recent = vec![BookSummary { id: "kobzar-20261101-090000".into(), title: "Кобзар".into(), status: "done".into(), chapters: 24, chapters_done: 24, totals: protocol::BookTotals { audio_s: 31_200.0, ..Default::default() }, ..Default::default() }];
 }
 
-/// A file without chapter marks: one long chapter, and the offer to split it.
 pub fn scene_autosplit_offer(s: &mut AppState) {
     scene_base(s);
     let one = |title: &str, words: u32| DraftChapter { title: title.into(), text: String::new(), words, est_s: words as f32 / 145.0 * 60.0, include: true };
@@ -1266,23 +1191,19 @@ pub fn scene_autosplit_offer(s: &mut AppState) {
     s.book.draft = Some(Draft { file, chapters: vec![one("Тіні забутих предків", 15796)], auto: Some(("length".into(), parts)), before_split: None });
 }
 
-/// The same after "Split automatically", with "Undo split".
 pub fn scene_autosplit_done(s: &mut AppState) {
     scene_autosplit_offer(s);
     auto_split(s);
 }
 
-/// Chapter 4 of 9 being read.
 pub fn scene_generating(s: &mut AppState) {
     scene_project(s, "running", 3, (37, 112));
 }
 
-/// Paused in the middle of chapter 4 (resumable).
 pub fn scene_paused(s: &mut AppState) {
     scene_project(s, "paused", 3, (37, 112));
 }
 
-/// The app closed mid-book: brought back after the next start, ready to resume.
 pub fn scene_interrupted(s: &mut AppState) {
     scene_project(s, "paused", 3, (37, 112));
     if let Some(p) = s.book.project.as_mut() {
@@ -1290,13 +1211,11 @@ pub fn scene_interrupted(s: &mut AppState) {
     }
 }
 
-/// Every chapter read, a chapter playing in the player bar.
 pub fn scene_finished(s: &mut AppState) {
     scene_project(s, "done", CHAPTERS.len(), (0, 0));
     playbar::scene_now(s, "/tmp/books/02.wav", CHAPTERS[1].0, &chapter_caption(1), playbar::Source::Speak, playbar::Status::Playing, 312.0, 2031.0);
 }
 
-/// Book mode before a file is opened.
 pub fn scene_empty(s: &mut AppState) {
     scene_base(s);
 }
