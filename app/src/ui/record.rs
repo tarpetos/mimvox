@@ -1,22 +1,3 @@
-//! Record screen: pick a preset (or paste your own text), read it part by part, auto-save every take.
-//!
-//! Shell integration (the shell calls these, see `ui::shell`):
-//! - `view` draws the screen on a transparent background (the shell paints chrome and aurora).
-//! - `on_engine` receives every engine message, `settle` runs after every event (outgoing requests, following the
-//!   header's voice); the live meter is fed by the recorder's level events (`on_capture`).
-//! - `on_key` handles Space (record / stop) and Left / Right (previous / next part); the screen root also
-//!   handles them itself when it has focus, so `AppSpec::on_key` may forward to it for the unfocused case.
-//!
-//! The recording goes into the voice that is active in the header. Without one, the screen creates a voice named
-//! "My voice" and selects it.
-//!
-//! **Languages.** The reading presets exist per language (`presets.list {language}` lists the languages; the choice is
-//! remembered as `record_language` in settings.json); "Use my own text" detects the language or takes the chosen one
-//! (`text.analyze {text, language}`). A new voice is created in the language of what is read (`voices.create
-//! {language}`); an empty active voice in another language takes the new language (`voices.rename {id, language}`), and
-//! one that already has recordings in another language is left alone: a new voice "<name> (<Language>)" is made. Requests are queued on `RecordState` and sent from `settle` through
-//! `shell::request`, so the screen state never needs the engine handle.
-
 mod files;
 mod fixtures;
 mod mic;
@@ -116,7 +97,6 @@ impl Verdict {
     }
 }
 
-/// A language with reading presets (`presets.list` -> `languages`).
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RecLang {
     pub code: String,
@@ -128,7 +108,6 @@ pub struct RecLang {
 
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
-    /// The language the text was analysed in, and whether the engine detected it.
     pub language: String,
     pub detected: bool,
     pub words: u32,
@@ -152,7 +131,7 @@ pub struct SummaryPart {
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
     pub total_minutes: f32,
-    /// Minutes the engine counts for training (parts with a "bad" verdict are left out).
+    /// Excludes parts with a "bad" verdict.
     pub usable_minutes: f32,
     pub has_reference: bool,
     pub parts: Vec<SummaryPart>,
@@ -161,12 +140,10 @@ pub struct Summary {
     pub recommended_epochs: Option<u32>,
 }
 
-/// What is being recorded.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct Plan {
     pub id: String,
-    /// The language of the texts (a new voice is created in it).
     pub language: String,
     pub title: String,
     pub target_minutes: f32,
@@ -181,7 +158,6 @@ pub enum TakeStatus {
     Checking,
     Saving,
     Saved,
-    /// The check said "bad": not added to the dataset.
     Rejected,
     Failed,
 }
@@ -194,7 +170,6 @@ pub struct Take {
     pub issues: Vec<String>,
     pub path: Option<PathBuf>,
     pub error: Option<String>,
-    /// File name of an existing recording that was imported instead of recorded live.
     pub imported: Option<String>,
 }
 
@@ -216,17 +191,11 @@ pub enum Phase {
     Summary,
 }
 
-/// "Use recordings you already have" on the start page: files of one person become a voice (or join the active
-/// one) without any reading. The files are cleaned and joined (`media.combine`) and stored as one recording of the
-/// voice (`dataset.add`), so the voice can speak at once and be trained when there is enough of it.
 #[derive(Default)]
 pub struct FilesFlow {
     pub stage: FilesStage,
-    /// The new voice's name in the "whose voice" dialog.
     pub name: TextEdit,
-    /// The dialog's choice: the files are more recordings of the active voice (else a new voice).
     pub into_current: bool,
-    /// The file dialog is open; its answer arrives as an event.
     picking: bool,
 }
 
@@ -234,7 +203,6 @@ pub struct FilesFlow {
 pub enum FilesStage {
     #[default]
     Idle,
-    /// The dialog: whose voice is in these files?
     Asking { paths: Vec<PathBuf> },
     Working { voice: String, note: String },
     Done { voice: String, minutes: f32, level: Level, notes: Vec<String> },
@@ -242,7 +210,6 @@ pub enum FilesStage {
 }
 
 enum Pending {
-    /// The files flow: the new voice, the joined recording, the recording stored in the voice.
     FilesCreate { paths: Vec<PathBuf>, name: String },
     FilesCombine { voice_id: String, name: String },
     FilesAdd { name: String, notes: Vec<String> },
@@ -251,12 +218,10 @@ enum Pending {
     CreateVoice,
     Check { part: usize, path: PathBuf },
     Add { part: usize, dest: PathBuf },
-    /// `media.combine`: several files joined into one take for `part`.
     Combine { part: usize },
     Summary,
 }
 
-/// A running capture and its live readings.
 pub struct Active {
     recorder: Option<Recorder>,
     /// Tells this capture's level events from those of an earlier one.
@@ -270,21 +235,17 @@ pub struct Active {
 
 #[derive(Default)]
 pub struct RecordState {
-    /// The voice being recorded into (follows the header's active voice).
     pub voice_id: Option<String>,
-    /// The chosen microphone (`None` = system default); persisted as `microphone` in the settings file.
+    /// `None` = system default; persisted as `microphone` in settings.json.
     pub input_device: Option<String>,
-    /// Microphone chooser: device list, dropdown and level test.
     pub mic: mic::MicState,
-    /// The app data folder (voices, temporary takes); copied from `ShellState::data_dir` by `AppState::default`.
     pub data_dir: PathBuf,
 
     pub phase: Phase,
-    /// The language of the presets (`""` until the saved choice is read: English).
+    /// `""` until the saved choice is read.
     pub language: String,
-    /// Languages that have presets (from `presets.list`).
     pub languages: Vec<RecLang>,
-    /// "Use my own text": the chosen language, `None` = detect it.
+    /// `None` = detect it.
     pub own_language: Option<String>,
     prefs_loaded: bool,
     pub presets: Load<Vec<Preset>>,
@@ -299,27 +260,19 @@ pub struct RecordState {
     pub analyze_error: Option<String>,
 
     pub active: Option<Active>,
-    /// One-line message above the recorder (auto-advance confirmation, errors).
     pub notice: Option<(String, Tone)>,
-    /// The current part's take is playing in the player bar (kept up to date by `settle`).
     pub playing: bool,
     pub creating_voice: bool,
-    /// The name for the voice `ensure_voice` creates next (default "My voice").
     new_voice_name: Option<String>,
-    /// The start page's "This is for": a new voice (else the active one), and the name typed for it.
     pub for_new: bool,
     pub new_name: TextEdit,
     pub files: FilesFlow,
-    /// A file drag is over the window (highlights the recorder card as a drop target).
     pub import_over: bool,
-    /// The "Import file..." dialog is open; its answer arrives as an event.
     importing: bool,
-    /// Numbers captures (live recordings and mic tests) so late level events of a stopped one are ignored.
+    /// Numbers captures so late level events of a stopped one are ignored.
     capture_seq: u64,
     pending: HashMap<u64, Pending>,
-    /// Requests waiting for the event to settle (sent through `shell::request`).
     outbox: Vec<(String, Value, Pending)>,
-    /// The dataset changed: refresh the shell's voice list (minutes, parts) when the event settles.
     voices_dirty: bool,
 }
 
@@ -365,7 +318,6 @@ fn parse_summary(v: &Value) -> Summary {
 }
 
 impl RecordState {
-    /// The part being recorded or shown.
     pub fn part(&self) -> Option<&PartText> {
         self.plan.as_ref().and_then(|p| p.parts.get(self.current))
     }
@@ -374,13 +326,12 @@ impl RecordState {
         self.active.is_some()
     }
 
-    /// Queues a request; `settle` sends it. Always accepted (a dead engine fails it there).
+    /// Always accepted: `settle` sends it, and a dead engine fails it there.
     fn request(&mut self, method: &str, params: Value, what: Pending) -> bool {
         self.outbox.push((method.to_string(), params, what));
         true
     }
 
-    /// The language of the presets ("en" until chosen).
     pub fn lang(&self) -> &str {
         if self.language.is_empty() { "en" } else { &self.language }
     }
@@ -393,7 +344,6 @@ impl RecordState {
         }
     }
 
-    /// The header's voice changed: show that voice's recorded parts for the current plan.
     fn set_voice(&mut self, id: Option<String>) {
         self.voice_id = id;
         if let Some(plan) = &self.plan {
@@ -404,7 +354,6 @@ impl RecordState {
         }
     }
 
-    /// A queued request could not be sent: the engine is not running.
     fn send_failed(&mut self, what: Pending) {
         match what {
             Pending::Presets => self.presets = Load::Failed("The engine is not running".into()),
@@ -429,8 +378,7 @@ impl RecordState {
         }
     }
 
-    /// Files were dropped or chosen: ask whose voice it is. `fresh_active`: the active voice has no recordings yet
-    /// (it was just made for this), so the files are most likely meant for it.
+    /// `fresh_active`: the active voice has no recordings yet, so the files are most likely meant for it.
     pub fn files_offer(&mut self, paths: Vec<PathBuf>, fresh_active: bool) {
         if paths.is_empty() || matches!(self.files.stage, FilesStage::Working { .. }) {
             return;
@@ -448,7 +396,7 @@ impl RecordState {
         }
     }
 
-    /// The dialog's answer. `current`: the active voice (id, name), when there is one.
+    /// `current`: the active voice (id, name), when there is one.
     pub fn files_confirm(&mut self, current: Option<(String, String)>) {
         let FilesStage::Asking { paths } = std::mem::take(&mut self.files.stage) else { return };
         if self.files.into_current {
@@ -547,7 +495,6 @@ impl RecordState {
         dir.join(format!("record-part{}-{stamp}.wav", part + 1))
     }
 
-    /// Space / the big button.
     pub fn toggle_recording(&mut self) {
         if self.active.is_some() {
             self.stop_recording();
@@ -594,9 +541,7 @@ impl RecordState {
         }
     }
 
-    /// Several files for the current part: the engine joins them into one WAV (`media.combine`), which is then
-    /// imported like a single file. "Remove background music" as remembered from the Voices screen goes along
-    /// (`remove_music`); never set, the engine decides (`"auto"`: video files with sound under the voice, on a GPU).
+    /// `remove_music` as remembered on the Voices screen; never set, the engine decides (`"auto"`).
     fn import_many(&mut self, paths: Vec<PathBuf>) {
         if self.active.is_some() || self.importing {
             return;
@@ -641,8 +586,6 @@ impl RecordState {
         self.notice = Some((msg, if skipped.is_empty() { Tone::Neutral } else { Tone::Warning }));
     }
 
-    /// Uses an existing recording (any format the engine reads) for the current part instead of recording live:
-    /// it goes through the same `recording.check` -> `dataset.add` path as a live take.
     fn import_take(&mut self, path: PathBuf) {
         if self.active.is_some() {
             return;
@@ -694,12 +637,10 @@ impl RecordState {
         self.start_recording();
     }
 
-    /// First part that has no saved take, after `from`.
     fn next_open(&self, from: usize) -> Option<usize> {
         (from + 1..self.takes.len()).find(|&i| self.takes[i].status != TakeStatus::Saved)
     }
 
-    /// Minutes recorded so far (saved takes), from the summary when the engine reported one.
     pub fn total_minutes(&self) -> f32 {
         match &self.summary {
             Some(s) => s.usable_minutes,
@@ -717,7 +658,6 @@ impl RecordState {
             let path = stored(self, p.index);
             if let Some(t) = (p.index as usize).checked_sub(1).and_then(|i| self.takes.get_mut(i)) {
                 if t.status == TakeStatus::Empty || t.status == TakeStatus::Failed {
-                    // a part restored from an earlier session: show it as saved, playable from the dataset
                     t.status = if p.verdict == Verdict::Bad { TakeStatus::Rejected } else { TakeStatus::Saved };
                     t.duration_s = p.duration_s;
                     t.verdict = Some(p.verdict);
@@ -726,7 +666,6 @@ impl RecordState {
                 }
             }
         }
-        // parts removed from the dataset become empty again
         let have: Vec<usize> = sum.parts.iter().map(|p| p.index as usize).collect();
         for (i, t) in self.takes.iter_mut().enumerate() {
             if t.status == TakeStatus::Saved && !have.contains(&(i + 1)) {
@@ -736,7 +675,7 @@ impl RecordState {
         self.summary = Some(sum);
     }
 
-    /// Handles the answer to one of our requests. Returns the id of a voice this screen just created.
+    /// Returns the id of a voice this screen just created.
     fn on_response(&mut self, id: u64, result: &Result<Value, crate::engine::protocol::EngineError>) -> Option<String> {
         let what = self.pending.remove(&id)?;
         let mut created = None;
@@ -911,7 +850,6 @@ impl RecordState {
             self.voices_dirty = true;
         }
         let (verdict, dur) = self.takes.get(part).map_or((None, 0.0), |t| (t.verdict, t.duration_s));
-        // auto-advance only on a clean take, and only while the reader is still on that part
         if verdict == Some(Verdict::Ok) && part == self.current {
             self.notice = Some((format!("Part {} saved ({})", part + 1, widgets::fmt_dur(dur)), widgets::Tone::Success));
             match self.next_open(part) {
@@ -923,14 +861,12 @@ impl RecordState {
 
 }
 
-/// A meter sink for capture `seq`: the audio thread's level events reach `apply` on the UI thread, newest only (at
-/// most one waits at a time), at the recorder's capped rate.
+/// Level events reach `apply` on the UI thread, newest only.
 pub(crate) fn meter_sink(seq: u64, apply: fn(&mut AppState, u64, CaptureEvent) -> bool) -> MeterSink {
     let feed = Latest::new(move |s: &mut AppState, ev: CaptureEvent| apply(s, seq, ev));
     std::sync::Arc::new(move |ev| feed.send(ev))
 }
 
-/// A level event of the live recording (meter, clip warning, elapsed time).
 fn on_capture(s: &mut AppState, seq: u64, ev: CaptureEvent) -> bool {
     let Some(a) = s.record.active.as_mut().filter(|a| a.seq == seq) else { return false };
     match ev {
@@ -971,7 +907,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     root
 }
 
-/// "Import file...": pick an existing recording for the current part (native dialog on its own thread).
 pub fn import_file(s: &mut AppState) {
     if s.record.importing || s.record.active.is_some() || s.shell.scripted() {
         return;
@@ -988,8 +923,7 @@ pub fn import_file(s: &mut AppState) {
     });
 }
 
-/// Files dropped on the Record screen. While a reading is open they become the current part's take (several are
-/// joined into one); on the start page they are recordings somebody already has, and a dialog asks whose voice.
+/// While a reading is open the files become the current part's take; on the start page a dialog asks whose voice.
 pub fn import_dropped(s: &mut AppState, files: Vec<PathBuf>) {
     s.record.import_over = false;
     if matches!(s.record.phase, Phase::Session | Phase::Summary) && s.record.plan.is_some() {
@@ -1006,7 +940,6 @@ fn offer_files(s: &mut AppState, files: Vec<PathBuf>) {
     s.record.files_offer(files, fresh_active);
 }
 
-/// "Choose files…" on the start page (native dialog on its own thread).
 pub fn choose_files(s: &mut AppState) {
     if s.record.files.picking || s.shell.scripted() {
         return;
@@ -1023,18 +956,15 @@ pub fn choose_files(s: &mut AppState) {
     });
 }
 
-/// The "whose voice" dialog's main button.
 pub fn confirm_files(s: &mut AppState) {
     let current = shell::active_voice(s).map(|v| (v.id.clone(), v.name.clone()));
     s.record.files_confirm(current);
 }
 
-/// The "whose voice" dialog, for the shell's overlays.
 pub fn files_overlay(s: &AppState, p: &theme::Palette) -> Option<El> {
     (s.screen == Screen::Record).then(|| files::overlay(s, p)).flatten()
 }
 
-/// The voice menu's "New voice": the start page, set to make a new voice.
 pub fn start_new_voice(s: &mut AppState) {
     s.record.back_to_pick();
     s.record.for_new = true;
@@ -1050,7 +980,6 @@ fn import_paths(s: &mut AppState, mut paths: Vec<PathBuf>) {
     }
 }
 
-/// Space / the big button: start or stop the capture (stops playback first).
 pub fn toggle_recording(s: &mut AppState) {
     if s.record.active.is_none() {
         shell::stop_audio(s);
@@ -1058,18 +987,15 @@ pub fn toggle_recording(s: &mut AppState) {
     s.record.toggle_recording();
 }
 
-/// "Record again" on a rejected or saved part.
 pub fn rerecord(s: &mut AppState) {
     shell::stop_audio(s);
     s.record.rerecord();
 }
 
-/// The current part's take, when it has one.
 fn current_take(s: &AppState) -> Option<PathBuf> {
     s.record.takes.get(s.record.current).and_then(|t| t.path.clone())
 }
 
-/// Plays, pauses or resumes the current part's take in the player bar.
 pub fn toggle_play(s: &mut AppState) {
     let Some(path) = current_take(s) else { return };
     let title = format!("Part {} take", s.record.current + 1);
@@ -1080,7 +1006,7 @@ pub fn toggle_play(s: &mut AppState) {
     s.record.playing = current_take(s).is_some_and(|p| super::playbar::playing(s, &p));
 }
 
-/// Space toggles record/stop, Left/Right move between parts. Returns true when it took the key.
+/// Returns true when it took the key.
 pub fn on_key(s: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
     if s.screen != Screen::Record || !matches!(s.record.phase, Phase::Session | Phase::Summary) {
         return false;
@@ -1112,7 +1038,6 @@ pub fn on_key(s: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
     }
 }
 
-/// The language of the reading presets was picked: load that language's presets (remembered for next time).
 pub fn set_language(s: &mut AppState, code: &str) {
     if s.record.lang() == code || s.record.recording() {
         return;
@@ -1124,12 +1049,9 @@ pub fn set_language(s: &mut AppState, code: &str) {
     }
 }
 
-/// Starts reading `plan` into the right voice: the active one when it is in the plan's language (or still empty: it
-/// takes the language), else a new voice for that language.
 fn begin_in_language(s: &mut AppState, plan: Plan) {
     let lang = plan.language.clone();
     let active = shell::active_voice(s).cloned();
-    // "This is for: a new voice" on the start page.
     if s.record.for_new || active.is_none() {
         let typed = s.record.new_name.text.trim().to_owned();
         let name = if !typed.is_empty() {
@@ -1167,7 +1089,6 @@ fn begin_in_language(s: &mut AppState, plan: Plan) {
     }
 }
 
-/// A preset card was pressed.
 pub fn choose_preset(s: &mut AppState, id: &str) {
     let Load::Ready(list) = &s.record.presets else { return };
     let Some(p) = list.iter().find(|p| p.id == id) else { return };
@@ -1175,7 +1096,6 @@ pub fn choose_preset(s: &mut AppState, id: &str) {
     begin_in_language(s, plan);
 }
 
-/// "Record these parts" after analysing the user's own text.
 pub fn record_own(s: &mut AppState) {
     let Some(a) = s.record.analysis.clone() else { return };
     let language = if a.language.is_empty() { "en".to_owned() } else { a.language.clone() };
@@ -1183,12 +1103,10 @@ pub fn record_own(s: &mut AppState) {
     begin_in_language(s, plan);
 }
 
-/// Called for every engine message (responses, events, exit).
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
         EngineMsg::Response { id, result } => {
             if let Some(voice) = s.record.on_response(*id, result) {
-                // select the new voice in the header; the refreshed list keeps it
                 s.shell.active_voice = Some(voice);
             }
         }
@@ -1203,7 +1121,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// After every event: drop highlight, microphone chooser, voice sync and queued requests.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
     if s.record.import_over != (s.formats.over && s.screen == Screen::Record) {
@@ -1211,14 +1128,12 @@ pub fn settle(s: &mut AppState) -> bool {
         changed = true;
     }
     changed |= mic::settle(s);
-    // The take's button follows the player bar (paused, ended or replaced there, or another part shown).
     let playing = current_take(s).is_some_and(|p| super::playbar::playing(s, &p));
     if playing != s.record.playing {
         s.record.playing = playing;
         changed = true;
     }
 
-    // follow the header's voice
     if s.shell.active_voice != s.record.voice_id && !s.record.creating_voice && s.record.active.is_none() {
         let active = s.shell.active_voice.clone();
         s.record.set_voice(active);
@@ -1240,7 +1155,6 @@ pub fn settle(s: &mut AppState) -> bool {
         changed = true;
     }
 
-    // send what the screen queued
     if !s.record.outbox.is_empty() {
         let queued = std::mem::take(&mut s.record.outbox);
         for (method, params, what) in queued {

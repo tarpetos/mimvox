@@ -1,5 +1,3 @@
-//! "Use recordings you already have": the drop card on the Record start page and the "whose voice is it" dialog.
-
 use super::widgets::*;
 use super::{FilesStage, Level, RecordState};
 use crate::state::AppState;
@@ -9,7 +7,6 @@ use crate::ui::theme::{radius, ty};
 use crate::ui::voices::kit;
 use rune::{Color, El, col, el, row, text};
 
-/// The card: what it is for, where to drop, and what happened to the last files.
 pub fn card(r: &RecordState, p: Pal) -> El {
     let over = r.import_over;
     let busy = matches!(r.files.stage, FilesStage::Working { .. });
@@ -77,7 +74,6 @@ pub fn card(r: &RecordState, p: Pal) -> El {
     c
 }
 
-/// One choice of the dialog: a ring, a title and a line under it.
 fn choice(p: Pal, key: &str, on: bool, title: String, sub: &str, pick: fn(&mut AppState)) -> El {
     let ring = el().size(18.0, 18.0).radius(9.0).center().border(1.5, if on { p.accent } else { p.text_faint })
         .children(on.then(|| el().size(9.0, 9.0).radius(4.5).fill(p.accent)));
@@ -90,7 +86,6 @@ fn choice(p: Pal, key: &str, on: bool, title: String, sub: &str, pick: fn(&mut A
             .child(txt(sub, 12.5, 400.0, p.text_dim).wrap().a11y_hidden()))
 }
 
-/// The dialog over the window while files wait for their answer.
 pub fn overlay(s: &AppState, p: &Pal) -> Option<El> {
     let FilesStage::Asking { paths } = &s.record.files.stage else { return None };
     let p = *p;

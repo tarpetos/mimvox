@@ -1,5 +1,4 @@
 //! Records 3 seconds from the default microphone and plays it back.
-//! Run: `cargo run --example audio_smoke` (needs audio devices; fails with a clear message without them).
 
 #[path = "../src/audio/mod.rs"]
 mod audio;

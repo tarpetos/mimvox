@@ -1,37 +1,3 @@
-//! Redub screen: take an existing recording (audio or video) and say it again in your voice.
-//!
-//! Three modes:
-//! * **Translate & dub** (the default) takes speech in any language and says it in another one (the "To" picker, English
-//!   by default, any language the engine speaks) in your voice, in one job (`redub.dub`: transcribe, translate, speak,
-//!   save). With "Review text before dubbing" the job stops after the translation: a two-column table (original |
-//!   translation, editable) and "Dub it", which finishes with `redub.render` in `respeak` mode and the edited segments.
-//! * **Convert voice** keeps the original timing and delivery and swaps in a trained voice (`redub.render`, mode
-//!   `convert`).
-//! * **Re-speak** transcribes the speech (`redub.transcribe`), lets you edit or translate the text, then speaks it
-//!   again in the voice's own delivery (`redub.render`, mode `respeak`, with the edited segments).
-//!
-//! `redub.prepare` is sent as soon as a file is chosen, so the first click starts at once. The last mode, spoken language,
-//! review choice and target language are remembered in `settings.json` (`redub_mode`, `redub_language`, `redub_review`,
-//! `redub_target`), and so is "Translation quality" (`redub_translator`: `nllb-1.3b` | `nllb-600m`), offered when the
-//! engine has both translators (`hello` -> `translators`). The language lists come from the engine (`ui::lang`).
-//! Translate & dub and Re-speak have "Keep original timing" (`timing`: `keep` | `natural`), on by default for a video
-//! and off for an audio file, remembered per kind once changed (`redub_timing`).
-//! For a video source every mode offers "Output: Video with new voice / Audio only" (`output`, default video,
-//! remembered as `redub_output`) and "Keep background music and sounds" (`keep_background`, default on, remembered as
-//! `redub_keep_background`): the engine separates the voice from the music, mixes the new voice over the background
-//! and muxes it into a copy of the video (the picture is not re-encoded). A video output always keeps the original
-//! timing. The result plays its audio in the app and opens the video in the system player ("Open video").
-//! Dubbing into English, or re-speaking English, with a voice that has no English reference clip shows Speak's
-//! "Accent" choice (`speak::accent_block`, the same setting), sent as `accent` with `redub.dub`, with the
-//! `redub.render` that finishes a reviewed dub and with a Re-speak's `redub.render`. A job spoken from a clip in another
-//! language than its text (`reference_note`) shows a warning toast.
-//!
-//! The file comes from a drop anywhere on the window (see `formats::window_drops`) or "Choose file..." (rfd on its
-//! own thread). The voice is the header's active voice; Voice match, Expressiveness and Quality are the Speak
-//! screen's own controls and state. Results land in the history with A/B playback and the shared "Export as..."
-//! control; it survives restarts (filled from `outputs.list` once the engine is ready, see `ui::history`; "Original"
-//! plays only for this session's results). Requests and events follow `contract/engine-protocol.md` (`redub.*`).
-
 use super::components::{
     Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel, segmented_help, status_dot, well,
 };
@@ -52,7 +18,6 @@ use rune::{Cx, El, ScrollSpec, TextEdit, col, edit_access, el, row, text, text_i
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-/// A language code ("uk", "zh-CN", "pt") as a name for the screen; an unknown code is shown upper-case.
 fn lang_name(code: &str) -> String {
     lang::name(code)
 }
@@ -65,13 +30,8 @@ fn mode_from_key(k: &str) -> Option<RedubMode> {
     [RedubMode::Dub, RedubMode::Convert, RedubMode::Respeak].into_iter().find(|m| m.as_str() == k)
 }
 
-// -------------------------------------------------------------------------------------------------
-// State
-// -------------------------------------------------------------------------------------------------
-
 #[derive(Clone, Debug)]
 enum Probe {
-    /// Not asked yet (the engine may still be starting).
     Pending,
     Asking(u64),
     Ready(RedubProbe),
@@ -83,12 +43,10 @@ struct Source {
     path: PathBuf,
     name: String,
     probe: Probe,
-    /// `redub.prepare` was sent for this file (reset when the engine restarts).
     prepared: bool,
 }
 
 impl Source {
-    /// A file the player can play as "the original": the engine's WAV preview, or the file itself when it is a WAV.
     fn preview(&self) -> Option<PathBuf> {
         if let Probe::Ready(p) = &self.probe {
             if let Some(pv) = &p.preview_path {
@@ -103,17 +61,14 @@ fn is_wav(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("wav"))
 }
 
-/// One editable line of the transcript.
 struct Seg {
     key: u64,
     start: f32,
     end: f32,
-    /// The original-language text shown next to the editable translation while reviewing a dub.
     source: String,
     edit: TextEdit,
 }
 
-/// A running engine job.
 #[derive(Clone, Debug)]
 struct Run {
     req: u64,
@@ -125,9 +80,7 @@ struct Run {
     segment: Option<(u32, u32)>,
     /// Cancel pressed before the job id arrived.
     cancel: bool,
-    /// The voice speaking (to record its detected reference language from `redub.done`).
     voice_id: String,
-    /// The foreign-reference warning was shown with the answer already.
     warned: bool,
 }
 
@@ -141,8 +94,6 @@ impl Run {
     }
 }
 
-/// The language a Re-speak speaks: the transcript's (the target after a translation), else what the options say
-/// ("Translate the transcript" to, or the spoken language when it is not Auto-detect).
 fn respeak_lang(r: &RedubState) -> Option<String> {
     if let Some(l) = r.transcript_lang.as_deref().filter(|l| !l.trim().is_empty()) {
         return Some(l.to_owned());
@@ -161,37 +112,31 @@ enum Job {
     Rendering { run: Run, mode: RedubMode, source: String, voice: String },
 }
 
-/// One finished redub in the history (newest first): made this session, or loaded with `outputs.list`.
 #[derive(Clone, Debug)]
 pub struct Redub {
     pub id: u64,
-    /// The source file's name (a result saved before sidecars: its own file name).
+    /// For a result saved before sidecars: its own file name.
     pub name: String,
     pub voice: String,
-    /// `None` for a result saved before sidecars (the mode was not recorded).
+    /// `None` for a result saved before sidecars.
     pub mode: Option<RedubMode>,
-    /// The saved file (`<data>/outputs`, in the chosen format): Show in folder, Open file, Export.
     pub path: PathBuf,
-    /// A WAV of it to play ("Result"; the saved file itself when that is a WAV). A loaded result in another format
-    /// has none until "Result" asks the engine for one (`outputs.play`; this is the saved file meanwhile).
+    /// A WAV to play; for a loaded result in another format, the saved file until `outputs.play` makes one.
     pub play: PathBuf,
-    /// The original's playback WAV ("Original"; this session only).
+    /// This session only.
     pub preview: Option<PathBuf>,
     pub duration_s: f32,
     /// `None` for a result saved before sidecars.
     pub elapsed_s: Option<f32>,
-    /// Seconds the spoken result ran past the original (a dub only; `None` when it did not).
+    /// Seconds the result ran past the original (a dub only).
     pub drift_s: Option<f32>,
-    /// The language a dub was spoken in.
     pub to: Option<String>,
-    /// The video with the new voice (a video output), next to `path`.
     pub video: Option<PathBuf>,
-    /// Unix time it was saved (the list's order).
+    /// Unix time.
     pub created: f64,
 }
 
 impl Redub {
-    /// A result from `outputs.list`.
     pub fn from_entry(id: u64, e: protocol::OutputEntry) -> Redub {
         let name = e.source_name.filter(|n| !n.trim().is_empty() && !e.legacy).unwrap_or_else(|| e.name.clone());
         let mode = e.mode.as_deref().and_then(mode_from_key);
@@ -216,45 +161,33 @@ impl Redub {
 }
 
 pub struct RedubState {
-    /// The "Output" line is unfolded (video or audio, the background, the timing).
-    /// The folded section of the options that is open (one at a time).
     pub fold: Option<Fold>,
     file: Option<Source>,
     pub mode: RedubMode,
-    /// The language of the speech (`auto` or a code).
+    /// `auto` or a code.
     pub from: String,
-    /// The language to translate to and speak (Translate & dub, and Re-speak with "Translate").
     pub to: String,
     translate: bool,
-    /// "Review text before dubbing" (Translate & dub).
     review_first: bool,
-    /// "Translation quality: Faster" (NLLB-200 600M) instead of Better (1.3B); only asked when both are installed.
+    /// NLLB-200 600M instead of 1.3B.
     faster_translation: bool,
-    /// "Keep original timing" as the user set it for audio files (`[0]`) and video files (`[1]`); `None` until they
-    /// change it (then it is on for video and off for audio).
+    /// Per kind: audio `[0]`, video `[1]`; `None` until the user changes it.
     keep_timing: [Option<bool>; 2],
-    /// "Output: Video with new voice" (else "Audio only") for a video source.
     video_out: bool,
-    /// "Keep background music and sounds" for a video source.
     keep_bg: bool,
-    /// The engine can separate a voice from the background (the music removal component; `hello` -> `components`).
     pub can_separate: bool,
     segments: Vec<Seg>,
-    /// The segments are a dub's translation waiting for the user's edits (shown as the two-column review).
     reviewing: bool,
-    /// Language of the text in `segments` (the target after a translation, never the source language).
+    /// Never the source language after a translation.
     transcript_lang: Option<String>,
-    /// The speech language when the text was translated ("English · from Ukrainian").
     transcript_from: Option<String>,
     transcript_translated: bool,
     prefs_loaded: bool,
     prefs_dirty: bool,
     job: Job,
     pub history: Vec<Redub>,
-    /// The latest result for the current file (shown in the result card).
     result: Option<u64>,
     error: Option<String>,
-    /// The file dialog is open (its answer arrives as an event).
     picking: bool,
     next_id: u64,
     next_seg: u64,
@@ -294,20 +227,17 @@ impl Default for RedubState {
 }
 
 impl RedubState {
-    /// The id of a new history row.
     pub fn new_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
     }
 
-    /// A transcription or render is running.
     pub fn busy(&self) -> bool {
         !matches!(self.job, Job::Idle)
     }
     fn kept_segments(&self) -> impl Iterator<Item = &Seg> {
         self.segments.iter().filter(|g| !g.edit.text.trim().is_empty())
     }
-    /// Forgets the transcript or review (a new file, a new run, another mode).
     fn clear_text(&mut self) {
         self.segments.clear();
         self.reviewing = false;
@@ -315,7 +245,6 @@ impl RedubState {
         self.transcript_from = None;
         self.transcript_translated = false;
     }
-    /// "Ukrainian · from English" for the transcript or review header (never the source language alone for a translation).
     fn lang_label(&self) -> Option<String> {
         let l = self.transcript_lang.as_deref().filter(|l| !l.is_empty())?;
         let mut label = lang_name(l);
@@ -327,7 +256,6 @@ impl RedubState {
         }
         Some(label)
     }
-    /// The language of the segment texts, for `redub.render`.
     fn text_language(&self) -> TextLanguage {
         match self.transcript_lang.clone().filter(|l| !l.trim().is_empty()) {
             Some(l) if self.transcript_translated => TextLanguage::Translated(l),
@@ -340,11 +268,10 @@ impl RedubState {
     }
 }
 
-/// Extensions taken for video until `redub.probe` says whether the file has a picture track.
+/// Taken as video until `redub.probe` says whether the file has a picture track.
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "webm", "avi", "m4v"];
 
-/// The chosen file is a video (the probe's `has_video`, else its extension). Without a file: true (fitting the timing
-/// is what a video needs, and it was the only behaviour before the switch).
+/// Without a file: true.
 fn source_is_video(r: &RedubState) -> bool {
     let Some(f) = r.file.as_ref() else { return true };
     if let Probe::Ready(RedubProbe { has_video: Some(v), .. }) = &f.probe {
@@ -353,18 +280,14 @@ fn source_is_video(r: &RedubState) -> bool {
     f.path.extension().and_then(|e| e.to_str()).is_some_and(|e| VIDEO_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-/// What the job writes: for a video source the user's choices, for an audio file its audio alone (no separation).
 fn output(r: &RedubState) -> RedubOutput {
     if source_is_video(r) { RedubOutput { video: r.video_out, keep_background: r.keep_bg && r.can_separate } } else { RedubOutput::default() }
 }
 
-/// The timing is fixed to "keep": a video output keeps the picture's timing.
 fn timing_forced(r: &RedubState) -> bool {
     output(r).video
 }
 
-/// "Keep original timing": always for a video output, else the user's choice for this kind of file, else on for a
-/// video and off for audio.
 fn keep_timing(r: &RedubState) -> bool {
     if timing_forced(r) {
         return true;
@@ -373,8 +296,6 @@ fn keep_timing(r: &RedubState) -> bool {
     r.keep_timing[usize::from(video)].unwrap_or(video)
 }
 
-/// `redub.prepare` also separates the voice from the background: the job will need it (a kept background, or a
-/// converted video, whose voice is converted alone).
 fn wants_separation(r: &RedubState) -> bool {
     let o = output(r);
     r.can_separate && (o.keep_background || (o.video && r.mode == RedubMode::Convert))
@@ -394,7 +315,7 @@ fn toggle_keep_timing(s: &mut AppState) {
     r.persist();
 }
 
-/// The saved `redub_timing` setting: `{"audio": "keep"|"natural", "video": ...}`, each only once the user chose.
+/// `redub_timing`: `{"audio": "keep"|"natural", "video": ...}`, each only once the user chose.
 fn parse_timing_pref(v: Option<serde_json::Value>) -> [Option<bool>; 2] {
     let get = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(|x| x.as_str()).and_then(|x| match x {
         "keep" => Some(true),
@@ -414,12 +335,10 @@ fn timing_pref(t: [Option<bool>; 2]) -> serde_json::Value {
     v
 }
 
-/// "Keep original timing" with the hint for its current state (Translate & dub and Re-speak).
 fn timing_block(s: &AppState, p: Palette, key: &str) -> El {
     let r = &s.redub;
     let on = keep_timing(r);
     let forced = timing_forced(r);
-    // For an audio-only result of a video, the hint says what the choice means for laying it back over the picture.
     let hint = match (on, source_is_video(r)) {
         _ if forced => "A video result always keeps the original timing, so your voice stays in sync with the picture. Fits each phrase into its time; may speed up speech.",
         (true, true) => "Fits each phrase into the original timing; may speed up speech. Stays in sync with the video.",
@@ -432,18 +351,14 @@ fn timing_block(s: &AppState, p: Palette, key: &str) -> El {
         .child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
 }
 
-/// The parts of the options that are one line each. They are set once and rarely touched, and open they filled
-/// the panel. A press opens the choices in a panel over the page ([`fold_overlay`]), so nothing moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fold {
-    /// Re-speak: the spoken language, "Translate the transcript" and "Transcribe again".
     Transcription,
     Accent,
     Output,
 }
 
-/// A section's line: its name, what is chosen now, and "Change". `pinned` is a section shown in full under the
-/// line (a running job, a warning): the line then only names it.
+/// `pinned`: the section is shown in full under the line, which then only names it.
 fn fold_row(p: Palette, key: &str, title: &str, summary: &str, open: bool, pinned: bool, which: Fold) -> El {
     let r = row().key(key.to_owned()).w_full().gap(10.0).center_y().px(6.0).py(6.0).radius(radius::CONTROL)
         .child(text(title.to_owned()).font(ty::LABEL).color(p.text).a11y_hidden())
@@ -457,18 +372,14 @@ fn fold_row(p: Palette, key: &str, title: &str, summary: &str, open: bool, pinne
         .child(text("Change").font(ty::CAPTION).color(p.accent).a11y_hidden())
 }
 
-/// The key the options of the current mode are built with.
 fn fold_key(r: &RedubState) -> &'static str {
     if r.mode == RedubMode::Respeak { "respeak" } else { "dub" }
 }
 
-/// The open section's choices, in a panel over the page under its line (added at the root by the shell). `None`
-/// when no section is open.
 pub fn fold_overlay(s: &AppState, p: Palette) -> Option<El> {
     let r = &s.redub;
     let which = r.fold.filter(|_| s.screen == Screen::Redub && r.file.is_some() && r.mode != RedubMode::Convert)?;
     let key = fold_key(r);
-    // Each body names itself (its own "Accent" / "Output" label, "Spoken language"), so the panel adds no title.
     let (anchor, body) = match which {
         Fold::Accent => (format!("{key}-accent-head"), speak::accent_block(s, p, &format!("{key}-accent"))),
         Fold::Output => {
@@ -487,7 +398,6 @@ pub fn fold_overlay(s: &AppState, p: Palette) -> Option<El> {
     Some(super::components::popover(p, "redub-fold", &anchor, 520.0, rune::Align::End, |s: &mut AppState| s.redub.fold = None, content))
 }
 
-/// Re-speak's "Spoken language", "Translate the transcript" and the Transcribe button.
 fn transcription_choices(s: &AppState, p: Palette) -> El {
     let r = &s.redub;
     let busy = r.busy();
@@ -513,13 +423,10 @@ fn transcription_choices(s: &AppState, p: Palette) -> El {
         .child(transcribe_row(s, p))
 }
 
-/// The Accent choice as one line ("Native (American) · closest speaker"); the choice, with the hint about what to
-/// install or add while the native accent is not possible, opens from it.
 fn accent_section(s: &AppState, p: Palette, key: &str) -> El {
     fold_row(p, &format!("{key}-head"), "Accent", &speak::accent_summary(s), s.redub.fold == Some(Fold::Accent), false, Fold::Accent)
 }
 
-/// What comes out, as one line; the choices (video or audio, the background, the timing) open from it.
 fn output_section(s: &AppState, p: Palette, key: &str) -> El {
     let r = &s.redub;
     let video = source_is_video(r);
@@ -532,7 +439,6 @@ fn output_section(s: &AppState, p: Palette, key: &str) -> El {
     fold_row(p, &format!("{key}-output-head"), "Output", &what.join(" · "), r.fold == Some(Fold::Output), false, Fold::Output)
 }
 
-/// "Output: Video with new voice / Audio only" and "Keep background music and sounds" (video sources, every mode).
 fn output_block(s: &AppState, p: Palette, key: &str) -> El {
     let r = &s.redub;
     let caption = match (r.video_out, r.keep_bg) {
@@ -581,22 +487,16 @@ fn output_block(s: &AppState, p: Palette, key: &str) -> El {
 const TRANSLATOR_BETTER: &str = "nllb-1.3b";
 const TRANSLATOR_FASTER: &str = "nllb-600m";
 
-/// The engine has both translators, so "Translation quality" is a choice.
 fn translator_choice(s: &AppState) -> bool {
     let has = |t: &str| s.shell.translators.iter().any(|x| x == t);
     has(TRANSLATOR_BETTER) && has(TRANSLATOR_FASTER)
 }
 
-/// The `translator` to send: the user's choice when there is one, else the engine picks the best one installed.
+/// `None`: the engine picks the best one installed.
 fn translator(s: &AppState) -> Option<&'static str> {
     translator_choice(s).then_some(if s.redub.faster_translation { TRANSLATOR_FASTER } else { TRANSLATOR_BETTER })
 }
 
-// -------------------------------------------------------------------------------------------------
-// Actions
-// -------------------------------------------------------------------------------------------------
-
-/// Why the engine cannot take a Redub job right now.
 fn engine_blocker(s: &AppState) -> Option<&'static str> {
     match &s.shell.engine {
         EngineStatus::Idle | EngineStatus::Starting { .. } => return Some("Waiting for the engine to start…"),
@@ -618,7 +518,6 @@ fn engine_blocker(s: &AppState) -> Option<&'static str> {
     None
 }
 
-/// Why Transcribe cannot run right now.
 fn transcribe_blocker(s: &AppState) -> Option<String> {
     if let Some(b) = engine_blocker(s) {
         return Some(b.to_owned());
@@ -631,7 +530,7 @@ fn transcribe_blocker(s: &AppState) -> Option<String> {
     }
 }
 
-/// Why Render cannot run right now, and whether it deserves the warning colour.
+/// The bool: whether it deserves the warning colour.
 fn render_blocker(s: &AppState) -> Option<(String, bool)> {
     if let Some(b) = transcribe_blocker(s) {
         let calm = b == "Choose a file first." || b == "Reading the file…";
@@ -652,7 +551,6 @@ fn render_blocker(s: &AppState) -> Option<(String, bool)> {
     }
 }
 
-/// Re-speak cannot say this text: it is not translated and not in a language the voice speaks.
 fn unspeakable_lang(s: &AppState) -> Option<String> {
     let r = &s.redub;
     if r.segments.is_empty() || r.transcript_translated {
@@ -662,7 +560,6 @@ fn unspeakable_lang(s: &AppState) -> Option<String> {
     (!l.trim().is_empty() && !lang::is_spoken(s, l)).then(|| lang_name(l))
 }
 
-/// The picker chose the language of the speech.
 pub fn set_from(s: &mut AppState, code: &str) {
     if s.redub.busy() || s.redub.reviewing {
         return;
@@ -671,7 +568,6 @@ pub fn set_from(s: &mut AppState, code: &str) {
     s.redub.persist();
 }
 
-/// The picker chose the language to translate to and speak.
 pub fn set_to(s: &mut AppState, code: &str) {
     if s.redub.busy() || s.redub.reviewing {
         return;
@@ -680,7 +576,6 @@ pub fn set_to(s: &mut AppState, code: &str) {
     s.redub.persist();
 }
 
-/// Opens `path` as the file to redub (from a drop or the picker). The engine probes it as soon as it is ready.
 pub fn set_file(s: &mut AppState, path: PathBuf) {
     if s.redub.busy() {
         shell::toast(s, Tone::Warning, "Wait for the current job to finish, or cancel it, before choosing another file.");
@@ -713,7 +608,6 @@ fn clear_file(s: &mut AppState) {
     r.error = None;
 }
 
-/// "Choose file...": the native picker on its own thread; its answer arrives as an event.
 pub fn choose_file(s: &mut AppState) {
     if s.redub.picking || s.redub.busy() || s.shell.scripted() {
         return;
@@ -742,7 +636,6 @@ fn set_mode(s: &mut AppState, mode: RedubMode) {
     }
     s.redub.fold = None;
     if s.redub.mode != mode && (s.redub.reviewing || mode == RedubMode::Dub) {
-        // A dub review and a re-speak transcript are different texts: do not carry one into the other.
         s.redub.clear_text();
     }
     s.redub.mode = mode;
@@ -754,7 +647,7 @@ fn start_transcribe(s: &mut AppState) {
     if s.redub.busy() {
         return;
     }
-    s.redub.fold = None; // the progress shows in the options, not in the panel the button was in
+    s.redub.fold = None;
     if let Some(why) = transcribe_blocker(s) {
         shell::toast(s, Tone::Warning, why);
         return;
@@ -775,7 +668,6 @@ fn start_transcribe(s: &mut AppState) {
     r.job = Job::Transcribing(Run::new(req, now));
 }
 
-/// The big button: starts the dub (Translate & dub), or, with the review open, speaks the edited translation.
 fn start_primary(s: &mut AppState) {
     if s.redub.mode == RedubMode::Dub && !s.redub.reviewing { start_dub(s) } else { start_render(s) }
 }
@@ -856,7 +748,7 @@ fn start_render(s: &mut AppState) {
         output(&s.redub),
     );
     if mode == RedubMode::Dub {
-        params["result_mode"] = json!("dub"); // the saved result is recorded as a dub (`outputs.list`)
+        params["result_mode"] = json!("dub");
     }
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -886,9 +778,7 @@ fn remove_segment(s: &mut AppState, key: u64) {
     s.redub.segments.retain(|g| g.key != key);
 }
 
-/// "Result" of a history row or the result card: play it, or pause / resume it. A result without a WAV to play (from
-/// an earlier session, saved in another format) first gets one from the engine (`ui::history`), which then comes back
-/// here.
+/// A result without a WAV first gets one from the engine (`ui::history`), which then comes back here.
 pub(crate) fn play_result(s: &mut AppState, id: u64) {
     let Some(r) = s.redub.history.iter().find(|r| r.id == id) else { return };
     let (file, play) = (r.path.clone(), r.play.clone());
@@ -900,19 +790,16 @@ pub(crate) fn play_result(s: &mut AppState, id: u64) {
     toggle_play(s, &path, name, "Redub · result");
 }
 
-/// A play button (the original, a result): play it, or pause / resume it in the player bar.
 fn toggle_play(s: &mut AppState, path: &Path, title: String, what: &str) {
     if let Err(e) = playbar::toggle(s, path, title, what, playbar::Source::Redub) {
         shell::toast(s, Tone::Danger, e);
     }
 }
 
-/// Stops playback started on this screen.
 fn stop_play(s: &mut AppState) {
     playbar::stop_from(s, playbar::Source::Redub);
 }
 
-/// The engine deleted a result's files (`ui::trash`): drop it from the history (and the result card).
 pub fn remove_result(s: &mut AppState, id: u64) {
     s.redub.history.retain(|r| r.id != id);
     if s.redub.result == Some(id) {
@@ -937,10 +824,6 @@ fn fail(s: &mut AppState, text: String) {
     s.redub.error = Some(text.clone());
     shell::toast(s, Tone::Danger, text);
 }
-
-// -------------------------------------------------------------------------------------------------
-// Engine messages and events
-// -------------------------------------------------------------------------------------------------
 
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     if matches!(msg, EngineMsg::Exited { .. }) {
@@ -1036,8 +919,7 @@ fn on_transcript(s: &mut AppState, t: RedubTranscript) {
     let r = &mut s.redub;
     let target = t.target_language.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| r.to.clone());
     let same = |l: &str| l.trim().eq_ignore_ascii_case(&target);
-    // The text is in the target language when the engine says it was translated; an engine that does not say is taken
-    // at the request.
+    // An engine that does not say whether it translated is taken at the request.
     let translated = t.segments.iter().any(|g| g.translated) || t.translated.unwrap_or(r.translate && !same(&t.language));
     r.segments = t
         .segments
@@ -1064,7 +946,6 @@ fn on_transcript(s: &mut AppState, t: RedubTranscript) {
     }
 }
 
-/// A dub with "Review text before dubbing" stopped after the translation: show the two columns.
 fn on_review(s: &mut AppState, rv: RedubReview) {
     if !matches!(s.redub.job, Job::Rendering { mode: RedubMode::Dub, .. }) {
         return;
@@ -1095,7 +976,6 @@ fn on_done(s: &mut AppState, done: RedubDone) {
     let to = (mode == RedubMode::Dub).then(|| {
         done.target_language.clone().filter(|l| !l.is_empty()).or_else(|| s.redub.transcript_lang.clone()).unwrap_or_else(|| s.redub.to.clone())
     });
-    // The language spoken and the clip that spoke it (a clip transcribed for the first time is known only now).
     if let Some(spoken) = to.clone().or_else(|| done.language.clone()).filter(|l| !l.is_empty()) {
         speak::note_reference(s, &run.voice_id, &spoken, &done.reference);
     }
@@ -1105,7 +985,6 @@ fn on_done(s: &mut AppState, done: RedubDone) {
         }
     }
     if mode == RedubMode::Dub {
-        // The dub (or the reviewed one) is finished: the review text is no longer needed.
         s.redub.clear_text();
     }
     if let Some(n) = done.background_note.clone().filter(|n| !n.is_empty()) {
@@ -1121,11 +1000,9 @@ fn on_done(s: &mut AppState, done: RedubDone) {
     s.redub.result = Some(id);
 }
 
-/// After every event: saved choices, and the probe / model preload a chosen file waits for until the engine is ready.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
 
-    // Last time's choices, then every change of them.
     if !s.shell.scripted() {
         if !s.redub.prefs_loaded {
             s.redub.prefs_loaded = true;
@@ -1166,7 +1043,6 @@ pub fn settle(s: &mut AppState) -> bool {
         }
     }
 
-    // Probe a newly chosen file once the engine can answer.
     if shell::engine_ready(s) && !s.shell.scripted() && matches!(s.redub.file.as_ref().map(|f| &f.probe), Some(Probe::Pending)) {
         let path = s.redub.file.as_ref().map(|f| f.path.clone()).unwrap_or_default();
         let (method, params) = protocol::redub_probe(&path);
@@ -1178,8 +1054,7 @@ pub fn settle(s: &mut AppState) -> bool {
         }
     }
 
-    // Preload the speech models for a newly chosen file, so the first click does not wait for them. Failures (busy, not
-    // ready) do not matter: the job loads what it needs anyway.
+    // Preload so the first click does not wait; failures do not matter, the job loads what it needs anyway.
     let want_prepare = s.redub.file.as_ref().is_some_and(|f| !f.prepared && !matches!(f.probe, Probe::Failed(_)));
     if want_prepare && shell::engine_ready(s) && !s.shell.scripted() && !s.redub.busy() && !super::train::is_training(s) && !s.speak.is_generating() {
         let path = s.redub.file.as_ref().map(|f| f.path.clone()).unwrap_or_default();
@@ -1194,17 +1069,12 @@ pub fn settle(s: &mut AppState) -> bool {
     changed
 }
 
-/// The start of the running job (its elapsed time ticks on the Redub screen).
 pub fn clock_origin(s: &AppState) -> Option<f64> {
     match &s.redub.job {
         Job::Idle => None,
         Job::Transcribing(run) | Job::Rendering { run, .. } => Some(run.started),
     }
 }
-
-// -------------------------------------------------------------------------------------------------
-// View
-// -------------------------------------------------------------------------------------------------
 
 fn fmt_time(secs: f32) -> String {
     let t = secs.max(0.0).round() as u32;
@@ -1225,8 +1095,6 @@ fn main_panel(s: &AppState, p: Palette) -> El {
     if let Some(e) = &s.redub.error {
         body = body.child(kit::notice(&p, Tone::Danger, e));
     }
-    // The mode's options show once there is a file to apply them to: before that the panel is the file and the
-    // three things that can be done with it, nothing else.
     body = if s.redub.file.is_none() {
         body.child(text("Choose a file above: the options for the chosen mode appear then.").font(ty::CAPTION).color(p.text_dim).wrap())
     } else {
@@ -1245,8 +1113,6 @@ fn main_panel(s: &AppState, p: Palette) -> El {
     bottom = bottom.child(action_bar(s, p));
     section_panel(p, "Redub").key("redub-panel").grow(1.0).min_w(0.0).h_full().gap(14.0).child(body).child(bottom)
 }
-
-// ---- source file ----
 
 fn source_card(s: &AppState, p: Palette) -> El {
     let over = s.formats.over;
@@ -1335,8 +1201,6 @@ fn file_card(s: &AppState, p: Palette, f: &Source, over: bool) -> El {
             .child(remove))
 }
 
-// ---- mode ----
-
 fn mode_card(p: Palette, key: &str, title: &str, sub: &str, on: bool, mode: RedubMode) -> El {
     col().key(key.to_owned()).role("button").label(title.to_owned()).checked(on).focusable(true).grow(1.0).min_w(0.0).gap(3.0).padding(12.0)
         .radius(radius::CARD).continuous_corners()
@@ -1351,7 +1215,6 @@ fn mode_card(p: Palette, key: &str, title: &str, sub: &str, on: bool, mode: Redu
 
 fn mode_block(s: &AppState, p: Palette) -> El {
     let m = s.redub.mode;
-    // The mode's component, when it is not installed: offered right under the cards.
     let missing = match m {
         RedubMode::Dub if !super::setuprun::has(s, "translation") => Some(("translation", "")),
         RedubMode::Convert if !super::setuprun::has(s, "training") => Some(("training", "")),
@@ -1400,14 +1263,10 @@ fn convert_block(s: &AppState, p: Palette) -> El {
     c
 }
 
-// ---- translate & dub ----
-
-/// The label of the "From" chip: "Auto-detect" or the language.
 fn from_label(code: &str) -> String {
     if code.eq_ignore_ascii_case("auto") { "Auto-detect".to_owned() } else { lang::label(code) }
 }
 
-/// A caption under "To" when the voice was recorded in another language (its RVC index is capped there).
 fn foreign_note(s: &AppState, to: &str) -> Option<String> {
     let v = shell::active_voice(s)?;
     if v.lang() == lang::base(to) {
@@ -1415,7 +1274,7 @@ fn foreign_note(s: &AppState, to: &str) -> Option<String> {
     }
     let (rec, target) = (lang::name(v.lang()), lang::name(to));
     if speak::accent_param(s, to).is_some() {
-        return None; // the Accent choice below says what happens
+        return None;
     }
     let mut t = format!("Voice recorded in {rec}: timbre kept");
     if v.trained {
@@ -1463,7 +1322,6 @@ fn dub_block(s: &AppState, p: Palette) -> El {
         .child(text(format!("Stops after the translation so you can fix the {to_name} before it is spoken.")).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
     let mut c = col().key("dub-block").w_full().gap(12.0);
     if !r.reviewing {
-        // While the review is open the table gets the room; the choices are locked in until it is done or discarded.
         c = c.child(options);
     }
     if shell::active_voice(s).is_none() {
@@ -1476,7 +1334,6 @@ fn dub_block(s: &AppState, p: Palette) -> El {
     c
 }
 
-/// "Translation quality: Better (1.3B) / Faster (600M)" (shown when both translators are installed).
 fn translation_quality(r: &RedubState, p: Palette) -> El {
     let caption = if r.faster_translation { "NLLB-200 600M · the smaller model, about 1.5× faster" } else { "NLLB-200 1.3B · the larger, generally more accurate model" };
     row().key("translation-quality").w_full().center_y().justify_between().gap(10.0)
@@ -1525,8 +1382,6 @@ fn review_table(s: &AppState, p: Palette) -> El {
         }).build(p)))
 }
 
-// ---- re-speak ----
-
 fn respeak_block(s: &AppState, p: Palette) -> El {
     let r = &s.redub;
     let busy = r.busy();
@@ -1535,12 +1390,9 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
         .opacity(if busy { 0.6 } else { 1.0 });
     let mut c = col().key("respeak-block").w_full().gap(12.0);
     if r.segments.is_empty() {
-        // Step one: only what transcribing needs. How it is spoken and what comes out wait for the transcript.
         options = options.child(transcription_choices(s, p));
         c = c.child(text("Transcribes the speech so you can fix or translate the words, then says them again in your voice's own delivery.").font(ty::CAPTION).color(p.text_dim).wrap());
     } else {
-        // Step two: the transcript gets the room; the choices are one line each. A running transcription and a
-        // language the voice cannot speak show the transcription choices in full.
         let pinned = matches!(r.job, Job::Transcribing(_)) || unspeakable_lang(s).is_some();
         let heard = r.transcript_lang.as_deref().filter(|l| !l.trim().is_empty()).map(lang_name).unwrap_or_else(|| from_label(&r.from));
         let summary = if r.translate { format!("{heard} · translated to {to_name}") } else { format!("{heard} · not translated") };
@@ -1548,7 +1400,6 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
         if pinned {
             options = options.child(el().w_full().pb(6.0).child(transcription_choices(s, p)));
         }
-        // English without an English reference clip: the same Accent choice as Speak and Translate & dub.
         if respeak_lang(r).is_some_and(|l| speak::accent_applies(s, &l)) {
             options = options.child(accent_section(s, p, "respeak-accent"));
         }
@@ -1639,13 +1490,7 @@ fn segment_row(p: Palette, i: usize, g: &Seg, busy: bool, with_source: bool) -> 
     line.child(well_).child(del.mt(4.0))
 }
 
-// ---- result and actions ----
-
-/// "Show in folder" and "Open file" of a result: the folder shows its video when it has one; the file opened is the audio
-/// player; the audio sits next to it under the same name), else of the audio file.
 fn open_reveal(p: Palette, id: u64, tag: &str, r: &Redub) -> (El, El) {
-    // "Show in folder" selects the video when there is one; the open icon opens the audio ("Open video" is its own
-    // button on video results).
     let (a, b) = (r.video.as_deref().unwrap_or(&r.path).to_path_buf(), r.path.to_path_buf());
     let reveal = icon_button(p, &format!("reveal-{tag}{id}"), &icons::FOLDER, "Show in folder", move |s| {
         if let Err(e) = speak::reveal_file(&a) {
@@ -1660,7 +1505,6 @@ fn open_reveal(p: Palette, id: u64, tag: &str, r: &Redub) -> (El, El) {
     (reveal, open)
 }
 
-/// "Original" and "Result" play buttons: press one to hear it, press it again to pause (A/B).
 fn ab_buttons(s: &AppState, p: Palette, r: &Redub, tag: &str) -> El {
     let id = r.id;
     let mk = |label: &str, key: String, path: Option<PathBuf>, lead: bool| -> El {
@@ -1681,7 +1525,6 @@ fn ab_buttons(s: &AppState, p: Palette, r: &Redub, tag: &str) -> El {
         .child(mk("Result", format!("ab-res-{tag}{id}"), Some(r.play.clone()), true))
 }
 
-/// "dubbed to Ukrainian", "converted" or "re-spoken" ("redubbed" when not recorded).
 fn mode_past(r: &Redub) -> String {
     match r.mode {
         Some(RedubMode::Dub) => format!("dubbed to {}", lang_name(r.to.as_deref().unwrap_or("en"))),
@@ -1723,7 +1566,6 @@ fn result_card(s: &AppState, p: Palette, r: &Redub) -> El {
         .child(ab_buttons(s, p, r, "main"))
 }
 
-/// The progress line and bar of a running dub or render, by engine stage.
 fn stage_label(run: &Run, mode: RedubMode) -> (String, Option<f32>) {
     let frac = (run.pct > 0.0).then(|| (run.pct / 100.0).max(0.03));
     match run.stage.as_str() {
@@ -1787,8 +1629,6 @@ fn action_bar(s: &AppState, p: Palette) -> El {
     row().key("bar-idle").w_full().gap(20.0).center_y().child(el().grow(1.0).min_w(0.0).child(voice_line)).child(go)
 }
 
-// ---- history ----
-
 fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let h = &s.redub.history;
     let more = super::history::has_older(s, trash::Kind::Redub);
@@ -1809,7 +1649,6 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
 
 fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
     let (reveal, open) = open_reveal(p, r.id, "h", r);
-    // A video result is the video: its file names the card, and "Open video" is spelled out (the audio plays here).
     let title = r.video.as_ref().and_then(|v| v.file_name()).map(|n| n.to_string_lossy().into_owned())
         .filter(|_| r.name.starts_with("redub_")).unwrap_or_else(|| r.name.clone());
     let video_btn = r.video.clone().map(|v| {
@@ -1845,14 +1684,12 @@ fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
         })
 }
 
-/// A right arrow between "From" and "To".
 static ARROW: rune::Icon = rune::Icon {
     name: "arrow-right",
     view: 16.0,
     body: r#"<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8H13M9.5 4.5L13 8L9.5 11.5"/></g>"#,
 };
 
-/// The tab icon: two wavy lines trading places (swap), outline like the other icons.
 pub static ICON: rune::Icon = rune::Icon {
     name: "redub",
     view: 16.0,
@@ -1863,10 +1700,6 @@ pub static ICON: rune::Icon = rune::Icon {
         "</g>"
     ),
 };
-
-// -------------------------------------------------------------------------------------------------
-// Headless scenes
-// -------------------------------------------------------------------------------------------------
 
 const SAMPLE_PATH: &str = "/tmp/interview-take-2.mp3";
 
@@ -1924,8 +1757,6 @@ fn scene_file(s: &mut AppState) {
     demo_file(s);
 }
 
-/// After a restart: the history loaded with `outputs.list` (as the engine answers it), a result from before sidecars
-/// (its file name, no mode) among them, and "Show older" at the bottom.
 fn scene_history(s: &mut AppState) {
     demo(s, true);
     let page = serde_json::json!({ "more": true, "results": [
@@ -2017,7 +1848,6 @@ fn scene_export_menu(s: &mut AppState) {
     s.formats.format = "mp3".into();
 }
 
-/// Results saved as FLAC, with the "Save results as" menu open.
 fn scene_output_menu(s: &mut AppState) {
     scene_done(s);
     s.formats.scene_ready();
@@ -2047,7 +1877,6 @@ fn scene_dub_ready(s: &mut AppState) {
     demo_history(s);
 }
 
-/// A video file instead of the demo's MP3.
 fn demo_video(s: &mut AppState) {
     if let Some(f) = s.redub.file.as_mut() {
         f.path = "/tmp/game-tour.mp4".into();
@@ -2059,27 +1888,23 @@ fn demo_video(s: &mut AppState) {
     }
 }
 
-/// Translate & dub of a video: "Keep original timing" is on by default, with the video hint.
 fn scene_dub_timing_video(s: &mut AppState) {
     scene_dub_ready(s);
     demo_video(s);
     s.redub.fold = Some(Fold::Output);
 }
 
-/// The same with "Audio only" and the timing switch turned off for videos: natural pace, the hint warns about the sync.
 fn scene_dub_timing_video_off(s: &mut AppState) {
     scene_dub_timing_video(s);
     s.redub.video_out = false;
     s.redub.keep_timing = [None, Some(false)];
 }
 
-/// Translate & dub of a video with "Keep background music and sounds" off: the new voice alone in the video.
 fn scene_dub_video_voice_only(s: &mut AppState) {
     scene_dub_timing_video(s);
     s.redub.keep_bg = false;
 }
 
-/// Convert voice of a video: the output choice under the trained voice.
 fn scene_convert_video(s: &mut AppState) {
     demo(s, true);
     demo_file(s);
@@ -2088,7 +1913,6 @@ fn scene_convert_video(s: &mut AppState) {
     demo_history(s);
 }
 
-/// Re-speak of a video with "Audio only" chosen.
 fn scene_respeak_video_audio(s: &mut AppState) {
     scene_transcript(s);
     demo_video(s);
@@ -2096,7 +1920,6 @@ fn scene_respeak_video_audio(s: &mut AppState) {
     s.redub.fold = Some(Fold::Output);
 }
 
-/// A video dub at the separation stage.
 fn scene_dub_separating(s: &mut AppState) {
     demo_dub_file(s);
     demo_video(s);
@@ -2108,7 +1931,6 @@ fn scene_dub_separating(s: &mut AppState) {
     demo_history(s);
 }
 
-/// A finished video dub: the Done card with "Open video", and the history row with the Video badge.
 fn scene_dub_done_video(s: &mut AppState) {
     demo_dub_file(s);
     demo_video(s);
@@ -2132,20 +1954,17 @@ fn scene_dub_done_video(s: &mut AppState) {
     s.redub.result = Some(3);
 }
 
-/// Re-speak of an audio file with the switch turned on (it is off by default for audio).
 fn scene_respeak_timing_keep(s: &mut AppState) {
     scene_transcript(s);
     s.redub.keep_timing = [Some(true), None];
     s.redub.fold = Some(Fold::Output);
 }
 
-/// Translate & dub with both translators installed: "Translation quality" is offered (Better chosen).
 fn scene_dub_translator(s: &mut AppState) {
     scene_dub_ready(s);
     s.shell.translators = vec![TRANSLATOR_BETTER.into(), TRANSLATOR_FASTER.into()];
 }
 
-/// The same with Faster chosen.
 fn scene_dub_translator_faster(s: &mut AppState) {
     scene_dub_translator(s);
     s.redub.faster_translation = true;
@@ -2185,7 +2004,6 @@ fn scene_dub_done(s: &mut AppState) {
     s.redub.result = Some(3);
 }
 
-/// Translate & dub from English to Ukrainian, with the picker open on "To" and a finished Ukrainian dub in the history.
 fn scene_dub_to_uk(s: &mut AppState) {
     demo(s, true);
     demo_file(s);
@@ -2202,7 +2020,6 @@ fn scene_dub_to_uk_picker(s: &mut AppState) {
     s.langpick.open = Some((lang::Target::RedubTo, "dub-to".into()));
 }
 
-/// The review of an English -> Ukrainian dub.
 fn scene_dub_review_uk(s: &mut AppState) {
     demo_dub_file(s);
     s.redub.from = "en".into();
@@ -2220,7 +2037,6 @@ fn scene_dub_review_uk(s: &mut AppState) {
     s.redub.transcript_translated = true;
 }
 
-/// Ukrainian -> English with a voice recorded in Ukrainian: the Accent choice (native by default).
 fn scene_dub_accent(s: &mut AppState) {
     demo_dub_file(s);
     for v in &mut s.shell.voices {
@@ -2230,14 +2046,12 @@ fn scene_dub_accent(s: &mut AppState) {
     s.redub.fold = Some(Fold::Accent);
 }
 
-/// The same with an untrained voice and the zero-shot converter installed: Native, from the reference clip.
 fn scene_dub_accent_zero_shot(s: &mut AppState) {
     scene_dub_accent_untrained(s);
     s.shell.zero_shot_vc = true;
     s.redub.fold = Some(Fold::Accent);
 }
 
-/// The same with an untrained voice and no zero-shot converter: the choice is disabled with the hint.
 fn scene_dub_accent_untrained(s: &mut AppState) {
     demo(s, false);
     demo_file(s);
@@ -2248,14 +2062,11 @@ fn scene_dub_accent_untrained(s: &mut AppState) {
     }
 }
 
-/// Re-speak with a transcript: the Transcription choices open in their panel.
 fn scene_respeak_transcription(s: &mut AppState) {
     scene_transcript(s);
     s.redub.fold = Some(Fold::Transcription);
 }
 
-/// Re-speak with a transcript in a language the voice does not speak (Hebrew): Render is disabled with the hint to
-/// translate.
 fn scene_respeak_foreign(s: &mut AppState) {
     scene_transcript(s);
     s.redub.transcript_lang = Some("he".into());
@@ -2264,8 +2075,6 @@ fn scene_respeak_foreign(s: &mut AppState) {
     }
 }
 
-/// The owner's case in Translate & dub: Ukrainian -> English with a voice set to English whose reference clip is
-/// Ukrainian speech, not trained: the Accent choice, disabled, with "Add an English clip".
 fn scene_dub_accent_foreign_ref(s: &mut AppState) {
     demo(s, false);
     demo_file(s);
@@ -2274,29 +2083,23 @@ fn scene_dub_accent_foreign_ref(s: &mut AppState) {
     s.shell.voices[0].reference_language = Some("uk".into());
 }
 
-/// Re-speak of an English transcript with that voice, trained: the Accent choice (Native) under the options.
 fn scene_respeak_accent(s: &mut AppState) {
     scene_transcript(s);
     s.shell.voices[0].reference_language = Some("uk".into());
     s.redub.fold = Some(Fold::Accent);
 }
 
-/// The same untrained without the zero-shot converter: disabled, with the hint to install it, train or add an
-/// English clip.
 fn scene_respeak_accent_untrained(s: &mut AppState) {
     scene_respeak_accent(s);
     s.shell.voices[0].trained = false;
     s.shell.voices[0].trained_epochs = 0;
 }
 
-/// The same untrained with the zero-shot converter installed: Native, from the reference clip.
 fn scene_respeak_accent_zero_shot(s: &mut AppState) {
     scene_respeak_accent_untrained(s);
     s.shell.zero_shot_vc = true;
 }
 
-/// "Delete this result?" on a Results row, with the other result paused in the player bar (the action bar above
-/// it stays usable).
 fn scene_trash_confirm(s: &mut AppState) {
     scene_file(s);
     demo_history(s);

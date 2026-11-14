@@ -1,15 +1,5 @@
-//! Windows: the moving part of the player's seek bar (the fill and the knob) in a small window of its own.
-//!
-//! Why: every frame Rune draws is presented as the whole window, and Windows then composites the whole window again.
-//! Measured on an RTX 4070 (idle 11.4 W): a knob that moves 60 times a second through the window's own frames keeps
-//! the card at about 36 W, however cheap each frame is to draw (0.08 ms), while a small window that redraws just the
-//! strip costs about 14 W. So the knob glides in a layered child window over the seek rail: a few thousand pixels
-//! drawn on the CPU on a 16 ms window timer, and nothing of the main window is redrawn while a track plays (its
-//! clock still changes once a second).
-//!
-//! The strip takes no input (`HTTRANSPARENT`): clicks and drags reach the seek bar under it. When it cannot be made
-//! (a system without layered child windows) or is not wanted (another element covers the bar, a headless run), the
-//! bar draws its own knob, as on the other systems (`playbar::seek_bar`).
+//! Windows: the seek knob glides in a layered child window, so the main window is not redrawn 60 times a second
+//! while a track plays. Measured on an RTX 4070: about 36 W redrawing the main window, about 14 W with the strip.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
@@ -27,14 +17,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SW_HIDE, SW_SHOWNA, ULW_ALPHA, WM_NCHITTEST, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
 };
 
-/// The knob's frames a second while a track plays (the window timer's period, rounded down to whole milliseconds).
+/// The window timer's period, rounded down to whole milliseconds.
 const TICK_MS: u32 = 16;
-/// Points the strip reaches past the rail on each side (the knob's radius and its shadow).
+/// The knob's radius and its shadow.
 const REACH_PT: f32 = 14.0;
-/// The strip's height in points (the knob with its shadow).
+/// The knob with its shadow.
 const HEIGHT_PT: f32 = 30.0;
 
-/// How the strip is drawn: sizes in points, colours as straight sRGB.
+/// Sizes in points, colours as straight sRGB.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Look {
     pub track_pt: f32,
@@ -42,11 +32,9 @@ pub struct Look {
     pub fill_top: [u8; 3],
     pub fill_bottom: [u8; 3],
     pub ring: [u8; 3],
-    /// Without the knob (a track still being generated cannot be sought).
     pub knob: bool,
 }
 
-/// What the strip follows: the playing speed, and whether a track plays (else `PLACED` is shown).
 static SPEED: AtomicU32 = AtomicU32::new(0);
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static PLACED: AtomicU32 = AtomicU32::new(0);
@@ -56,7 +44,7 @@ struct Strip {
     dc: HDC,
     bitmap: HBITMAP,
     bits: *mut u32,
-    /// The strip's size in pixels and where the rail is in it: its left edge, its width, the centre line.
+    /// Pixels; `rail` is its left edge, width and centre line.
     size: (i32, i32),
     rail: (f32, f32, f32),
     scale: f32,
@@ -72,9 +60,8 @@ thread_local! {
     static FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Puts the strip over the seek rail (`rail_pt`: x, y, width, height in window points) and says what it shows: the
-/// playing `track` gliding on at `speed`, or the still fraction `frac`. UI thread, from the view. False when there is
-/// no strip (the bar then draws its own knob).
+/// `rail_pt`: x, y, width, height in window points. UI thread. False when there is no strip (the bar then draws
+/// its own knob).
 pub fn show(rail_pt: [f32; 4], scale: f32, look: Look, track: u64, playing: bool, speed: f32, frac: f32) -> bool {
     if FAILED.get() || rail_pt[2] < 4.0 || scale <= 0.0 {
         return false;
@@ -116,13 +103,13 @@ pub fn show(rail_pt: [f32; 4], scale: f32, look: Look, track: u64, playing: bool
                 s.ticking = playing;
             }
         }
-        s.drawn = f32::NAN; // the look or the size may have changed: draw
+        s.drawn = f32::NAN;
         paint(s);
         true
     })
 }
 
-/// Hides the strip (the bar is gone, or something covers it). UI thread.
+/// UI thread.
 pub fn hide() {
     STRIP.with_borrow_mut(|slot| {
         if let Some(s) = slot.as_mut().filter(|s| s.shown) {
@@ -136,7 +123,6 @@ pub fn hide() {
     });
 }
 
-/// The fraction of the track to show now: gliding while it plays, else where the view placed it.
 fn fraction(glide: &mut super::playbar::Glide) -> f32 {
     if PLAYING.load(Relaxed) {
         if let Some(frac) = glide.step(f32::from_bits(SPEED.load(Relaxed))) {
@@ -148,7 +134,6 @@ fn fraction(glide: &mut super::playbar::Glide) -> f32 {
     f32::from_bits(PLACED.load(Relaxed)).clamp(0.0, 1.0)
 }
 
-/// Draws the strip at the current fraction and hands it to the compositor, unless it already shows it.
 fn paint(s: &mut Strip) {
     let frac = fraction(&mut s.glide);
     let (x0, rail_w, cy) = s.rail;
@@ -166,13 +151,11 @@ fn paint(s: &mut Strip) {
     let radius = look.knob_pt * s.scale / 2.0;
     let shadow_reach = 5.0 * s.scale;
     let shadow_drop = 2.0 * s.scale;
-    // Only the columns that can have paint: the fill's span and the knob's.
     let x_end = ((at + radius + shadow_reach + 2.0).ceil() as usize).min(w);
     for y in 0..h {
         let py = y as f32 + 0.5;
         let dy = py - cy;
         let row = &mut pixels[y * w..(y + 1) * w];
-        // The fill: a capsule from the rail's start to the knob, lit from the top.
         let in_fill_rows = dy.abs() <= half + 1.0;
         let t = ((dy + half) / (2.0 * half)).clamp(0.0, 1.0);
         let fill_rgb = [mix(look.fill_top[0], look.fill_bottom[0], t), mix(look.fill_top[1], look.fill_bottom[1], t), mix(look.fill_top[2], look.fill_bottom[2], t)];
@@ -192,7 +175,6 @@ fn paint(s: &mut Strip) {
             }
             if look.knob {
                 let dx = pxc - at;
-                // A soft shadow under the knob, the knob's face, and a thin ring in the accent colour.
                 let ds = (dx * dx + (dy - shadow_drop).powi(2)).sqrt() - radius;
                 let shade = 0.45 * (1.0 - (ds / shadow_reach).clamp(0.0, 1.0)).powi(2);
                 if shade > 0.0 {
@@ -242,7 +224,6 @@ fn over(top: [f32; 4], bottom: [f32; 4]) -> [f32; 4] {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
-        // Input goes to the seek bar under the strip.
         WM_NCHITTEST => HTTRANSPARENT as LRESULT,
         WM_TIMER => {
             // `try_borrow_mut`: a timer message dispatched while `show` holds the strip waits for the next one.
@@ -260,7 +241,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-/// The app's window: the visible, unowned top-level window of this process.
 fn main_window() -> Option<HWND> {
     unsafe extern "system" fn each(hwnd: HWND, found: LPARAM) -> i32 {
         let mut pid = 0;

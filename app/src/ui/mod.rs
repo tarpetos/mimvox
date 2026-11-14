@@ -1,11 +1,3 @@
-//! UI: shell (navigation, glass chrome), theme, shared components and one module per screen.
-//!
-//! * `theme`: the dark smoked-glass palette, type scale, radii, springs.
-//! * `components`: GlassPanel, Button, Slider, TextArea, ProgressBar, LevelMeter, Badge, Toast, icons.
-//! * `shell`: header, tabs, engine status, toasts and the event routing (see its module docs for the
-//!   `on_engine` / `settle` convention every screen implements).
-//! * `events`: how background threads (engine, audio, dialogs) wake the UI; there is no polling.
-
 pub mod book;
 pub mod caption;
 pub mod components;
@@ -98,7 +90,6 @@ pub const SCENES: &[(&str, fn(&mut AppState))] = &[
 
 type Scene = (&'static str, fn(&mut AppState));
 
-/// Every scene of every screen (the screens each list their own).
 pub fn all_scenes() -> &'static [Scene] {
     static ALL: OnceLock<Vec<Scene>> = OnceLock::new();
     ALL.get_or_init(|| {
@@ -117,15 +108,13 @@ pub fn all_scenes() -> &'static [Scene] {
     })
 }
 
-/// `App::on_focus`: coming back to the window is when an outside change (setup finished in its terminal) shows.
 pub fn on_focus(s: &mut AppState, focused: bool, _tx: &mut Tx) {
     if focused {
         onboarding::on_focus(s);
     }
 }
 
-/// Window-level keys: each screen gets a chance, the first to take the key wins (Space records on Record,
-/// Ctrl+Enter generates on Speak, ...), so they work without clicking into anything first.
+/// Each screen gets a chance in turn; the first to take the key wins.
 pub fn on_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     record::on_key(s, ev, tx) || speak::on_key(s, ev, tx)
 }

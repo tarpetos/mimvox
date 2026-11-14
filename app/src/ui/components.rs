@@ -1,26 +1,3 @@
-//! Reusable "liquid glass" components shared by every screen.
-//!
-//! All functions take a [`Palette`] (get it with `theme::palette(s, cx)`) and return a plain Rune
-//! [`El`], so they compose with the usual `.w_full()`, `.grow(1.0)`, `.child(..)` builders.
-//!
-//! | Component | Entry point |
-//! | --- | --- |
-//! | Frosted panel (blur, hairline, top highlight) | [`glass_panel`] |
-//! | Panel with a title tag on its border (the main app's section look) | [`section_panel`] |
-//! | Lighter card inside a panel (no blur) | [`glass_card`] |
-//! | Primary / secondary / ghost / danger button | [`Button`] |
-//! | Square ghost icon button | [`icon_button`] |
-//! | Dropdown chip (icon, label, chevron) | [`dropdown_chip`] |
-//! | Slider with label and value | [`Slider`] |
-//! | Multi-line text field | [`TextArea`] |
-//! | Progress bar (determinate or shimmering) | [`progress_bar`] |
-//! | Level meter (green / yellow / red) | [`level_meter`] |
-//! | Badge / status pill | [`badge`], [`status_dot`] |
-//! | Toast stack (state lives in `AppState.shell`) | [`toast_stack`], `shell::toast` |
-//! | Empty state, section label, divider | [`empty_state`], [`overline`], [`divider`] |
-//!
-//! Handlers are `Fn(&mut AppState)` closures: the whole app shares one root state.
-
 use super::theme::{Palette, motion, radius, ty};
 use crate::state::AppState;
 use rune::{
@@ -30,12 +7,6 @@ use rune::{
 use std::f32::consts::PI;
 use std::rc::Rc;
 
-// -------------------------------------------------------------------------------------------------
-// Icons
-// -------------------------------------------------------------------------------------------------
-
-/// 16-point stroke icons in one style. Draw with `components::icon_el(&icons::PLAY, 16.0)`
-/// (or `rune::icon`) and colour with `.color(..)`.
 #[allow(dead_code)]
 pub mod icons {
     use rune::Icon;
@@ -74,16 +45,10 @@ pub mod icons {
     stroke_icon!(VOLUME, "volume", r#"<path d="M2.6 6.2H5L8.2 3.4V12.6L5 9.8H2.6Z" stroke-width="1.3"/><path d="M10.4 5.8A3.2 3.2 0 0 1 10.4 10.2M12.2 4A5.6 5.6 0 0 1 12.2 12"/>"#);
 }
 
-/// A themed icon element (`rune::icon` with the colour applied).
 pub fn icon_el(i: &'static Icon, size: f32, color: Color) -> El {
     icon(i, size).color(color)
 }
 
-// -------------------------------------------------------------------------------------------------
-// Tone
-// -------------------------------------------------------------------------------------------------
-
-/// Semantic colour of a badge, toast or status dot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Neutral,
@@ -105,25 +70,16 @@ impl Tone {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Panels
-// -------------------------------------------------------------------------------------------------
-
-/// Adds the liquid-glass edge to a translucent element: a bright 1 pt specular line along the top inside edge
-/// and a soft inner glow that brightens the rim, as if the glass were thick and caught the light.
 pub fn glass_edge(p: Palette, e: El) -> El {
     e.box_shadow(Shadow { x: 0.0, y: 1.0, blur: 1.5, spread: 0.0, color: p.highlight, inset: true })
         .box_shadow(Shadow { x: 1.0, y: 2.0, blur: 18.0, spread: 0.0, color: p.highlight.alpha(p.highlight.a * 0.3), inset: true })
         .box_shadow(Shadow { x: -1.0, y: -1.0, blur: 10.0, spread: 0.0, color: p.highlight.alpha(p.highlight.a * 0.14), inset: true })
 }
 
-/// A panel that opens over the page next to the element keyed `anchor` (below it, or above when there is no room),
-/// `width` points wide; a press outside it runs `close`. Add it at the root, above the screens. The page under it
-/// does not move: sections that unfolded in place pushed everything below them down and jumped under the pointer.
-/// A panel taller than the window scrolls.
+/// Opens next to the element keyed `anchor` (below it, or above when there is no room); a press outside runs
+/// `close`. Add it at the root, above the screens.
 pub fn popover(p: Palette, key: &str, anchor: &str, width: f32, align: Align, close: impl Fn(&mut AppState) + 'static, content: El) -> El {
-    // The page dims a little, so the panel reads as the thing in front; the panel is opaque (text under a
-    // translucent one showed through).
+    // The panel is opaque: text under a translucent one showed through.
     let scrim = el().key(format!("{key}-scrim")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.22)).on_press(close);
     let panel = col().key(format!("{key}-panel")).w(width).min_h(0.0).padding(14.0).radius(radius::PANEL)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0))
@@ -136,10 +92,7 @@ pub fn popover(p: Palette, key: &str, anchor: &str, width: f32, align: Align, cl
     el().key(format!("{key}-layer")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(glass_edge(p, panel))
 }
 
-/// Accent-tinted luminous glass (the primary button, the active tab lens, the play button): a translucent
-/// accent fill with a bright top, a white-to-accent rim and a soft accent glow. Apply to a sized element.
 pub fn accent_glass(p: Palette, e: El) -> El {
-    // Saturated and translucent rather than milky: a bright ice-blue top deepening to a richer blue, a thin rim.
     let top = rune::oklcha(0.8, 0.1, 245.0, 0.9);
     let bottom = rune::oklcha(0.66, 0.14, 250.0, 0.62);
     let e = e
@@ -151,13 +104,8 @@ pub fn accent_glass(p: Palette, e: El) -> El {
     glass_edge(p, e)
 }
 
-/// A liquid-glass panel: a translucent gradient fill over the light fields behind it (they are soft already: a
-/// backdrop blur changed almost nothing there, cost a blur pyramid per panel on every frame, and cannot be drawn
-/// into a cached layer, see `shell::view`), a bright specular rim (lit top edge fading down), an inner edge glow, a top sheen and layered
-/// soft shadows. Returns an empty column: add `.padding(..)`, size and children.
-///
-/// A frame blurs at most `rune::MAX_BACKDROP_BLURS` (4) elements, so keep real panels to the
-/// big surfaces of a screen (the header takes one) and use [`glass_card`] for everything inside them.
+/// No backdrop blur: over the soft light fields it changed almost nothing, cost a blur pyramid per panel per
+/// frame and cannot be drawn into a cached layer. Returns an empty column: add `.padding(..)`, size and children.
 pub fn glass_panel(p: Palette) -> El {
     let r = radius::PANEL;
     let e = col()
@@ -172,13 +120,11 @@ pub fn glass_panel(p: Palette) -> El {
     glass_edge(p, e).child(sheen(p, r))
 }
 
-/// A glass panel with a simple inline title at its top-left. Add the body with `.child(..)`; padding is set.
-/// Anything pinned into the title row (a count, a hint) should use `.pin(None, Some(22.0), Some(22.0), None)`.
+/// Padding is set; pin title-row extras with `.pin(None, Some(22.0), Some(22.0), None)`.
 pub fn section_panel(p: Palette, title: &str) -> El {
     glass_panel(p).padding(22.0).gap(14.0).child(text(title.to_owned()).font(ty::TITLE).color(p.text))
 }
 
-/// A lighter card for use inside a [`glass_panel`]: cheap frost (no backdrop blur), rim and edge glow.
 pub fn glass_card(p: Palette) -> El {
     let e = col()
         .radius(radius::CARD)
@@ -190,7 +136,6 @@ pub fn glass_card(p: Palette) -> El {
     glass_edge(p, e)
 }
 
-/// A recessed well: the background of text fields. Darker than the glass around it, with an inner top shadow.
 pub fn well(p: Palette) -> El {
     col()
         .radius(radius::CONTROL + 2.0)
@@ -200,7 +145,6 @@ pub fn well(p: Palette) -> El {
         .box_shadow(Shadow { x: 0.0, y: 2.0, blur: 8.0, spread: 0.0, color: Color::BLACK.alpha(0.4), inset: true })
 }
 
-/// Top sheen of a glass surface: a faint light wash fading down, and a bright hairline that fades out sideways.
 fn sheen(p: Palette, r: f32) -> El {
     let wash = el()
         .key("sheen-wash")
@@ -218,7 +162,6 @@ fn sheen(p: Palette, r: f32) -> El {
     el().key("sheen").pin(Some(0.0), Some(0.0), Some(0.0), None).h(r * 4.0).inert().child(wash).child(line)
 }
 
-/// A centred placeholder for an empty list: icon, title, optional subtitle.
 pub fn empty_state(p: Palette, glyph: &'static Icon, title: &str, subtitle: &str) -> El {
     let badge = el()
         .size(48.0, 48.0)
@@ -237,19 +180,11 @@ pub fn empty_state(p: Palette, glyph: &'static Icon, title: &str, subtitle: &str
     c
 }
 
-// -------------------------------------------------------------------------------------------------
-// Buttons
-// -------------------------------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonKind {
-    /// Accent gradient with glow: the one main action of a screen.
     Primary,
-    /// Glass: everything else.
     Secondary,
-    /// No background until hovered.
     Ghost,
-    /// Red gradient for destructive actions.
     Danger,
 }
 
@@ -262,12 +197,6 @@ pub enum ButtonSize {
 
 type Handler = Rc<dyn Fn(&mut AppState)>;
 
-/// A pill button.
-///
-/// ```ignore
-/// Button::new("Generate").primary().large().icon(&icons::SPARKLE)
-///     .on_press(|s| speak::generate(s)).build(p)
-/// ```
 pub struct Button {
     label: String,
     glyph: Option<&'static Icon>,
@@ -318,28 +247,24 @@ impl Button {
         self.size = ButtonSize::Large;
         self
     }
-    /// A leading icon.
     pub fn icon(mut self, glyph: &'static Icon) -> Self {
         self.glyph = Some(glyph);
         self
     }
-    /// A disabled button is dimmed and ignores presses.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
-    /// Stable element key (defaults to the label); give one when two buttons share a label.
+    /// Defaults to the label; give one when two buttons share a label.
     pub fn key(mut self, key: impl Into<String>) -> Self {
         self.key = Some(key.into());
         self
     }
-    /// A tooltip.
     #[allow(dead_code)]
     pub fn help(mut self, text: impl Into<String>) -> Self {
         self.help = Some(text.into());
         self
     }
-    /// Fill the available width of a row (`grow(1.0)`).
     #[allow(dead_code)]
     pub fn grow(mut self) -> Self {
         self.grow = true;
@@ -402,7 +327,7 @@ impl Button {
     }
 }
 
-/// A round glass icon button (32 pt). `help` is the tooltip and accessible label.
+/// `help` is the tooltip and accessible label.
 pub fn icon_button(
     p: Palette,
     key: &str,
@@ -430,8 +355,7 @@ pub fn icon_button(
         .child(icon_el(glyph, 16.0, p.text_dim))
 }
 
-/// A compact glass chip that opens a dropdown (the language pickers, the result format): an accent icon, `label` and a
-/// chevron, 30 pt tall. `key` anchors the dropdown; `a11y` is the accessible label. A disabled chip is dimmed.
+/// `key` anchors the dropdown; `a11y` is the accessible label.
 pub fn dropdown_chip(p: Palette, key: &str, glyph: &'static Icon, label: &str, a11y: String, enabled: bool, on_press: impl Fn(&mut AppState) + 'static) -> El {
     let b = row().key(key.to_owned()).role("button").label(a11y).h(30.0).pl(12.0).pr(9.0).gap(7.0).center_y().radius(15.0)
         .fill(p.glass)
@@ -445,17 +369,6 @@ pub fn dropdown_chip(p: Palette, key: &str, glyph: &'static Icon, label: &str, a
     if enabled { b.hover(p.glass_hover).focusable(true).on_press(on_press) } else { b.opacity(0.5) }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Slider
-// -------------------------------------------------------------------------------------------------
-
-/// A labelled slider with a live value read-out and optional end captions.
-///
-/// ```ignore
-/// Slider::new("expr", "Expressiveness", s.speak.expressiveness, 0.4, 1.0)
-///     .step(0.05).ends("Steady", "Lively")
-///     .on_change(|s, v| s.speak.expressiveness = v).build(p)
-/// ```
 pub struct Slider {
     key: String,
     label: String,
@@ -484,23 +397,20 @@ impl Slider {
             on_change: None,
         }
     }
-    /// Snap to multiples of `step` (0 = continuous).
+    /// 0 = continuous.
     pub fn step(mut self, step: f32) -> Self {
         self.step = step;
         self
     }
-    /// Digits shown after the decimal point.
     #[allow(dead_code)]
     pub fn decimals(mut self, d: usize) -> Self {
         self.decimals = d;
         self
     }
-    /// A unit appended to the live value read-out (for example `"×"`).
     pub fn unit(mut self, unit: &'static str) -> Self {
         self.unit = unit;
         self
     }
-    /// Captions under the left and right end of the track.
     pub fn ends(mut self, left: impl Into<String>, right: impl Into<String>) -> Self {
         self.ends = Some((left.into(), right.into()));
         self
@@ -603,20 +513,6 @@ impl Slider {
     }
 }
 
-
-// -------------------------------------------------------------------------------------------------
-// Text area
-// -------------------------------------------------------------------------------------------------
-
-/// A multi-line text field inside an inset well that scrolls and grows with its parent.
-///
-/// Return inserts a newline; Ctrl/Cmd+Enter runs `on_submit`.
-///
-/// ```ignore
-/// TextArea::new("speak-text", &s.speak.text, |s| &mut s.speak.text)
-///     .placeholder("Type anything to hear it in your voice...")
-///     .on_submit(|s| speak::generate(s)).build(p)
-/// ```
 pub struct TextArea<'a> {
     key: String,
     edit: &'a TextEdit,
@@ -639,7 +535,6 @@ impl<'a> TextArea<'a> {
         self.font = font;
         self
     }
-    /// Minimum height of the editable area in points (default 120).
     pub fn min_height(mut self, h: f32) -> Self {
         self.min_h = h;
         self
@@ -683,12 +578,7 @@ impl<'a> TextArea<'a> {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Progress and meters
-// -------------------------------------------------------------------------------------------------
-
-/// A thin progress bar. `Some(0.0..=1.0)` is a determinate fill that springs to its value;
-/// `None` is an indeterminate shimmer for work of unknown length.
+/// `Some(0..=1)`: determinate fill; `None`: indeterminate shimmer.
 pub fn progress_bar(p: Palette, value: Option<f32>) -> El {
     let h = 8.0;
     let track = el()
@@ -705,15 +595,11 @@ pub fn progress_bar(p: Palette, value: Option<f32>) -> El {
     }
 }
 
-/// An audio level meter: `level` 0..1 lights segments green, then yellow above 0.65 and red above
-/// 0.88. `peak` (optional) draws a hold marker. Segments fade smoothly as the level moves.
-/// A small segmented toggle (a recessed glass pill; the chosen option is lit with the accent). `on_pick` gets the
-/// index of the pressed option.
 pub fn segmented(p: Palette, key: &str, options: &[&str], selected: usize, on_pick: impl Fn(&mut AppState, usize) + Clone + 'static) -> El {
     segmented_help(p, key, options, &[], selected, on_pick)
 }
 
-/// [`segmented`] with a tooltip per option (`helps[i]`; missing or empty ones get none).
+/// [`segmented`] with a tooltip per option; missing or empty `helps` get none.
 pub fn segmented_help(p: Palette, key: &str, options: &[&str], helps: &[&str], selected: usize, on_pick: impl Fn(&mut AppState, usize) + Clone + 'static) -> El {
     let mut strip = row().key(key.to_owned()).padding(3.0).gap(2.0).radius(17.0)
         .fill(p.well)
@@ -736,8 +622,7 @@ pub fn segmented_help(p: Palette, key: &str, options: &[&str], helps: &[&str], s
     strip
 }
 
-/// A [`segmented_help`] strip that fills its width, the options sharing it equally: long labels in a narrow panel.
-/// `enabled: false` dims it and ignores presses (the help texts still show, to say why).
+/// Options share the width equally; when disabled the help texts still show.
 #[allow(clippy::too_many_arguments)]
 pub fn segmented_fill(
     p: Palette,
@@ -791,11 +676,6 @@ pub fn level_meter(p: Palette, level: f32, peak: Option<f32>) -> El {
     row().w_full().h(14.0).gap(3.0).children(seg)
 }
 
-// -------------------------------------------------------------------------------------------------
-// Badges and pills
-// -------------------------------------------------------------------------------------------------
-
-/// A small tinted label ("Trained", "Zero-shot", "5 parts").
 pub fn badge(p: Palette, label: &str, tone: Tone) -> El {
     let c = tone.color(p);
     row()
@@ -808,7 +688,6 @@ pub fn badge(p: Palette, label: &str, tone: Tone) -> El {
         .child(text(label).font(TextStyle::new(11.0, 600.0).lh(14.0)).color(if tone == Tone::Neutral { p.text_dim } else { c }))
 }
 
-/// A coloured dot, optionally pulsing (for "working" states).
 pub fn status_dot(p: Palette, tone: Tone, pulsing: bool) -> El {
     const PULSE: Cycle = Cycle { period: 1.4, phase: 0.0, stops: &[(0.0, 1.0), (0.5, 0.35), (1.0, 1.0)], still: 1.0, fps: 12.0 };
     let c = tone.color(p);
@@ -816,27 +695,19 @@ pub fn status_dot(p: Palette, tone: Tone, pulsing: bool) -> El {
     if pulsing { d.cycle(PULSE) } else { d }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Toasts
-// -------------------------------------------------------------------------------------------------
-
-/// One transient message. Push with `shell::toast(s, Tone::Success, "Saved")`.
 #[derive(Clone, Debug)]
 pub struct Toast {
     pub id: u64,
     pub tone: Tone,
     pub text: String,
-    /// Shell clock time at which it disappears.
+    /// Shell clock time.
     pub expires: f64,
 }
 
-/// The toast column, pinned bottom-centre, `bottom` points above the window's bottom edge (above the player bar
-/// while it shows). The shell draws it once; screens only push toasts.
 pub fn toast_stack(p: Palette, toasts: &[Toast], bottom: f32) -> El {
     let items = toasts.iter().map(|t| {
         let id = t.id;
-        // Long messages wrap onto more lines inside a bounded card instead of being cut off. The width follows the
-        // text (a centred wrapping text would otherwise shrink to its longest word).
+        // Width estimated from the text: a centred wrapping text would otherwise shrink to its longest word.
         let width = (t.text.chars().count() as f32 * 7.8 + 72.0).clamp(160.0, 640.0);
         row().key(format!("toast{id}"))
             .w(width)
@@ -863,7 +734,6 @@ trait InertIfEmpty {
     fn inert_if_empty(self, empty: bool) -> Self;
 }
 impl InertIfEmpty for El {
-    /// An empty toast column must not swallow clicks meant for the screen below.
     fn inert_if_empty(self, empty: bool) -> Self {
         if empty { self.inert() } else { self }
     }

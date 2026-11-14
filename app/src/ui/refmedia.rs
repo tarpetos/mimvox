@@ -1,16 +1,3 @@
-//! "Reference from media" block of the active voice's reference section (Voices screen).
-//!
-//! The user picks (or drops onto the Voices screen) many audio and video files of the same speaker. The engine
-//! combines them into one cleaned pool (`<voice>/reference_media.wav`, at most 20 minutes) and makes its best 8-12 s
-//! window the voice's reference (`voices.reference_from_media`, a job: `voices.media.progress` / `.done` / `.error`).
-//! The language chip says which reference it becomes: the voice's own language writes `reference.wav`, another one
-//! `reference_<lang>.wav`. The pool's other good windows then show up in the "Choose..." list of the reference section
-//! (`source: "media"` candidates), so the user can listen and pick another one.
-//!
-//! "Remove background music" sends `remove_music`: the engine then keeps only the vocals of each file (Hybrid Demucs)
-//! before cleaning it. The choice is remembered as `remove_music` in settings.json; until the user makes one it is on
-//! when the engine runs on a CUDA GPU. Record's multi-file import sends the remembered choice too (`media.combine`).
-
 use std::path::PathBuf;
 
 use rune::{El, col, el, row, text};
@@ -24,14 +11,12 @@ use crate::ui::shell::{self, VoiceInfo};
 use crate::ui::theme::{Palette, motion, radius, ty};
 use crate::ui::voices::kit;
 
-/// A file the engine could not use, and why.
 #[derive(Clone, Debug, Default)]
 pub struct Skipped {
     pub name: String,
     pub reason: String,
 }
 
-/// What a finished job reported.
 #[derive(Clone, Debug, Default)]
 pub struct Outcome {
     pub files: usize,
@@ -46,7 +31,7 @@ pub struct Outcome {
     pub message: Option<String>,
     pub skipped: Vec<Skipped>,
     pub truncated: Vec<String>,
-    /// Files whose background music was removed (`music_files`), and why not when none was (`music_reason`).
+    /// Files whose background music was removed; `music_reason` says why when none was.
     pub music_files: usize,
     pub music_reason: Option<String>,
 }
@@ -55,17 +40,14 @@ pub struct Outcome {
 pub enum Phase {
     #[default]
     Idle,
-    /// `voices.reference_from_media` sent, waiting for the job id.
     Starting,
-    /// The job runs.
     Running,
 }
 
 #[derive(Default)]
 pub struct MediaState {
-    /// The voice the job / result below belongs to.
     pub voice: Option<String>,
-    /// The chosen language (`None`: the voice's own).
+    /// `None`: the voice's own.
     pub lang: Option<String>,
     pub phase: Phase,
     req: Option<u64>,
@@ -73,7 +55,7 @@ pub struct MediaState {
     pub job: Option<String>,
     pub picking: bool,
     pub cancelling: bool,
-    /// Files sent, file being processed (1-based), its name, stage and overall percent.
+    /// `file` is 1-based.
     pub files: usize,
     pub file: usize,
     pub name: String,
@@ -82,7 +64,7 @@ pub struct MediaState {
     pub outcome: Option<Outcome>,
     pub error: Option<String>,
     pub skipped: Vec<Skipped>,
-    /// "Remove background music" as the user last set it (`None`: never set, see [`remove_music`]).
+    /// `None`: never set.
     pub remove_music: Option<bool>,
     prefs_loaded: bool,
 }
@@ -97,28 +79,21 @@ fn m(s: &mut AppState) -> &mut MediaState {
     &mut s.voices.refclip.media
 }
 
-// ---------------------------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------------------------
-
-/// The language the media reference is for (the chip's check mark): the chosen one, else the voice's own.
 pub fn language(s: &AppState) -> String {
     s.voices.refclip.media.lang.clone().unwrap_or_else(|| shell::active_voice(s).map(|v| v.lang().to_owned()).unwrap_or_else(|| "en".into()))
 }
 
-/// The language picker answered.
 pub fn set_language(s: &mut AppState, code: &str) {
     let own = shell::active_voice(s).map(|v| lang::base(v.lang()));
     let code = lang::base(code);
     m(s).lang = if own.as_deref() == Some(code.as_str()) { None } else { Some(code) };
 }
 
-/// "Remove background music": the remembered choice, else on when the engine has a CUDA GPU.
 pub fn remove_music(s: &AppState) -> bool {
     super::setuprun::has(s, "music_removal") && s.voices.refclip.media.remove_music.unwrap_or(s.shell.gpu)
 }
 
-/// The remembered choice only (`None` when the user never set it: the engine then decides, `"auto"`).
+/// `None` when never set: the engine then decides (`"auto"`).
 pub fn saved_remove_music() -> Option<bool> {
     super::onboarding::setting("remove_music").and_then(|v| v.as_bool())
 }
@@ -131,7 +106,6 @@ fn toggle_music(s: &mut AppState) {
     }
 }
 
-/// "Add media...": the native multi-file picker on its own thread; the choice comes back as an event.
 pub fn pick_files(s: &mut AppState) {
     if s.shell.scripted() || m(s).picking || m(s).busy() {
         return;
@@ -149,7 +123,6 @@ pub fn pick_files(s: &mut AppState) {
     });
 }
 
-/// Files dropped on the Voices screen.
 pub fn drop_files(s: &mut AppState, files: &[PathBuf]) {
     if files.is_empty() {
         return;
@@ -168,7 +141,7 @@ fn start(s: &mut AppState, paths: Vec<PathBuf>) {
         return;
     }
     super::refclip::stop_preview(s);
-    s.voices.refclip.more = Some(super::refclip::More::Media); // the panel that shows the progress and the result
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     let mut params = json!({ "id": id, "paths": paths, "remove_music": remove_music(s) });
     if let Some(code) = m(s).lang.clone() {
         params["language"] = json!(code);
@@ -201,7 +174,7 @@ fn dismiss(s: &mut AppState) {
     st.skipped.clear();
 }
 
-/// "Remove combined media": deletes the pool and its candidates (references cut from it stay).
+/// Deletes the pool and its candidates; references cut from it stay.
 fn clear_pool(s: &mut AppState) {
     let Some(id) = s.shell.active_voice.clone() else { return };
     super::refclip::stop_preview(s);
@@ -243,10 +216,6 @@ fn friendly(code: &str, message: &str) -> String {
         _ => message.to_owned(),
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Engine messages
-// ---------------------------------------------------------------------------------------------
 
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
@@ -338,7 +307,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// After every event: the saved "Remove background music" once; a result of another voice is not shown for this one.
 pub fn settle(s: &mut AppState) -> bool {
     if !m(s).prefs_loaded && !s.shell.scripted() {
         let saved = saved_remove_music();
@@ -358,10 +326,6 @@ pub fn settle(s: &mut AppState) -> bool {
     }
     false
 }
-
-// ---------------------------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------------------------
 
 fn clock(secs: f32) -> String {
     let t = secs.max(0.0).round() as u32;
@@ -392,7 +356,6 @@ fn skipped_lines(p: &Palette, list: &[Skipped]) -> El {
     c
 }
 
-/// "Background music removed from 3 of 12 files." / "Background music not removed: <why>." / nothing (turned off).
 fn music_line(o: &Outcome) -> Option<String> {
     match (o.music_files, o.music_reason.as_deref()) {
         (0, None | Some("turned off")) => None,
@@ -407,7 +370,6 @@ fn music_line(o: &Outcome) -> Option<String> {
     }
 }
 
-/// "12 files combined · 7:32 · reference set: 11.4 s from file 3".
 fn summary_line(o: &Outcome) -> String {
     let files = if o.files == 1 { "1 file combined".to_owned() } else { format!("{} files combined", o.files) };
     let mut t = format!("{files} · {}", clock(o.duration_s));
@@ -441,7 +403,6 @@ fn drop_well(s: &AppState, p: &Palette, over: bool) -> El {
         .child(Button::new(if picking { "Choosing…" } else { "Add media…" }).small().icon(&icons::PLUS).key("refmedia-add").disabled(picking).on_press(pick_files).build(*p))
 }
 
-/// The block inside the reference section.
 pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El {
     let st = &s.voices.refclip.media;
     let mine = st.voice.as_deref() == Some(info.id.as_str());
@@ -523,11 +484,6 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
     c
 }
 
-// ---------------------------------------------------------------------------------------------
-// Scenes for headless snapshots
-// ---------------------------------------------------------------------------------------------
-
-/// The default on a CUDA machine: "Remove background music" ticked (no saved choice).
 fn scene_idle(s: &mut AppState) {
     super::refclip::scene_demo(s);
     s.voices.refclip.more = Some(super::refclip::More::Media);
@@ -549,7 +505,6 @@ fn scene_running(s: &mut AppState) {
     };
 }
 
-/// Removing the music of file 2 of 6.
 fn scene_separating(s: &mut AppState) {
     super::refclip::scene_demo(s);
     s.voices.refclip.more = Some(super::refclip::More::Media);
@@ -559,7 +514,6 @@ fn scene_separating(s: &mut AppState) {
     };
 }
 
-/// The checkbox off (the user's saved choice).
 fn scene_music_off(s: &mut AppState) {
     super::refclip::scene_demo(s);
     s.voices.refclip.more = Some(super::refclip::More::Media);
@@ -585,7 +539,6 @@ fn scene_done(s: &mut AppState) {
     s.voices.refclip.open = false;
 }
 
-/// After combining: the "Choose..." list with the media clips under their own heading.
 fn scene_choose(s: &mut AppState) {
     scene_done(s);
     s.voices.refclip.open = true;
@@ -595,7 +548,6 @@ fn scene_choose(s: &mut AppState) {
 fn scene_done_lang(s: &mut AppState) {
     scene_done(s);
     if let Some(c) = s.voices.refclip.candidates.first().cloned() {
-        // reference.wav is still the part clip; the media clips went to reference_uk.wav
         let mut cur = c;
         cur.preview_path = "/tmp/demo/reference.wav".into();
         cur.recommended = false;
@@ -618,7 +570,6 @@ fn scene_done_lang(s: &mut AppState) {
     s.voices.refclip.open = false;
 }
 
-/// Done with the music removed from most files.
 fn scene_done_music(s: &mut AppState) {
     scene_done(s);
     s.voices.refclip.media.remove_music = Some(true);
@@ -628,7 +579,6 @@ fn scene_done_music(s: &mut AppState) {
     }
 }
 
-/// Done, but the separation model is missing (an older install): the files were used as they are.
 fn scene_done_nomodel(s: &mut AppState) {
     scene_done(s);
     s.voices.refclip.media.remove_music = Some(true);

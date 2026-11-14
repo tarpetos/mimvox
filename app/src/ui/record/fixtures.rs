@@ -1,5 +1,3 @@
-//! Headless scenes for snapshots: `scenes()` returns state fixtures the shell can register in `AppSpec.scenes`.
-
 use super::*;
 use widgets::Tone;
 
@@ -77,20 +75,17 @@ pub fn scene_picker(s: &mut AppState) {
     base(s);
 }
 
-/// The start page with "This is for: a new voice".
 pub fn scene_new_voice(s: &mut AppState) {
     base(s);
     s.record.for_new = true;
     s.record.new_name = rune::TextEdit::new("Anna");
 }
 
-/// Files hover over the start page.
 pub fn scene_files_hover(s: &mut AppState) {
     base(s);
     s.record.import_over = true;
 }
 
-/// The "whose voice is it" dialog after files were dropped.
 pub fn scene_files_ask(s: &mut AppState) {
     base(s);
     s.record.files_offer(vec![PathBuf::from("/home/me/interview-part-1.mp3"), PathBuf::from("/home/me/interview-part-2.mp3")], false);
@@ -146,7 +141,6 @@ fn uk_languages(s: &mut AppState) {
         .collect();
 }
 
-/// The preset picker in Ukrainian.
 pub fn scene_language_uk(s: &mut AppState) {
     base(s);
     uk_languages(s);
@@ -154,7 +148,6 @@ pub fn scene_language_uk(s: &mut AppState) {
     s.record.presets = Load::Ready(uk_presets());
 }
 
-/// Reading a Ukrainian preset into a new voice (the active one was recorded in English).
 pub fn scene_session_uk(s: &mut AppState) {
     scene_language_uk(s);
     s.shell.voices[0].parts = 5;
@@ -162,7 +155,6 @@ pub fn scene_session_uk(s: &mut AppState) {
     s.record.phase = Phase::Session;
 }
 
-/// "Use my own text" with a detected Ukrainian text.
 pub fn scene_own_text_uk(s: &mut AppState) {
     base(s);
     uk_languages(s);
@@ -252,14 +244,12 @@ fn mic_devices(s: &mut AppState) {
     s.record.mic.devices = vec!["Microphone (Realtek(R) Audio)".into(), "Blue Yeti Stereo Microphone".into(), "Headset Microphone (Logi USB Headset)".into()];
 }
 
-/// The chip on the picker, showing a chosen device.
 pub fn scene_mic_picker(s: &mut AppState) {
     base(s);
     mic_devices(s);
     s.record.input_device = Some("Blue Yeti Stereo Microphone".into());
 }
 
-/// The chip on the session with the dropdown open and a live level.
 pub fn scene_mic_open(s: &mut AppState) {
     standard(s);
     mic_devices(s);
@@ -268,14 +258,12 @@ pub fn scene_mic_open(s: &mut AppState) {
     s.record.mic.test = mic::Test::Running(mic::Live { rec: None, seq: 0, level: 0.38, peak: 0.52 });
 }
 
-/// The saved device is gone: fallback to the system default with a warning.
 pub fn scene_mic_warning(s: &mut AppState) {
     standard(s);
     mic_devices(s);
     s.record.mic.warning = Some("\"USB Podcast Mic\" is not available, using the system default".into());
 }
 
-/// A file is being dragged over the recorder card.
 pub fn scene_import_drop(s: &mut AppState) {
     standard(s);
     s.record.current = 1;
@@ -285,7 +273,6 @@ pub fn scene_import_drop(s: &mut AppState) {
     s.formats.scene_ready();
 }
 
-/// An existing recording (an MP3) was imported for part 2 and is being checked.
 pub fn scene_import_checking(s: &mut AppState) {
     standard(s);
     s.record.current = 1;
@@ -293,7 +280,6 @@ pub fn scene_import_checking(s: &mut AppState) {
     s.record.takes[1] = Take { status: TakeStatus::Checking, path: Some(PathBuf::from("/home/me/Voice Memos/evening-reading.mp3")), imported: Some("evening-reading.mp3".into()), ..Take::default() };
 }
 
-/// The imported recording passed the check with notes and was added to the dataset.
 pub fn scene_import_saved(s: &mut AppState) {
     standard(s);
     s.record.current = 1;

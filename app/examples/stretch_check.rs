@@ -1,16 +1,4 @@
-//! Offline check of the player's pitch-preserving speed change (`src/audio/stretch.rs`, WSOLA).
-//!
-//! `cargo run --example stretch_check [speech.wav] [out_dir]`
-//!
-//! For a harmonic test tone (200 Hz fundamental) and, when given, a speech WAV, at 0.5x / 0.75x / 1x / 1.25x / 1.5x / 2x:
-//! * the length is the source length divided by the speed (within 2 %);
-//! * the pitch is kept: the dominant frequency of the tone, and the median fundamental of the voiced speech frames,
-//!   stay within 2 % of the source's;
-//! * at 1x the output equals the source (apart from the 16 ms fade-in and fade-out at the ends);
-//! * changing the speed while it plays keeps the waveform continuous (the tone's largest sample step stays put);
-//! * the time it takes per second of audio (the playback callback runs it in real time).
-//!
-//! With `out_dir`, every result is written as a WAV there to listen to. Exits non-zero when a check fails.
+//! Offline check of the player's pitch-preserving speed change: `cargo run --example stretch_check [speech.wav] [out_dir]`.
 
 #[path = "../src/audio/stretch.rs"]
 mod stretch;
@@ -55,9 +43,7 @@ fn main() {
 
 #[derive(Clone, Copy)]
 enum Measure {
-    /// Strongest spectral peak (a steady tone).
     Dominant,
-    /// Median autocorrelation fundamental of the voiced frames (speech).
     F0,
 }
 
@@ -104,8 +90,6 @@ fn check(name: &str, src: &[f32], rate: u32, m: Measure, out_dir: Option<&Path>)
     failed
 }
 
-/// Changing the speed while playing (every 0.1 s, through all speeds, in 10 ms callback-sized blocks) must not
-/// break the waveform: on the tone, the largest step between two output samples stays near the source's.
 fn switching(src: &[f32], rate: u32) -> u32 {
     let mut st = stretch::Stretcher::new(rate);
     let block = (rate / 100) as usize;
@@ -133,7 +117,6 @@ fn pitch(x: &[f32], rate: u32, m: Measure) -> f32 {
     }
 }
 
-/// The strongest frequency between 60 and 1000 Hz (Goertzel, 0.5 Hz steps, Hann window) over the middle second.
 fn dominant(x: &[f32], rate: u32) -> f32 {
     let n = (rate as usize).min(x.len());
     let start = (x.len() - n) / 2;
@@ -159,8 +142,6 @@ fn dominant(x: &[f32], rate: u32) -> f32 {
     best
 }
 
-/// Median fundamental (70..400 Hz) of 40 ms frames whose normalised autocorrelation peak is above 0.6 (voiced),
-/// with parabolic interpolation of the peak lag.
 fn median_f0(x: &[f32], rate: u32) -> f32 {
     let frame = (rate as f32 * 0.04) as usize;
     let hop = frame / 2;

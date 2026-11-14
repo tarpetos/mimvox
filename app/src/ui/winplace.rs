@@ -1,32 +1,20 @@
-//! The window opens where and as large as it was closed (`settings.json` `window`), and the first time in the middle
-//! of the main display at its default size, not maximized.
-//!
-//! Saved when the window closes: the outer position in desktop pixels, the content size in points, and whether it
-//! was maximized. A maximized window saves the place it returns to when un-maximized (on Windows, its restore
-//! rectangle), which is on the display it was maximized on: the next start creates the window there and maximizes
-//! it, so it comes back on the same display and not on the one the app was started from. It is placed when it is
-//! created, never afterwards: moving a maximized window un-maximizes it. A place that is no
-//! longer on any display (a monitor unplugged since) is not used: the window opens centred. Wayland hides window
+//! Placed only when the window is created: moving a maximized window un-maximizes it. Wayland hides window
 //! positions, so there only the size is kept.
 
 use std::cell::RefCell;
 
 use serde_json::{Value, json};
 
-/// The default content size in points.
 pub const DEFAULT_SIZE: (f32, f32) = (1040.0, 700.0);
-/// A saved size below this is not trusted.
 const MIN_SIZE: (f32, f32) = (640.0, 420.0);
 
 thread_local! {
-    /// The app's window, kept from `App::on_window` for [`save`].
     static WINDOW: RefCell<Option<rune::WindowHandle>> = const { RefCell::new(None) };
 }
 
-/// How the window opens.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Opening {
-    /// Content size in points.
+    /// Points.
     pub size: (f32, f32),
     /// Outer position in desktop pixels; None: centre it on the main display.
     pub position: Option<(i32, i32)>,
@@ -39,7 +27,6 @@ impl Default for Opening {
     }
 }
 
-/// The saved placement, or the default.
 pub fn opening() -> Opening {
     parse(super::onboarding::setting("window").as_ref(), on_a_display)
 }
@@ -60,12 +47,11 @@ fn parse(saved: Option<&Value>, visible: impl Fn(i32, i32, f32, f32) -> bool) ->
     Opening { size: (w, h), position, maximized: v.get("maximized").and_then(Value::as_bool).unwrap_or(false) }
 }
 
-/// Keeps the window for [`save`] (`App::on_window`).
 pub fn keep(window: &rune::WindowHandle) {
     WINDOW.with_borrow_mut(|w| *w = Some(window.clone()));
 }
 
-/// Saves where the window is now (when it closes). UI thread.
+/// UI thread, when the window closes.
 pub fn save() {
     let Some(place) = WINDOW.with_borrow(|w| w.as_ref().and_then(rune::WindowHandle::placement)) else { return };
     if place.minimized || place.full_screen {
@@ -95,9 +81,8 @@ pub fn save() {
     });
 }
 
-/// Puts a maximized window's restore place into the saved `window`: always where, and the size only when it differs
-/// clearly from the saved one (the restore rectangle is the outer frame, the saved size the content: taking a
-/// near-equal one each time would let the window creep).
+/// The restore rectangle is the outer frame and the saved size the content, so the size is taken only when it
+/// differs clearly (taking a near-equal one each time would let the window creep).
 fn merge_restore(window: &mut Value, at: (i32, i32), size: (f64, f64), saved: (f64, f64), scale: f64) {
     window["x"] = json!(at.0);
     window["y"] = json!(at.1);
@@ -168,14 +153,11 @@ mod tests {
 
     #[test]
     fn a_maximized_window_saves_where_it_returns_to() {
-        // On the second display, with a frame a few pixels off the saved content size: the place moves, the size stays.
         let mut w = json!({ "x": 200, "y": 120, "w": 1300, "h": 800, "scale": 2.0, "maximized": true });
         merge_restore(&mut w, (4040, 300), (1301.0, 800.5), (1300.0, 800.0), 1.0);
         assert_eq!(w, json!({ "x": 4040, "y": 300, "w": 1300, "h": 800, "scale": 1.0, "maximized": true }));
-        // Resized before it was maximized: the new size is taken too.
         merge_restore(&mut w, (4040, 300), (1500.0, 900.0), (1300.0, 800.0), 1.0);
         assert_eq!((w["w"].as_f64(), w["h"].as_f64()), (Some(1500.0), Some(900.0)));
-        // A nonsense rectangle keeps the saved size.
         merge_restore(&mut w, (4040, 300), (10.0, 10.0), (1500.0, 900.0), 1.0);
         assert_eq!((w["w"].as_f64(), w["h"].as_f64()), (Some(1500.0), Some(900.0)));
     }

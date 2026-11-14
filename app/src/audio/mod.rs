@@ -1,11 +1,4 @@
-//! Microphone capture and playback (cpal + hound). Event-driven, never blocks the UI thread: the capture callback
-//! reports the input level at a capped rate ([`METER_HZ`]) to a [`MeterSink`], the playback callback reports the
-//! position at a capped rate ([`PROGRESS_HZ`], only while sound plays) and the end of a track to a [`PlaySink`].
-//! Nothing has to be polled. Playback speed keeps the pitch (WSOLA time-stretch, see [`stretch`]).
-//!
-//! cpal streams are not `Send`, so each `Recorder` / `Player` owns a small worker thread that creates and holds the
-//! stream; the public handles only share atomics and short-lived mutexes with it (so they are `Send + Sync`).
-//! Without audio devices (e.g. WSL) everything returns `Err` with a readable message instead of panicking.
+//! cpal streams are not `Send`, so each `Recorder` / `Player` owns a worker thread that creates and holds the stream.
 
 #![allow(dead_code)]
 
@@ -36,8 +29,6 @@ fn load_f32(a: &AtomicU32) -> f32 {
     f32::from_bits(a.load(Ordering::Relaxed))
 }
 
-/// Stores `v` if it is larger than the current value (peak hold). Single writer per atomic is not guaranteed,
-/// so this uses a CAS loop.
 fn fetch_max_f32(a: &AtomicU32, v: f32) {
     let mut cur = a.load(Ordering::Relaxed);
     while v > f32::from_bits(cur) {
@@ -47,10 +38,6 @@ fn fetch_max_f32(a: &AtomicU32, v: f32) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Devices
-// ---------------------------------------------------------------------------------------------------------------
 
 /// Names of the available input devices; the first is the system default.
 pub fn input_devices() -> Vec<String> {
@@ -78,52 +65,38 @@ fn pick_input(device: Option<&str>) -> anyhow::Result<cpal::Device> {
         if let Some(d) = found {
             return Ok(d);
         }
-        // Fall through to the default if the saved device is gone.
     }
     host.default_input_device()
         .ok_or_else(|| anyhow!("no microphone found: connect an input device and check the system sound settings"))
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Recorder
-// ---------------------------------------------------------------------------------------------------------------
-
-/// Level reports per second from a running capture (the meter's redraw rate).
 pub const METER_HZ: u32 = 25;
 
-/// What a running capture reports, from the audio thread.
 #[derive(Clone, Debug)]
 pub enum CaptureEvent {
-    /// About [`METER_HZ`] times a second: the meter level 0..1 (peak with a 0.25 s decay), the highest sample so far,
-    /// and the seconds captured.
+    /// `level`: meter 0..1 (peak with a 0.25 s decay); `peak`: highest sample so far.
     Level { level: f32, peak: f32, elapsed_s: f32 },
-    /// The backend reported a stream error (e.g. the microphone was unplugged).
     Error(String),
 }
 
-/// Receives [`CaptureEvent`]s on the audio thread: keep it short (hand the value on, see `ui::events::Latest`).
+/// Called on the audio thread: keep it short.
 pub type MeterSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
 
-/// Position reports per second while a track plays (the player bar's redraw rate). None while paused or stopped.
 pub const PROGRESS_HZ: u32 = 20;
 
-/// What the player reports, from the audio thread. `track` is the id [`Player::play`] returned: a report about a
-/// track that was replaced meanwhile can still arrive and must be ignored.
+/// `track` is the id from [`Player::play`]; reports about a replaced track can still arrive and must be ignored.
 #[derive(Clone, Copy, Debug)]
 pub enum PlayEvent {
-    /// About [`PROGRESS_HZ`] times a second while the position moves: seconds played and the track's length.
     Progress { track: u64, pos_s: f32, len_s: f32 },
-    /// The track played to its end (not looping).
     Ended { track: u64 },
 }
 
-/// Receives [`PlayEvent`]s on the audio thread: keep it short (hand the value on, see `ui::events`).
+/// Called on the audio thread: keep it short.
 pub type PlaySink = Arc<dyn Fn(PlayEvent) + Send + Sync>;
 
 struct RecShared {
-    /// Mono samples at the device rate.
     buffer: Mutex<Vec<f32>>,
-    /// Max |sample| since the start (f32 bits).
+    /// Max |sample|, as f32 bits.
     peak: AtomicU32,
     samples: AtomicU64,
     error: Mutex<Option<String>>,
@@ -152,7 +125,6 @@ where
     let err_shared = shared.clone();
     let err_meter = meter.clone();
     let mut scratch: Vec<f32> = Vec::new();
-    // Meter state, counted in samples (the audio clock): the peak since the last report and the shown level.
     let every = (rate / METER_HZ).max(1) as u64;
     let (mut since, mut block_max, mut shown) = (0u64, 0.0f32, 0.0f32);
     device.build_input_stream(
@@ -195,8 +167,7 @@ where
 }
 
 impl Recorder {
-    /// Starts capturing from `device` (None = system default), mono. `meter` receives the live level (see
-    /// [`CaptureEvent`]).
+    /// `device`: None = system default.
     pub fn start(device: Option<&str>, meter: Option<MeterSink>) -> anyhow::Result<Self> {
         let shared = Arc::new(RecShared {
             buffer: Mutex::new(Vec::with_capacity(48_000 * 120)),
@@ -266,7 +237,6 @@ impl Recorder {
         }
     }
 
-    /// Highest sample so far 0..1 (clipping warning when >= 0.99).
     pub fn peak(&self) -> f32 {
         load_f32(&self.shared.peak)
     }
@@ -283,7 +253,6 @@ impl Recorder {
         &self.device_name
     }
 
-    /// A stream error reported by the audio backend (e.g. the microphone was unplugged), if any.
     pub fn error(&self) -> Option<String> {
         lock(&self.shared.error).clone()
     }
@@ -361,7 +330,6 @@ pub fn read_wav_mono(path: &Path) -> anyhow::Result<(Vec<f32>, u32)> {
     Ok((mono, spec.sample_rate))
 }
 
-/// Linear-interpolation resampler (adequate for speech playback).
 pub fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || input.is_empty() {
         return input.to_vec();
@@ -381,10 +349,6 @@ pub fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Player
-// ---------------------------------------------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     Idle,
@@ -393,12 +357,11 @@ enum State {
     Ended,
 }
 
-/// The loaded track: mono samples at the device rate, read by the stretcher.
 struct Track {
     id: u64,
     samples: Vec<f32>,
     state: State,
-    /// Still growing (Speak's streaming playback): reaching the end waits for more instead of ending.
+    /// Still growing: reaching the end waits for more instead of ending.
     live: bool,
     looped: bool,
     speed: f32,
@@ -419,7 +382,7 @@ pub struct Player {
     thread: Option<JoinHandle<()>>,
 }
 
-/// Renders `out.len()` mono samples of the track. Returns whether it reached its end (not looping) this time.
+/// Returns whether the track reached its end (not looping) this call.
 fn render(t: &mut Track, out: &mut [f32]) -> bool {
     let mut filled = 0;
     if t.state == State::Playing {
@@ -454,10 +417,8 @@ where
     let rate = config.sample_rate.0.max(1);
     let err_shared = shared.clone();
     let mut mono: Vec<f32> = Vec::new();
-    // Progress reports, counted in output samples (the audio clock), only when the position moved. The position
-    // reported is a smooth one: the stretcher's own advances a block at a time (uneven steps of tens of
-    // milliseconds), so between its steps the report moves on by the samples played times the speed, and takes the
-    // stretcher's value again when the two part by more than `SNAP_S` (a seek, a loop, a new track).
+    // The stretcher's position advances in uneven blocks, so reports extrapolate by samples played × speed and
+    // resync to it when the two differ by more than `SNAP_S` (a seek, a loop, a new track).
     const SNAP_S: f64 = 0.12;
     let every = (rate / PROGRESS_HZ).max(1) as usize;
     let (mut since, mut last_pos) = (0usize, f64::NAN);
@@ -518,7 +479,6 @@ where
 }
 
 impl Player {
-    /// Opens the default output. `sink` hears the position while a track plays and when it ends.
     pub fn new(sink: Option<PlaySink>) -> anyhow::Result<Self> {
         let shared = Arc::new(PlayShared {
             // The real rate is only known once the device is open; the stretcher is rebuilt for it below.
@@ -586,9 +546,8 @@ impl Player {
         }
     }
 
-    /// Stops whatever plays and plays `path` from the start (loop and speed stay as set). Returns the new track's
-    /// id (for [`PlayEvent`]s) and its length in seconds. `live`: more audio will be appended with [`Self::enqueue`]
-    /// (reaching the end waits for it, until [`Self::set_live`] `(false)`).
+    /// Returns the new track's id (for [`PlayEvent`]s) and length in seconds. `live`: more audio will be appended with
+    /// [`Self::enqueue`] until [`Self::set_live`]`(false)`.
     pub fn play(&self, path: &Path, live: bool) -> anyhow::Result<(u64, f32)> {
         let samples = self.load(path)?;
         let len_s = samples.len() as f32 / self.sample_rate as f32;
@@ -605,8 +564,7 @@ impl Player {
         Ok((id, len_s))
     }
 
-    /// Appends `path` to the live track (gapless streaming of tts.chunk files). Returns the track's new length in
-    /// seconds.
+    /// Returns the track's new length in seconds.
     pub fn enqueue(&self, path: &Path) -> anyhow::Result<f32> {
         let samples = self.load(path)?;
         let mut t = lock(&self.shared.track);
@@ -617,12 +575,10 @@ impl Player {
         Ok(t.samples.len() as f32 / self.sample_rate as f32)
     }
 
-    /// No more audio will be appended: the end of what is there is the end of the track.
     pub fn set_live(&self, live: bool) {
         lock(&self.shared.track).live = live;
     }
 
-    /// Decodes and resamples to the device rate before the track lock is taken.
     fn load(&self, path: &Path) -> anyhow::Result<Vec<f32>> {
         let (mono, rate) = read_wav_mono(path)?;
         let out = resample_linear(&mono, rate, self.sample_rate);
@@ -632,7 +588,6 @@ impl Player {
         Ok(out)
     }
 
-    /// Drops the track: silence.
     pub fn stop(&self) {
         let old = {
             let mut t = lock(&self.shared.track);
@@ -651,7 +606,7 @@ impl Player {
         }
     }
 
-    /// Continues a paused track, or plays an ended one again from the start. False when nothing is loaded.
+    /// Plays an ended track again from the start. False when nothing is loaded.
     pub fn resume(&self) -> bool {
         let mut t = lock(&self.shared.track);
         match t.state {
@@ -666,8 +621,7 @@ impl Player {
         true
     }
 
-    /// Jumps to `pos_s` seconds (clamped to the track). An ended track stays ended until [`Self::resume`], which
-    /// then plays from there.
+    /// Clamped to the track; an ended track stays ended until [`Self::resume`].
     pub fn seek(&self, pos_s: f32) {
         let mut t = lock(&self.shared.track);
         let pos = (f64::from(pos_s.max(0.0)) * self.sample_rate as f64).min(t.samples.len() as f64);
@@ -681,23 +635,21 @@ impl Player {
         lock(&self.shared.track).looped = on;
     }
 
-    /// Playback speed, pitch kept (0.25..4; takes effect within one frame, about 16 ms).
+    /// Pitch kept; 0.25..4.
     pub fn set_speed(&self, speed: f32) {
         lock(&self.shared.track).speed = speed.clamp(0.25, 4.0);
     }
 
-    /// Sound is playing (a track is loaded, not paused, not at its end).
     pub fn is_playing(&self) -> bool {
         lock(&self.shared.track).state == State::Playing
     }
 
-    /// Seconds into the track.
     pub fn position_s(&self) -> f32 {
         let t = lock(&self.shared.track);
         (t.stretch.position().min(t.samples.len() as f64) / self.sample_rate as f64) as f32
     }
 
-    /// The track's length in seconds (what has arrived, for a live track).
+    /// For a live track, the length of what has arrived.
     pub fn duration_s(&self) -> f32 {
         lock(&self.shared.track).samples.len() as f32 / self.sample_rate as f32
     }

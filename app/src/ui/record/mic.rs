@@ -1,14 +1,4 @@
-//! Microphone selection for the Record screen: a compact glass "mic chip", a dropdown with the input devices
-//! and a live level test.
-//!
-//! - Devices are listed on a worker thread (cpal enumeration can take 100+ ms on Windows): once when the screen is
-//!   first entered and again every time the dropdown opens. The list comes back as an event.
-//! - The choice is `RecordState::input_device`, saved under `microphone` in `<data dir>/settings.json` and restored
-//!   on launch. A saved device that is gone falls back to the system default with a small warning (and is picked
-//!   up again when it reappears).
-//! - While the dropdown is open a short-lived `Recorder` on the selected device feeds a level meter through its
-//!   level events (opened on a worker thread too, dropped when the menu closes). It never writes a file, and switching is locked while a
-//!   recording runs.
+//! Devices are listed on a worker thread: cpal enumeration can take 100+ ms on Windows.
 
 use super::widgets::*;
 use super::{RecordState, guard, meter_sink};
@@ -20,11 +10,9 @@ use crate::ui::onboarding;
 use crate::ui::theme::{motion, radius, ty};
 use rune::{Align, Color, El, ScrollSpec, Side, col, el, row, text};
 
-/// A running level test.
 pub struct Live {
     /// `None` only in headless scene fixtures.
     pub rec: Option<Recorder>,
-    /// The capture number its level events carry.
     pub seq: u64,
     pub level: f32,
     pub peak: f32,
@@ -34,7 +22,6 @@ pub struct Live {
 pub enum Test {
     #[default]
     Off,
-    /// Capture `seq` is being opened on a worker thread (its result arrives as an event).
     Starting(u64),
     Running(Live),
     Failed(String),
@@ -45,7 +32,6 @@ pub struct MicState {
     /// Input device names; the first is the system default.
     pub devices: Vec<String>,
     pub loaded: bool,
-    /// The device list is being read on a worker thread (it arrives as an event).
     listing: bool,
     pub open: bool,
     pub warning: Option<String>,
@@ -61,7 +47,6 @@ fn drop_later(rec: Recorder) {
 }
 
 impl RecordState {
-    /// The chip shows on the preset picker and the recording session, not on the own-text editor.
     pub fn mic_visible(&self) -> bool {
         matches!(self.phase, super::Phase::Pick | super::Phase::Session | super::Phase::Summary)
     }
@@ -131,7 +116,6 @@ impl RecordState {
         }
     }
 
-    /// Picks a device (`None` = system default), remembers it and re-points the level test.
     pub fn mic_select(&mut self, name: Option<String>) {
         if self.recording() {
             return;
@@ -167,7 +151,6 @@ impl RecordState {
     }
 }
 
-/// The level test's microphone opened (or failed to): event from the opening thread.
 fn on_test_opened(s: &mut AppState, seq: u64, opened: Result<Recorder, String>) {
     let r = &mut s.record;
     let current = matches!(r.mic.test, Test::Starting(n) if n == seq);
@@ -187,7 +170,6 @@ fn on_test_opened(s: &mut AppState, seq: u64, opened: Result<Recorder, String>) 
     };
 }
 
-/// A level event of the running test (from the audio thread, newest only).
 fn on_test_level(s: &mut AppState, seq: u64, ev: CaptureEvent) -> bool {
     let Test::Running(live) = &mut s.record.mic.test else { return false };
     if live.seq != seq {
@@ -210,7 +192,7 @@ fn on_test_level(s: &mut AppState, seq: u64, ev: CaptureEvent) -> bool {
 
 impl RecordState {
 
-    /// Reads the saved choice once. Headless scenes mark it as read so they never touch the settings file.
+    /// Reads the saved choice once; headless scenes mark it read so they never touch the settings file.
     fn mic_read_settings(&mut self) {
         if self.mic.settings_read {
             return;
@@ -222,8 +204,7 @@ impl RecordState {
     }
 }
 
-/// After every event: the saved choice once, the first device listing, and closing the dropdown (and its test)
-/// whenever it should not be there. True when that changed what shows.
+/// True when it changed what shows.
 pub fn settle(s: &mut AppState) -> bool {
     let on_screen = s.screen == Screen::Record;
     let r = &mut s.record;
@@ -243,7 +224,6 @@ fn current_label(r: &RecordState) -> String {
     r.input_device.clone().unwrap_or_else(|| "System default".to_string())
 }
 
-/// The compact glass chip (plus the fallback warning when there is one).
 pub fn chip(r: &RecordState, p: Pal) -> El {
     let busy = r.recording();
     let open = r.mic.open;
@@ -276,7 +256,6 @@ pub fn chip(r: &RecordState, p: Pal) -> El {
         .child(icon_el(if warn { &icons::ALERT } else { &icons::MIC }, 14.0, if warn { p.warn } else { p.accent }))
         .child(text(name).font(ty::LABEL).color(p.text).max_w(190.0).truncate().a11y_hidden())
         .child(icon_el(&icons::CHEVRON_DOWN, 12.0, p.text_dim));
-    // The warning sits under the chip, right-aligned, so it never runs into the heading next to it.
     let mut out = col().items_end().gap(6.0).child(pill);
     if let Some(w) = &r.mic.warning {
         out = out.child(text(w.clone()).font(ty::CAPTION).color(p.warn).max_w(260.0).max_lines(2));
@@ -329,7 +308,7 @@ fn test_block(r: &RecordState, p: Pal) -> El {
         .child(text(line).font(ty::CAPTION).color(tone).wrap().max_lines(3))
 }
 
-/// The dropdown (with its scrim), anchored under the chip. Attach it at the screen root after the chip.
+/// Attach it at the screen root after the chip.
 pub fn overlay(r: &RecordState, p: Pal) -> Option<El> {
     if !r.mic.open || !r.mic_visible() {
         return None;
