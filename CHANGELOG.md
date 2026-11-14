@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* **A book draft survives a restart:** an opened file with its chapters as you left them (split, joined, renamed,
+  ticked) comes back when you open the app again, until you read it or close it.
 * **Refresh from disk:** a round ↻ button on Speak's and Redub's Results and on the voices list (the Voices screen
   and the voice menu) reads the folder again, so what you copied in, renamed or deleted outside the app shows or
   leaves at once. Audio and video files you put in the outputs folder yourself are listed too, by file name: audio

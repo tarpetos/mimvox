@@ -36,7 +36,7 @@ enum Purpose {
     Book,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DraftChapter {
     pub title: String,
     pub text: String,
@@ -45,7 +45,7 @@ pub struct DraftChapter {
     pub include: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Draft {
     pub file: TextImport,
     pub chapters: Vec<DraftChapter>,
@@ -80,6 +80,9 @@ pub struct BookState {
     pub read_titles: bool,
     pub expressiveness: f32,
     settings_loaded: bool,
+    /// The draft is kept in `book-draft.json` until it is read or closed; the fingerprint of what is on disk.
+    draft_restored: bool,
+    draft_saved: Option<u64>,
     pub(crate) settings_dirty: bool,
     renaming: Option<(usize, TextEdit)>,
     m4b_making: bool,
@@ -109,6 +112,8 @@ impl Default for BookState {
             read_titles: true,
             expressiveness: EXPRESSIVENESS,
             settings_loaded: false,
+            draft_restored: false,
+            draft_saved: None,
             settings_dirty: false,
             renaming: None,
             m4b_making: false,
@@ -685,8 +690,63 @@ fn request_list(s: &mut AppState) {
     s.book.listed = true;
 }
 
+fn draft_path() -> std::path::PathBuf {
+    super::onboarding::data_dir().join("book-draft.json")
+}
+
+fn fingerprint(d: &Draft) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    d.file.path.hash(&mut h);
+    d.before_split.is_some().hash(&mut h);
+    for c in &d.chapters {
+        (&c.title, c.include, c.text.len()).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Restores the draft once, then writes it (off the UI thread) whenever it changes, and removes it once it is gone.
+fn keep_draft(s: &mut AppState) -> bool {
+    if !s.book.draft_restored {
+        s.book.draft_restored = true;
+        if s.book.draft.is_none() {
+            let restored = std::fs::read(draft_path()).ok().and_then(|b| serde_json::from_slice::<Draft>(&b).ok());
+            if let Some(d) = restored {
+                s.book.draft_saved = Some(fingerprint(&d));
+                s.book.draft = Some(d);
+                return true;
+            }
+        }
+    }
+    let now = s.book.draft.as_ref().map(fingerprint);
+    if now == s.book.draft_saved {
+        return false;
+    }
+    s.book.draft_saved = now;
+    let draft = s.book.draft.clone();
+    std::thread::spawn(move || {
+        let path = draft_path();
+        match draft {
+            Some(d) => {
+                let tmp = path.with_extension("json.tmp");
+                let ok = serde_json::to_vec(&d).ok().is_some_and(|b| std::fs::write(&tmp, b).is_ok());
+                if ok {
+                    let _ = std::fs::rename(&tmp, &path);
+                }
+            }
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    });
+    false
+}
+
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
+    if !s.shell.scripted() {
+        changed |= keep_draft(s);
+    }
     // A click anywhere else takes the focus from the title field: that ends the rename, as Enter does.
     if s.book.renaming.as_ref().is_some_and(|(_, edit)| !edit.focused) {
         commit_rename(s);
@@ -1231,4 +1291,42 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("book_interrupted", scene_interrupted),
         ("book_finished", scene_finished),
     ]
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+
+    fn sample() -> Draft {
+        let one = |t: &str, text: &str| DraftChapter { title: t.into(), text: text.into(), words: 2, est_s: 1.0, include: true };
+        let mut file = scene_file();
+        file.title = "Тіні забутих предків".into();
+        Draft { file, chapters: vec![one("Частина 1", "Іван був"), one("Частина 2", "дев'ятнадцятою дитиною")],
+                auto: Some(("length".into(), vec![one("1", "a")])), before_split: Some(vec![one("Тіні", "Іван був дев'ятнадцятою")]) }
+    }
+
+    #[test]
+    fn a_draft_survives_a_restart_whole() {
+        let d = sample();
+        let back: Draft = serde_json::from_slice(&serde_json::to_vec(&d).unwrap()).unwrap();
+        assert_eq!(fingerprint(&back), fingerprint(&d));
+        assert_eq!(back.file.title, "Тіні забутих предків");
+        assert_eq!(back.chapters[1].text, "дев'ятнадцятою дитиною");
+        assert!(back.before_split.is_some() && back.auto.is_some());
+    }
+
+    #[test]
+    fn every_edit_changes_the_fingerprint() {
+        let d = sample();
+        let mut renamed = d.clone();
+        renamed.chapters[0].title = "Пролог".into();
+        let mut unticked = d.clone();
+        unticked.chapters[1].include = false;
+        let mut joined = d.clone();
+        let second = joined.chapters.remove(1);
+        joined.chapters[0].text += &second.text;
+        for other in [renamed, unticked, joined] {
+            assert_ne!(fingerprint(&other), fingerprint(&d));
+        }
+    }
 }

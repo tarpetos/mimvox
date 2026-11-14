@@ -725,6 +725,9 @@ after closing the app.
 
    Parts of a file without chapters are named *Частина 1*, *Part 1* and so on in the book's language (just *1* when the
    word is not known), since titles are read aloud; parts of a long chapter keep its title, with (2), (3).
+   The draft is kept while you work on it: close the app and the same file opens again with your chapters, names
+   and ticks, ready to read. It is forgotten once you press **Read the book** (the book then lives in the list) or
+   close the file.
 3. Set the voice, language and Style as for Speak. **Expressiveness** has its own value in Book mode, **0.60** by
    default: a steadier narrator for long listening. In the **Output** panel pick the format ("Save as"), and tick
    **Also make one M4B audiobook with chapter marks** if you want a single file for an audiobook player. **Read each
