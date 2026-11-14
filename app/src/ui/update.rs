@@ -10,7 +10,7 @@
 //! continues after the restart, as on any close). Where the app cannot replace itself (a .deb, a loose binary) the
 //! banner and the dialog offer the release's download page instead.
 
-use super::components::{Button, Tone, badge, icon_button, icon_el, icons, progress_bar, status_dot};
+use super::components::{Button, Tone, badge, icon_button, icon_el, icons, progress_bar};
 use super::events;
 use super::shell::EngineStatus;
 use super::theme::{Palette, radius, ty};
@@ -372,16 +372,24 @@ fn notes_view(p: Palette, notes: &str) -> El {
 
 // ---- views -------------------------------------------------------------------------------------------------------
 
-/// The version in the header: opens the Updates dialog. A dot marks a newer version waiting.
+/// The version in the header, a glass pill like the header's others: opens the Updates dialog. A newer version waiting
+/// adds a sparkle (the update banner's icon) and turns the version accent.
 pub fn version_button(s: &AppState, p: Palette) -> El {
     let waiting = s.update.found.as_ref().is_some_and(|f| update::compare(&f.version) == Ordering::Greater);
-    let help = if waiting { "A new version is available: updates and what's new" } else { "Updates and what's new" };
-    row().key("version-button").role("button").label("Updates").h(24.0).px(8.0).gap(6.0).center_y().radius(12.0)
-        .fill(if s.update.dialog { p.glass_hover } else { Color::TRANSPARENT })
-        .hover(p.glass_hover).focusable(true).help(help)
+    let help = match &s.update.found {
+        Some(f) if waiting => format!("Mimvox {} is available: updates and what's new", f.version),
+        _ => "Updates and what's new".to_owned(),
+    };
+    let pill = row().key("version-button").role("button").label("Updates").h(28.0).px(11.0).gap(6.0).center().radius(14.0)
+        .fill(if s.update.dialog { p.glass_hover } else { p.glass }).gradient(p.glass_top, p.glass_bottom)
+        .border_gradient(1.0, p.rim_top, if waiting { p.accent.alpha(0.45) } else { p.rim_bottom })
+        .shadow(3.0, 10.0, p.shadow_soft);
+    super::components::glass_edge(p, pill)
+        .hover(p.glass_hover).focusable(true).cursor(rune::Cursor::Pointer).motion(super::theme::motion::UI).help(help)
         .on_press(|s: &mut AppState| open_dialog(s, None))
-        .child(text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(ty::CAPTION).color(p.text_faint).a11y_hidden())
-        .children(waiting.then(|| status_dot(p, Tone::Accent, false)))
+        .children(waiting.then(|| icon_el(&icons::SPARKLE, 12.0, p.accent)))
+        .child(text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(rune::TextStyle::new(11.5, 600.0).lh(15.0))
+            .color(if waiting { p.accent } else { p.text_dim }).a11y_hidden())
 }
 
 pub fn banner(s: &AppState, p: Palette) -> Option<El> {
@@ -658,6 +666,13 @@ pub fn scene_downloading(s: &mut AppState) {
     s.update.phase = Phase::Downloading { got: 96_468_992, total: Some(214_958_080) };
 }
 
+/// The header and the banner with a newer version waiting (the dialog closed).
+pub fn scene_waiting(s: &mut AppState) {
+    super::speak::scene_idle(s);
+    s.update.kind = Some(Kind::Auto);
+    s.update.found = Some(Found::preview("0.4.0", Some("\n* **Updates window:** every version with its notes.\n")));
+}
+
 pub fn scene_loading(s: &mut AppState) {
     demo(s);
     s.update.list = List::Loading;
@@ -669,6 +684,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("updates_older", scene_older),
         ("updates_downloading", scene_downloading),
         ("updates_loading", scene_loading),
+        ("updates_waiting", scene_waiting),
     ]
 }
 

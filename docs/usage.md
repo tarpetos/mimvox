@@ -173,8 +173,8 @@ packages or models, a second banner says **This version needs a setup update**: 
 the same data folder, which installs only what changed, and the engine restarts by itself when it is done. To turn the check off, set
 `"check_updates": false` in `settings.json` in your data folder.
 
-The version next to **Mimvox** in the header opens the **Updates** window (a dot next to it means a newer version is
-waiting). On the left are all versions from 0.2.0 on, the newest at the top, marked **New** or **Installed**. On the
+The version next to **Mimvox** in the header opens the **Updates** window (a sparkle in it means a newer version
+is waiting). On the left are all versions from 0.2.0 on, the newest at the top, marked **New** or **Installed**. On the
 right are the chosen version's notes and what you can do with it: **Update to …** for a newer one, **Install …** for
 an older one, or nothing for the one you have. An older version downloads, is checked and installs the same way. Your
 voices, results and settings stay, and the older version offers the newest one again when it starts. **Check for
