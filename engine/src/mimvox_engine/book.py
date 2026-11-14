@@ -1,27 +1,5 @@
-"""Audiobooks: ``book.start`` / ``book.resume`` / ``book.pause`` / ``book.cancel`` / ``book.list`` / ``book.get`` /
-``book.play`` / ``book.delete``. One job reads a whole book, chapter by chapter, segment by segment, in the voice and
-style of Speak, and writes one file per chapter (plus an optional M4B with chapter marks).
-
-The speech pipeline is ``tts.generate``'s: the same backend, native accent (the zero-shot converter or RVC with the
-native clip), RVC and the one generation slot (``tts.start_exclusive``, so Speak, Redub and training answer ``busy``
-while a book is read). The text is cut and paced for listening by ``narration.py`` (whole sentences, pauses by
-punctuation, trimmed and levelled segments, an outlier made again once; every chapter normalized to -18 LUFS). And the
-audio goes to disk, not to the app:
-
-- Nothing is held in memory. Every finished segment (resampled to 44.1 kHz, its pause appended) is appended as 16-bit
-  PCM to ``<data>/books/<id>/work/<NN>.pcm``; when a chapter's last segment is in, that file becomes the chapter's
-  output file (``<data>/outputs/books/<book>/<NN> - <title>.<ext>``; RF64 when a WAV would pass 4 GB) and goes away.
-- After every segment ``state.json`` records how far the chapter got: the next segment and the PCM length that goes
-  with it (written after the PCM, atomically). A resume truncates the PCM to that length, so a segment written but
-  not recorded (a crash between the two writes) is dropped and spoken again: no gap and no repeat. The segments of a
-  chapter are fixed in ``work/<NN>.segments.json`` when it starts, so a resume continues the same cut.
-- Pause and cancel stop the job at once (the segment being made is spoken again on resume) and free the slot. An
-  engine that stops mid-book (the app closed) leaves ``status: "running"`` on disk; the next engine reports such a book
-  as ``paused`` (``interrupted``) and ``book.resume`` continues it.
-
-Everything runs on the engine loop; file work goes to the IO pool (``aio.run_io``). A producer task synthesizes (one
-segment ahead, also across chapter ends) and a consumer converts, appends and finishes chapters, as in ``tts.py``.
-"""
+"""Audiobook jobs. Each segment is appended to the chapter PCM, then recorded in state.json; a resume truncates the PCM
+to the recorded length, so a crash between the two writes neither loses nor repeats audio."""
 from __future__ import annotations
 
 import asyncio
@@ -45,24 +23,21 @@ from .registry import Context, EngineError, method
 
 log = logging.getLogger("mimvox.book")
 
-SR = au.OUT_SR                # chapter audio: 44.1 kHz mono 16-bit
+SR = au.OUT_SR
 BYTES_PER_S = SR * 2
-# Segmentation, pauses, trimming, levels and the outlier checks: narration.py (one table of constants there).
-QUALITY_CHECKS = True         # re-make outlier segments once and even out level steps (narration.Judge)
-ENCODE_QUALITY = "standard"   # chapter files: MP3 192 kbps, Opus 96 kbps, AAC 192 kbps, Vorbis q5 (speech needs no more)
-M4B_BITRATE = "96k"           # the whole-book M4B (AAC, mono)
-MAX_CHARS = 20_000_000        # a book's text (about 3.5 million words)
+QUALITY_CHECKS = True
+ENCODE_QUALITY = "standard"
+M4B_BITRATE = "96k"
+MAX_CHARS = 20_000_000
 WAV_LIMIT = 0xFFFFFFFF - 1024  # a RIFF WAV cannot pass 4 GB: RF64 above that
 HOLDER = "a book is being read; pause it (Speak, Book) to use speech, Redub or training"
 
-_RUNNING: dict[str, str] = {}   # book id -> job (loop thread only)
-_STOP: dict[str, str] = {}      # book id -> "pause" | "cancel" while its job is being stopped
-# A running book's state dict is changed on IO threads (the producer cuts the next chapter while the consumer appends
-# to this one) and read on the loop: every change and save holds this lock.
+_RUNNING: dict[str, str] = {}   # loop thread only
+_STOP: dict[str, str] = {}
+# Changed on IO threads (the producer cuts the next chapter while the consumer appends to this one) and read on the
+# loop: every change and save holds this lock.
 _LOCK = threading.RLock()
 
-
-# ------------------------------------------------------------------------------------------------ files
 
 def books_dir(data: config.DataDir) -> str:
     return os.path.join(data.root, "books")
@@ -103,7 +78,6 @@ def _write_json(path: str, obj: Any) -> None:
 
 
 def _load(data: config.DataDir, book_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """``(book.json, state.json)`` of a book; ``not_found`` when it does not exist."""
     d = book_dir(data, book_id)
     book = _read_json(os.path.join(d, "book.json"))
     if book is None:
@@ -137,8 +111,7 @@ _BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
 def safe_name(name: str, limit: int = 80) -> str:
-    """A file or folder name from a title: no characters Windows forbids, no trailing dots or spaces, not a device
-    name, at most ``limit`` characters."""
+    """No characters Windows forbids, no trailing dots or spaces, not a reserved device name."""
     s = re.sub(r"\s+", " ", _BAD_NAME.sub(" ", name or "")).strip(" .")
     s = s[:limit].rstrip(" .")
     if re.fullmatch(r"(?i)(con|prn|aux|nul|com\d|lpt\d)(\..*)?", s):
@@ -159,7 +132,6 @@ def _segs_path(data: config.DataDir, book_id: str, k: int) -> str:
 
 
 def spoken_text(chapter: dict[str, Any], read_titles: bool) -> str:
-    """What is read for a chapter: its title as a sentence of its own (with ``read_titles``), then its text."""
     title = re.sub(r"\s+", " ", str(chapter.get("title") or "")).strip()
     text = str(chapter.get("text") or "").strip()
     if not read_titles or not title:
@@ -173,11 +145,8 @@ def _flat_chars(text: str) -> int:
     return len(re.sub(r"\s+", " ", text).strip())
 
 
-# ------------------------------------------------------------------------------------------- summaries
-
 def _status(book_id: str, state: dict[str, Any]) -> tuple[str, bool]:
-    """``(status, interrupted)``: a book recorded as running whose job is not running (the engine stopped mid-book) is
-    ``paused`` and ``interrupted``."""
+    """A book recorded as running whose job is not (the engine stopped mid-book) is paused and interrupted."""
     st = str(state.get("status") or "new")
     if st == "running" and book_id not in _RUNNING:
         return "paused", True
@@ -232,11 +201,8 @@ def _chapter_rows(book: dict[str, Any], state: dict[str, Any]) -> list[dict[str,
     return rows
 
 
-# ------------------------------------------------------------------------------------------- voice setup
-
 @dataclass
 class _Voice:
-    """Everything a book job speaks with, checked when it starts (as ``tts.generate`` checks it)."""
     backend: backends.TtsBackend
     lang: str
     ref: str
@@ -255,7 +221,6 @@ class _Voice:
 
 
 def _settings(params: dict[str, Any]) -> dict[str, Any]:
-    """The voice settings of a ``book.start`` request, checked and normalized (stored in ``book.json``)."""
     voice_id = params.get("voice_id")
     if not isinstance(voice_id, str) or not voice_id:
         raise EngineError("bad_request", "'voice_id' is required")
@@ -276,12 +241,10 @@ def _settings(params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _voice(ctx: Context, data: config.DataDir, st: dict[str, Any]) -> _Voice:
-    """The speech setup of a book's settings: the checks and choices of ``tts.generate`` (models ready, the voice and
-    its reference, RVC, the native accent and its converter)."""
     lang, backend = tts.speech_language(st)
     tts.check_backend_ready(backend)
     voice_id = st["voice_id"]
-    meta = await aio.run_io(voices.read_meta, data, voice_id)  # not_found
+    meta = await aio.run_io(voices.read_meta, data, voice_id)
     out_fmt = await aio.run_io(media.output_format, st)
     voice_match = float(st["voice_match"])
     rvc_rate = rvc.index_rate_for(voice_match, lang, meta.get("language"))
@@ -303,8 +266,6 @@ async def _voice(ctx: Context, data: config.DataDir, st: dict[str, Any]) -> _Voi
     return _Voice(backend, lang, ref, pth, idx, rvc_rate, worker, choice, zs, voice_match,
                   float(st["expressiveness"]), st["quality"], tts.duration_factor_for(st["speed"]), out_fmt, ref_fields)
 
-
-# ------------------------------------------------------------------------------------------- the methods
 
 def _clean_chapters(raw: Any) -> list[dict[str, Any]]:
     from .dataset.text import count_words  # noqa: PLC0415
@@ -330,7 +291,6 @@ def _clean_chapters(raw: Any) -> list[dict[str, Any]]:
 
 def _create(data: config.DataDir, title: str, source: str | None, fmt: str | None, chapters: list[dict[str, Any]],
             settings: dict[str, Any]) -> dict[str, Any]:
-    """IO thread: a new book project (``book.json``, ``state.json``) and its output folder name."""
     stamp = time.strftime("%Y%m%d-%H%M%S")
     base = f"{voices.slugify(title)[:32].strip('-') or 'book'}-{stamp}"
     bid, n = base, 1
@@ -357,7 +317,6 @@ def _create(data: config.DataDir, title: str, source: str | None, fmt: str | Non
 
 
 def _folder_taken(data: config.DataDir, folder: str) -> list[bool]:
-    """Whether another book project already writes into ``folder`` (not created yet on disk)."""
     out = []
     try:
         names = os.listdir(books_dir(data))
@@ -371,12 +330,11 @@ def _folder_taken(data: config.DataDir, folder: str) -> list[bool]:
 
 @method("book.start")
 async def book_start(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Create a book project from chapters and start reading it."""
     data = config.data_dir(ctx)
     settings = _settings(params)
     chapters = _clean_chapters(params.get("chapters"))
     title = re.sub(r"\s+", " ", str(params.get("title") or "")).strip() or "Book"
-    v = await _voice(ctx, data, settings)  # the checks, before anything is written
+    v = await _voice(ctx, data, settings)
     if tts.is_busy():
         raise EngineError("busy", tts.busy_message("another generation is running"))
     settings["output_format"] = v.out_fmt
@@ -394,7 +352,6 @@ async def book_start(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("book.resume")
 async def book_resume(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Continue a paused, interrupted, failed or cancelled book from its next unfinished segment."""
     data = config.data_dir(ctx)
     bid = str(params.get("id") or "")
     book, state = await aio.run_io(_load, data, bid)
@@ -409,7 +366,7 @@ async def book_resume(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _start(ctx: Context, data: config.DataDir, bid: str, v: _Voice) -> str:
-    """Take the generation slot for the book (loop thread; no await since the busy checks)."""
+    """Loop thread, with no await since the busy checks."""
     if bid in _RUNNING:
         raise EngineError("busy", "this book is being read already")
     job = tts.start_exclusive(ctx, lambda j: _run(ctx, j, data, bid, v), "another generation is running", HOLDER)
@@ -420,7 +377,6 @@ def _start(ctx: Context, data: config.DataDir, bid: str, v: _Voice) -> str:
 
 @method("book.pause")
 async def book_pause(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Stop reading now; ``book.paused`` follows. The segment being made is spoken again on resume."""
     bid = str(params.get("id") or "")
     job = _RUNNING.get(bid)
     if job is None:
@@ -432,8 +388,6 @@ async def book_pause(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("book.cancel")
 async def book_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Stop reading and drop the unfinished chapter's progress (finished chapter files stay). A running job ends with
-    ``book.error {"code":"cancelled"}``. The book can still be resumed: from the start of that chapter."""
     data = config.data_dir(ctx)
     bid = str(params.get("id") or "")
     job = _RUNNING.get(bid)
@@ -448,7 +402,6 @@ async def book_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _drop_partial(data: config.DataDir, bid: str, state: dict[str, Any], status: str) -> None:
-    """IO thread: forget the unfinished chapter (its PCM and cut) and record ``status``."""
     for cs in state.get("chapters") or []:
         if cs.get("status") != "done":
             cs.clear()
@@ -461,7 +414,6 @@ def _drop_partial(data: config.DataDir, bid: str, state: dict[str, Any], status:
 
 @method("book.list")
 async def book_list(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Every book project, the most recently changed first (without the chapter texts)."""
     data = config.data_dir(ctx)
 
     def scan() -> list[dict[str, Any]]:
@@ -484,7 +436,6 @@ async def book_list(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("book.get")
 async def book_get(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """One book: its summary, settings and chapters with their progress (``text: true`` adds the chapter texts)."""
     data = config.data_dir(ctx)
     bid = str(params.get("id") or "")
     book, state = await aio.run_io(_load, data, bid)
@@ -497,7 +448,6 @@ async def book_get(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("book.delete")
 async def book_delete(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Forget a book project (its progress and texts). The chapter files in ``outputs/books`` stay."""
     data = config.data_dir(ctx)
     bid = str(params.get("id") or "")
     d = book_dir(data, bid)
@@ -511,8 +461,7 @@ async def book_delete(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("book.play")
 async def book_play(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """A WAV to play a finished chapter with (the app plays WAV only): the chapter file itself when it is a WAV, else a
-    decoded copy in ``<data>/tmp/play`` (gone at the next engine start)."""
+    """The app plays WAV only: another format is decoded to ``<data>/tmp/play``."""
     data = config.data_dir(ctx)
     bid = str(params.get("id") or "")
     k = params.get("index")
@@ -534,10 +483,8 @@ def _playable(data: config.DataDir, bid: str, k: int, path: str) -> str:
     dst = os.path.join(data.tmp, media.PLAY_DIR, f"book-{bid}-{k + 1:03d}.wav")
     if os.path.isfile(dst) and os.path.getmtime(dst) >= os.path.getmtime(path):
         return dst
-    return media.play_wav(path, dst, SR, channels=1)  # streams: a long chapter never sits in memory
+    return media.play_wav(path, dst, SR, channels=1)
 
-
-# ------------------------------------------------------------------------------------------- the job
 
 def _pcm(x: np.ndarray) -> bytes:
     return (np.clip(x, -1.0, 1.0) * 32767.0).round().astype("<i2").tobytes()
@@ -545,8 +492,6 @@ def _pcm(x: np.ndarray) -> bytes:
 
 def _prepare_chapter(data: config.DataDir, bid: str, k: int, book: dict[str, Any], state: dict[str, Any],
                      count: Any) -> list[tuple[str, int, str]]:
-    """IO thread: the chapter's segments (fixed in ``work/<NN>.segments.json`` the first time) and its PCM cut back to
-    the length ``state.json`` recorded (a segment written but never recorded is dropped and spoken again)."""
     with _LOCK:
         return _prepare_chapter_locked(data, bid, k, book, state, count)
 
@@ -576,10 +521,10 @@ def _prepare_chapter_locked(data: config.DataDir, bid: str, k: int, book: dict[s
     pcm = _pcm_path(data, bid, k)
     keep = int(cs.get("bytes") or 0)
     if os.path.exists(pcm) or keep:
-        with open(pcm, "ab") as fh:  # creates it when missing (then it is shorter than recorded: the cut is re-made)
+        with open(pcm, "ab") as fh:  # creates it when missing
             pass
         size = os.path.getsize(pcm)
-        if size < keep:  # lost audio that was recorded (should not happen): start the chapter again
+        if size < keep:
             log.warning("book %s chapter %d: %d bytes on disk, %d recorded; starting it again", bid, k + 1, size, keep)
             cs.update({"segment": 0, "bytes": 0, "chars_done": 0, "audio_s": 0.0, "stats": []})
             keep = 0
@@ -593,7 +538,6 @@ def _prepare_chapter_locked(data: config.DataDir, bid: str, k: int, book: dict[s
 
 
 def _segment_audio(src: str, chars: int) -> tuple[np.ndarray, dict[str, Any]]:
-    """IO thread: a converted segment at 44.1 kHz, trimmed of the model's silence and faded, with its measures."""
     x, sr = au.read_mono(src)
     x = narration.trim(au.resample(x, sr, SR), SR)
     return x, narration.measure(x, SR, chars)
@@ -601,8 +545,6 @@ def _segment_audio(src: str, chars: int) -> tuple[np.ndarray, dict[str, Any]]:
 
 def _commit(data: config.DataDir, bid: str, state: dict[str, Any], k: int, i: int, x: np.ndarray, pause_ms: int,
             chars: int, dt: float, stat: dict[str, Any]) -> float:
-    """IO thread: append segment ``i`` of chapter ``k`` (the chapter's lead-in before segment 0, the pause after it)
-    to the chapter PCM, then record it (and its measures, ``stat``) in ``state.json``. Returns the seconds added."""
     parts = [au.silence(narration.LEAD_MS)] if i == 0 else []
     parts += [x, au.silence(narration.gap(pause_ms))]
     data_bytes = _pcm(np.concatenate(parts))
@@ -615,11 +557,11 @@ def _append(data: config.DataDir, bid: str, state: dict[str, Any], k: int, i: in
             chars: int, dt: float, stat: dict[str, Any]) -> float:
     cs = state["chapters"][k]
     stats = cs.setdefault("stats", [])
-    del stats[i:]  # (a segment made again after a resume replaces its old record)
+    del stats[i:]
     lead = narration.LEAD_MS / 1000.0 if i == 0 else 0.0
     stats.append({**stat, "at": round(int(cs.get("bytes") or 0) / BYTES_PER_S + lead, 3)})
     with open(pcm, "ab") as fh:
-        if fh.tell() != int(cs.get("bytes") or 0):  # (never: the chapter was cut back to the record when it started)
+        if fh.tell() != int(cs.get("bytes") or 0):
             fh.truncate(int(cs.get("bytes") or 0))
             fh.seek(int(cs.get("bytes") or 0))
         fh.write(data_bytes)
@@ -639,8 +581,6 @@ def _append(data: config.DataDir, bid: str, state: dict[str, Any], k: int, i: in
 
 def _finish_chapter(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[str, Any], k: int,
                     fmt: str) -> str:
-    """IO thread: the chapter PCM becomes its output file (WAV streamed in blocks, RF64 past 4 GB; another format is
-    encoded from a WAV in the work folder, kept as WAV if the encoder fails). Records it and drops the work files."""
     import soundfile as sf  # noqa: PLC0415
 
     pcm = _pcm_path(data, bid, k)
@@ -652,7 +592,7 @@ def _finish_chapter(data: config.DataDir, bid: str, book: dict[str, Any], state:
     size = os.path.getsize(pcm)
     block_bytes = 1 << 22
 
-    def blocks():  # the chapter PCM as float blocks, never all of it at once
+    def blocks():
         with open(pcm, "rb") as src:
             while True:
                 b = src.read(block_bytes)
@@ -660,7 +600,7 @@ def _finish_chapter(data: config.DataDir, bid: str, book: dict[str, Any], state:
                     return
                 yield np.frombuffer(b[: len(b) // 2 * 2], dtype="<i2").astype(np.float32) / 32767.0
 
-    meter = narration.ChapterMeter(SR)  # pass 1: loudness and peak; pass 2: the file at TARGET_LUFS
+    meter = narration.ChapterMeter(SR)
     for x in blocks():
         meter.feed(x)
     gain = meter.gain()
@@ -701,7 +641,6 @@ def _ffmeta(s: str) -> str:
 
 
 def _make_m4b(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[str, Any]) -> str | None:
-    """IO thread: the whole book as one M4B (AAC) with a chapter mark per chapter, when ffmpeg can make it."""
     exe = media.ffmpeg_path()
     if not exe:
         log.info("book %s: no ffmpeg, no M4B", bid)
@@ -794,7 +733,7 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
         last_at = [time.time()]
         session = {"audio_s": 0.0, "elapsed_s": 0.0, "retries": 0}
         judge = narration.Judge()
-        for cs in state["chapters"]:  # a resumed chapter: the medians of what is already read
+        for cs in state["chapters"]:
             for m in cs.get("stats") or []:
                 if m.get("spc") is not None and m.get("kind") != "title":
                     judge.accept(m)
@@ -836,10 +775,10 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
                 src = await convert(k, i, path)
                 files.append(src)
                 x, m = await aio.run_io(_segment_audio, src, len(seg))
-                # (a title is read differently on purpose: it neither judges nor is judged)
+                # a title is read differently on purpose: it neither judges nor is judged
                 score, why = judge.deviation(m) if QUALITY_CHECKS and kind != "title" else (0.0, [])
                 retried = None
-                if score > 1.0:  # an outlier: made again once, the better take kept
+                if score > 1.0:
                     session["retries"] += 1
                     p2 = await synth(k, i, seg, "tts2")
                     s2 = await convert(k, i, p2, "2")

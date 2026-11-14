@@ -1,23 +1,4 @@
-"""French: grapheme-cluster heuristic (no G2P model or lexicon is shipped; good enough to measure phoneme coverage).
-
-Inventory (34, IPA): 14 vowels (i e ɛ a ɔ o u y ø œ ə and the nasal ɛ̃ ɑ̃ ɔ̃; ɑ is merged with a and œ̃ with ɛ̃ as in
-most of today's French), the semivowels j w ɥ and 17 consonants (ŋ of loanwords is left out).
-
-Rules, in order of priority:
-* Elision: l' d' j' qu' n' s' c' m' t' are read as their consonant before the next word.
-* Common short words come from a small table (le, les, est, et, un, des, ...).
-* Silent endings: final e/es (in words of three letters or more), final s x z t d p g (unless the word ended in e),
-  final -er/-ez/-et are e/e/ɛ (except mer, fer, hier, cher, fier, hiver: ɛʁ), -ent is ɑ̃ (verb endings cannot be told
-  apart without a lexicon).
-* Vowel clusters: eau/au o, ail(l)/eil(l)/euil(l)/ouil(l) aj/ɛj/œj/uj, ay/oy/uy + vowel ɛj/waj/ɥij, ai/ei ɛ, oi wa, ou u (w before a vowel), eu/œu ø (œ before a pronounced r l f v n),
-  an/am/en/em ɑ̃, on/om ɔ̃, in/im/ain/ein/un/um/yn/ym ɛ̃, ien jɛ̃, oin wɛ̃ (nasal only when not followed by a vowel
-  or by another n/m), ill j after a vowel and ij after a consonant (ville, mille, tranquille: il), final -il after a
-  vowel j, y between vowels j, ui ɥi, u y (ɥ before a vowel), i j before a vowel, é e, è ê ë ɛ, e ɛ before two
-  consonants or a final pronounced consonant and ə otherwise, o o at the end of a word and before s+e, ɔ otherwise.
-* Consonants: gn ɲ, ch ʃ, ph f, th t, qu k, gu (before e i) g, g ʒ before e i y, c s before e i y, ç s, s z between
-  vowels, ss s, x ks (gz in ex- before a vowel), h silent, r ʁ, j ʒ, -tion sjɔ̃, doubled consonants once.
-Liaisons and the many exceptions of French spelling are ignored.
-"""
+"""French: grapheme-cluster heuristic (no G2P model or lexicon is shipped; good enough to measure phoneme coverage)."""
 from __future__ import annotations
 
 from ._common import words
@@ -58,7 +39,6 @@ _SIMPLE_C = {"b": "b", "d": "d", "f": "f", "k": "k", "l": "l", "m": "m", "n": "n
 
 
 def _strip_silent(w: str) -> tuple[str, list[str]]:
-    """Drop silent final letters; returns (core spelling, phonemes to append at the end)."""
     tail: list[str] = []
     ended_e = False
     if len(w) > 3 and w.endswith("es"):
@@ -66,7 +46,7 @@ def _strip_silent(w: str) -> tuple[str, list[str]]:
     elif len(w) > 2 and w.endswith("e") and w[-2] not in _VOWEL_L - {"u"}:
         w, ended_e = w[:-1], True
     if ended_e:
-        if w.endswith(("g", "c")):  # soft g / c before the silent e: page, place
+        if w.endswith(("g", "c")):
             w = w[:-1] + ("j" if w[-1] == "g" else "ç")
         return w, tail
     if w.endswith("ent") and len(w) > 4:
@@ -81,7 +61,6 @@ def _strip_silent(w: str) -> tuple[str, list[str]]:
 
 
 def _nasal_ok(w: str, j: int) -> bool:
-    """True when the vowel+n/m ending before index ``j`` is nasal: ``j`` is the end or a consonant other than n/m/h."""
     return j >= len(w) or (w[j] not in _VOWEL_L and w[j] not in "nmh")
 
 
@@ -101,7 +80,6 @@ def word_phonemes(word: str) -> list[str]:
         def at(k: int) -> str:
             return w[i + k] if i + k < n else "#"
 
-        # --- vowels
         if r.startswith("eau"):
             out.append("o"); i += 3; continue  # noqa: E702
         if r.startswith(("ien",)) and _nasal_ok(w, i + 3):
@@ -152,7 +130,7 @@ def word_phonemes(word: str) -> list[str]:
             if nxt == "i" or (nxt in _VOWEL_L and prev not in "qg"):
                 out.append("ɥ")
             elif prev in "qg" and c == "u":
-                pass  # qu, gu: the u is silent (handled here when the consonant did not consume it)
+                pass  # qu, gu: the u is silent
             else:
                 out.append("y")
             i += 1
@@ -190,7 +168,6 @@ def word_phonemes(word: str) -> list[str]:
                 out.append("ə")
             i += 1
             continue
-        # --- consonants
         if r.startswith("gn"):
             out.append("ɲ"); i += 2; continue  # noqa: E702
         if r.startswith("ch"):
@@ -232,12 +209,12 @@ def word_phonemes(word: str) -> list[str]:
 def phonemes_of(text: str) -> list[str]:
     out: list[str] = []
     for w in words(text, DIGITS):
-        if "'" in w:  # elision: l'eau, qu'il, aujourd'hui
+        if "'" in w:
             head, _, rest = w.partition("'")
-            if head.endswith("qu"):  # qu', jusqu', lorsqu', puisqu'
+            if head.endswith("qu"):
                 out.extend((word_phonemes(head[:-2]) if len(head) > 2 else []) + ["k"])
                 w = rest
-            elif len(head) <= 2:  # l' d' j' n' s' c' m' t'
+            elif len(head) <= 2:
                 out.extend(word_phonemes(head + "e")[:-1])
                 w = rest
             else:

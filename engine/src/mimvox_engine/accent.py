@@ -1,30 +1,4 @@
-"""Native accent: English spoken from a native American reference voice, then turned into the user's timbre.
-
-OmniVoice copies the accent of its reference clip, so a voice recorded in Ukrainian speaks English with a Ukrainian
-accent, and voice conversion only changes the timbre of what it is given. With ``accent: "native-us"``
-(``tts.generate``, Redub ``dub`` / ``respeak`` into English) the pipeline speaks from a shipped native reference instead
-of the user's clip and lets a voice converter put the user's timbre on it:
-
-1. OmniVoice synthesizes with ``assets/native/en-us-{male,female}.wav`` (CMU ARCTIC speakers ``bdl`` and ``slt``,
-   US English; the transcript ships next to each clip, so no Whisper pass and no sidecar are needed). The voice is
-   picked from the user's median F0: the native speaker whose median is closer on a log scale (smallest pitch shift),
-   unless ``native_voice`` overrides it.
-2. The converter (``Choice.converter``):
-
-   - ``rvc``, a trained voice with ``voice_match`` above 0: the voice's RVC model, transposed by
-     ``round(12 * log2(user F0 / native F0))`` semitones so the model gets a pitch in the user's own range, at a low
-     index rate (``NATIVE_INDEX_RATE``): the retrieval index holds the user's own phoneme features, and a high rate
-     pulls the native vowels back towards them (the accent this is meant to remove); the timbre comes mostly from the
-     model itself. The closest match to the user.
-   - ``zero-shot``, any other voice (untrained, or ``voice_match`` 0): Seed-VC (``zsvc.py``) converts to the timbre
-     of the voice's ``reference.wav`` with no training. It generates the pitch of the reference itself, so no
-     transpose (measured: a 116 Hz native source came out at 121-128 Hz with a 126 Hz reference, 106-113 Hz with a
-     115 Hz one).
-
-Only without a converter (an untrained voice and Seed-VC not installed) would the native reference replace the user's
-timbre: the request then falls back to the voice's own reference and says so (``accent: "own"``,
-``accent_fallback: "no_converter"``). See contract/engine-protocol.md, "Native accent".
-"""
+"""English from a shipped native reference, converted to the user's timbre: OmniVoice copies its reference's accent."""
 from __future__ import annotations
 
 import json
@@ -47,16 +21,15 @@ ACCENTS = ("own", "native-us")
 NATIVE_VOICES = ("auto", "male", "female")
 NATIVE_LANG = "en"
 
-# RVC index rate for native-accent speech (capped by voice_match), below the 0.3 that rvc.FOREIGN_INDEX_RATE allows
-# for foreign speech: here the point is to keep the native vowels, which the index (the user's own phoneme features)
-# pulls back towards the user's accent. Not yet tuned by listening tests; MIMVOX_RVC_NATIVE_INDEX overrides it.
+# Low so the retrieval index (the user's own phoneme features) does not pull the native vowels back towards the
+# user's accent. Not yet tuned by listening tests.
 NATIVE_INDEX_RATE = float(os.environ.get("MIMVOX_RVC_NATIVE_INDEX", "0.2"))
-MAX_TRANSPOSE = 12  # semitones either way
+MAX_TRANSPOSE = 12
 
 F0_MIN_HZ, F0_MAX_HZ = 60.0, 500.0
 F0_SR = 16000
-F0_MAX_S = 30.0          # the median is taken over at most this much of the clip
-F0_MIN_VOICED = 25       # frames (20 ms each): less voiced speech than 0.5 s gives no F0
+F0_MAX_S = 30.0
+F0_MIN_VOICED = 25
 
 FALLBACK_TEXT = {
     "no_converter": "The native accent of a voice that is not trained needs the zero-shot voice converter, which is "
@@ -67,10 +40,7 @@ FALLBACK_TEXT = {
 }
 
 
-# ------------------------------------------------------------------------------------------------ parameters
-
 def parse(params: dict[str, Any], key: str = "accent") -> str:
-    """The requested accent (default ``own``); anything else than ``own`` / ``native-us`` is ``bad_request``."""
     v = params.get(key)
     if v in (None, ""):
         return "own"
@@ -80,7 +50,6 @@ def parse(params: dict[str, Any], key: str = "accent") -> str:
 
 
 def parse_voice(params: dict[str, Any], key: str = "native_voice") -> str:
-    """Which native speaker to use (default ``auto``: picked from the voice's pitch)."""
     v = params.get(key)
     if v in (None, ""):
         return "auto"
@@ -89,15 +58,13 @@ def parse_voice(params: dict[str, Any], key: str = "native_voice") -> str:
     return str(v)
 
 
-# ------------------------------------------------------------------------------------------------ native clips
-
 @dataclass(frozen=True)
 class NativeRef:
-    gender: str          # "male" | "female"
-    path: str            # the WAV OmniVoice clones (mono 24 kHz, under 12 s, so it is used whole)
-    text: str            # its transcript
-    f0: float            # its median F0 (Hz), measured with median_f0
-    speaker: str         # corpus speaker id ("bdl", "slt")
+    gender: str
+    path: str
+    text: str
+    f0: float
+    speaker: str
 
 
 _NATIVE: dict[str, NativeRef] | None = None
@@ -105,7 +72,6 @@ _NATIVE_LOCK = threading.Lock()
 
 
 def native_refs() -> dict[str, NativeRef]:
-    """The shipped native references by gender (``assets/native/voices.json``); empty when they are missing."""
     global _NATIVE
     with _NATIVE_LOCK:
         if _NATIVE is None:
@@ -133,11 +99,8 @@ def available() -> bool:
     return bool(native_refs())
 
 
-# ------------------------------------------------------------------------------------------------ pitch
-
 def median_f0(x: np.ndarray, sr: int) -> float | None:
-    """Median F0 (Hz) of the voiced frames of a mono clip (pYIN, 60-500 Hz, 20 ms hop); None without enough voicing.
-    CPU, a few seconds for 20 s of audio: call it on an IO thread."""
+    """None without enough voicing. Seconds of CPU: call it on an IO thread."""
     import librosa  # noqa: PLC0415
 
     x = np.asarray(x, dtype=np.float32)[: int(F0_MAX_S * sr)]
@@ -156,7 +119,7 @@ _F0_LOCK = threading.Lock()
 
 
 def clip_f0(path: str) -> float | None:
-    """``median_f0`` of a WAV, cached per file state (path, mtime, size) for the session. IO thread."""
+    """Cached per file state for the session. Blocking: IO thread."""
     try:
         st = os.stat(path)
     except OSError:
@@ -178,8 +141,7 @@ def clip_f0(path: str) -> float | None:
 
 
 def peek_native(user_reference: str, choice: str = "auto") -> tuple[bool, NativeRef | None]:
-    """(whether the voice's pitch is measured already, the native clip it picks): ``voices.warm``'s "already warm"
-    check, without measuring anything. IO thread (a stat)."""
+    """(whether the pitch is measured already, the native clip it picks), without measuring anything."""
     try:
         st = os.stat(user_reference)
     except OSError:
@@ -193,15 +155,12 @@ def peek_native(user_reference: str, choice: str = "auto") -> tuple[bool, Native
 
 
 def transpose(user_f0: float | None, native_f0: float) -> int:
-    """Semitones that move the native speaker's median pitch to the user's (RVC ``pitch``), within +-12."""
     if not user_f0 or not native_f0:
         return 0
     return max(-MAX_TRANSPOSE, min(MAX_TRANSPOSE, round(12.0 * math.log2(user_f0 / native_f0))))
 
 
 def pick_native(user_f0: float | None, choice: str = "auto") -> NativeRef | None:
-    """The native reference to speak from: ``choice`` when it is ``male`` / ``female``, else the one whose median F0
-    is closest to the user's on a log scale (the smallest RVC transpose). Unknown user pitch: male."""
     refs = native_refs()
     if not refs:
         return None
@@ -212,18 +171,14 @@ def pick_native(user_f0: float | None, choice: str = "auto") -> NativeRef | None
     return min(refs.values(), key=lambda r: abs(math.log2(user_f0 / r.f0)))
 
 
-# ------------------------------------------------------------------------------------------------ the plan
-
 @dataclass(frozen=True)
 class Choice:
-    """What a request asked for and what it gets, decided at request time (cheap, no audio is read)."""
-    accent: str                    # effective: "own" | "native-us"
-    native_voice: str = "auto"     # the request's override
-    fallback: str | None = None    # why "native-us" became "own" (a FALLBACK_TEXT key)
-    converter: str | None = None   # "native-us" only: "rvc" | "zero-shot"
+    accent: str
+    native_voice: str = "auto"
+    fallback: str | None = None
+    converter: str | None = None
 
     def fields(self) -> dict[str, Any]:
-        """``accent`` (+ ``accent_converter``, or ``accent_fallback`` / ``accent_note``) for responses and end events."""
         out: dict[str, Any] = {"accent": self.accent}
         if self.converter:
             out["accent_converter"] = self.converter
@@ -235,14 +190,8 @@ class Choice:
 
 def choose(requested: str, native_voice: str, lang: str, trained: bool, voice_match: float,
            zero_shot: bool = False) -> Choice:
-    """Decide the accent of a request speaking ``lang`` with a voice that is ``trained`` (has an RVC model), given
-    whether the zero-shot converter is installed (``zsvc.installed``): the zero-shot converter whenever it is
-    installed, else RVC for a trained voice with ``voice_match`` above 0.
-
-    The zero-shot converter wins even for trained voices: here the source is another speaker (the native clip), and
-    RVC, trained on a few minutes of the user, turned it metallic with a pitch shift that overshot (measured on the
-    owner's voice: high-band flatness 0.32 against 0.22 for the recording and 0.26 with the zero-shot converter, median
-    pitch 148 Hz against the recording's 135 Hz). RVC stays what "own" speech goes through."""
+    """The zero-shot converter wins even for trained voices: RVC turned the native clip metallic with an overshooting
+    pitch shift (measured: high-band flatness 0.32 vs 0.26 zero-shot, median pitch 148 Hz vs the recording's 135 Hz)."""
     if requested != "native-us":
         return Choice("own")
     converter = "zero-shot" if zero_shot else "rvc" if trained and voice_match > 0 else None
@@ -257,10 +206,8 @@ def choose(requested: str, native_voice: str, lang: str, trained: bool, voice_ma
 
 @dataclass(frozen=True)
 class Native:
-    """How a native-accent job speaks: the clip OmniVoice clones and the converter settings that bring the user back
-    (``pitch`` and ``index_rate`` are RVC's; the zero-shot converter gets pitch 0 and ignores the index rate)."""
     ref: NativeRef
-    pitch: int            # RVC transpose (semitones)
+    pitch: int
     index_rate: float
     user_f0: float | None
     converter: str = "rvc"
@@ -270,13 +217,12 @@ class Native:
 
 
 def prepare(choice: Choice, user_reference: str, voice_match: float) -> Native | None:
-    """The native setup of a ``native-us`` choice (None for ``own``): measures the user's pitch (cached) and picks
-    the native clip; the RVC transpose and index rate, or none for the zero-shot converter. IO thread."""
+    """None for ``own``. Measures the user's pitch: IO thread."""
     if choice.accent != "native-us":
         return None
     user_f0 = clip_f0(user_reference)
     ref = pick_native(user_f0, choice.native_voice)
-    if ref is None:  # vanished since choose(); not worth a failure
+    if ref is None:
         return None
     if choice.converter == "zero-shot":
         n = Native(ref, 0, 0.0, user_f0, "zero-shot")

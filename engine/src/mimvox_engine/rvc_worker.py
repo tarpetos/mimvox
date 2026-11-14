@@ -1,12 +1,11 @@
-"""Persistent RVC worker. Runs in the Applio virtualenv (separate torch), launched by ``rvc.py`` as
-``python -I rvc_worker.py --applio <dir>``.
+"""RVC worker, run in the Applio venv (a separate torch): imports nothing from ``mimvox_engine``.
 
-Standalone on purpose: it must not import anything from ``mimvox_engine`` (different interpreter); the shared
-event-driven skeleton ``worker_kit.py`` is loaded by its file path. Wire format: see ``worker_kit.py``.
+    python -I rvc_worker.py --applio <dir>
 
-Ops:  convert {"in","out","pth","index","idx","protect","f0","pitch"} -> {"elapsed":s}
-      release {}                                                       -> {} (drops the voice model and HuBERT)
-      ping    {}                                                       -> {}
+Ops (wire format: ``worker_kit.py``):
+  convert {"in","out","pth","index","idx","protect","f0","pitch"} -> {"elapsed":s}
+  release {}                                                       -> {}
+  ping    {}                                                       -> {}
 """
 import argparse
 import hashlib

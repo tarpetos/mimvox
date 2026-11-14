@@ -1,13 +1,4 @@
-"""Spanish: rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic).
-
-Inventory (25, IPA): 5 vowels, the glides j w, and 18 consonants (peninsular θ is kept; with seseo it is spoken as s,
-which costs nothing because s is in the inventory anyway). The approximants β ð ɣ are allophones of b d g.
-
-Rules: ch tʃ; ll ʝ; rr r; r is the trill r at the start of a word and after l n s, the tap ɾ elsewhere; qu/gu before
-e i are k/g; gü is g w; c before e i is θ, otherwise k; z θ; g before e i and j are x; h is silent; ñ ɲ; v b; x is
-k s (x in México, Texas, Oaxaca); y before a vowel is ʝ, otherwise i (j after a vowel: hoy, muy). Unaccented i/u next
-to another vowel are the glides j/w (tiene, bueno, aire, causa); accented í ú stay vowels (día, país).
-"""
+"""Spanish: rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic)."""
 from __future__ import annotations
 
 from ._common import words

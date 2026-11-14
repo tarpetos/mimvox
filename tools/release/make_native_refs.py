@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
 """Rebuild the native-accent reference clips in engine/src/mimvox_engine/assets/native/ from CMU ARCTIC.
 
-For each US English speaker (``bdl`` male, ``slt`` female) the same four sentences are read from the original 32 kHz
-recordings (channel 0 of the WAVEGG archives; only those members are fetched, with HTTP range requests), trimmed,
-high-passed at 50 Hz, levelled to the same loudness, joined with 0.25 s pauses, resampled to 24 kHz mono 16-bit and
-written as ``en-us-<gender>.wav`` with the transcript in ``en-us-<gender>.txt``. ``voices.json`` gets each clip's
-median F0, measured with the engine's own ``accent.median_f0``.
+The clips are modifications of the CMU ARCTIC recordings (licence: CMU_ARCTIC_COPYING.txt next to them).
 
-The joined clips are modifications of the CMU ARCTIC recordings (licence: CMU_ARCTIC_COPYING.txt next to them).
-
-Usage (numpy, scipy, soundfile and librosa needed, for example):
     uv run --no-project --python 3.11 --with numpy,scipy,soundfile,librosa python tools/release/make_native_refs.py
 """
 from __future__ import annotations
@@ -36,13 +29,11 @@ SPEAKERS = {"male": "bdl", "female": "slt"}
 SENTENCES = ["arctic_a0029", "arctic_a0039", "arctic_a0187", "arctic_b0063"]
 SR_IN, SR_OUT = 32000, 24000
 PAUSE_S, LEAD_S, TAIL_S = 0.25, 0.10, 0.15
-TARGET_RMS_DB = -20.0   # of each sentence's speech
+TARGET_RMS_DB = -20.0
 PEAK = 0.9
 
 
 class HttpFile(io.RawIOBase):
-    """A seekable read-only view of a remote file through HTTP range requests (for zipfile)."""
-
     def __init__(self, url: str) -> None:
         with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=60) as r:
             self.size = int(r.headers["Content-Length"])

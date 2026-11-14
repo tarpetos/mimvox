@@ -1,6 +1,4 @@
-# Checks a pull request's title against the commit convention (CONTRIBUTING.md, "Commit messages"). Pull requests are
-# squash-merged and the title becomes the commit on master, so this is what keeps master's history uniform. The check
-# is required by the repository's ruleset.
+# Required check: pull requests are squash-merged, so the title becomes the commit on master.
 name: PR title
 
 on:

@@ -8,29 +8,21 @@
 #   --skip-compile           reuse the compiled binary (only re-stage resources and re-package)
 #
 # Output: dist/Mimvox.app and dist/Mimvox_<version>_<aarch64|universal>.dmg
-# (dist/ is git-ignored).
 #
-# Signing is opt-in. Set APPLE_SIGNING_IDENTITY (e.g. "Developer ID Application: Name (TEAMID)") to sign the app;
-# cargo-packager then also notarizes it when APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID (or the APPLE_API_* trio, or
-# APPLE_KEYCHAIN_PROFILE) are set. Unsigned builds work for personal use: after copying the app from the .dmg, run
+# Signing is opt-in: set APPLE_SIGNING_IDENTITY (e.g. "Developer ID Application: Name (TEAMID)"); the app is then also
+# notarized when APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID (or the APPLE_API_* trio, or APPLE_KEYCHAIN_PROFILE) are set.
+# An unsigned app needs this after copying it from the .dmg:
 #   xattr -dr com.apple.quarantine "/Applications/Mimvox.app"
-#
-# What it does: checks the toolchain, installs cargo-packager when missing, stages the runtime resources
-# (engine sources, presets, setup tools, contract; NOT the heavy models) into app/target/bundle-resources,
-# compiles the release binary and runs `cargo packager` with app/Packager.toml. Resources end up in
-# Contents/Resources of the .app (see the header of app/Packager.toml).
 #
 # Knobs: CARGO_PACKAGER_VERSION (default below), CARGO_BUILD_JOBS (default 6), CARGO_TARGET_DIR.
 set -euo pipefail
 
 PACKAGER_VERSION="${CARGO_PACKAGER_VERSION:-0.11.8}"
 BIN_NAME="mimvox"
-# Cap parallel compiler jobs (a full Rust + wgpu build is memory hungry); override with CARGO_BUILD_JOBS.
+# a full Rust + wgpu build is memory hungry
 JOBS="${CARGO_BUILD_JOBS:-6}"
 export CARGO_BUILD_JOBS="$JOBS"
 
-# The repo root is two folders above this script, so the build works from any directory
-# and from a path that contains spaces.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
 APP_DIR="$REPO_ROOT/app"
@@ -72,7 +64,7 @@ if [[ ",$FORMATS," == *",dmg,"* ]]; then
     need hdiutil "hdiutil ships with macOS."
 fi
 
-# The oldest macOS the app declares (Packager.toml [macos] minimum-system-version).
+# must match Packager.toml [macos] minimum-system-version
 export MACOSX_DEPLOYMENT_TARGET=13.0
 
 # The version in Packager.toml must match the crate, otherwise the installer lies about it.
@@ -124,7 +116,7 @@ if [ ! -x "$BIN_DIR/$BIN_NAME" ]; then
     exit 1
 fi
 # cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
-# --binaries-dir points elsewhere (see build-linux.sh), so the per-target binary is copied there first.
+# --binaries-dir points elsewhere, so the per-target binary is copied there first.
 if [ "$(cd "$BIN_DIR" && pwd -P)" != "$(mkdir -p "$APP_DIR/target/release" && cd "$APP_DIR/target/release" && pwd -P)" ]; then
     cp -f "$BIN_DIR/$BIN_NAME" "$APP_DIR/target/release/$BIN_NAME"
     BIN_DIR="$APP_DIR/target/release"

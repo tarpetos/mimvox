@@ -1,9 +1,3 @@
-"""Per-voice dataset store: ``voices/<id>/dataset/part<N>.wav`` plus the best-clip ``reference.wav``.
-
-Stored takes are mono 16-bit PCM at the source rate (resampled to 44.1 kHz only above 48 kHz), with leading/trailing
-silence trimmed (0.25 s kept) and loudness normalised (active-speech RMS about -20 dBFS, peak at most 0.9). Per-part
-quality results live in ``dataset/meta.json`` so ``dataset.summary`` is cheap.
-"""
 from __future__ import annotations
 
 import json
@@ -24,16 +18,14 @@ TARGET_ACTIVE_RMS_DB = -20.0
 MAX_PEAK = 0.9
 MAX_GAIN_DB = 40.0
 TRIM_PAD_S = 0.25
-TRIM_MIN_FRAMES = 5            # speech must last 50 ms to count as the start/end (ignores clicks)
+TRIM_MIN_FRAMES = 5            # 50 ms: ignores clicks
 MAX_RATE = 48000
-MEDIA_POOL = "reference_media.wav"   # voices.reference_from_media: the combined media files (not a dataset part)
+MEDIA_POOL = "reference_media.wav"
 
 _LOCK = threading.RLock()
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 _PART_RE = re.compile(r"^part(\d+)\.wav$")
 
-
-# ---------------------------------------------------------------------------------------------- paths and meta
 
 def _voice_dir(ctx: Any, params: dict[str, Any]) -> str:
     vid = params.get("voice_id")
@@ -91,10 +83,7 @@ def _existing_parts(vdir: str) -> list[int]:
     return sorted(int(m.group(1)) for n in names if (m := _PART_RE.match(n)))
 
 
-# ---------------------------------------------------------------------------------------------- processing
-
 def trim_silence(y: np.ndarray, sr: int, m: dict[str, Any]) -> np.ndarray:
-    """Cut leading/trailing silence, keeping ``TRIM_PAD_S`` around the speech."""
     if m["speech_db"] <= -90.0:
         return y
     fdb = m["_frame_db"]
@@ -114,7 +103,6 @@ def trim_silence(y: np.ndarray, sr: int, m: dict[str, Any]) -> np.ndarray:
 
 
 def normalise(y: np.ndarray, m: dict[str, Any]) -> np.ndarray:
-    """Gain to about -20 dBFS active-speech RMS without exceeding peak 0.9 (or +40 dB)."""
     fdb = m["_frame_db"]
     act = fdb >= m["_silence_thr"]
     if m["speech_db"] <= -90.0 or not act.any():
@@ -138,7 +126,6 @@ def _fade(y: np.ndarray, sr: int, sec: float = 0.01) -> np.ndarray:
 
 
 def _titles(vdir: str) -> dict[int, str]:
-    """Part number -> reading-text title, when the voice was made with a known preset (else empty)."""
     try:
         with open(os.path.join(vdir, "voice.json"), encoding="utf-8") as f:
             vmeta = json.load(f)
@@ -155,14 +142,13 @@ def _titles(vdir: str) -> dict[int, str]:
 
 
 def _usable(vdir: str, meta: dict[str, Any]) -> set[int]:
-    """Stored parts that may supply the reference: not rated "bad" (all of them when every part is)."""
     have = {n for n in _existing_parts(vdir) if str(n) in meta["parts"]}
     ok = {n for n in have if meta["parts"][str(n)].get("verdict") != "bad"}
     return ok or have
 
 
 def _ensure_analysed(vdir: str, meta: dict[str, Any]) -> bool:
-    """Fill rate / candidate windows for parts stored before the pace analysis existed. True when meta changed."""
+    """Analyses parts stored before the pace analysis existed. True when meta changed."""
     changed = False
     for n in _existing_parts(vdir):
         info = meta["parts"].get(str(n))
@@ -175,12 +161,11 @@ def _ensure_analysed(vdir: str, meta: dict[str, Any]) -> bool:
 
 
 def rank_candidates(vdir: str, meta: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
-    """Every stored candidate window of the voice, best first (see ``pace.rank``); ``meta`` must be analysed."""
+    """Best first; ``meta`` must be analysed."""
     return pace.rank(meta["parts"], _titles(vdir), _usable(vdir, meta))
 
 
 def write_reference(vdir: str, meta: dict[str, Any], part: int, start_s: float, end_s: float, **extra: Any) -> None:
-    """Cut ``[start_s, end_s]`` of part ``part`` into ``reference.wav`` and record it in ``meta['reference']``."""
     y, sr = read_audio(_part_path(vdir, part))
     clip = _fade(y[int(start_s * sr): int(end_s * sr)], sr)
     write_wav(os.path.join(vdir, "reference.wav"), clip, sr)
@@ -189,8 +174,7 @@ def write_reference(vdir: str, meta: dict[str, Any], part: int, start_s: float, 
 
 
 def cut_media(vdir: str, start_s: float, end_s: float) -> tuple[np.ndarray, int]:
-    """``[start_s, end_s]`` of the media pool (``reference_media.wav``), faded at both ends; read without loading the
-    whole pool. ``not_found`` when there is no pool."""
+    """Read without loading the whole pool; ``not_found`` when there is no pool."""
     path = os.path.join(vdir, MEDIA_POOL)
     try:
         sr = int(sf.info(path).samplerate)
@@ -203,15 +187,13 @@ def cut_media(vdir: str, start_s: float, end_s: float) -> tuple[np.ndarray, int]
 
 
 def _keep_manual(vdir: str, meta: dict[str, Any], cur: dict[str, Any], changed_part: int | None) -> bool:
-    """Whether a manual reference choice still stands (``reference.wav`` is rewritten from its source if it went
-    missing). A clip from the media pool does not depend on the parts: it stays until another clip is chosen."""
     ref_path = os.path.join(vdir, "reference.wav")
     if cur.get("source") == "media":
         if os.path.isfile(ref_path):
             return True
         pool = meta.get("media") if isinstance(meta.get("media"), dict) else {}
         if not cur.get("pool") or cur.get("pool") != pool.get("pool"):
-            return False  # cut from a pool that has been replaced or cleared since
+            return False
         try:
             clip, sr = cut_media(vdir, float(cur["start_s"]), float(cur["end_s"]))
         except (EngineError, KeyError, TypeError, ValueError):
@@ -227,9 +209,8 @@ def _keep_manual(vdir: str, meta: dict[str, Any], cur: dict[str, Any], changed_p
 
 
 def _refresh_reference(vdir: str, meta: dict[str, Any], changed_part: int | None = None) -> None:
-    """Choose ``reference.wav`` (best window by SNR, pace near the voice's median, few long pauses). A manual choice
-    (``voices.set_reference``) is kept until its part is removed or re-recorded (``changed_part``); one from the media
-    pool (``voices.reference_from_media``) until another clip is chosen."""
+    """A manual choice is kept until its part is removed or re-recorded (``changed_part``); one from the media pool
+    until another clip is chosen."""
     ref_path = os.path.join(vdir, "reference.wav")
     cur = meta.get("reference")
     if isinstance(cur, dict) and cur.get("manual"):
@@ -253,15 +234,12 @@ def _refresh_reference(vdir: str, meta: dict[str, Any], changed_part: int | None
 
 
 def _analyse_stored(vdir: str, n: int) -> dict[str, Any]:
-    """Meta entry for a part file that has none (e.g. copied in by hand): analyse the stored audio."""
     y, sr = read_audio(_part_path(vdir, n))
     m = quality.measure(y, sr)
     verdict, issues = quality.assess(m)
     return {"verdict": verdict, "issues": issues, "snr_db": round(m["snr_db"], 1),
             "clipping_pct": round(m["clipping_pct"], 3), **pace.analyse_part(y, sr)}
 
-
-# ---------------------------------------------------------------------------------------------- summary
 
 def _summary(vdir: str, meta: dict[str, Any]) -> dict[str, Any]:
     changed = False
@@ -313,8 +291,6 @@ def _summary(vdir: str, meta: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-# ---------------------------------------------------------------------------------------------- handlers
-
 @method("dataset.add")
 def dataset_add(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     vdir = _voice_dir(ctx, params)
@@ -326,10 +302,10 @@ def dataset_add(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         raise EngineError("bad_request", f"Sample rate too low ({sr} Hz): record at 44.1 or 48 kHz.")
     if sr > MAX_RATE:
         y, sr = resample(y, sr, 44100), 44100
-    y = y - float(np.mean(y))  # DC offset
+    y = y - float(np.mean(y))
     m0 = quality.measure(y, sr)
     y = trim_silence(y, sr, m0)
-    m1 = quality.measure(y, sr)  # verdict is about the trimmed take (before the gain, which changes no ratio)
+    m1 = quality.measure(y, sr)
     expected = params.get("expected_s")
     verdict, issues = quality.assess(m1, float(expected) if isinstance(expected, (int, float)) else None)
     y = normalise(y, m1)

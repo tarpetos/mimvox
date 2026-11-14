@@ -1,18 +1,7 @@
-"""Move an installed data directory (runtime, models, voices) to another place: ``setup.py --move-to <new dir>``.
+"""Move the data directory: ``setup.py --move-to <new dir>``. Standard library only.
 
-Standard library only. Output the app can parse: progress lines ``[move] 37% 11.4/31.0 GB`` while copying, then
-``[move] done`` (exit code 0) or ``[move] failed: <reason>`` (non-zero). Everything else is ``[move] <text>``.
-
-Safety:
-* refuses while the engine (or anything from the old runtime) is running;
-* the old directory is deleted last, only after the copy is verified (same files, same sizes) and the moved runtime
-  passed the quick check; an interrupted move resumes (rerun the same command, files already copied are skipped);
-* on the same volume the directory is renamed instead (atomic, no copy).
-
-After the files are in place, absolute paths of the old location are rewritten inside the virtual environments: the
-editable-install ``.pth`` / finder modules (``_editable_impl_indextts.pth``, ``__editable__*.py``), ``direct_url.json``,
-``pyvenv.cfg`` and the activation / console scripts. Windows ``.exe`` console launchers keep the path in a PE resource
-that cannot be edited in place; they are not used by the engine and are only reported (``pip``-style reinstall refreshes them).
+The app parses the output: ``[move] 37% 11.4/31.0 GB`` while copying, then ``[move] done`` (exit code 0) or
+``[move] failed: <reason>`` (non-zero); anything else is ``[move] <text>``.
 """
 from __future__ import annotations
 
@@ -33,18 +22,14 @@ TEXT_LIMIT = 2_000_000
 
 
 class MoveError(RuntimeError):
-    """The move cannot continue; the message is shown to the user."""
+    """The message is shown to the user."""
 
 
 def out(line: str) -> None:
     print(f"[move] {line}", flush=True)
 
 
-# ------------------------------------------------------------------------------------------------ preconditions
-
 def running_processes(old: Path, windows: bool) -> list[str]:
-    """Descriptions of processes that use the runtime: the engine (``mimvox_engine``) or any program started
-    from inside ``old`` (the venv interpreters, Applio training)."""
     needle = os.path.normcase(str(old)).rstrip("\\/")
     found: list[str] = []
     me = os.getpid()
@@ -90,8 +75,8 @@ def existing_parent(path: Path) -> Path:
     return path
 
 
-# Top-level folders a move leaves behind (and deletes with the old folder): uv's package cache and the temporary
-# files, both made again when needed. Copying the cache to another drive would also undo its hard links.
+# Left behind and deleted with the old folder: both are made again when needed, and copying uv's cache to another
+# drive would undo its hard links.
 NOT_MOVED = ("cache", "tmp")
 
 
@@ -117,10 +102,8 @@ def _inside(child: Path, parent: Path) -> bool:
     return c == p or c.startswith(p.rstrip("\\/") + os.sep)
 
 
-# ------------------------------------------------------------------------------------------------------- copying
-
 def _walk_files(root: Path):
-    """Yield ``(relative path, is_symlink)`` of every file and symlink, and directories as ``(rel, None)``."""
+    """``(rel, is_symlink)`` of every file and symlink; directories as ``(rel, None)``."""
     for dirpath, dirs, files in os.walk(root):
         _prune_top(root, dirpath, dirs)
         rel_dir = Path(dirpath).relative_to(root)
@@ -134,8 +117,7 @@ def _walk_files(root: Path):
 
 
 def copy_tree(src: Path, dst: Path, old: Path, total: int, progress: Callable[[int], None]) -> None:
-    """Copy ``src`` to ``dst``. Files are written as ``name.mimvox-part`` and renamed, so a half copy never looks complete;
-    a file that is already there with the same size is skipped (resume)."""
+    """Files are written as ``name.mimvox-part`` and renamed, so a half copy never looks complete."""
     dst.mkdir(parents=True, exist_ok=True)
     done = 0
     for rel, link in _walk_files(src):
@@ -171,7 +153,6 @@ def copy_tree(src: Path, dst: Path, old: Path, total: int, progress: Callable[[i
 
 
 def verify_tree(src: Path, dst: Path) -> None:
-    """Same set of files and links with the same sizes, else :class:`MoveError`."""
     want = {rel.as_posix(): (None if link else (src / rel).stat().st_size) for rel, link in _walk_files(src) if link is not None}
     have = {rel.as_posix(): (None if link else (dst / rel).stat().st_size) for rel, link in _walk_files(dst) if link is not None}
     have.pop(MARKER, None)
@@ -198,8 +179,6 @@ def remove_tree(path: Path) -> None:
     else:
         shutil.rmtree(path, onerror=lambda f, p, e: onexc(f, p, e))
 
-
-# ------------------------------------------------------------------------------------------------------- path fix
 
 def _forms(old: Path, new: Path) -> list[tuple[bytes, bytes]]:
     o, n = str(old), str(new)
@@ -253,8 +232,8 @@ class PathFixer:
         self.fixed.append(str(path))
 
     def launcher(self, path: Path) -> None:
-        """A Windows console-script launcher (``.exe``) keeps the python path in a PE resource, whose size cannot
-        change in place. The engine never starts them (it runs ``python.exe`` directly), so they are only reported."""
+        """The PE resource holding the python path cannot change size in place; the engine never starts these
+        launchers (it runs ``python.exe``), so they are only reported."""
         try:
             data = path.read_bytes()
         except OSError:
@@ -264,7 +243,6 @@ class PathFixer:
 
 
 def fix_venv_paths(root: Path, old: Path, windows: bool) -> PathFixer:
-    """Rewrite ``old`` -> ``root`` inside every virtual environment under ``<root>/runtime``."""
     fixer = PathFixer(old, root, windows)
     for venv in sorted(root.glob("runtime/*/.venv")) + sorted(root.glob("runtime/*/venv")):
         fixer.text_file(venv / "pyvenv.cfg")
@@ -282,10 +260,8 @@ def fix_venv_paths(root: Path, old: Path, windows: bool) -> PathFixer:
     return fixer
 
 
-# --------------------------------------------------------------------------------------------------------- driver
-
 def prepare(old: Path | None, new: Path, windows: bool, force: bool) -> tuple[Path, bool, bool]:
-    """Validate the request. Returns ``(old, resume, same_volume)``."""
+    """Returns ``(old, resume, same_volume)``."""
     marker = new / MARKER
     resume = marker.is_file()
     if resume:
@@ -318,7 +294,6 @@ def prepare(old: Path | None, new: Path, windows: bool, force: bool) -> tuple[Pa
 
 
 def move_files(old: Path, new: Path, resume: bool, same_volume: bool, force: bool) -> None:
-    """Get the files to ``new`` (rename or verified copy). The old directory is left in place when it was copied."""
     if not old.exists():
         if not (new / MARKER).is_file():
             raise MoveError(f"{old} does not exist")

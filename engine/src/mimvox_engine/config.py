@@ -1,4 +1,3 @@
-"""runtime.toml parsing and data-directory layout helpers."""
 from __future__ import annotations
 
 import os
@@ -11,7 +10,6 @@ from .registry import EngineError
 
 
 def load_runtime(path: str) -> dict[str, Any]:
-    """Parse runtime.toml (see contract/engine-protocol.md)."""
     with open(path, "rb") as fh:
         return tomllib.load(fh)
 
@@ -26,8 +24,6 @@ def applio_dir(runtime: dict[str, Any]) -> str | None:
 
 
 def runtime_root(runtime: dict[str, Any]) -> str | None:
-    """``<data>/runtime``: the parent of the Applio checkout, or (without voice training) of the models folder that
-    holds the OmniVoice model."""
     applio = applio_dir(runtime)
     if applio:
         return os.path.dirname(os.path.normpath(applio))
@@ -44,14 +40,12 @@ def backend(runtime: dict[str, Any]) -> str:
 
 
 def vendor(runtime: dict[str, Any]) -> str:
-    """``nvidia`` or ``amd`` for the cuda backend (ROCm torch also uses the ``cuda`` device), else ``""``."""
+    """ROCm torch also uses the ``cuda`` backend: this tells ``nvidia`` from ``amd`` (else ``""``)."""
     return str(runtime.get("device", {}).get("vendor", "")).lower()
 
 
 @dataclass(frozen=True)
 class DataDir:
-    """Layout of ``<data>`` (see the contract)."""
-
     root: str
 
     @property

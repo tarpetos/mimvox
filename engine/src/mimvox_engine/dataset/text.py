@@ -1,8 +1,3 @@
-"""Reading-text analysis: word count, estimated reading time, phoneme coverage, level and ~60-90 s parts.
-
-Every measure is per language (``dataset.lang``): the reading pace for the time estimates, the phoneme inventory and
-the coverage thresholds. ``text.analyze`` detects the language when ``language`` is omitted.
-"""
 from __future__ import annotations
 
 import re
@@ -12,16 +7,16 @@ from ..registry import EngineError, method
 from . import lang
 from .levels import level_for, message_for
 
-WPM = 145.0              # English reading pace (words per minute); other languages: ``lang.LANGUAGES[code].wpm``
+WPM = 145.0              # English; other languages: ``lang.LANGUAGES[code].wpm``
 PART_MIN_S = 60.0
 PART_TARGET_S = 75.0
 PART_MAX_S = 90.0
-MERGE_TAIL_S = 35.0      # a final part shorter than this is merged into the previous one when it still fits
+MERGE_TAIL_S = 35.0
 
 # Letters of any script and digits, joined by apostrophes or hyphens (don't, п'ять, l'eau, well-known).
 _WORD_RE = re.compile(r"[^\W_]+(?:['’ʼ\-][^\W_]+)*")
-# A sentence ends at . ! ? … (plus closing quotes/brackets) followed by space; the next one must start with an
-# opening quote/bracket/¿/¡/dash or an upper-case letter or a digit (checked in ``_split_sentences``).
+# Sentence end; the next sentence must start with an opening quote, bracket, ¿, ¡, dash, capital or digit
+# (checked in ``_split_sentences``).
 _SENT_END = re.compile(r"(?<=[.!?…])[\"'”’»)\]]*\s+")
 _SENT_OPENERS = "\"'“„«([¿¡—–-"
 
@@ -47,7 +42,6 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _units(text: str) -> list[tuple[str, int, bool]]:
-    """Paragraph units as (text, words, ends_paragraph)."""
     out = []
     for para in re.split(r"\n+", text.replace("\r\n", "\n").replace("\r", "\n")):
         para = para.strip()
@@ -67,7 +61,6 @@ def _sentences(unit: tuple[str, int, bool]) -> list[tuple[str, int, bool]]:
 
 def split_parts(text: str, target_s: float = PART_TARGET_S, min_s: float = PART_MIN_S,
                 max_s: float = PART_MAX_S, wpm: float = WPM) -> list[dict[str, Any]]:
-    """Split ``text`` at paragraph/sentence boundaries into parts of about ``min_s``..``max_s`` seconds of reading."""
     per_s = wpm / 60.0
     target_w, min_w, max_w = target_s * per_s, min_s * per_s, max_s * per_s
     queue = _units(text)
@@ -121,7 +114,6 @@ def _coverage_note(missing: list[str], code: str) -> str:
 
 
 def analyze(text: str, language: str | None = None) -> dict[str, Any]:
-    """Analysis of ``text`` read in ``language`` (an ISO 639-1 code known to ``dataset.lang``; detected when None)."""
     detected = language is None
     code = lang.detect(text) if detected else language
     info = lang.get(code)

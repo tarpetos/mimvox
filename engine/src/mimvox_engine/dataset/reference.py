@@ -1,11 +1,4 @@
-"""``voices.reference_candidates`` / ``voices.set_reference``: choose which clip of the recordings is ``reference.wav``.
-
-The speech model copies tempo and manner from the reference, so the clip decides how fast and how natural the cloned voice
-sounds. ``dataset.add`` picks one automatically (see ``pace.py``); these two methods let the user hear the best few
-and pick another. A manual pick is kept until its part is removed or re-recorded. Windows of the media pool
-(``voices.reference_from_media``, see ``media_ref.py``) are offered too (``source: "media"``); picking one writes the
-pool's target (``reference.wav``, or ``reference_<lang>.wav`` when the pool was made for another language).
-"""
+"""Which clip is ``reference.wav``: the speech model copies its tempo and manner."""
 from __future__ import annotations
 
 import os
@@ -31,7 +24,6 @@ def _vdir(ctx: Any, params: dict[str, Any]) -> tuple[str, str]:
 
 
 def _ensure_meta(vdir: str, meta: dict[str, Any]) -> bool:
-    """Meta + pace analysis for every stored part (parts copied in by hand, voices from before the pace analysis)."""
     changed = False
     for n in store._existing_parts(vdir):
         if str(n) not in meta["parts"]:
@@ -59,7 +51,7 @@ def _current(vdir: str, meta: dict[str, Any], titles: dict[int, str], median: fl
     cur = meta.get("reference") if isinstance(meta.get("reference"), dict) else None
     media = cur is not None and cur.get("source") == "media"
     try:
-        if media:  # cut from the media pool: describe the clip itself
+        if media:
             y, sr = read_audio(ref_path)
             an = pace.PartAnalysis(y, sr)
             a, b, part = 0, len(an.fdb), None
@@ -69,7 +61,7 @@ def _current(vdir: str, meta: dict[str, Any], titles: dict[int, str], median: fl
             a = int(float(cur["start_s"]) / pace.HOP_S)
             b = min(int(float(cur["end_s"]) / pace.HOP_S), len(an.fdb))
             part: int | None = int(cur["part"])
-        else:  # reference.wav that no part explains (voices.import with a reference_path)
+        else:
             y, sr = read_audio(ref_path)
             an = pace.PartAnalysis(y, sr)
             a, b, part = 0, len(an.fdb), None
@@ -95,7 +87,6 @@ def _is_current(c: dict[str, Any], cur: dict[str, Any] | None) -> bool:
 
 def _media_candidates(vdir: str, meta: dict[str, Any], current: dict[str, Any] | None, pdir: str,
                       start: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """The best windows of the media pool (with preview clips) and a summary of the pool, or ``([], None)``."""
     from . import media_ref  # noqa: PLC0415
 
     mm = meta.get("media")
@@ -104,7 +95,7 @@ def _media_candidates(vdir: str, meta: dict[str, Any], current: dict[str, Any] |
     code = mm.get("language") or None
     target = media_ref.target_name(code)
     in_use = None
-    if code is None:  # reference.wav: the current clip, when it was cut from this pool
+    if code is None:
         ref = meta.get("reference") if isinstance(meta.get("reference"), dict) else None
         if current is not None and ref and ref.get("source") == "media" and ref.get("pool") == mm.get("pool"):
             in_use = {"source": "media", "part": None, "start_s": ref["start_s"], "end_s": ref["end_s"]}
@@ -160,8 +151,7 @@ def reference_candidates(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         media, pool = [], None
     from .. import reflang  # noqa: PLC0415
 
-    # The detected language of reference.wav (None until the speech worker has transcribed this clip: the next
-    # warm-up or generation does; its `voice.warm` event carries it).
+    # None until the speech worker transcribes this clip (the next warm-up or generation).
     return {"candidates": out + media, "current": current, "rate_median": round(median, 2), "media": pool,
             "reference_language": reflang.detected(os.path.join(vdir, "reference.wav"))[0]}
 
@@ -206,7 +196,6 @@ def set_reference(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _warm(ctx: Any, vid: str) -> bool:
-    """The existing warm path: conditioning (and the RVC model) are prepared in the background."""
     try:
         from ..registry import methods  # noqa: PLC0415
 
@@ -229,7 +218,6 @@ def _times(params: dict[str, Any]) -> tuple[float, float]:
 
 
 def _set_from_media(ctx: Any, vid: str, vdir: str, params: dict[str, Any]) -> dict[str, Any]:
-    """``set_reference`` with ``source: "media"``: a window of the media pool becomes the pool's target."""
     from .. import tts  # noqa: PLC0415
     from . import media_ref  # noqa: PLC0415
 
@@ -260,13 +248,10 @@ def _set_from_media(ctx: Any, vid: str, vdir: str, params: dict[str, Any]) -> di
             "warming": _warm(ctx, vid) if code is None else False}
 
 
-# ------------------------------------------------------------------------- per-language references (reference_<lang>)
-
 LANG_REF_MIN_S, LANG_REF_MAX_S = 3.0, 40.0
 
 
 def _speech_language(value: Any) -> str:
-    """A language the speech model speaks (``bad_request`` otherwise)."""
     from .. import backends  # noqa: PLC0415
     from ..redub import langs  # noqa: PLC0415
 
@@ -278,7 +263,6 @@ def _speech_language(value: Any) -> str:
 
 
 def language_references(vdir: str) -> list[str]:
-    """Languages that have a ``reference_<lang>.wav`` in the voice folder, sorted."""
     try:
         names = os.listdir(vdir)
     except OSError:
@@ -294,8 +278,6 @@ def language_references(vdir: str) -> list[str]:
 
 @method("voices.add_reference")
 def add_reference(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
-    """Store a recording as ``reference_<language>.wav`` (trimmed at both ends, normalised): the speech model uses it
-    instead of ``reference.wav`` when it speaks that language (accent and prosody of the clip carry over)."""
     from .. import tts  # noqa: PLC0415
     from . import quality  # noqa: PLC0415
 
@@ -311,7 +293,7 @@ def add_reference(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         raise EngineError("bad_request", "The audio file is empty.")
     if sr > store.MAX_RATE:
         y, sr = store.resample(y, sr, 44100), 44100
-    y = y - float(np.mean(y))  # DC offset
+    y = y - float(np.mean(y))
     trimmed = store.trim_silence(y, sr, quality.measure(y, sr))
     clip = store.normalise(trimmed, quality.measure(trimmed, sr))
     duration = len(clip) / float(sr)

@@ -1,20 +1,7 @@
 #!/usr/bin/env python3
-"""Build the Windows installer (setup.exe) with Inno Setup, dark and in the app's colours.
+"""Build the Windows installer (setup.exe) with a pinned, portable Inno Setup. Run by build-win.ps1:
 
-Run by build-win.ps1 (``uv run --no-project --with pillow python scripts/build/inno.py ...``):
-
-    --version 0.1.6 --arch x64|arm64 --stage <folder with mimvox.exe and the bundled resources> --out <dist>
-    --cache <folder for the portable Inno Setup>
-
-What it does: draws the wizard's pictures from the app icon and the app's dark palette (the Welcome/Finish side banner
-and the top-right icon, at every display scale), writes ``mimvox.iss`` and compiles it with a pinned, portable Inno
-Setup (downloaded once into ``--cache``, checked against its SHA-256). The wizard is forced dark
-(``WizardStyle=modern dark``) in the app's palette (app/src/ui/theme.rs), and its title bar is painted the same colour.
-
-The installer installs per user (no administrator prompt), into ``%LOCALAPPDATA%\\Programs\\Mimvox`` by default. An
-update from inside the app runs it with ``/SILENT /SUPPRESSMSGBOXES /NORESTART`` (and ``/RELAUNCH=1`` for "Restart
-now"; see app/src/update.rs): it closes the app if it still runs, replaces the app's folders and starts the new version
-when asked. The uninstaller removes the app's folders whole; the user's data folder is elsewhere and stays.
+    inno.py --version 0.1.6 --arch x64|arm64 --stage <folder> --out <dist> --cache <folder for Inno Setup>
 """
 from __future__ import annotations
 
@@ -37,14 +24,13 @@ BINARY = "mimvox.exe"
 PUBLISHER = "tarpetos"
 URL = "https://github.com/tarpetos/mimvox"
 TAGLINE = "Your voice, any text"
-# The app's top-level folders (scripts/build/stage_resources.py): replaced whole on install, removed on uninstall.
+# The top-level folders stage_resources.py stages: replaced whole on install, removed on uninstall.
 APP_DIRS = ("engine", "presets", "tools", "contract", "bin")
 
-# The app's dark palette (app/src/ui/theme.rs, Palette::new): navy background, the four "aurora" light fields drifting
-# behind its glass (ice, teal, steel, deep blue), the ice accent and its gradient, the text colours.
+# The app's dark palette (app/src/ui/theme.rs, Palette::new).
 BG_TOP = "#0B131F"
 BG_BOTTOM = "#070C13"
-GLASS = "#101A28"   # smoked glass over the background: the header strip
+GLASS = "#101A28"
 AURORA_ICE = "#9CD2FF"
 AURORA_TEAL = "#3FC0CF"
 AURORA_STEEL = "#6283B8"
@@ -54,7 +40,7 @@ ACCENT_TOP = "#AEDAFF"
 ACCENT_BOTTOM = "#5FAAF0"
 TEXT = "#F2F6FB"
 TEXT_DIM = "#AFBBCB"
-WELL = "#0E182A"    # the app's recessed wells: the progress bar's track
+WELL = "#0E182A"
 BAD = "#FF7A85"
 
 # Pinned, because the download is executed: the digest GitHub publishes for the release asset.
@@ -62,12 +48,11 @@ INNO_VERSION = "6.7.3"
 INNO_URL = f"https://github.com/jrsoftware/issrc/releases/download/is-{INNO_VERSION.replace('.', '_')}/innosetup-{INNO_VERSION}.exe"
 INNO_SHA256 = "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
 
-# The image areas at 100-250 % display scaling (Inno Setup 6.7 help, WizardImageFile / WizardSmallImageFile); Setup
-# picks the closest, so every scale gets a sharp picture.
+# Inno's image areas at 100-250 % display scaling: Setup picks the closest.
 BANNER_SIZES = ((202, 386), (269, 515), (336, 643), (403, 772), (430, 824), (498, 953), (534, 1022))
 SMALL_SIZES = (58, 77, 97, 116, 124, 143, 159)
 
-# DwmSetWindowAttribute's DWMWA_CAPTION_COLOR (Windows 11; older Windows refuses it and keeps its own title bar).
+# Windows 11 only: older Windows refuses it and keeps its own title bar.
 DWMWA_CAPTION_COLOR = 35
 
 
@@ -82,11 +67,7 @@ def colorref(colour: str) -> str:
     return f"${b:02X}{g:02X}{r:02X}"
 
 
-# ------------------------------------------------------------------------------------------------- the pictures
-
 def draw_banner(width: int, height: int, out: Path) -> None:
-    """The Welcome/Finish side banner, drawn like the app's window: the navy gradient with its aurora light fields
-    (ice, teal, steel, deep blue), the icon on an accent glow, the name, an accent-gradient rule and the tagline."""
     from PIL import Image, ImageDraw, ImageFilter, ImageFont  # noqa: PLC0415 - only the Windows build draws
 
     top, bottom = rgb(BG_TOP), rgb(BG_BOTTOM)
@@ -100,7 +81,6 @@ def draw_banner(width: int, height: int, out: Path) -> None:
     image = base.convert("RGBA")
 
     def field(colour: str, cx: float, cy: float, rx: float, ry: float, alpha: int) -> None:
-        """One soft light field, as the app's background draws them (a blurred ellipse)."""
         nonlocal image
         layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         box = (round((cx - rx) * width), round((cy - ry) * height), round((cx + rx) * width), round((cy + ry) * height))
@@ -111,7 +91,7 @@ def draw_banner(width: int, height: int, out: Path) -> None:
     field(AURORA_TEAL, 1.0, 0.3, 0.5, 0.16, 84)
     field(AURORA_STEEL, 0.05, 0.9, 0.6, 0.18, 74)
     field(AURORA_BLUE, 1.0, 0.75, 0.55, 0.18, 96)
-    field(AURORA_ICE, 0.5, 0.36, 0.4, 0.12, 58)   # the light behind the icon
+    field(AURORA_ICE, 0.5, 0.36, 0.4, 0.12, 58)
 
     icon = Image.open(ICON_PNG).convert("RGBA")
     side = round(width * 0.46)
@@ -124,7 +104,6 @@ def draw_banner(width: int, height: int, out: Path) -> None:
     tag_font = ImageFont.truetype(str(FONT_REGULAR), round(width * 0.062))
     name_y = icon_top + side + round(height * 0.045)
     draw.text((width / 2, name_y), APP, font=name_font, fill=rgb(TEXT), anchor="mt")
-    # The rule: the accent's own gradient, light to deep, like the app's primary buttons.
     rule_y = name_y + round(width * 0.17)
     x0, x1 = round(width * 0.38), round(width * 0.62)
     thick = max(2, width // 90)
@@ -137,7 +116,6 @@ def draw_banner(width: int, height: int, out: Path) -> None:
 
 
 def draw_small(side: int, out: Path) -> None:
-    """The top-right icon on the inner pages: the app icon on a transparent margin."""
     from PIL import Image  # noqa: PLC0415
 
     small = Image.new("RGBA", (side, side), (0, 0, 0, 0))
@@ -159,20 +137,15 @@ def draw_images(folder: Path) -> tuple[list[Path], list[Path]]:
     return banners, smalls
 
 
-# ------------------------------------------------------------------------------------------------- uninstalling
-
-# The mutex the app holds while it runs (app/src/main.rs, APP_MUTEX).
+# Must match app/src/main.rs, APP_MUTEX.
 APP_MUTEX = "Local\\Mimvox-running"
 # Inno's uninstall entry: <AppId>_is1 under the install mode's root (HKA: per user here).
 def uninstall_key(app_id: str) -> str:
     return f"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{app_id}_is1"
-# What the data folder holds that Mimvox made (scripts never delete the folder blindly: a folder the user chose may
-# hold other files). ENGINE: the speech engine, models, caches; YOURS: what the user made, and the settings.
+# Never delete the data folder blindly: a folder the user chose may hold other files.
 ENGINE_ENTRIES = ("runtime", "cache", "tmp", "runtime.toml")
 USER_ENTRIES = ("voices", "outputs", "books", "logs", "settings.json")
 
-# Setup and Uninstall: whether the app runs (its mutex), the timer that watches it, and Setup's window that waits for
-# the app to close (the same look as the uninstaller's: a red line, Continue disabled until the app is gone).
 RUNNING_CODE = r"""
 function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: Longword): Longword;
   external 'SetTimer@user32.dll stdcall';
@@ -297,10 +270,8 @@ begin
 end;
 """
 
-# The uninstaller's one window (Pascal). "Apps & features" runs it with /SILENT (RegisterOneWindowUninstall), so Inno's
-# own "Remove ...?" box never shows; /VERYSILENT (a tool removing apps unattended) keeps every bit of data. The choice:
-# 0 the app only, 1 also the speech engine and models, 2 everything; /REMOVE=<n> answers it without the form. A run
-# started by hand (unins000.exe without /SILENT) shows the form too, then Inno's box.
+# "Apps & features" runs the uninstaller with /SILENT, so Inno's own "Remove ...?" box never shows; /VERYSILENT keeps
+# all data. /REMOVE=<n> answers the form: 0 the app only, 1 also the engine and models, 2 everything.
 UNINSTALL_CODE = r"""
 var
   RemoveChoice: Integer;
@@ -644,8 +615,6 @@ def uninstall_code(app_id: str) -> str:
             .replace("@USER@", lines(USER_ENTRIES)))
 
 
-# ------------------------------------------------------------------------------------------------- the script
-
 def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], smalls: list[Path],
         app_id: str = APP) -> str:
     arch_allowed = "arm64" if arch == "arm64" else "x64compatible"
@@ -653,8 +622,7 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
     lines = [
         "; Generated by scripts/build/inno.py - do not edit by hand.",
         "[Setup]",
-        # Finds an earlier install (and its folder and shortcuts) by this; a test build passes another id, so it
-        # never touches a real install's uninstall entry.
+        # A test build passes another id, so it never touches a real install's uninstall entry.
         f"AppId={app_id}",
         f"AppName={APP}",
         f"AppVersion={version}",
@@ -667,27 +635,20 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         f"DefaultDirName={{autopf}}\\{APP}",
         f"DefaultGroupName={APP}",
         "DisableProgramGroupPage=yes",
-        # Lets /NOICONS skip the Start menu entry (a test install, a scripted one).
         "AllowNoIcons=yes",
         "AllowRootDirectory=no",
         "PrivilegesRequired=lowest",
-        # Off: it is inherited by what Setup starts (the app after installing, and after an update), and it blocks the
-        # links uv's Python installs are made of (cpython-3.11-... -> cpython-3.11.13-...): the engine's python.exe then
-        # fails with "uv trampoline failed to spawn Python child process: entity not found". It protects elevated
-        # installers writing to shared folders; this one installs per user into the user's own folders.
+        # Off: Setup passes it on to the app it starts, and it blocks the links uv's Python installs are made of (the
+        # engine's python.exe fails with "uv trampoline failed to spawn Python child process"). Not needed per user.
         "RedirectionGuard=no",
         f"ArchitecturesAllowed={arch_allowed}",
         f"ArchitecturesInstallIn64BitMode={arch_allowed}",
-        # Closes a running Mimvox (Restart Manager) before its files are replaced.
         "CloseApplications=yes",
         "RestartApplications=no",
         "SetupLogging=yes",
         "Compression=lzma2/max",
         "SolidCompression=yes",
         "LZMANumBlockThreads=4",
-        # The look: forced dark, the app's background everywhere, our pictures.
-        # Inno's own dark style (neutral, its default button only outlined in light blue, like the app's glass
-        # buttons), coloured with the app's palette below; no bevel lines (the app has none).
         "WizardStyle=modern dark hidebevels",
         f"WizardBackColor={BG_TOP}",
         f"WizardImageFile={','.join(str(p) for p in banners)}",
@@ -695,7 +656,6 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         f"WizardSmallImageFile={','.join(str(p) for p in smalls)}",
         "WizardSmallImageBackColor=none",
         "DisableWelcomePage=no",
-        # One settings page: the folder and the desktop shortcut together (see [Code]); Install is pressed there.
         "DisableReadyPage=yes",
         f"OutputDir={out}",
         f"OutputBaseFilename={base}",
@@ -704,11 +664,11 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "WelcomeLabel2=This installs [name/ver] on your computer.%n%nThe speech engine and its models are not in "
         "this installer: the app downloads them on its first start, and you choose which parts you want.",
         f"FinishedLabel={APP} is installed. On its first start it sets up the speech engine for you.",
-        # The folder page is the last before installing (no Ready page): its button installs.
+        # No Ready page: this page's button installs.
         "SelectDirBrowseLabel=To install, click Install. To choose a different folder, click Browse.",
         "",
         "[InstallDelete]",
-        # An update replaces the app's folders whole, so nothing an older version shipped stays behind.
+        # Nothing an older version shipped stays behind.
         *(f'Type: filesandordirs; Name: "{{app}}\\{name}"' for name in APP_DIRS),
         "",
         "[Files]",
@@ -719,7 +679,6 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         f'Name: "{{autodesktop}}\\{APP}"; Filename: "{{app}}\\{BINARY}"; Check: DesktopWanted',
         "",
         "[UninstallDelete]",
-        # Whatever the app wrote inside its own folders goes with them; the data folder is elsewhere.
         *(f'Type: filesandordirs; Name: "{{app}}\\{name}"' for name in APP_DIRS),
         'Type: dirifempty; Name: "{app}"',
         "",
@@ -839,10 +798,7 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
     return "\n".join(lines) + "\n" + uninstall_code(app_id)
 
 
-# ------------------------------------------------------------------------------------------------- the compiler
-
 def ensure_iscc(cache: Path) -> Path:
-    """The pinned Inno Setup's compiler, unpacked once (portable, per user, no administrator prompt) into ``cache``."""
     iscc = cache / f"inno-{INNO_VERSION}" / "ISCC.exe"
     if iscc.is_file():
         return iscc

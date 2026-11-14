@@ -1,16 +1,8 @@
-"""Persistent speech worker: Whisper (transcription), NLLB-200 1.3B or 600M (translation) and Hybrid Demucs (vocal
-separation) in one child process of the engine.
+"""Speech worker: Whisper, NLLB-200 and Hybrid Demucs. Standalone: imports nothing from ``mimvox_engine``.
 
-Started lazily by ``speech.py`` as ``python -I speech_worker.py --models-root <data>/runtime/models`` with the engine
-interpreter (the engine venv). Standalone on purpose: it imports nothing from ``mimvox_engine``.
+    python -I speech_worker.py --models-root <data>/runtime/models
 
-Why a process: the OmniVoice worker and the RVC worker already share the 12 GB card; a separate
-process can be told to hand its GPU memory back, exits on its own when idle, and a native crash cannot take the
-engine down. Models load on demand, stay warm, and are dropped after ``UNLOAD_S`` of idleness (the process itself
-exits after ``EXIT_S``).
-
-Wire format and the event-driven skeleton (stdin reader thread -> loop -> single op thread, idle timers): see
-``worker_kit.py``, which this script loads by its file path.
+Wire format: ``worker_kit.py``.
 
 Ops (all params optional unless stated):
   load_asr    {"model":"turbo","allow_cuda":true}                              -> {"device","half","model","load_s"}
@@ -62,36 +54,35 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--models-root", required=True)
 args = ap.parse_args()
 
-UNLOAD_S = float(os.environ.get("MIMVOX_SPEECH_UNLOAD_S", "180"))   # models are dropped after this much idleness
-EXIT_S = float(os.environ.get("MIMVOX_SPEECH_EXIT_S", "600"))       # the process exits after this much idleness
-ASR_NEED_HALF_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))   # fp16 weights (1.6 GB) + decoding activations
+UNLOAD_S = float(os.environ.get("MIMVOX_SPEECH_UNLOAD_S", "180"))
+EXIT_S = float(os.environ.get("MIMVOX_SPEECH_EXIT_S", "600"))
+ASR_NEED_HALF_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))   # fp16 weights (1.6 GB) + decoding
 ASR_NEED_FP32_GB = 4.0
-# Translators (NLLB-200), best first: id -> (folder under the models root, VRAM needed for fp16 weights + beam search).
-# The 1.3B runs on the GPU only while the 600M is there to fall back to (on a CPU it is about 3x slower, 2x the RAM).
+# NLLB-200 translators, best first: (folder, VRAM for fp16 weights + beam search). The 1.3B runs on the GPU only
+# while the 600M is there to fall back to (on a CPU it is about 3x slower, with 2x the RAM).
 MT_MODELS = {
-    "nllb-1.3b": ("nllb-200-distilled-1.3B", float(os.environ.get("MIMVOX_NLLB_BIG_NEED_GB", "3.4"))),   # 2.6 GB weights
-    "nllb-600m": ("nllb-200-distilled-600M", float(os.environ.get("MIMVOX_NLLB_NEED_GB", "2.0"))),       # 1.2 GB weights
+    "nllb-1.3b": ("nllb-200-distilled-1.3B", float(os.environ.get("MIMVOX_NLLB_BIG_NEED_GB", "3.4"))),
+    "nllb-600m": ("nllb-200-distilled-600M", float(os.environ.get("MIMVOX_NLLB_NEED_GB", "2.0"))),
 }
-MT_FILES = ("config.json", "sentencepiece.bpe.model", "tokenizer_config.json")   # + model.safetensors or pytorch_model.bin
-GLOSSARY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glossary")   # <nllb source code>.json
+MT_FILES = ("config.json", "sentencepiece.bpe.model", "tokenizer_config.json")
+GLOSSARY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glossary")
 WHISPER_DIR = os.path.join(args.models_root, "whisper")
-# Vocal separation: torchaudio's HDEMUCS_HIGH_MUSDB_PLUS weights (setup downloads them; never fetched from here).
+# torchaudio's HDEMUCS_HIGH_MUSDB_PLUS weights: setup downloads them, never fetched from here.
 SEP_PATH = os.path.join(args.models_root, "demucs", "hdemucs_high_trained.pt")
 SEP_SOURCES = ("drums", "bass", "other", "vocals")
 SEP_SR = 44100
-SEP_NEED_GB = float(os.environ.get("MIMVOX_DEMUCS_NEED_GB", "1.2"))   # 0.76 GB peak measured (fp32 weights + one 10 s
-                                                                      # segment) plus the CUDA context
-SEP_SEGMENT_S = 10.0     # audio per forward pass: bounds the memory whatever the file length
-SEP_OVERLAP = 0.25       # neighbouring segments overlap by this share and are cross-faded (as Demucs' apply does)
-SPLIT_OVER_CHARS = 160   # a longer text is translated sentence by sentence (NLLB drops content of long inputs)
-MERGE_MIN_CHARS = 50     # ... but a sentence shorter than this is joined to the next one
-JOIN_MAX_TEXTS = 4       # "join": at most this many texts (segments) are translated as one sentence
-JOIN_MAX_CHARS = 320     # ... and at most this many characters
-JOIN_MAX_GAP_S = 2.5     # ... and never across a pause this long ("gaps")
+SEP_NEED_GB = float(os.environ.get("MIMVOX_DEMUCS_NEED_GB", "1.2"))   # measured 0.76 GB peak plus the CUDA context
+SEP_SEGMENT_S = 10.0
+SEP_OVERLAP = 0.25
+SPLIT_OVER_CHARS = 160   # NLLB drops content of long inputs
+MERGE_MIN_CHARS = 50
+JOIN_MAX_TEXTS = 4
+JOIN_MAX_CHARS = 320
+JOIN_MAX_GAP_S = 2.5
 
 Cancelled = kit.Cancelled
 OpError = kit.OpError
-WORKER = None  # the kit.Worker, created at the bottom
+WORKER = None
 
 
 def log(msg):
@@ -105,8 +96,6 @@ def check_cancel():
 def progress(stage, pct):
     WORKER.progress({"stage": stage, "pct": round(float(pct), 1)})
 
-
-# ------------------------------------------------------------------------------------------------ memory helpers
 
 def _torch():
     import torch
@@ -124,7 +113,6 @@ def free_vram_gb():
 
 
 def rss_gb():
-    """(working set, peak working set) of this process in GB; (0, 0) when unreadable."""
     try:
         if os.name == "nt":
             import ctypes
@@ -178,18 +166,14 @@ def collect():
     trim_working_set()
 
 
-# ------------------------------------------------------------------------------------------------ state
-
 class Slot:
-    """A loaded model: ``obj`` (and ``aux``), the ``device`` it lives on and a ``key`` naming what it is."""
-
     def __init__(self, key, obj, device, aux=None, half=False):
         self.key, self.obj, self.device, self.aux, self.half = key, obj, device, aux, half
 
 
-ASR = [None]   # Slot of Whisper
-MT = [None]    # Slot of NLLB
-SEP = [None]   # Slot of Hybrid Demucs
+ASR = [None]
+MT = [None]
+SEP = [None]
 _half_broken = [False]   # the fp16 Whisper loader failed once: use the stock loader from then on
 
 
@@ -214,9 +198,8 @@ def unload_all(reason=""):
 
 
 def pick_device(need_gb, allow_cuda, *others):
-    """cuda when ``need_gb`` of VRAM is free beyond the desktop's reserve (``kit.VRAM_RESERVE_GB``; dropping the other
-    models from the GPU if that makes it fit), else cpu (dropping the other models too when they also sit in host RAM,
-    so the process stays small). On cuda the allocator cap (``kit.gpu_fence``) is set right away."""
+    """cuda when ``need_gb`` is free beyond the desktop's reserve, dropping the other models if that makes it fit,
+    else cpu. On cuda the allocator cap (``kit.gpu_fence``) is set right away."""
     torch = _torch()
     if allow_cuda and torch.cuda.is_available():
         free = kit.gpu_free_gb()
@@ -237,8 +220,6 @@ def pick_device(need_gb, allow_cuda, *others):
             unload(other)
     return "cpu"
 
-
-# ------------------------------------------------------------------------------------------------ Whisper
 
 class Bar:
     """Stands in for tqdm inside whisper: reports progress and honours cancel."""
@@ -272,7 +253,6 @@ def _load_whisper_half(whisper, name, device):
 
 
 def ensure_asr(name, allow_cuda):
-    """Load Whisper ``name`` if it is not loaded yet; returns the Slot."""
     slot = ASR[0]
     if slot is not None and slot.key == name:
         progress("load_model", 100)
@@ -350,8 +330,6 @@ def op_transcribe(req):
                          for s in res.get("segments", [])]}
 
 
-# ------------------------------------------------------------------------------------------------ NLLB
-
 def _transformers_major():
     import transformers
     try:
@@ -371,7 +349,6 @@ def mt_installed(name):
 
 
 def mt_candidates(want):
-    """The installed translators to try for ``want`` (``nllb-1.3b`` | ``nllb-600m`` | None = the best), in order."""
     if want not in (None, "", *MT_MODELS):
         raise OpError("bad_request", f"unknown translator {want!r} (one of {', '.join(MT_MODELS)})")
     order = list(MT_MODELS)
@@ -386,8 +363,7 @@ def mt_candidates(want):
 
 
 def ensure_mt(want, allow_cuda, force_cpu=False):
-    """The translator to use for ``want``, loaded: the wanted (or best) one on the GPU in fp16; the 1.3B falls back to
-    the 600M when it does not fit in the free VRAM (or there is no GPU), the last one installed runs wherever it can."""
+    """The 1.3B falls back to the 600M when it does not fit in the free VRAM; the last one installed runs anywhere."""
     torch = _torch()
     have = mt_candidates(want)
     cuda = bool(allow_cuda) and not force_cpu and torch.cuda.is_available()
@@ -418,12 +394,10 @@ def ensure_mt(want, allow_cuda, force_cpu=False):
 
 
 _SENT = re.compile(r"(?<=[.!?…])\s+")
-# A text that ends a sentence: final punctuation, optionally followed by closing quotes or brackets.
 _SENT_END = re.compile(r"[.!?…。！？؟।]['\"»”’)\]]*$")
-# Where a translation is best cut back into segments (after these, then at any word boundary).
 _CUT_STRONG = set(".!?…。！？;；")
 _CUT_WEAK = set(",:，、：—–-)»”\"'")
-# Scripts written without spaces between words (Thai, Lao, Tibetan, Myanmar, Khmer, Chinese, Japanese).
+# Thai, Lao, Tibetan, Myanmar, Khmer, Chinese, Japanese: no spaces between words.
 _NO_SPACES = re.compile("[\u0e00-\u0fff\u1000-\u109f\u1780-\u17ff\u2e80-\u9fff\uf900-\ufaff]")
 
 
@@ -432,7 +406,6 @@ def _clean(text):
 
 
 def split_pieces(text):
-    """One text -> pieces translated separately and joined with a space (short texts stay whole)."""
     text = _clean(text)
     if len(text) <= SPLIT_OVER_CHARS:
         return [text]
@@ -451,9 +424,7 @@ def split_pieces(text):
 
 
 def join_groups(texts, gaps=None):
-    """Consecutive texts that form one sentence, as lists of indices: a text that does not end with sentence
-    punctuation is joined with the next one (at most JOIN_MAX_TEXTS / JOIN_MAX_CHARS, never across an empty text or a
-    pause of JOIN_MAX_GAP_S; ``gaps[i]`` is the silence in seconds between text i and i+1)."""
+    """Indices of consecutive texts that form one sentence; ``gaps[i]`` is the silence in seconds after text i."""
     clean = [_clean(t) for t in texts]
     groups, cur, size = [], [], 0
     for i, t in enumerate(clean):
@@ -474,15 +445,14 @@ def join_groups(texts, gaps=None):
 
 
 def split_translation(text, weights):
-    """``text`` cut into ``len(weights)`` non-empty parts whose lengths follow ``weights`` (the source texts' lengths),
-    each cut moved to a nearby punctuation mark or else the nearest word boundary that does not follow a short word
-    (any character for a script written without spaces). None when the text has too few words for that many parts."""
+    """``text`` cut into parts whose lengths follow ``weights``, at punctuation or word boundaries; None when it has
+    too few words."""
     text = _clean(text)
     k = len(weights)
     if k == 1:
         return [text] if text else None
     if " " in text:
-        cands = [m.end() for m in re.finditer(r" ", text)]   # where the next word starts
+        cands = [m.end() for m in re.finditer(r" ", text)]
     elif _NO_SPACES.search(text):
         cands = list(range(1, len(text)))
     else:
@@ -505,7 +475,7 @@ def split_translation(text, weights):
             elif word[-1:] in _CUT_WEAK:
                 score -= 0.10
             elif word.isalpha() and len(word) <= 3:
-                score += 0.20   # not after "the", "at", "his", "a": such a word belongs to the next part
+                score += 0.20
             if best is None or score < best[0]:
                 best = (score, ci)
         cuts.append(cands[best[1]])
@@ -518,8 +488,7 @@ _GLOSSARIES = {}
 
 
 def glossary(src):
-    """Source-side replacements for language ``src`` (``glossary/<src>.json``: ``{"replace":[[regex, text], ...]}``,
-    applied in order, case-insensitive; slang the model does not know becomes words it does). [] when none."""
+    """``glossary/<src>.json``: ``{"replace": [[regex, text], ...]}``, applied in order, case-insensitive."""
     if src not in _GLOSSARIES:
         rules = []
         path = os.path.join(GLOSSARY_DIR, f"{src}.json")
@@ -586,7 +555,6 @@ def _translate_all(slot, pieces, src, tgt, beams):
 
 
 def _translate_texts(slot, texts, src, tgt, beams, rules):
-    """Every text translated (long ones piece by piece); "" for an empty text."""
     owners, pieces = [], []
     for i, t in enumerate(texts):
         for p in split_pieces(apply_glossary(_clean(t), rules)):
@@ -620,7 +588,7 @@ def op_translate(req):
         try:
             out = _translate_texts(slot, units, src, tgt, beams, rules)
             result = [""] * len(texts)
-            alone = []   # texts of a joined group whose translation could not be cut back: translated one by one
+            alone = []
             for g, unit in zip(groups, out):
                 parts = split_translation(unit, [len(_clean(texts[i])) for i in g]) if len(g) > 1 else [unit]
                 if parts is None:
@@ -653,11 +621,7 @@ def op_translate(req):
             "peak_vram_gb": round(peak, 2)}
 
 
-# ------------------------------------------------------------------------------------------------ Hybrid Demucs
-
 def ensure_sep(allow_cuda, force_cpu=False):
-    """Load the separation model (torchaudio's ``hdemucs_high`` with the HDEMUCS_HIGH_MUSDB_PLUS weights from
-    ``SEP_PATH``, fp32) if it is not loaded yet; returns the Slot."""
     slot = SEP[0]
     if slot is not None and (not force_cpu or slot.device == "cpu"):
         progress("load_model", 100)
@@ -685,15 +649,8 @@ def ensure_sep(allow_cuda, force_cpu=False):
 
 
 def _separate(slot, mix, vocals_out, rest_out=None):
-    """Hybrid Demucs over ``mix`` (float32, ``(channels, n)`` at SEP_SR, one or two channels; may be memory-mapped).
-    The vocals are written to ``vocals_out`` and, when given, the sum of the other stems (drums + bass + other: the
-    accompaniment) to ``rest_out``; both are zero-filled arrays of the same shape (memory-mapped ``.npy`` files, so
-    a long file does not have to fit in RAM).
-
-    The model takes stereo: a mono signal is fed on both channels and the two output channels are averaged. The
-    signal is normalised once for the whole file (by its mono mean and deviation, as Demucs does) and cut into
-    SEP_SEGMENT_S segments that overlap by SEP_OVERLAP; each segment's output is weighted with a triangle and the
-    overlaps are summed and divided by the summed weights (Demucs' ``apply_model`` with ``segment`` / ``overlap``)."""
+    """Writes into zero-filled memory-mapped arrays, so a long file need not fit in RAM. The model takes stereo: a mono
+    signal is fed on both channels and the two outputs are averaged."""
     import math
     import numpy as np
     torch = _torch()
@@ -702,7 +659,7 @@ def _separate(slot, mix, vocals_out, rest_out=None):
     others = [i for i in range(len(SEP_SOURCES)) if i != vi]
     chans, n = int(mix.shape[0]), int(mix.shape[1])
     mean, std = 0.0, 0.0
-    step = SEP_SR * 60   # the statistics in one-minute blocks (a memory-mapped input stays on disk)
+    step = SEP_SR * 60   # a memory-mapped input stays on disk
     total_sq = 0.0
     for a in range(0, n, step):
         ref = np.asarray(mix[:, a:a + step], dtype=np.float64).mean(0)
@@ -749,14 +706,12 @@ def _separate(slot, mix, vocals_out, rest_out=None):
 
 
 def _open_out(path, shape):
-    """A zero-filled float32 ``.npy`` of ``shape`` mapped into memory, at ``<path>.part.npy`` (renamed when done)."""
     import numpy as np
     return np.lib.format.open_memmap(path + ".part.npy", mode="w+", dtype=np.float32, shape=shape)
 
 
 def _release_outs(outs):
-    """Unmap the output files in ``outs`` (emptied) and return their paths (Windows cannot rename or delete a mapped
-    file)."""
+    """Windows cannot rename or delete a mapped file: unmap before."""
     for arr in outs:
         arr.flush()
     names = [arr.filename for arr in outs]
@@ -809,8 +764,6 @@ def op_separate_vocals(req):
     return {"device": slot.device, "seconds": round(seconds, 2), "channels": int(mix.shape[0]),
             "elapsed_s": round(elapsed, 2), "peak_vram_gb": round(peak, 2)}
 
-
-# ------------------------------------------------------------------------------------------------ main
 
 def op_status(_req):
     cur, peak = rss_gb()

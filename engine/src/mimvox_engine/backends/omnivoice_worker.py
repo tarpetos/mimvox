@@ -1,31 +1,18 @@
-"""Persistent OmniVoice worker (k2-fsa/OmniVoice, zero-shot TTS in 600+ languages): the engine's speech model.
-
-Runs with the engine venv's interpreter (``<data>/runtime/engine/.venv``: torch 2.8, transformers 5, omnivoice,
-openai-whisper, num2words), started by ``backends/omnivoice.py`` as
+"""OmniVoice worker. Standalone: imports nothing from ``mimvox_engine``.
 
     python -I omnivoice_worker.py --model-dir <data>/runtime/models/omnivoice --whisper-dir <data>/runtime/models/whisper
                                   [--device cuda|cpu|mps] [--unload-after S] [--exit-after S] [--prompt-cache N]
 
-Standalone on purpose: it imports nothing from ``mimvox_engine``; the event-driven skeleton ``worker_kit.py`` and
-the text normalizer ``omnivoice_text.py`` are loaded by their file paths. Wire format: see ``worker_kit.py``.
-
-Ops (one at a time, on the op thread):
-  load     {}                                         -> {"load_s","device","vram_gb"}   (no-op when loaded)
+Ops (wire format: ``worker_kit.py``):
+  load     {}                                         -> {"load_s","device","vram_gb"}
   synth    {"text","lang","ref","out", "steps":32, "speed":1.0, "duration":null, "normalize":true, "ref_text":null,
-            "model_lang", "position_temperature", "class_temperature", "guidance_scale" (optional sampling knobs)}
+            "model_lang", "position_temperature", "class_temperature", "guidance_scale"}
                                                       -> {"out","sr","duration_s","gen_s","text"}
-           ``ref``: a WAV of the voice. A clip longer than REF_MAX_S (12 s) is cut to a 7-12 s run of whole sentences
-           (Whisper turbo finds them once; the cut, its transcript and Whisper's detected language are cached next
-           to the clip in ``<clip>.omnivoice.json``). ``ref_text``, the transcript of a clip of at most REF_MAX_S, skips Whisper and
-           the sidecar (the shipped native-accent clips, whose folder may be read-only). The voice-clone prompts of
-           the last ``--prompt-cache`` references (default 3: the user's clip and the native ones) stay in memory.
-  warm     {"ref","ref_text"?}                        -> {"elapsed_s"}  (builds the voice-clone prompt only)
-  inspect  {"ref","detect"?:true}                     -> {"language","text","elapsed_s"}  (the clip's sidecar, built
-           when missing: Whisper only, the TTS model is not loaded; with ``detect`` a sidecar without ``language``
-           gets Whisper's language detection added)
-  release  {}                                         -> {}  (drops the models and frees the GPU; ``load`` or the next
-                                                              ``synth`` loads them again)
+  warm     {"ref","ref_text"?}                        -> {"elapsed_s"}
+  inspect  {"ref","detect"?:true}                     -> {"language","text","elapsed_s"}  (Whisper only, no TTS model)
+  release  {}                                         -> {}
   status   {}                                         -> {"loaded","rss_gb","vram_gb"}
+  zs_load, zs_convert, zs_warm, zs_release, zs_status: Seed-VC (``zsvc_worker.py``)
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"}, {"event":"exit","reason":"idle"}.
 """
 import argparse
@@ -54,9 +41,9 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--model-dir", required=True)
 ap.add_argument("--whisper-dir", default="")
 ap.add_argument("--device", default="cuda")
-ap.add_argument("--unload-after", type=float, default=0.0)  # 0: keep the model while the process lives
-ap.add_argument("--exit-after", type=float, default=0.0)    # 0: never exit on idleness
-ap.add_argument("--prompt-cache", type=int, default=3)      # voice-clone prompts kept in memory (least recently used out)
+ap.add_argument("--unload-after", type=float, default=0.0)
+ap.add_argument("--exit-after", type=float, default=0.0)
+ap.add_argument("--prompt-cache", type=int, default=3)
 args = ap.parse_args()
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -70,19 +57,16 @@ import torch  # noqa: E402
 text_norm = _load_by_path("mimvox_omnivoice_text", os.path.join(HERE, "omnivoice_text.py"))
 whisper_half = _load_by_path("mimvox_whisper_half", os.path.join(os.path.dirname(HERE), "whisper_half.py"))
 
-# Reference length: OmniVoice's docs suggest 3-10 s. On a test voice the whole 19 s clip cloned a little better
-# than a 7 s cut (ECAPA similarity after RVC 0.86 vs 0.84) but needs ~3 GB more VRAM (peak 6.9 vs 3.9 GB), and next to
-# the RVC worker that filled the 12 GB card (11.6 GB in use, segments 2-3x slower). Clips up to REF_MAX_S are used
-# whole, longer ones are cut to whole sentences around REF_CUT_TARGET_S.
+# A whole 19 s reference cloned barely better than a 7 s cut (ECAPA 0.86 vs 0.84) but peaked at 6.9 GB VRAM instead
+# of 3.9, which next to the RVC worker filled a 12 GB card: longer clips are cut to whole sentences.
 REF_MAX_S = float(os.environ.get("MIMVOX_OMNIVOICE_REF_MAX_S", "12"))
 REF_CUT_MIN_S, REF_CUT_MAX_S, REF_CUT_TARGET_S = 7.0, REF_MAX_S, 10.0
-# Whisper turbo for a new reference clip: on the GPU with fp16 weights (1.6 GB + decoding) only when that fits beyond
-# the desktop's reserve next to everything else on the card, else on the CPU (about 10-20 s for a clip, once per clip).
+# fp16 Whisper turbo: 1.6 GB of weights plus decoding; on the CPU otherwise (10-20 s per clip).
 WHISPER_NEED_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))
 SIDECAR_VERSION = 3
 
 _state = {"model": None, "device": None}
-_prompts = collections.OrderedDict()  # (sig, ref_text) -> voice-clone prompt, most recently used last
+_prompts = collections.OrderedDict()
 
 
 def _log(msg):
@@ -120,8 +104,6 @@ def _rss_gb():
     except Exception:  # noqa: BLE001
         return 0.0
 
-
-# ---------------------------------------------------------------------------------------------------- model
 
 def _device():
     want = args.device
@@ -183,8 +165,6 @@ def _idle_unload():
     return {"event": "unloaded", "reason": "idle"}
 
 
-# ------------------------------------------------------------------------------------------------ reference
-
 def _sig(path):
     st = os.stat(path)
     return [os.path.abspath(path), st.st_mtime_ns, st.st_size]
@@ -208,8 +188,7 @@ def _whisper_device():
 
 
 def _with_whisper(use):
-    """``use(model, device)`` with Whisper turbo loaded for this call only (fp16 on the GPU when it fits, else the CPU),
-    retried on the CPU when the GPU runs out of memory midway; the model is dropped afterwards either way."""
+    """Whisper turbo loaded for this call only; retried on the CPU when the GPU runs out of memory midway."""
     import whisper
 
     dev = _whisper_device()
@@ -242,8 +221,7 @@ def _16k(x, sr):
 
 
 def _transcribe(x, sr):
-    """Whisper turbo on a clip, language auto-detected (not forced): ([(start, end, text)], detected language code or
-    None)."""
+    """([(start, end, text)], detected language or None); the language is not forced."""
     x16 = _16k(x, sr)
     res = _with_whisper(lambda wm, dev: wm.transcribe(x16, fp16=dev == "cuda", condition_on_previous_text=False))
     segs = [(float(s["start"]), float(s["end"]), s["text"].strip()) for s in res["segments"] if s["text"].strip()]
@@ -251,7 +229,6 @@ def _transcribe(x, sr):
 
 
 def _detect_language(x, sr):
-    """Whisper turbo's language detection alone (the first 30 s of a clip): an ISO code or None."""
     import whisper
 
     x16 = _16k(x, sr)
@@ -268,8 +245,8 @@ def _detect_language(x, sr):
 
 
 def _pick_window(segs, total):
-    """The run of whole Whisper segments closest to REF_CUT_TARGET_S within [MIN, MAX]; statements (ending with
-    '.') are preferred over questions and exclamations, which make every generated sentence sound like one."""
+    """Whole segments closest to REF_CUT_TARGET_S, preferring statements: a question or exclamation in the reference
+    makes every generated sentence sound like one."""
     best, best_score = None, None
     for i in range(len(segs)):
         for j in range(i, len(segs)):
@@ -282,7 +259,7 @@ def _pick_window(segs, total):
             score = abs(d - REF_CUT_TARGET_S) + 3.0 * questions
             if best_score is None or score < best_score:
                 best, best_score = (i, j), score
-    if best is None:  # no fitting run: the first REF_CUT_MAX_S seconds with whatever was said in them
+    if best is None:
         keep = [s for s in segs if s[1] <= REF_CUT_MAX_S] or segs[:1]
         return 0.0, min(total, keep[-1][1] if keep else REF_CUT_MAX_S), " ".join(s[2] for s in keep)
     i, j = best
@@ -290,8 +267,7 @@ def _pick_window(segs, total):
 
 
 def _reference(ref, ref_text=None):
-    """(waveform float32 mono, sample rate, transcript) for the voice-clone prompt: a clip of at most REF_MAX_S with
-    a known ``ref_text`` as it is, else via the sidecar cache."""
+    """(mono float32, sr, transcript); a clip up to REF_MAX_S with a known ``ref_text`` skips Whisper and sidecar."""
     sig = _sig(ref)
     side = os.path.splitext(ref)[0] + ".omnivoice.json"
     x, sr = _load_mono(ref)
@@ -348,8 +324,6 @@ def _prompt(ref, ref_text=None):
     return prompt
 
 
-# ------------------------------------------------------------------------------------------------------ ops
-
 def op_warm(req):
     t0 = time.time()
     op_load()
@@ -358,9 +332,6 @@ def op_warm(req):
 
 
 def op_inspect(req):
-    """The sidecar of a user clip, built when missing (Whisper only: the TTS model is not loaded for this). With
-    ``detect`` (default) a sidecar written before the worker recorded the language (version 3 without ``language``)
-    gets Whisper's language detection added."""
     ref = req.get("ref")
     if not ref or not os.path.isfile(ref):
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
@@ -370,7 +341,7 @@ def op_inspect(req):
     try:
         with open(side, encoding="utf-8") as fh:
             cached = json.load(fh)
-    except (OSError, ValueError) as exc:  # the folder is read-only: _reference could not write it
+    except (OSError, ValueError) as exc:
         raise kit.OpError("internal", f"no sidecar for {ref}: {exc}") from None
     if not cached.get("language") and req.get("detect", True):
         x, sr = _load_mono(ref)
@@ -406,7 +377,7 @@ def op_synth(req):
     gen_s = time.time() - t0
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()  # hand cached blocks back: the RVC worker shares the card
+        torch.cuda.empty_cache()  # the RVC worker shares the card
     sr = int(_state["model"].sampling_rate)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     sf.write(out, np.clip(audio, -1.0, 1.0), sr, subtype="PCM_16")
@@ -417,11 +388,7 @@ def op_status(_req=None):
     return {"loaded": _state["model"] is not None, "rss_gb": _rss_gb(), "vram_gb": _vram_gb()}
 
 
-# ------------------------------------------------------------------------- the zero-shot converter (Seed-VC)
-#
-# Hosted here instead of in a process of its own (zsvc_worker.py explains): its ops are ``zs_load``, ``zs_convert``,
-# ``zs_warm``, ``zs_release`` and ``zs_status``, each with "seed_vc" (the checkout) and "models" (the weights folder).
-# The module and its models load on the first of them.
+# Seed-VC is hosted in this process (``zsvc_worker.py`` says why) and loads on its first ``zs_*`` op.
 
 _zs = {}
 

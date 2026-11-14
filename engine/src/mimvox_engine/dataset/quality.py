@@ -1,9 +1,4 @@
-"""Recording quality analysis: level, clipping, noise floor, SNR and silence, with friendly advice.
-
-Calibration notes (measured on good takes, recorded quietly with a peak of about 0.1-0.15):
-quiet-but-clean audio is fine because the dataset step normalises loudness. "Too quiet" therefore only fires when
-the peak is so low that normalising would mostly amplify noise and 16-bit quantisation.
-"""
+"""Recording quality. Quiet but clean takes (peak 0.1-0.15) are fine: the dataset step normalises loudness."""
 from __future__ import annotations
 
 from typing import Any
@@ -13,11 +8,10 @@ import numpy as np
 from ..registry import EngineError, method
 from ._audio import HOP_S, frame_db, read_audio, to_db
 
-# Thresholds (dBFS unless noted)
 MIN_DURATION_BAD_S = 3.0
 MIN_DURATION_WARN_S = 10.0
-PEAK_WARN = 0.03          # about -30 dBFS
-PEAK_BAD = 0.006          # about -44 dBFS
+PEAK_WARN = 0.03
+PEAK_BAD = 0.006
 CLIP_WARN_PCT = 0.05
 CLIP_BAD_PCT = 0.5
 SNR_WARN_DB = 25.0
@@ -31,7 +25,6 @@ _SEVERITY = {"ok": 0, "warn": 1, "bad": 2}
 
 
 def _sum_squares(y: np.ndarray, block: int = 1 << 20) -> float:
-    """Sum of squares in float64, a block at a time (no float64 copy of a long file)."""
     total = 0.0
     for i in range(0, len(y), block):
         seg = y[i:i + block].astype(np.float64)
@@ -40,7 +33,7 @@ def _sum_squares(y: np.ndarray, block: int = 1 << 20) -> float:
 
 
 def measure(y: np.ndarray, sr: int) -> dict[str, Any]:
-    """Raw metrics plus the frame-level arrays other modules reuse (keys starting with ``_``)."""
+    """Keys starting with ``_`` are frame-level arrays other modules reuse."""
     n = len(y)
     peak = max(float(np.max(y)), -float(np.min(y))) if n else 0.0
     if peak >= 0.95:
@@ -49,7 +42,7 @@ def measure(y: np.ndarray, sr: int) -> dict[str, Any]:
         clipping_pct = 0.0
     rms = float(np.sqrt(_sum_squares(y) / n)) if n else 0.0
     fdb = frame_db(y, sr)
-    live = fdb[fdb > -90.0]  # ignore digitally silent frames (noise gates / zero padding)
+    live = fdb[fdb > -90.0]
     if live.size < 10:
         noise_floor, speech = -90.0, -90.0
     else:
@@ -74,7 +67,6 @@ def measure(y: np.ndarray, sr: int) -> dict[str, Any]:
 
 
 def assess(m: dict[str, Any], expected_s: float | None = None) -> tuple[str, list[str]]:
-    """Turn metrics into a verdict (ok / warn / bad) and friendly English issues."""
     found: list[tuple[str, str]] = []
     dur = m["duration_s"]
     if dur < MIN_DURATION_BAD_S:

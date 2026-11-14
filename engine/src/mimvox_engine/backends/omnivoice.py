@@ -1,28 +1,4 @@
-"""OmniVoice backend (k2-fsa/OmniVoice): the speech model of the engine. Zero-shot voice cloning in ~60 well-covered
-languages, English and Ukrainian among them.
-
-The model runs in a persistent worker process (``omnivoice_worker.py``) started with the engine's own interpreter
-(the engine venv, ``<data>/runtime/engine/.venv``: torch 2.8 + transformers 5), weights in
-``<data>/runtime/models/omnivoice`` (``runtime.toml`` ``[paths] omnivoice_model``; ``[python] omnivoice`` may name
-another interpreter). A process and not a module of the engine: a native crash cannot take the engine down, and
-handing the GPU to a training is ending the process (all its VRAM and host RAM back at once). The worker is driven
-through ``workerproc.WorkerClient``: one owner task, a reader task resolving futures, timers for timeouts; nothing here
-blocks the engine loop or polls.
-
-Measured on an RTX 4070 (12 GB, Windows 11), fp16, 32 steps: about 2.2 s per segment of up to ~10 s of speech
-(RTF 0.2-0.33; 16 steps halves it), ~4 GB of VRAM with a 9 s reference (~7 GB with 19 s), ~2.2 GB of host RAM, 10-25 s to load.
-
-Voice: the voice's ``reference.wav`` (used whole up to 12 s, else cut by the worker to 7-12 s of whole sentences;
-transcript and Whisper's detected language cached next to it in ``reference.omnivoice.json``, read by ``reflang.py``). A per-language clip ``reference_<lang>.wav`` next to it wins when present: OmniVoice
-carries the accent of the reference into the target language, so a Ukrainian clip makes the cleanest Ukrainian.
-For English, ``accent.py`` may speak from a shipped native American clip instead (``SynthParams.reference_text``) and
-let RVC bring the user's timbre back.
-
-The voice's RVC model then converts the output like every backend's (pipeline). For languages other than the one the
-RVC model was trained on, keep the index rate low (measured: index 1.0 garbles Ukrainian phonemes through an
-English-only feature index; 0.3 keeps the words and most of the timbre): ``rvc.index_rate_for`` caps it, applied by
-``tts.generate`` and Redub respeak from the voice's ``language`` (``voice.json``, default ``en``).
-"""
+"""OmniVoice in a worker process: a native crash cannot take the engine down, and ending it frees the GPU at once."""
 from __future__ import annotations
 
 import logging
@@ -44,15 +20,11 @@ WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "omnivoice_wor
 BEST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_STEPS", "32"))
 FAST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_FAST_STEPS", "16"))
 FIRST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_FIRST_STEPS", "16"))  # segment 0: ~1.1 s instead of ~2.2 s
-UNLOAD_AFTER_S = float(os.environ.get("MIMVOX_OMNIVOICE_UNLOAD_S", "0"))   # 0: keep the model loaded while idle
-# Voice-clone prompts the worker keeps (least recently used out): the user's reference plus the native-accent clips
-# (accent.py), so switching between them does not rebuild a prompt.
-PROMPT_CACHE = 3
+UNLOAD_AFTER_S = float(os.environ.get("MIMVOX_OMNIVOICE_UNLOAD_S", "0"))
+PROMPT_CACHE = 3  # the user's reference plus the two native-accent clips
 
-# "expressiveness" (0.1-1.5, default 0.8) -> OmniVoice's two sampling knobs:
-# position_temperature (randomness of the order in which tokens are unmasked: phrasing, pauses; model default 5.0) and
-# class_temperature (randomness of the tokens themselves; model default 0 = greedy). The default 0.8 gives the model's
-# defaults; lower is flatter and steadier, higher adds variation (above ~1.2 words may start to slur).
+# Expressiveness 0.8 gives OmniVoice's defaults (position_temperature 5.0, class_temperature 0 = greedy);
+# above ~1.2 words may start to slur.
 EXPR_DEFAULT = 0.8
 POS_TEMP_DEFAULT = 5.0
 
@@ -62,32 +34,25 @@ def sampling_for(expressiveness: float) -> dict[str, float]:
     return {"position_temperature": round(POS_TEMP_DEFAULT * e / EXPR_DEFAULT, 3),
             "class_temperature": round(max(0.0, e - EXPR_DEFAULT), 3)}
 
-SYNTH_TIMEOUT_S = 300.0   # one segment; includes a first-time reference transcription and a cold model load
+SYNTH_TIMEOUT_S = 300.0   # includes a first-time reference transcription and a cold model load
 LOAD_TIMEOUT_S = 300.0
 
-# ISO 639-1 (Whisper / NLLB codes of redub/langs.py) -> OmniVoice language id, for the languages with at least ~100 h of
-# OmniVoice training data (docs/languages.md of k2-fsa/OmniVoice; hours in the comments). The model knows 646, but
-# below ~100 h quality drops; those are left out on purpose.
+# Languages with at least ~100 h of OmniVoice training data (its docs/languages.md): quality drops below that.
 LANGS: dict[str, str] = {
-    # >= 1000 h
     "en": "en", "zh": "zh", "ja": "ja", "es": "es", "fr": "fr", "de": "de", "ru": "ru", "pt": "pt", "yue": "yue",
     "th": "th", "it": "it", "ko": "ko", "vi": "vi", "id": "id", "no": "no", "ca": "ca", "hr": "hr", "lt": "lt",
-    "sk": "sk", "sv": "sv", "el": "el", "nl": "nl", "bg": "bg", "sr": "sr", "uk": "uk",  # uk: 1852 h
-    "be": "be", "da": "da", "kk": "kk", "lv": "lv", "sl": "sl", "ar": "arb",  # ar: Standard Arabic, 1484 h
-    # 100-1000 h
+    "sk": "sk", "sv": "sv", "el": "el", "nl": "nl", "bg": "bg", "sr": "sr", "uk": "uk",
+    "be": "be", "da": "da", "kk": "kk", "lv": "lv", "sl": "sl", "ar": "arb",
     "et": "et", "pl": "pl", "bs": "bs", "is": "is", "mt": "mt", "eu": "eu", "fi": "fi", "ta": "ta", "sw": "sw",
     "fa": "fa", "bn": "bn", "as": "as", "mn": "mn", "hu": "hu", "ba": "ba", "te": "te", "ur": "ur", "gl": "gl",
     "ml": "ml", "ka": "ka", "mr": "mr", "cs": "cs", "pa": "pa", "cy": "cy", "kn": "kn", "tr": "tr", "hi": "hi",
     "uz": "uz", "ne": "npi",
-    # Under 100 h, added after a test (asked for by users). Romanian: the same six sentences per language from the two
-    # shipped English reference clips, Whisper turbo back-transcription, numbers spelled alike on both sides: 13 % of
-    # the words wrong, against 22 % for Polish and 39 % for Hungarian (both in the list above).
+    # Under 100 h but tested: 13 % of words wrong, against 22 % for Polish and 39 % for Hungarian.
     "ro": "ro",
 }
 
 
 def omnivoice_python(runtime: dict[str, Any]) -> str:
-    """The worker's interpreter: ``[python] omnivoice`` when set, else the engine's own (the engine venv has OmniVoice)."""
     return config.runtime_path(runtime, "python", "omnivoice") or sys.executable
 
 
@@ -100,7 +65,6 @@ def omnivoice_model_dir(runtime: dict[str, Any]) -> str | None:
 
 
 def _runtime_root(runtime: dict[str, Any]) -> str | None:
-    """``<data>/runtime`` (see ``config.runtime_root``)."""
     return config.runtime_root(runtime)
 
 
@@ -116,11 +80,10 @@ class OmniVoiceBackend(TtsBackend):
     def __init__(self, unload_after_s: float = UNLOAD_AFTER_S) -> None:
         self._client: WorkerClient | None = None
         self._status = "loading"
-        self._warm: OrderedDict[tuple, None] = OrderedDict()  # mirror of the worker's prompt cache (by clip state)
+        self._warm: OrderedDict[tuple, None] = OrderedDict()
         self.unload_after_s = unload_after_s
         self.last_load: dict[str, Any] = {}
 
-    # ---- state ----
     def status(self) -> str:
         return self._status
 
@@ -141,7 +104,6 @@ class OmniVoiceBackend(TtsBackend):
             self._client.on_release.append(self._warm.clear)
         return self._client
 
-    # ---- lifecycle ----
     async def load(self, runtime: dict[str, Any]) -> None:
         if not installed(runtime):
             self._status = "missing"
@@ -160,7 +122,7 @@ class OmniVoiceBackend(TtsBackend):
         log.info("OmniVoice ready: %s", self.last_load)
 
     async def release(self) -> None:
-        """Training takes the GPU: end the worker process (frees VRAM and all its host RAM at once)."""
+        """Ending the worker frees its VRAM and host RAM at once."""
         self._status = "paused"
         self._warm.clear()
         if self._client is not None:
@@ -170,7 +132,6 @@ class OmniVoiceBackend(TtsBackend):
         if self._client is not None:
             await self._client.close()
 
-    # ---- synthesis ----
     async def synthesize(self, text: str, lang: str, reference: str, params: SynthParams) -> str:
         lang = (lang or "").lower()
         model_lang = LANGS.get(lang)
@@ -204,8 +165,6 @@ class OmniVoiceBackend(TtsBackend):
         return str(res.get("out") or params.out_path)
 
     async def warm(self, reference: str, lang: str = "en", reference_text: str | None = None) -> None:
-        """Build the voice-clone prompt of a clip now (``voices.warm``), so its first sentence is fast.
-        ``reference_text`` as in ``SynthParams``."""
         if self._client is None or self._status != "ready":
             return
         ref = reference if reference_text else reference_for(reference, lang)
@@ -219,9 +178,7 @@ class OmniVoiceBackend(TtsBackend):
         self._mark_warm(ref)
 
     async def inspect(self, reference: str, detect: bool = True) -> str | None:
-        """Whisper's language of a user clip (``reference.wav`` or ``reference_<lang>.wav`` itself, no per-language
-        swap), building its sidecar when missing; with ``detect`` an older sidecar without the language gets it. The
-        worker does this without loading the TTS model. ``None`` when not ready or unknown (never raises)."""
+        """Whisper's language of the clip itself (no per-language swap), or None; never raises."""
         if self._client is None or self._status != "ready":
             return None
         try:
@@ -248,11 +205,10 @@ class OmniVoiceBackend(TtsBackend):
         return sig is not None and sig in self._warm
 
     def forget_reference(self) -> None:
-        self._warm = OrderedDict()  # the worker re-reads a clip whose size or mtime changed (and its sidecar)
+        self._warm = OrderedDict()
 
 
 def reference_for(reference: str, lang: str) -> str:
-    """``reference_<lang>.wav`` next to the voice's reference when it exists, else the reference itself."""
     alt = os.path.join(os.path.dirname(reference), f"reference_{(lang or '').lower()}.wav")
     return alt if lang and os.path.isfile(alt) else reference
 

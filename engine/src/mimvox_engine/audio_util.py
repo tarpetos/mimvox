@@ -1,4 +1,3 @@
-"""Shared audio helpers: float32 mono arrays in memory, 16-bit WAV on disk (other formats: ``media.save_result``)."""
 from __future__ import annotations
 
 import math
@@ -32,7 +31,6 @@ def silence(ms: float, sr: int = OUT_SR) -> np.ndarray:
 
 
 def concat(parts: list[np.ndarray], gap_ms: float = 0.0, sr: int = OUT_SR) -> np.ndarray:
-    """Join clips with ``gap_ms`` of silence between them."""
     if not parts:
         return np.zeros(0, dtype=np.float32)
     if gap_ms <= 0:
@@ -47,12 +45,10 @@ def concat(parts: list[np.ndarray], gap_ms: float = 0.0, sr: int = OUT_SR) -> np
 
 
 def write_wav(path: str, data: np.ndarray, sr: int = OUT_SR) -> None:
-    """16-bit WAV of mono ``(n,)`` or multichannel ``(channels, n)`` samples."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     frames = data.T if data.ndim == 2 else data
     sf.write(path, np.clip(frames, -1.0, 1.0), sr, subtype="PCM_16", format="WAV")
 
 
 def duration_s(data: np.ndarray, sr: int = OUT_SR) -> float:
-    """Length of mono ``(n,)`` or ``(channels, n)`` samples."""
     return round(data.shape[-1] / float(sr), 3)

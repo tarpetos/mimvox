@@ -1,9 +1,4 @@
-"""``redub.probe`` / ``redub.prepare`` / ``redub.transcribe`` / ``redub.dub`` / ``redub.render`` / ``redub.cancel``
-(see contract/engine-protocol.md).
-
-The job-starting handlers are ``async`` (they run on the engine loop, so taking the one GPU slot is atomic); job bodies
-are coroutines that await the speech worker, the TTS backend and the RVC worker. ``redub.cancel`` cancels the job task.
-"""
+"""Redub methods. Job-starting handlers are ``async`` so taking the one GPU slot on the engine loop is atomic."""
 from __future__ import annotations
 
 import asyncio
@@ -55,9 +50,7 @@ def _models_not_loading() -> None:
 
 
 def _reg_job(ctx: Context, fn: Any, error_event: str = "redub.error", speech_job: bool = False) -> str:
-    """Start an exclusive GPU job (``async fn(job, finish)``) whose failures become ``redub.error`` and whose slot is
-    freed before the end event. A job that does not use the speech worker (``speech_job=False``) first has it hand its
-    GPU memory back."""
+    """A job that does not use the speech worker (``speech_job=False``) first has it hand its GPU memory back."""
 
     async def run(job: str) -> None:
         def finish(event: str, payload: dict[str, Any]) -> None:
@@ -94,7 +87,7 @@ def redub_probe(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _preview(data: config.DataDir, path: str) -> str | None:
-    """The source decoded to mono 16-bit 44.1 kHz WAV in <data>/tmp (the app plays only WAV); cached per file state."""
+    """The app plays only WAV: the source decoded to 16-bit WAV in <data>/tmp, cached per file state."""
     dst = os.path.join(data.tmp, f"redub_preview_{video.file_key(path)}.wav")
     if not os.path.isfile(dst):
         part = dst + ".part.wav"
@@ -118,13 +111,10 @@ async def redub_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-# ------------------------------------------------------------------------------------------------ transcribe / dub
-
 _MODE_NOTE = "Run setup (setup.sh / setup.cmd) to download it."
 
 
 def _language(params: dict[str, Any], key: str, default: str = "auto") -> str | None:
-    """A language parameter: ``"auto"`` -> None, else a normalised two/three letter code."""
     lang = params.get(key, default)
     lang = default if lang in (None, "") else lang
     if not isinstance(lang, str) or (lang != "auto" and not _LANG.match(lang.lower())):
@@ -133,8 +123,6 @@ def _language(params: dict[str, Any], key: str, default: str = "auto") -> str | 
 
 
 def target_language(value: Any, key: str) -> str:
-    """A translation target: a language both the translation model and the speech model know (``bad_request``
-    otherwise; the message lists them)."""
     if not isinstance(value, str) or not _LANG.match(langs.norm(value)):
         raise EngineError("bad_request", f"'{key}' must be a language code such as \"en\"")
     code = langs.norm(value)
@@ -146,7 +134,7 @@ def target_language(value: Any, key: str) -> str:
 
 def _translate_to(params: dict[str, Any]) -> str | None:
     to = params.get("translate_to")
-    legacy = params.get("translate_to_en", False)  # the old spelling
+    legacy = params.get("translate_to_en", False)
     if not isinstance(legacy, bool):
         raise EngineError("bad_request", "'translate_to_en' must be true or false")
     if to in (None, ""):
@@ -155,8 +143,6 @@ def _translate_to(params: dict[str, Any]) -> str | None:
 
 
 def _translator(params: dict[str, Any]) -> str | None:
-    """``translator``: ``"nllb-1.3b"`` (better), ``"nllb-600m"`` (faster) or absent / null (the best installed). A
-    translator that is not installed falls back to the other one."""
     t = params.get("translator")
     if t in (None, ""):
         return None
@@ -181,8 +167,6 @@ def _check_speech_ready(data: config.DataDir, translate: bool) -> None:
 
 @method("redub.prepare")
 async def redub_prepare(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Warm the speech worker (start it, load Whisper) and, for a video, split the file into voice and background, in
-    the background; answers at once. Event ``redub.prepared``."""
     path = await aio.run_io(_path, params)
     data = config.data_dir(ctx)
     sep = params.get("separate")
@@ -198,7 +182,7 @@ async def redub_prepare(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         return {"warming": False, "separating": False, "reason": "busy"}
     if not warm and not sep:
         return {"warming": False, "separating": False, "reason": "unavailable"}
-    warm = warm and not _PREPARING[0]   # one Whisper preload at a time (a second file only adds its separation)
+    warm = warm and not _PREPARING[0]   # one Whisper preload at a time
     if warm:
         _PREPARING[0] = True
     aio.spawn(_prepare(ctx, data, path, sep, warm), name="redub-prepare")
@@ -209,7 +193,7 @@ async def _prepare(ctx: Context, data: config.DataDir, path: str, separate: bool
     t0 = time.time()
     out: dict[str, Any] = {"ok": True}
     try:
-        # The speech model may still be loading at engine start: do not compete with it (an awaited event, 3 min max).
+        # The speech model may still be loading at engine start: do not compete with it.
         await tts.wait_settled(180.0)
         if "paused" in tts.models_status().values():
             ctx.emit("redub.prepared", {"ok": False, "message": "the GPU is in use by a training"})
@@ -248,7 +232,7 @@ async def redub_transcribe(ctx: Context, params: dict[str, Any]) -> dict[str, An
     translate_to = _translate_to(params)
     translator = _translator(params)
     if translate_to and lang == translate_to:
-        translate_to = None  # already in that language
+        translate_to = None
     data = config.data_dir(ctx)
     await aio.run_io(_check_speech_ready, data, translate_to is not None)
 
@@ -288,7 +272,7 @@ def _segments(params: dict[str, Any]) -> list[dict[str, Any]]:
             raise EngineError("bad_request", f"segments[{k}] needs a 'text' string")
         text = re.sub(r"\s+", " ", text).strip()
         if not text:
-            continue  # an emptied segment stays silent
+            continue
         if start < 0 or end < start:
             raise EngineError("bad_request", f"segments[{k}]: need 0 <= start <= end")
         out.append({"start": start, "end": end, "text": text})
@@ -303,9 +287,6 @@ _LANG_NAMES = {"uk": "Ukrainian", "ru": "Russian", "de": "German", "fr": "French
 
 
 def _speak_language(params: dict[str, Any], segs: list[dict[str, Any]]) -> str:
-    """The language the segment texts are spoken in. ``translated: true`` means they are translations into
-    ``target_language`` (default English); else ``language`` (the transcript's language) or, when absent, a guess from
-    the script. A language no backend speaks is refused instead of producing garbage."""
     translated = params.get("translated", False)
     if not isinstance(translated, bool):
         raise EngineError("bad_request", "'translated' must be true or false")
@@ -324,17 +305,14 @@ def _speak_language(params: dict[str, Any], segs: list[dict[str, Any]]) -> str:
     return code
 
 
-_STATS = ("timing", "stretched", "overrun", "pushed", "drift_s", "max_push_s")   # respeak stats in redub.done
+_STATS = ("timing", "stretched", "overrun", "pushed", "drift_s", "max_push_s")
 
-
-# ------------------------------------------------------------------------------------------------ video output
 
 _NO_SEPARATOR = ("The music-removal model is not installed (run setup again), so the background could not be kept: "
                  "the result has the new voice only.")
 
 
 def ranges(parts: list[tuple[str, float]]) -> dict[str, tuple[float, float]]:
-    """``Emit`` ranges from (stage, weight) pairs in order: the weights shared out over 0-100."""
     total = sum(w for _, w in parts) or 1.0
     out, acc = {}, 0.0
     for name, w in parts:
@@ -344,7 +322,6 @@ def ranges(parts: list[tuple[str, float]]) -> dict[str, tuple[float, float]]:
 
 
 def _out_stages(out: video.Output, separate: bool) -> tuple[list[tuple[str, float]], list[tuple[str, float]]]:
-    """(stages before, stages after) the voice work of a job with this output, with their progress weights."""
     before = [("separate", 7.0)] if separate else []
     after = ([("mix", 2.0)] if out.mixes else []) + [("save", 2.0)] + ([("mux", 4.0)] if out.video else [])
     return before, after
@@ -352,8 +329,7 @@ def _out_stages(out: video.Output, separate: bool) -> tuple[list[tuple[str, floa
 
 async def _stems(ctx: Context, data: config.DataDir, path: str, emit: transcribe.Emit,
                  need: bool) -> tuple[video.Stems | None, str | None]:
-    """The voice / background stems a job needs (``need``), from the cache or separated now, and a note for the
-    result when they cannot be had (model missing, separation failed: the job goes on without them)."""
+    """A missing model or a failed separation gives a note instead of an error: the job goes on without the stems."""
     if not need:
         return None, None
     emit.stage("separate", 0)
@@ -377,9 +353,7 @@ def _mix(track: np.ndarray, stems: video.Stems | None, keep_background: bool) ->
 async def _finish(data: config.DataDir, path: str, track: np.ndarray, stems: video.Stems | None, out: video.Output,
                   out_fmt: str, emit: transcribe.Emit, workdir: str, language: str | None,
                   note: str | None) -> tuple[dict[str, Any], np.ndarray, dict[str, Any]]:
-    """Mix (``out.mixes``: the loudness of the original voice, the background when kept, no clipping), save the audio
-    result in ``out_fmt`` and, for a video output, mux it into a copy of the video next to it. Returns (the saved
-    audio's fields, the final audio, the video fields of ``redub.done``)."""
+    """Returns (the saved audio's fields, the final audio, the video fields of ``redub.done``)."""
     fields: dict[str, Any] = {"output": out.output, "video_path": None,
                               "keep_background": stems is not None and out.keep_background}
     if note:
@@ -411,7 +385,6 @@ async def _finish(data: config.DataDir, path: str, track: np.ndarray, stems: vid
 def _record(saved: dict[str, Any], voice: "_Voice", source: str, mode: str, duration_s: float, elapsed_s: float,
             vfields: dict[str, Any], language: str | None = None, to: str | None = None,
             accent_name: str | None = None) -> None:
-    """IO thread: the sidecar of a saved Redub result (results.py), so it comes back after a restart."""
     results.record(saved, {"kind": "redub", "voice_id": voice.voice_id, "voice_name": voice.name, "mode": mode,
                            "source_name": os.path.basename(source), "language": language, "to": to,
                            "accent": accent_name, "duration_s": duration_s, "elapsed_s": elapsed_s,
@@ -419,11 +392,9 @@ def _record(saved: dict[str, Any], voice: "_Voice", source: str, mode: str, dura
 
 
 class _Voice:
-    """The voice-side settings shared by ``redub.render`` and ``redub.dub``."""
-
     def __init__(self, ctx: Context, data: config.DataDir, params: dict[str, Any]) -> None:
         self.voice_id = str(params.get("voice_id") or "")
-        meta = voices.read_meta(data, self.voice_id)  # not_found
+        meta = voices.read_meta(data, self.voice_id)
         self.language = meta.get("language") or "en"
         self.name = str(meta.get("name") or self.voice_id)
         quality = params.get("quality") or "best"
@@ -431,8 +402,8 @@ class _Voice:
             raise EngineError("bad_request", "'quality' must be \"best\" or \"fast\"")
         self.temperature = _num(params, "expressiveness", 0.8, 0.1, 1.5)
         self.index_rate = _num(params, "voice_match", 1.0, 0.0, 1.0)
-        self.speed = _num(params, "speed", 1.0, tts.SPEED_MIN, tts.SPEED_MAX)  # respeak only
-        self.timing = params.get("timing") or "keep"                             # respeak / dub only
+        self.speed = _num(params, "speed", 1.0, tts.SPEED_MIN, tts.SPEED_MAX)
+        self.timing = params.get("timing") or "keep"
         if self.timing not in render.TIMINGS:
             raise EngineError("bad_request", "'timing' must be \"keep\" or \"natural\"")
         self.pth, self.idx = data.rvc_model(self.voice_id)
@@ -440,29 +411,22 @@ class _Voice:
         self.ref = data.reference(self.voice_id)
         self.quality = quality
         self.ctx = ctx
-        self.accent = accent.parse(params)              # respeak / dub only
+        self.accent = accent.parse(params)
         self.native_voice = accent.parse_voice(params)
-        # The native accent of an untrained voice (or voice_match 0) uses the zero-shot converter, when installed.
         self.zs_worker = zsvc.get(ctx.runtime, data.root) if self.accent == "native-us" else None
 
     def index_rate_for(self, lang: str) -> float:
-        """RVC index rate for speech in ``lang``: capped for languages the voice was not recorded in (rvc.py)."""
         return rvc.index_rate_for(self.index_rate, lang, self.language)
 
     def accent_for(self, lang: str) -> accent.Choice:
-        """The accent speech in ``lang`` gets (``native-us`` needs English and RVC or the zero-shot converter, else
-        ``own``; accent.py)."""
         return accent.choose(self.accent, self.native_voice, lang, self.trained, self.index_rate,
                              self.zs_worker is not None)
 
     async def ref_fields(self, choice: accent.Choice, lang: str) -> dict[str, Any]:
-        """``reference_language`` / ``reference_foreign`` / ``reference_note`` of speech in ``lang`` (reflang.py)."""
         return await aio.run_io(reflang.fields, self.ref, lang, choice.accent == "native-us")
 
     async def speak_setup(self, choice: accent.Choice, lang: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        """(extra ``redub.done`` fields, ``render.respeak`` keyword arguments) for speech in ``lang``: the voice's
-        own reference, or the native clip with its transcript, RVC pitch and index rate (or the zero-shot converter,
-        ``zs``, bound to the voice's reference)."""
+        """(extra ``redub.done`` fields, ``render.respeak`` keyword arguments)."""
         native = (await aio.run_io(accent.prepare, choice, self.ref, self.index_rate)
                   if choice.accent == "native-us" else None)
         if native is None:
@@ -476,7 +440,6 @@ class _Voice:
         return {**choice.fields(), **native.fields()}, how
 
     def respeak_worker(self, lang: str = "en") -> rvc.RvcWorker | None:
-        """Checks that a respeak can start (``not_found`` / ``not_ready``) and returns the RVC worker it needs, if any."""
         st = tts.models_status()
         if not os.path.isfile(self.ref):
             raise EngineError("not_found", "this voice has no recording yet (reference.wav is missing)")
@@ -498,7 +461,6 @@ class _Voice:
 
 @method("redub.dub")
 async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """The whole pipeline in one job: transcribe -> translate every segment -> (review stop | speak and save)."""
     path = await aio.run_io(_path, params)
     data = config.data_dir(ctx)
     lang = _language(params, "source_language")
@@ -511,10 +473,10 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     voice = await aio.run_io(_Voice, ctx, data, params)
     out_fmt = await aio.run_io(media.output_format, params)
     out = await aio.run_io(video.options, params, path)
-    forced = out.video and voice.timing != "keep"   # a video keeps the original timing (the picture does not wait)
+    forced = out.video and voice.timing != "keep"   # the picture does not wait
     if out.video:
         voice.timing = "keep"
-    worker = None if review else voice.respeak_worker(target)  # a review stop needs no voice models yet
+    worker = None if review else voice.respeak_worker(target)
     choice = voice.accent_for(target)
     await aio.run_io(_check_speech_ready, data, lang != target)
 
@@ -542,9 +504,8 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                          res["timings_s"])
                 finish("redub.transcript", res)
                 return
-            stems, note = await _stems(ctx, data, path, emit, separate)   # usually ready (redub.prepare)
-            await sp.release_gpu()  # Whisper / NLLB / Demucs leave the GPU to the speech model and RVC
-            # The text is in `target` now (translated, or the speech already was in that language).
+            stems, note = await _stems(ctx, data, path, emit, separate)
+            await sp.release_gpu()
 
             def progress(stage: str, pct: float, **extra: Any) -> None:
                 if stage == "speak":
@@ -585,7 +546,7 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     mode = params.get("mode")
     if mode not in ("convert", "respeak"):
         raise EngineError("bad_request", "'mode' must be \"convert\" or \"respeak\"")
-    # The finish of a reviewed Translate & dub is a respeak the app still calls a dub (recorded so in the sidecar).
+    # A reviewed Translate & dub finishes as a respeak that the app still calls a dub.
     result_mode = "dub" if mode == "respeak" and params.get("result_mode") == "dub" else mode
     voice = await aio.run_io(_Voice, ctx, data, params)
     out_fmt = await aio.run_io(media.output_format, params)
@@ -593,8 +554,7 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     forced = mode == "respeak" and out.video and voice.timing != "keep"
     if out.video:
         voice.timing = "keep"
-    # Convert runs RVC over the voice alone whenever the result is a video or keeps the background (RVC over music
-    # garbles it); re-speak only needs the background when it is kept.
+    # RVC over music garbles it: convert runs on the voice alone for a video or a kept background.
     separate = out.keep_background or (mode == "convert" and out.video)
     pth, idx, trained, index_rate = voice.pth, voice.idx, voice.trained, voice.index_rate
     segs = _segments(params) if mode == "respeak" else []
@@ -634,10 +594,10 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             emit.stage("decode", 100)
             stems, note = await _stems(ctx, data, path, emit, separate)
             if separate:
-                await speech.yield_gpu()   # Demucs leaves the GPU to RVC / the speech model
+                await speech.yield_gpu()
             if mode == "convert":
                 assert worker is not None
-                if stems is not None:   # the voice alone: the background is added back by the mix
+                if stems is not None:
                     source = await aio.run_io(lambda: np.asarray(stems.vocals(), dtype=np.float32).mean(axis=0))
                 elif separate:
                     note = ("The voice could not be separated from the background, so the whole sound track was "
