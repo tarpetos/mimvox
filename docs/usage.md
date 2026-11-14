@@ -181,8 +181,12 @@ voices, results and settings stay, and the older version offers the newest one a
 updates** asks for the newest version at once, even one you skipped. **Release page** opens the version on GitHub. A
 `.deb` install gets the download page instead of an install button.
 
+![The Updates window with an older version chosen](screenshots/usage-updates.png)
+
 ## 2. The window at a glance
 
+- **Version pill** next to **Mimvox**: opens the [Updates](#updates) window. Its rim glows in and out while a newer
+  version is waiting.
 - **Tabs** in the middle of the header: **Record**, **Train**, **Speak**, **Redub**.
 - **Engine pill** on the right: *Ready*, *Loading models…*, *Training · speech paused*, *Models missing* or
   *Engine stopped*. When the engine has stopped, press it to restart.

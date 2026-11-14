@@ -648,32 +648,47 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
 const NOTES_030: &str = "\n* **Romanian:** Speak, Book and Redub now offer Romanian. Record has Romanian reading texts too (Quick,\n  Standard and Pro), so a voice can be recorded and trained in Romanian from start to finish.\n* **A voice from recordings you already have:** Record's start page now begins with a card for audio or video\n  files of one person: no reading and no preset.\n* **Player:** no Stop button any more (pause, the knob and Close cover it).\n";
 const NOTES_020: &str = "\n* **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage and .deb) and macOS on Apple\n  Silicon (.dmg), built by GitHub Actions for every release.\n* **Updates from inside the app:** a new version shows a banner under the header.\n* **Install only what you need:** the welcome screen lists the parts of the runtime with their sizes.\n";
 
-fn demo(s: &mut AppState) {
+const NOTES_031: &str = "\n* **Updates window:** the version next to the app's name in the header opens it. It lists every version from\n  0.2.0 on with its notes. **Check for updates** asks for the newest version at any time.\n* **The update check runs on the welcome screen too.**\n";
+
+/// The Updates dialog over Speak, with the published versions and this one; `newer` adds a release after it.
+fn demo(s: &mut AppState, newer: bool) {
     super::speak::scene_idle(s);
-    let current = env!("CARGO_PKG_VERSION").to_owned();
-    s.update.list = List::Loaded(vec![
-        Release { version: "0.4.0".into(), date: "2026-11-20".into(), notes: "\n* **Updates window:** every version with its notes; install any of them, older ones too.\n* **Check for updates** whenever you like, from the version in the header.\n".into() },
-        Release { version: current, date: "2026-11-14".into(), notes: NOTES_030.into() },
-        Release { version: "0.2.0".into(), date: "2026-11-13".into(), notes: NOTES_020.into() },
-    ]);
+    let current = env!("CARGO_PKG_VERSION");
+    let mut list = Vec::new();
+    if newer {
+        list.push(Release { version: "0.4.0".into(), date: "2026-11-20".into(), notes: "\n* **Updates window:** every version with its notes; install any of them, older ones too.\n* **Check for updates** whenever you like, from the version in the header.\n".into() });
+    }
+    list.push(Release { version: current.into(), date: "2026-11-14".into(), notes: NOTES_031.into() });
+    for (version, date, notes) in [("0.3.0", "2026-11-14", NOTES_030), ("0.2.0", "2026-11-13", NOTES_020)] {
+        if version != current {
+            list.push(Release { version: version.into(), date: date.into(), notes: notes.into() });
+        }
+    }
+    s.update.list = List::Loaded(list);
     s.update.dialog = true;
     s.update.kind = Some(Kind::Auto);
 }
 
+/// The guide's picture: the installed version and the published ones, an older one chosen.
+pub fn scene_docs(s: &mut AppState) {
+    demo(s, false);
+    s.update.selected = Some("0.3.0".into());
+}
+
 pub fn scene_newer(s: &mut AppState) {
-    demo(s);
+    demo(s, true);
     s.update.found = Some(Found::preview("0.4.0", Some("\n* **Updates window:** every version with its notes.\n")));
     s.update.selected = Some("0.4.0".into());
     s.update.checked = Some((Tone::Accent, "Mimvox 0.4.0 is available.".into()));
 }
 
 pub fn scene_older(s: &mut AppState) {
-    demo(s);
+    demo(s, true);
     s.update.selected = Some("0.2.0".into());
 }
 
 pub fn scene_downloading(s: &mut AppState) {
-    demo(s);
+    demo(s, true);
     s.update.found = Some(Found::preview("0.4.0", None));
     s.update.phase = Phase::Downloading { got: 96_468_992, total: Some(214_958_080) };
 }
@@ -686,7 +701,7 @@ pub fn scene_waiting(s: &mut AppState) {
 }
 
 pub fn scene_loading(s: &mut AppState) {
-    demo(s);
+    demo(s, true);
     s.update.list = List::Loading;
 }
 
@@ -697,6 +712,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("updates_downloading", scene_downloading),
         ("updates_loading", scene_loading),
         ("updates_waiting", scene_waiting),
+        ("updates_docs", scene_docs),
     ]
 }
 

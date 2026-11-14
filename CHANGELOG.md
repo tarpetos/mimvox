@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 * **Updates window:** the version next to the app's name in the header is now a button that opens it. When a newer
   version is waiting, that button's rim glows in and out, slowly. The window lists every version from 0.2.0 on with
