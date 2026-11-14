@@ -12,9 +12,7 @@
 //! bar draws its own knob, as on the other systems (`playbar::seek_bar`).
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
-use std::sync::Mutex;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -48,10 +46,7 @@ pub struct Look {
     pub knob: bool,
 }
 
-/// The audio thread's last report: (track, seconds played, the track's length, when).
-static HEARD: Mutex<Option<(u64, f32, f32, Instant)>> = Mutex::new(None);
-/// What the strip follows: the playing track, its speed, and whether it plays (else `PLACED` is shown).
-static TRACK: AtomicU64 = AtomicU64::new(0);
+/// What the strip follows: the playing speed, and whether a track plays (else `PLACED` is shown).
 static SPEED: AtomicU32 = AtomicU32::new(0);
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static PLACED: AtomicU32 = AtomicU32::new(0);
@@ -69,16 +64,12 @@ struct Strip {
     ticking: bool,
     shown: bool,
     drawn: f32,
+    glide: super::playbar::Glide,
 }
 
 thread_local! {
     static STRIP: RefCell<Option<Strip>> = const { RefCell::new(None) };
     static FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// The audio thread heard the track at `pos_s` of `len_s` (any thread).
-pub fn heard(track: u64, pos_s: f32, len_s: f32) {
-    *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some((track, pos_s, len_s, Instant::now()));
 }
 
 /// Puts the strip over the seek rail (`rail_pt`: x, y, width, height in window points) and says what it shows: the
@@ -88,7 +79,7 @@ pub fn show(rail_pt: [f32; 4], scale: f32, look: Look, track: u64, playing: bool
     if FAILED.get() || rail_pt[2] < 4.0 || scale <= 0.0 {
         return false;
     }
-    TRACK.store(track, Relaxed);
+    let _ = track;
     SPEED.store(speed.to_bits(), Relaxed);
     PLACED.store(frac.to_bits(), Relaxed);
     PLAYING.store(playing, Relaxed);
@@ -145,21 +136,21 @@ pub fn hide() {
     });
 }
 
-/// The fraction of the track to show now.
-fn fraction() -> f32 {
+/// The fraction of the track to show now: gliding while it plays, else where the view placed it.
+fn fraction(glide: &mut super::playbar::Glide) -> f32 {
     if PLAYING.load(Relaxed) {
-        let heard = *HEARD.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, pos_s, len_s, at)) = heard.filter(|h| h.0 == TRACK.load(Relaxed) && h.2 > 0.0) {
-            let now_s = pos_s + at.elapsed().as_secs_f32() * f32::from_bits(SPEED.load(Relaxed));
-            return (now_s / len_s).clamp(0.0, 1.0);
+        if let Some(frac) = glide.step(f32::from_bits(SPEED.load(Relaxed))) {
+            return frac.clamp(0.0, 1.0);
         }
+    } else {
+        glide.rest();
     }
     f32::from_bits(PLACED.load(Relaxed)).clamp(0.0, 1.0)
 }
 
 /// Draws the strip at the current fraction and hands it to the compositor, unless it already shows it.
 fn paint(s: &mut Strip) {
-    let frac = fraction();
+    let frac = fraction(&mut s.glide);
     let (x0, rail_w, cy) = s.rail;
     let at = x0 + frac * rail_w;
     if (at - s.drawn).abs() < 0.05 {
@@ -186,7 +177,8 @@ fn paint(s: &mut Strip) {
         let t = ((dy + half) / (2.0 * half)).clamp(0.0, 1.0);
         let fill_rgb = [mix(look.fill_top[0], look.fill_bottom[0], t), mix(look.fill_top[1], look.fill_bottom[1], t), mix(look.fill_top[2], look.fill_bottom[2], t)];
         let (a, b) = (x0 + half, (at).max(x0 + half));
-        let x_start = ((x0 - 1.0).floor().max(0.0)) as usize;
+        let knob_left = if look.knob { at - radius - shadow_reach - 2.0 } else { x0 };
+        let x_start = (x0 - 1.0).min(knob_left).floor().max(0.0) as usize;
         for (x, out) in row.iter_mut().enumerate().take(x_end).skip(x_start) {
             let pxc = x as f32 + 0.5;
             let mut c = [0.0f32; 4]; // premultiplied r, g, b, a
@@ -326,7 +318,7 @@ fn create(x: i32, y: i32, w: i32, h: i32) -> Option<Strip> {
         Some(Strip {
             hwnd, dc, bitmap, bits: bits.cast(), size: (w, h), rail: (0.0, 1.0, h as f32 / 2.0), scale: 1.0,
             look: Look { track_pt: 5.0, knob_pt: 14.0, fill_top: [0; 3], fill_bottom: [0; 3], ring: [0; 3], knob: true },
-            ticking: false, shown: false, drawn: f32::NAN,
+            ticking: false, shown: false, drawn: f32::NAN, glide: super::playbar::Glide::new(),
         })
     }
 }

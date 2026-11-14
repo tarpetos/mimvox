@@ -117,6 +117,7 @@ fn start(s: &mut AppState, path: &Path, title: String, what: String, source: Sou
     })?;
     s.playbar.now = Some(Now { path: path.to_path_buf(), title, what, source, status: Status::Playing, pos_s: 0.0, len_s, live, track });
     s.playbar.watch = Some((track, shell::clock_now(s) + STALL_S));
+    jump(track, 0.0, len_s);
     Ok(())
 }
 
@@ -245,6 +246,7 @@ pub fn resume(s: &mut AppState) {
             n.pos_s = 0.0;
         }
         n.status = Status::Playing;
+        jump(n.track, n.pos_s, n.len_s);
     }
 }
 
@@ -261,23 +263,6 @@ pub fn stop(s: &mut AppState) {
     player_do(s, |p| p.stop());
     s.playbar.now = None;
     s.playbar.speed_menu = false;
-}
-
-/// The bar's Stop: halts the track and rewinds it to the start, the bar stays (play starts it again from 0:00).
-/// Live Speak playback cannot be rewound while it is still arriving: there Stop ends it, as Close does.
-fn stop_rewind(s: &mut AppState) {
-    if s.playbar.now.as_ref().is_none_or(|n| n.live) {
-        stop(s);
-        return;
-    }
-    if s.playbar.now.as_ref().is_some_and(|n| n.status == Status::Playing) {
-        pause(s);
-    }
-    seek(s, 0.0);
-    if let Some(n) = s.playbar.now.as_mut() {
-        n.status = Status::Paused;
-        n.pos_s = 0.0;
-    }
 }
 
 /// Stops playback started from `source` (leaves anything else playing).
@@ -332,6 +317,7 @@ pub fn seek(s: &mut AppState, pos_s: f32) {
         if n.status == Status::Ended {
             n.status = Status::Paused;
         }
+        jump(n.track, pos, n.len_s);
     }
 }
 
@@ -358,9 +344,7 @@ pub fn sink() -> crate::audio::PlaySink {
     let sent = std::sync::Mutex::new((0u64, 0.0f32, 0.0f32));
     std::sync::Arc::new(move |ev| match ev {
         crate::audio::PlayEvent::Progress { track, pos_s, len_s } => {
-            *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some((track, pos_s, len_s, std::time::Instant::now()));
-            #[cfg(windows)]
-            super::seekstrip::heard(track, pos_s, len_s);
+            report(track, pos_s, len_s);
             let mut last = sent.lock().unwrap_or_else(|e| e.into_inner());
             if last.0 != track || (last.2 - len_s).abs() > 1e-3 || shows(last.1, pos_s, len_s) {
                 *last = (track, pos_s, len_s);
@@ -389,24 +373,90 @@ const GLIDE_HZ: f64 = 60.0;
 /// The seek strip shows the fill and the knob (Windows, `seekstrip`), so the bar draws neither and does not glide.
 static STRIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The audio thread's last report: (track, seconds played, the track's length, when). The knob glides on from it.
-static HEARD: std::sync::Mutex<Option<(u64, f32, f32, std::time::Instant)>> = std::sync::Mutex::new(None);
+/// Where the sound is: a track, the seconds played of its length, and when that was true. The knob glides on from it.
+#[derive(Clone, Copy)]
+struct Heard {
+    track: u64,
+    pos_s: f32,
+    len_s: f32,
+    at: std::time::Instant,
+}
 
-/// While a track plays, places the knob where the sound is now (the last report plus the time since, at the
-/// playing speed) and asks for the next step on a 60-a-second grid: a timer deadline, like the app's other clocks.
-/// Each step is one frame of the bar (live values), no view run.
+static HEARD: std::sync::Mutex<Option<Heard>> = std::sync::Mutex::new(None);
+/// After the position jumped (a seek, a start), the audio thread's reports are left out until this moment: one from
+/// before the jump can still be on its way, and would pull the knob back for a moment.
+static QUIET_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// Counts the jumps, so a glider takes the new place at once instead of easing towards it.
+static JUMPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The audio thread heard `track` at `pos_s` of `len_s`.
+fn report(track: u64, pos_s: f32, len_s: f32) {
+    let now = std::time::Instant::now();
+    if QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|until| now < until) {
+        return;
+    }
+    *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(Heard { track, pos_s, len_s, at: now });
+}
+
+/// The position changed at once (a track started, a seek, a resume): the knob goes there, no easing. UI thread.
+fn jump(track: u64, pos_s: f32, len_s: f32) {
+    let now = std::time::Instant::now();
+    *QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(now + std::time::Duration::from_millis(150));
+    *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(Heard { track, pos_s, len_s, at: now });
+    JUMPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A knob's glide: where it shows the track, moved on by the clock between the audio thread's reports. A report
+/// only corrects it gently (reports arrive in bursts a few milliseconds early or late; following each one made the
+/// knob hop back and forth), except after a jump or when it is far off, where it takes the new place at once.
+pub(super) struct Glide {
+    shown_s: f32,
+    last: Option<std::time::Instant>,
+    track: u64,
+    jumps: u64,
+}
+
+impl Glide {
+    pub(super) const fn new() -> Self {
+        Glide { shown_s: 0.0, last: None, track: 0, jumps: 0 }
+    }
+
+    /// The fraction of the track to show now, at the playing `speed`; None before any report.
+    pub(super) fn step(&mut self, speed: f32) -> Option<f32> {
+        let h = (*HEARD.lock().unwrap_or_else(|e| e.into_inner())).filter(|h| h.len_s > 0.0)?;
+        let now = std::time::Instant::now();
+        let target = h.pos_s + now.duration_since(h.at).as_secs_f32() * speed;
+        let jumps = JUMPS.load(std::sync::atomic::Ordering::Relaxed);
+        let dt = self.last.map_or(f32::INFINITY, |last| now.duration_since(last).as_secs_f32());
+        let moved_on = self.shown_s + dt * speed;
+        let at_once = self.track != h.track || self.jumps != jumps || dt > 0.5 || (target - moved_on).abs() > 0.3;
+        self.shown_s = if at_once { target } else { moved_on + (target - moved_on) * 0.06 }.clamp(0.0, h.len_s);
+        (self.track, self.jumps, self.last) = (h.track, jumps, Some(now));
+        Some(self.shown_s / h.len_s)
+    }
+
+    /// Nothing plays: the next step starts from the report, not from where the glide was.
+    pub(super) fn rest(&mut self) {
+        self.last = None;
+    }
+}
+
+/// While a track plays, places the knob where the sound is now and asks for the next step on a 60-a-second grid: a
+/// timer deadline, like the app's other clocks. Each step is one frame of the bar (live values), no view run.
 fn glide(s: &mut AppState, tx: &mut rune::Tx) {
+    static GLIDE: std::sync::Mutex<Glide> = std::sync::Mutex::new(Glide::new());
+    let mut glide = GLIDE.lock().unwrap_or_else(|e| e.into_inner());
     if STRIP.load(std::sync::atomic::Ordering::Relaxed) {
+        glide.rest();
         return; // the seek strip moves the knob (Windows): the window has nothing to draw
     }
-    let Some(n) = s.playbar.now.as_ref().filter(|n| n.status == Status::Playing) else { return };
-    let heard = *HEARD.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((track, pos_s, len_s, at)) = heard.filter(|h| h.0 == n.track) {
-        if len_s > 0.0 {
-            let now_s = (pos_s + at.elapsed().as_secs_f32() * s.playbar.speed).min(len_s);
-            place(now_s / len_s, false);
-        }
-        let _ = track;
+    let Some(n) = s.playbar.now.as_ref().filter(|n| n.status == Status::Playing) else {
+        glide.rest();
+        return;
+    };
+    let track = n.track;
+    if let Some(frac) = glide.step(s.playbar.speed).filter(|_| HEARD.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|h| h.track == track)) {
+        place(frac, false);
     }
     let clock = tx.clock();
     tx.wake_at(((clock * GLIDE_HZ).floor() + 1.0) / GLIDE_HZ);
@@ -543,14 +593,6 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
         .on_press(toggle_pause)
         .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 16.0, p.on_accent));
     let play = accent_glass(p, play);
-    // Stop is there while there is something to stop or rewind (not on a track resting at its start): a solid square
-    // on a button with a face of its own, so it reads as a control next to the big play button.
-    let stop_b = (on || n.pos_s > 0.0).then(|| {
-        el().key("pb-stop").role("button").label("Stop").help("Stop (back to the start)").size(32.0, 32.0).radius(16.0).center()
-            .fill(Color::WHITE.alpha(0.06)).border(1.0, p.rim_top.alpha(0.3)).hover(p.glass_hover).press(p.glass_press)
-            .focusable(true).motion(motion::UI).on_press(stop_rewind)
-            .child(el().key("pb-stop-glyph").size(10.0, 10.0).radius(2.5).fill(p.text.alpha(0.9)).inert())
-    });
     let title = col().key("pb-title").w(230.0).min_w(0.0).gap(1.0)
         .child(text(n.title.clone()).font(ty::LABEL).color(p.text).truncate())
         .child(text(n.what.clone()).font(ty::CAPTION).color(p.text_faint).truncate());
@@ -579,7 +621,6 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
         .shadow(10.0, 30.0, p.shadow)
         .on_key(on_key)
         .child(play)
-        .children(stop_b)
         .child(title)
         .child(text(clock(n.pos_s)).font(ty::NUM).color(p.text_dim))
         .child(seek_bar(p, n, native))

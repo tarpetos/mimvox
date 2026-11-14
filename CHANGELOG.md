@@ -20,7 +20,9 @@
   the card at 36 W), elsewhere the bar draws them over the cached rest of the window. The header, the background and
   each panel are drawn once and reused until they change; the big panels no longer blur the (already soft) light
   fields behind them; hover highlights settle faster.
-* **Player:** the Stop button has a face of its own and is there only while there is something to stop or rewind.
+* **Player:** no Stop button any more (pause, the knob and Close cover it). The knob moves on by the clock between
+  the audio's position reports and takes a seek at once, so it neither hops back and forth nor jumps back after a
+  drag.
 
 ## 0.2.0
 
