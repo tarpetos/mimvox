@@ -144,7 +144,9 @@ pub mod radius {
 /// Springs: calm, no overshoot except `BOUNCY`.
 pub mod motion {
     use super::Spring;
-    pub const UI: Spring = Spring::new(0.34, 0.12);
+    // Hover and press feedback: quick and without overshoot. Every frame of it is a redraw at the display's rate, so
+    // a long, bouncy spring (0.34 s, bounce 0.12 before) kept the GPU drawing for half a second per control crossed.
+    pub const UI: Spring = Spring::new(0.16, 0.0);
     pub const SNAP: Spring = Spring::new(0.22, 0.0);
     pub const SOFT: Spring = Spring::new(0.45, 0.0);
     pub const BOUNCY: Spring = Spring::new(0.4, 0.2);

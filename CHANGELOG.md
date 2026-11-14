@@ -2,20 +2,27 @@
 
 ## Unreleased
 
-* **Memory safety:** Mimvox no longer runs the computer out of memory. Recording a new reference while the app was
-  busy could fill the graphics card; the NVIDIA driver then moved the overflow into system RAM until Windows ran out
-  of memory, other programs crashed and the desktop lost its wallpaper and screenshots. Now every engine process caps
-  its GPU use at what is free beyond a reserve for the desktop and other programs (1.5 GB, `MIMVOX_VRAM_RESERVE_GB`); an
-  operation that does not fit makes the other idle models step aside and is retried once, else it stops with a clear
-  message. On Windows the engine and all its workers share a memory cap that follows the system: the commit limit
-  (RAM + page file, and how far a page file Windows manages can still grow) minus what other programs use and a
-  reserve (3 %, at least 1.5 GB; `MIMVOX_RAM_LIMIT_GB` fixes it), and they end with the engine. Workers hand their
-  cached GPU memory back after every job (on Windows it counts against that limit too); on Linux the system stops Mimvox first if memory runs out.
-* **Reference transcription:** Whisper for a new reference clip loads at half size (1.6 GB instead of 3.2 GB) on the
-  GPU only when it fits, otherwise on the processor, and moves to the processor if the GPU runs out midway.
-* **Windows: the app opens in a moment again.** The released Windows build waited about 12 s before its window
-  appeared, on every start: its shaders were compiled at start-up instead of loaded precompiled, because the build
-  machine changed their line endings. Now they keep LF everywhere (`.gitattributes`).
+* **Much lighter on memory:** an idle Mimvox held 19 GB of memory and 4 GB of the graphics card; now the models leave
+  after 10 idle minutes (`MIMVOX_IDLE_EXIT_S`) and the engine keeps 0.3 GB and nothing on the card; the next
+  generation loads them again (about 10 s). Voice match starts only for a trained voice, not with the app. Each
+  process no longer reserves a math buffer per CPU thread that nothing used. Measured on an RTX 4070 PC: a zero-shot
+  voice in use 19 GB -> 5.4 GB, a trained voice 19 GB -> 9.3 GB, the peak while a new reference is read 18.9 GB ->
+  12.4 GB; the models are ready 10 s after the start instead of 42 s. The native-accent converter now lives in the
+  speech process instead of one of its own (native accent in use: 10.7 GB -> 8.4 GB), and every model process gives
+  the RAM it only needed while loading back to Windows (with a trained voice and the native accent loaded: 6.5 GB of
+  RAM -> 0.6 GB).
+* **Playing and moving the pointer are light on the graphics card.** Measured on an RTX 4070 with a 4K 165 Hz
+  display (the card idles at 12 W): moving the pointer over the window drew a whole-window frame for every pointer
+  report, 36 W for as long as it moved; now a frame is drawn only when something on screen changes (12 W, also when
+  moving fast). Playing redrew the whole window for every position report; now the player's knob glides 60 times a
+  second and the window is not redrawn for it at all: on Windows the fill and the knob are a small strip of their own
+  over the seek bar (about 16 W while a chapter plays; a knob moved through the window's own frames at that rate kept
+  the card at 36 W), elsewhere the bar draws them over the cached rest of the window. The header, the background and
+  each panel are drawn once and reused until they change; the big panels no longer blur the (already soft) light
+  fields behind them; hover highlights settle faster.
+* **Player:** no Stop button any more (pause, the knob and Close cover it). The knob moves on by the clock between
+  the audio's position reports and takes a seek at once, so it neither hops back and forth nor jumps back after a
+  drag.
 
 ## 0.2.0
 

@@ -675,29 +675,28 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         body = body.child(b);
     }
     body = body.child(col().key(format!("screen-{:?}", s.screen)).w_full().grow(1.0).min_h(0.0).child(page));
+    // The header, the background and every glass panel (`components::glass_panel`) are drawn once into a texture and
+    // reused until they change (`El::cache`): a frame while something plays is those textures plus the player bar,
+    // and a hover animation redraws the one panel it is in, not the whole window (measured on a 165 Hz display:
+    // moving the pointer across the window drew 165 whole-window frames a second, 36 W on the GPU against 12 W idle).
     // The player bar docks under the screen (the screen gets shorter), so it never covers a screen's controls.
-    let dock = super::playbar::view(s, p);
+    // Menus and dialogs that open over the window (the player's seek strip steps aside for them).
+    let mut overlays: Vec<El> = Vec::new();
+    if s.shell.voice_menu_open {
+        overlays.push(voice_menu(s, p));
+    }
+    overlays.extend(super::relocate::overlay(s, &p));
+    overlays.extend(super::train::close_overlay(s, &p));
+    overlays.extend(super::formats::overlay(s, p));
+    overlays.extend(super::formats::output_overlay(s, p));
+    overlays.extend(super::lang::overlay(s, &p));
+    let dock = super::playbar::view(s, p, cx.layout_with(super::playbar::RAIL, |r| r), cx.env().scale, !overlays.is_empty());
     let toasts_at = if dock.is_some() { super::playbar::DOCK_H + 14.0 } else { 26.0 };
     let mut root = el().key("root").w_full().h_full().fill(p.bg_top).child(background(p)).child(
-        col().key("chrome").w_full().h_full().child(header(s, p, insets, fit)).child(body).children(dock),
+        col().key("chrome").w_full().h_full().child(header(s, p, insets, fit).cache()).child(body).children(dock),
     );
-    if s.shell.voice_menu_open {
-        root = root.child(voice_menu(s, p));
-    }
-    if let Some(dialog) = super::relocate::overlay(s, &p) {
-        root = root.child(dialog);
-    }
-    if let Some(dialog) = super::train::close_overlay(s, &p) {
-        root = root.child(dialog);
-    }
-    if let Some(menu) = super::formats::overlay(s, p) {
-        root = root.child(menu);
-    }
-    if let Some(menu) = super::formats::output_overlay(s, p) {
-        root = root.child(menu);
-    }
-    if let Some(menu) = super::lang::overlay(s, &p) {
-        root = root.child(menu);
+    for overlay in overlays {
+        root = root.child(overlay);
     }
     if let Some(menu) = super::playbar::overlay(s, p) {
         root = root.child(menu);
@@ -734,7 +733,7 @@ fn background(p: Palette) -> El {
             [(0.0, c.alpha(a)), (0.4, c.alpha(a * 0.5)), (0.75, c.alpha(a * 0.12)), (1.0, c.alpha(0.0))],
         )
     };
-    el().key("bg").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).inert().gradient(p.bg_top, p.bg_bottom)
+    el().key("bg").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).inert().cache().gradient(p.bg_top, p.bg_bottom)
         .child(blob("field-ice", p.aurora[0], 880.0, 620.0, field(29.0, 0.0)).pin(Some(-260.0), Some(-300.0), None, None))
         .child(blob("field-teal", p.aurora[1], 720.0, 560.0, field(37.0, 0.3)).pin(None, Some(-120.0), Some(-240.0), None))
         .child(blob("field-steel", p.aurora[2], 820.0, 600.0, field(33.0, 0.6)).pin(Some(-80.0), None, None, Some(-340.0)))
@@ -772,7 +771,7 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
             .help("Early version: expect bugs. Report problems on the project's GitHub page."));
     let right = row().key("right").gap(8.0).center_y().window_drag().child(engine_pill(s, p, fit.tight)).child(voice_pill(s, p));
     let bar = col().key("header").w_full().h(HEADER_HEIGHT).fill(p.glass).gradient(p.glass_top, p.glass_bottom)
-        .backdrop_blur(24.0).shadow(6.0, 24.0, p.shadow_soft).window_drag()
+        .shadow(6.0, 24.0, p.shadow_soft).window_drag()
         .child(row().key("header-row").w_full().h_full().center_y().gap(14.0)
             .pl(16.0 + insets.leading)
             .pr(if insets.trailing > 0.0 { insets.trailing + 14.0 } else { 12.0 })

@@ -125,9 +125,13 @@ impl<S: 'static> Host<S> {
         match event {
             WakeEvent::App(_) => {
                 self.drain(event_loop, true);
+                // PATCH: see `TimerFrame::may_reuse`.
+                if let Some(w) = &mut self.win { w.timer_frame.may_reuse(); }
             }
             WakeEvent::DisplayTick(_) => {
                 if self.win.as_ref().is_some_and(Win::paced) {
+                    // PATCH: see `TimerFrame::may_reuse`.
+                    if let Some(w) = &mut self.win { w.timer_frame.may_reuse(); }
                     self.redraw();
                     self.shell(event_loop);
                 }
@@ -464,6 +468,10 @@ impl<S: 'static> Host<S> {
                     }));
                     l.apply_cursor(rt, false);
                 }
+                // PATCH: the frame a pointer move asks for is built, and drawn only when it differs from the one
+                // on screen (`Presented::unchanged`). Upstream drew and presented one per move: a full-window frame
+                // at the pointer's report rate for as long as it moved, whatever was under it.
+                l.timer_frame.may_reuse();
                 l.request_redraw();
             }
             WindowEvent::CursorLeft { .. } => {

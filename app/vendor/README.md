@@ -61,3 +61,14 @@ hides; `Win::hide` (`src/window/win.rs`) uses it on Windows. A close hides the w
 Every window is also hidden that way just before it is dropped at exit (`AnyHost::hide_for_exit`, called from
 `exiting` in `src/window.rs`). The app itself never blocks the UI thread on quit: it only asks the engine to exit and
 waits for it after the loop has ended (`ui::train::quit_now`, `main`).
+
+### Patch 2: a pointer move does not draw a frame that changes nothing
+
+Upstream asks for a redraw on every `CursorMoved` and draws and presents it, even when the frame is identical to the
+one on screen (the pointer moved inside one element). On a 165 Hz display that was 165 whole-window frames a second
+for as long as the pointer moved over the window (measured: GPU 12 W idle, 36 W while moving the pointer). The patch
+marks the frame a pointer move asks for as one that may reuse what is on screen (`TimerFrame::pointer_moved`), the
+path upstream already has for timer wakes: the frame is built, compared with the presented one byte for byte
+(`Presented::unchanged`), and drawn only when it differs (a hover change, an animation, pending input).
+
+Touched: `src/window/pacing.rs`, `src/window/events.rs`. Lines are marked `PATCH`.

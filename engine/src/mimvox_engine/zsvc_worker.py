@@ -47,15 +47,20 @@ def _load_kit():
     return mod
 
 
-kit = _load_kit()
-INP, OUT = kit.open_channels()
+# Hosted: the OmniVoice worker loads this file into its own process (one PyTorch and one CUDA context for both models:
+# about 1.5 GB of commit and 1 GB of RAM less than a process of its own) and sets ``__hosted__`` first:
+# {"kit": its worker_kit, "worker": its kit.Worker, "argv": this file's arguments}. It then serves ``OPS`` itself.
+HOST = globals().get("__hosted__")
+kit = HOST["kit"] if HOST else _load_kit()
+if not HOST:
+    INP, OUT = kit.open_channels()
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--seed-vc", required=True)
 ap.add_argument("--models", required=True)
 ap.add_argument("--device", default="cuda")
-ap.add_argument("--unload-after", type=float, default=float(os.environ.get("MIMVOX_ZSVC_UNLOAD_S", "600")))
-args = ap.parse_args()
+ap.add_argument("--unload-after", type=float, default=float(os.environ.get("MIMVOX_ZSVC_UNLOAD_S", "0")))  # 0: exit instead
+args = ap.parse_args(HOST["argv"] if HOST else None)
 
 SEED_VC = os.path.abspath(args.seed_vc)
 MODELS = os.path.abspath(args.models)
@@ -347,14 +352,19 @@ def _idle_unload():
     return {"event": "unloaded", "reason": "idle"}
 
 
-idle = [(args.unload_after, _idle_unload)] if args.unload_after > 0 else []
-worker = kit.Worker("zsvc", INP, OUT, {"load": op_load, "convert": op_convert, "warm": op_warm, "release": op_release,
-                                       "status": op_status, "ping": lambda _req: {}}, idle=idle)
-try:
-    worker.run()
-except BaseException as exc:  # noqa: BLE001
-    worker.send({"event": "fatal", "error": f"{type(exc).__name__}: {exc}"})
+OPS = {"load": op_load, "convert": op_convert, "warm": op_warm, "release": op_release, "status": op_status}
+if HOST:
+    worker = HOST["worker"]
+else:
+    idle = [(args.unload_after, _idle_unload)] if args.unload_after > 0 else []
+    if kit.IDLE_EXIT_S > 0:
+        idle.append((kit.IDLE_EXIT_S, "exit"))
+    worker = kit.Worker("zsvc", INP, OUT, {**OPS, "ping": lambda _req: {}}, idle=idle)
+    try:
+        worker.run()
+    except BaseException as exc:  # noqa: BLE001
+        worker.send({"event": "fatal", "error": f"{type(exc).__name__}: {exc}"})
+        sys.stderr.flush()
+        os._exit(1)
     sys.stderr.flush()
-    os._exit(1)
-sys.stderr.flush()
-os._exit(0)  # do not wait for CUDA teardown or the stdin reader thread
+    os._exit(0)  # do not wait for CUDA teardown or the stdin reader thread

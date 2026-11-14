@@ -20,6 +20,8 @@ pub mod refclip;
 pub mod refmedia;
 pub mod redub;
 pub mod relocate;
+#[cfg(windows)]
+pub mod seekstrip;
 pub mod setuprun;
 pub mod shell;
 pub mod speak;

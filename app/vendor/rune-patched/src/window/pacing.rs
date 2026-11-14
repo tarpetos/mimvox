@@ -143,6 +143,11 @@ impl TimerFrame {
     /// Something other than a timer asked for a frame: the one that follows draws in full.
     pub(crate) fn no_longer_quiet(&mut self) { self.quiet = false; }
 
+    /// PATCH: a pointer move, an app event or a display tick asked for a frame. Like a timer's, it may turn out to
+    /// draw what is already on screen (the pointer moved inside one element, an event changed nothing visible, a
+    /// tick after the last change), and then takes no drawable.
+    pub(crate) fn may_reuse(&mut self) { self.quiet = true; }
+
     /// Only a timer asked for the frame that is next to draw.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn quiet(&self) -> bool { self.quiet }

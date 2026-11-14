@@ -23,11 +23,10 @@ import asyncio
 import contextlib
 import logging
 import os
-import sys
 from typing import Any
 
 from . import config
-from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
+from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError
 
 log = logging.getLogger("mimvox.zsvc")
 
@@ -66,11 +65,12 @@ def installed(runtime: dict[str, Any], data_root: str) -> bool:
 
 
 class ZsvcWorker:
-    def __init__(self, code: str, models: str, device: str) -> None:
-        env = child_env(TRANSFORMERS_OFFLINE="1", HF_HUB_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
-        # -I: do not put the script directory (engine modules such as config.py) on sys.path.
-        self.client = WorkerClient("zsvc", [sys.executable, *isolated(), WORKER, "--seed-vc", code, "--models", models,
-                                            "--device", device], env, start_timeout=120.0)
+    """The converter, hosted by the OmniVoice worker process (``zs_*`` ops of ``client``, the speech model's worker
+    client): one PyTorch process for both models instead of two."""
+
+    def __init__(self, code: str, models: str, client: WorkerClient) -> None:
+        self.where = {"seed_vc": code, "models": models}
+        self.client = client
         self.warm_refs: set[tuple] = set()   # reference states whose prompt the worker has built (cleared on exit)
         self.client.on_release.append(self.warm_refs.clear)
 
@@ -79,7 +79,7 @@ class ZsvcWorker:
 
     async def _call(self, op: str, params: dict[str, Any], timeout: float, start: bool = True) -> dict[str, Any]:
         try:
-            return await self.client.call(op, params, timeout=timeout, start=start)
+            return await self.client.call(f"zs_{op}", {**params, **self.where}, timeout=timeout, start=start)
         except (WorkerError, WorkerDied, WorkerCancelled) as exc:
             self.warm_refs.clear()
             raise ZsvcError(str(exc) or type(exc).__name__) from exc
@@ -115,8 +115,8 @@ class ZsvcWorker:
             log.exception("could not release the converter's GPU memory")
 
     async def stop(self) -> None:
-        self.warm_refs.clear()
-        await self.client.stop()
+        """Drop the converter's models (the process is the speech model's and ends with it)."""
+        await self.release_gpu()
 
 
 def ref_sig(path: str) -> tuple | None:
@@ -153,8 +153,11 @@ def get(runtime: dict[str, Any], data_root: str) -> ZsvcWorker | None:
     if not installed(runtime, data_root):
         return None
     if _WORKER is None:
+        from .backends.omnivoice import OMNIVOICE, installed as speech_installed  # noqa: PLC0415 - no import cycle
+        if not speech_installed(runtime):
+            return None
         code, models = paths(runtime, data_root)
-        _WORKER = ZsvcWorker(code, models, config.backend(runtime))
+        _WORKER = ZsvcWorker(code, models, OMNIVOICE._ensure_client(runtime))
     return _WORKER
 
 

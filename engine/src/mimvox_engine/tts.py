@@ -268,8 +268,10 @@ def _pick_warm_voice(data: config.DataDir) -> tuple[str | None, str | None]:
 
 
 async def load_models(ctx: Context) -> None:
-    """Background start-up (and reload after a training): the speech model (OmniVoice worker) and the RVC worker start
-    in parallel, then both are warmed up with a trained voice. Status changes are ``models`` events."""
+    """Background start-up (and reload after a training): the speech model (OmniVoice worker) loads and is warmed up.
+    The RVC worker is not started here: ``rvc: ready`` means it can be, and it starts when a trained voice is warmed
+    (``voices.warm``) or first used; a voice without a model never pays for it (6.5 GB of commit, 3 GB of RAM).
+    Status changes are ``models`` events."""
     data = config.data_dir(ctx)
     errors: dict[str, str] = {}
     worker = rvc.get(ctx.runtime)
@@ -287,12 +289,6 @@ async def load_models(ctx: Context) -> None:
     async def do_rvc() -> None:
         if worker is None:
             errors["rvc"] = "RVC runtime not found"
-            return
-        try:
-            await worker.start()
-        except Exception as exc:  # noqa: BLE001
-            log.exception("RVC worker failed to start")
-            errors["rvc"] = f"{type(exc).__name__}: {exc}"
 
     async def do_others() -> None:
         for b in backends.all_backends():
@@ -306,7 +302,6 @@ async def load_models(ctx: Context) -> None:
     await asyncio.gather(do_tts(), do_rvc(), do_others())
     warm_dir = os.path.join(data.tmp, "_warm")
     await aio.run_io(os.makedirs, warm_dir, exist_ok=True)
-    wav: str | None = None
     trained_voice: str | None = None
     try:
         if "tts" not in errors:
@@ -314,19 +309,13 @@ async def load_models(ctx: Context) -> None:
             if ref is not None:  # without any voice there is nothing to clone yet: the first generation warms up
                 t1 = time.time()
                 lang = await aio.run_io(_voice_language, data, trained_voice) if trained_voice else "en"
-                wav = await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), lang, ref,
-                                                 SynthParams(out_path=os.path.join(warm_dir, "warm_tts.wav"),
-                                                             first=True))
+                await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), lang, ref,
+                                           SynthParams(out_path=os.path.join(warm_dir, "warm_tts.wav"), first=True))
                 log.info("speech model warm-up %.1fs", time.time() - t1)
             _set_status(ctx, tts="ready")
         else:
             _set_status(ctx, tts="missing")
         if "rvc" not in errors and worker is not None:
-            if wav and trained_voice:
-                pth, idx = data.rvc_model(trained_voice)
-                t1 = time.time()
-                await worker.convert(wav, os.path.join(warm_dir, "warm_rvc.wav"), pth, idx, 1.0)
-                log.info("RVC warm-up %.1fs", time.time() - t1)
             _set_status(ctx, rvc="ready")
         else:
             _set_status(ctx, rvc="missing")

@@ -47,6 +47,10 @@ class OpError(Exception):
 # fails with code "no_vram", and the engine frees GPU memory elsewhere and retries (workerproc.py).
 
 VRAM_RESERVE_GB = float(os.environ.get("MIMVOX_VRAM_RESERVE_GB", "1.5"))
+# A model worker that nobody has used for this long exits: its VRAM, its RAM and the 1.5 GB a PyTorch process costs by
+# itself all go back to the system (an idle Mimvox held 19 GB of commit and 6.6 GB of RAM before). The next request
+# starts it again (workerproc.py). 0 keeps workers for the engine's life.
+IDLE_EXIT_S = float(os.environ.get("MIMVOX_IDLE_EXIT_S", "600"))
 NO_VRAM = "not enough free GPU memory: close programs that use the graphics card (games, video, browsers) and try again"
 NO_RAM = "not enough free memory (RAM): close other programs and try again"
 
@@ -113,6 +117,84 @@ def gpu_release_cache():
             pass
 
 
+# ---------------------------------------------------------------------------------------- RAM after a load
+#
+# Loading a model leaves a worker with far more RAM in its working set than it uses afterwards: the weights pass
+# through host memory on their way to the GPU, and the import of the libraries touches pages once (measured: the RVC
+# worker holds 2.0 GB after its first conversion and touches 0.4 GB per conversion from then on; the zero-shot
+# converter added 1.8 GB the same way). After an op that left the working set well above its steady size, the worker
+# hands its pages back (Windows; other systems reclaim them by themselves): what the next op needs comes back in
+# milliseconds, the rest becomes free RAM.
+
+TRIM_ABOVE_STEADY = 512 * 2**20
+
+
+def _working_set():
+    """This process's working set in bytes (Windows), else None."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class Counters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        *[(f"f{i}", ctypes.c_size_t) for i in range(6)]]
+
+        k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+        c = Counters()
+        c.cb = ctypes.sizeof(c)
+        if not psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            return None
+        return c.WorkingSetSize
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def trim_working_set():
+    """Hand this process's resident pages back to Windows (they return on use)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.EmptyWorkingSet.argtypes = [wintypes.HANDLE]
+        psapi.EmptyWorkingSet(k32.GetCurrentProcess())
+    except Exception:  # noqa: BLE001, S110 - best effort
+        pass
+
+
+class _Trimmer:
+    """Trims after an op that left the working set ``TRIM_ABOVE_STEADY`` above the steady size, which is what the
+    working set is after the op that follows a trim."""
+
+    def __init__(self):
+        self.steady = 0          # 0: nothing measured yet, so the first load is trimmed
+        self.just_trimmed = False
+
+    def after_op(self):
+        now = _working_set()
+        if now is None:
+            return
+        if self.just_trimmed:    # this op ran from a trimmed process: what it touched is (at least) the steady size
+            self.steady, self.just_trimmed = max(self.steady, now), False
+            return
+        if now <= self.steady + TRIM_ABOVE_STEADY:
+            self.steady = max(self.steady, now)   # a small op after a trim must not set the bar low for the next one
+            return
+        import gc
+
+        gc.collect()
+        trim_working_set()
+        self.just_trimmed = True
+
+
 def gpu_cleanup():
     """Collect garbage and give cached GPU blocks back after a failed op."""
     import gc
@@ -169,6 +251,7 @@ class Worker:
         self.current = None          # id of the op running now (read by check_cancel on the op thread)
         self._busy = 0               # ops queued or running
         self._timers = []
+        self._trimmer = _Trimmer()
         self.loop = None
         self._finished = None
 
@@ -283,6 +366,7 @@ class Worker:
             self.send({"id": rid, "ok": False, "code": "internal", "error": f"{type(exc).__name__}: {exc}"})
         finally:
             gpu_release_cache()
+            self._trimmer.after_op()
             self.current = None
             self._cancelled.discard(rid)
 
