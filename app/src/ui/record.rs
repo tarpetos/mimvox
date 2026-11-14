@@ -1107,7 +1107,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
         EngineMsg::Response { id, result } => {
             if let Some(voice) = s.record.on_response(*id, result) {
-                s.shell.active_voice = Some(voice);
+                super::voices::select(s, &voice);
             }
         }
         EngineMsg::Exited { .. } => {

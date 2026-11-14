@@ -864,7 +864,7 @@ fn voice_menu(s: &AppState, p: Palette) -> El {
             row().key(format!("voice-{}", v.id)).w_full().h(38.0).px(12.0).gap(10.0).center_y().radius(19.0)
                 .fill(if on { p.accent.alpha(0.14) } else { Color::TRANSPARENT }).hover(p.glass_hover).focusable(true)
                 .on_press(move |s: &mut AppState| {
-                    s.shell.active_voice = Some(id.clone());
+                    super::voices::select(s, &id);
                     s.shell.voice_menu_open = false;
                 })
                 .child(text(v.name.clone()).font(ty::LABEL).color(p.text).grow(1.0).truncate())
