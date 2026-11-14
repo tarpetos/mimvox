@@ -747,6 +747,11 @@ fn request_list(s: &mut AppState) {
 /// After every event: the saved options once, their changes, and the book list once the engine is ready.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
+    // A click anywhere else takes the focus from the title field: that ends the rename, as Enter does.
+    if s.book.renaming.as_ref().is_some_and(|(_, edit)| !edit.focused) {
+        commit_rename(s);
+        changed = true;
+    }
     if !s.shell.scripted() {
         if !s.book.settings_loaded {
             s.book.settings_loaded = true;
@@ -905,8 +910,15 @@ fn draft_row(s: &AppState, p: Palette, i: usize, c: &DraftChapter, last: bool) -
     let renaming = s.book.renaming.as_ref().filter(|(k, _)| *k == i);
     let title: El = match renaming {
         Some((_, edit)) => kit::field(&p, edit, "Chapter title", |s: &mut AppState| &mut s.book.renaming.as_mut().expect("renaming").1)
-            .on_submit(|s: &mut AppState, _| commit_rename(s)),
-        None => text(c.title.clone()).font(ty::LABEL).color(if c.include { p.text } else { p.text_faint }).truncate().grow(1.0).min_w(0.0)
+            .on_submit(|s: &mut AppState, _| commit_rename(s))
+            .on_key(|s: &mut AppState, ev: &rune::KeyEvent, _: &mut rune::Tx| {
+                let escape = ev.key == rune::Key::Escape;
+                if escape {
+                    s.book.renaming = None;
+                }
+                escape
+            }),
+        None => text(c.title.clone()).key(format!("book-title{i}")).font(ty::LABEL).color(if c.include { p.text } else { p.text_faint }).truncate().grow(1.0).min_w(0.0)
             .role("button").label(format!("Rename {}", c.title)).help("Click to rename").on_press(move |s: &mut AppState| start_rename(s, i)),
     };
     let meta = format!("{} words · {}", group(c.words), fmt_len(c.est_s / s.speak.speed.max(0.5)));
