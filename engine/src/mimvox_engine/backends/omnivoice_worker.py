@@ -56,6 +56,9 @@ import torch  # noqa: E402
 
 text_norm = _load_by_path("mimvox_omnivoice_text", os.path.join(HERE, "omnivoice_text.py"))
 whisper_half = _load_by_path("mimvox_whisper_half", os.path.join(os.path.dirname(HERE), "whisper_half.py"))
+# MIMVOX_OMNIVOICE_FAST=0 keeps the library's own decoding loop.
+fast = _load_by_path("mimvox_omnivoice_fast", os.path.join(HERE, "omnivoice_fast.py")) \
+    if os.environ.get("MIMVOX_OMNIVOICE_FAST", "1") != "0" else None
 
 # A whole 19 s reference cloned barely better than a 7 s cut (ECAPA 0.86 vs 0.84) but peaked at 6.9 GB VRAM instead
 # of 3.9, which next to the RVC worker filled a 12 GB card: longer clips are cut to whole sentences.
@@ -372,8 +375,7 @@ def op_synth(req):
     elif req.get("speed") and abs(float(req["speed"]) - 1.0) > 1e-3:
         kw["speed"] = float(req["speed"])
     t0 = time.time()
-    audio = _state["model"].generate(text=text, language=req.get("model_lang") or lang, voice_clone_prompt=prompt,
-                                     **kw)[0]
+    audio = _generate(text=text, language=req.get("model_lang") or lang, voice_clone_prompt=prompt, **kw)[0]
     gen_s = time.time() - t0
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     if torch.cuda.is_available():
@@ -382,6 +384,24 @@ def op_synth(req):
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     sf.write(out, np.clip(audio, -1.0, 1.0), sr, subtype="PCM_16")
     return {"out": out, "sr": sr, "duration_s": round(len(audio) / sr, 3), "gen_s": round(gen_s, 3), "text": text}
+
+
+def _generate(**kw):
+    """``model.generate(**kw)`` through omnivoice_fast when it can run. A non-memory error of the fast path (e.g. an
+    omnivoice or transformers version it does not fit) turns it off for the process and falls back to the library."""
+    global fast
+    model = _state["model"]
+    if fast is not None:
+        try:
+            return fast.generate(model, **kw)
+        except fast.Unsupported:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            if kit.is_vram_error(exc):
+                raise
+            _log(f"fast decoding failed ({type(exc).__name__}: {exc}); using the library's decoding from now on")
+            fast = None
+    return model.generate(**kw)
 
 
 def op_status(_req=None):

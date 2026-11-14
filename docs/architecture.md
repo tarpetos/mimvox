@@ -171,8 +171,8 @@ about four times faster and needs less than half the memory ([performance.md](pe
 - It runs as a persistent worker with the engine's interpreter (`backends/omnivoice_worker.py`, model in
   `<data>/runtime/models/omnivoice`), driven like the RVC and speech workers (`workerproc.WorkerClient` on the engine
   loop; `worker_kit.py` in the worker: a reader thread hands stdin lines to the loop, ops run on one op thread, idle
-  timers via `call_later`). About 4-5 GB of VRAM and 2-6 GB of host RAM; 1-3 s per segment (RTF 0.15-0.3 on an
-  RTX 4070).
+  timers via `call_later`). About 4-5 GB of VRAM and 2-6 GB of host RAM; 1-2 s per segment (RTF 0.10-0.12 on an
+  RTX 4070, with the decoding loop of `omnivoice_fast.py`).
 - The voice comes from `reference.wav` (used whole up to 12 s, else cut to 7-12 s of whole sentences; Whisper finds them
   once and `reference.omnivoice.json` caches the cut and its transcript) or from `reference_<lang>.wav` when the voice
   has one for that language (OmniVoice carries the accent of the reference into the target language).

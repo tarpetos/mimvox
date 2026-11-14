@@ -58,6 +58,90 @@ Real server process, a real data directory with two test voices, quality *best*:
 The engine environment is one venv (`runtime/engine`, ~7.6 GB) plus the OmniVoice model (3.3 GB); the whole runtime is
 about 28 GB instead of 36 GB with IndexTTS.
 
+## Speech speed (OmniVoice decoding loop)
+
+Where the time goes in a Book chapter (2200 characters per language, Book segmentation, RTX 4070, Windows 11, torch
+2.8 cu128, fp16, 32 steps, warm model): the transformer passes are **96 %** of OmniVoice's time; decoding tokens to
+audio 2 %, the library's silence trim 1 %, text and prompt preparation and the sampling between steps 1-2 %. RVC is
+cheap next to it (RTF **0.032**, 0.3-0.6 s per 5-20 s segment, overlapped with the next synthesis); file IO,
+resampling and the Book level checks are milliseconds. So the work went into the transformer pass.
+
+Each of the 32 steps runs the Qwen3 transformer over a classifier-free-guidance batch of two rows: the conditional row
+(style, reference transcript, text, reference audio tokens, target) and the unconditional row (the target alone),
+padded to the conditional row's length with a dense 4D mask. `backends/omnivoice_fast.py` replaces the library's loop
+(same model, schedule, scoring and Gumbel sampling, called from the library):
+
+- the unconditional row is **packed** behind the conditional one in one sequence (positions restart), so no padding
+  goes through the matrix multiplies;
+- attention runs **per block** (two unmasked SDPA calls per layer instead of one masked call over everything);
+- the audio head projects only the target positions;
+- short passes are replayed as a **CUDA graph** (one per segment, up to 1100 tokens): a pass costs ~40 ms of Python
+  and kernel launches on Windows however short it is, so short segments were CPU-bound.
+
+One step, Ukrainian voice (15.7 s reference), three Book segments:
+
+| Segment | 55 chars (639 + 106 tokens) | 208 chars (994 + 390) | 268 chars (1132 + 497) |
+| --- | --- | --- | --- |
+| Library (padded batch of 2, mask) | 44.7 ms | 76.1 ms | 89.8 ms |
+| Packed, masked | 44.8 | 54.4 | 71.5 |
+| Packed, masked, cuDNN attention | 44.2 | 49.9 | 61.2 |
+| **Packed, per-block attention** | 44.0 | 46.3 | 57.7 |
+| ... as a CUDA graph | **24.8** | 46.2 | 56.3 |
+
+OmniVoice alone over the whole chapter, two seeds (Book expressiveness 0.6):
+
+| | English (301 s of speech) | Ukrainian (339 s) |
+| --- | --- | --- |
+| Library loop | 44.3 s, RTF 0.147 | 57.2 s, RTF 0.169 |
+| **omnivoice_fast** | **31.3 s, RTF 0.104** (1.42x) | **38.8 s, RTF 0.114** (1.48x) |
+
+End to end through the engine process (a test data dir, voices warm, Ukrainian with its trained RVC model, English
+without; same day, GPU otherwise idle):
+
+| Workload | Before | After |
+| --- | --- | --- |
+| Book, Ukrainian + RVC, 175 s of speech | 33.0-33.9 s (RTF 0.19, 11.4 s per minute of speech) | 22.9-29.2 s (RTF 0.13-0.17, 7.8-10 s per minute) |
+| Book, English, 158 s | 21.1-22.4 s (RTF 0.13-0.14, 8.2 s per minute) | 16.7-19.1 s (RTF 0.11-0.12, 6.3-7.2 s per minute) |
+| Speak, Ukrainian + RVC, 4 segments, 21 s | first chunk 1.0-1.2 s, all 6.1-6.5 s | first chunk **0.72-0.97 s**, all **4.3-4.7 s** |
+| Speak, English, 3 segments, 17 s | first chunk 0.70-0.71 s, all 3.7-5.2 s | first chunk **0.45-0.53 s**, all **2.4-2.7 s** |
+
+The Book runs vary with the GPU's state (the first run after the Speak tests was the slow one); a second comparison
+was started but the card was then in use by another job and the numbers were discarded.
+
+Quality (same 24 segments per language and configuration; WER: Whisper large-v3-turbo with the language forced, digits
+spelled out before scoring; similarity: ECAPA cosine to the Ukrainian speaker's dataset recordings / the English
+voice's reference clip; the difference is paired per clip):
+
+| Configuration | English WER | Ukrainian WER | English similarity | Ukrainian similarity | RTF en / uk |
+| --- | --- | --- | --- | --- | --- |
+| Library, 32 steps | 10.07 % | 10.03 % | 0.914 | 0.824 | 0.147 / 0.169 |
+| **omnivoice_fast, 32 steps** | 10.07 % | 10.47 % | 0.915 (+0.001 ± 0.003) | 0.829 (+0.005 ± 0.003) | 0.104 / 0.114 |
+| ... fp16 accumulation in cuBLAS | 9.84 % | 9.14 % | 0.914 | 0.829 | 0.101 / 0.101 |
+| ... 24 steps | 10.63 % | 9.88 % | 0.916 | 0.830 | 0.082 / 0.087 |
+| ... 16 steps | 10.29 % | 12.98 % | 0.910 (-0.005) | 0.819 (-0.005) | 0.059 / 0.060 |
+
+Most remaining errors are numbers (case endings of Ukrainian numerals, "and" in English ones); on the segments without
+numbers the WER is 0.4-0.8 % in English and 4-5 % in Ukrainian for both the library and the fast loop. The fast loop is
+unchanged in quality, so it is on by default (`MIMVOX_OMNIVOICE_FAST=0` turns it off; any non-memory error turns it off
+for the process and the library's loop takes over).
+
+Tried and not used:
+
+- **cuDNN attention** (12-15 % faster on long passes) builds a plan for every new sequence length, 0.43-0.62 s each,
+  and every segment has a new length; the per-block attention is faster still without that cost. Torch's Windows wheels
+  have no flash attention.
+- **Batching segments** (rows padded to the longest): the pass is compute-bound for Book segments (61 ms for one,
+  126 ms for two, 273 ms for four); only short segments gained (43 -> 26 ms each for two), which the CUDA graph gives one
+  segment at a time.
+- **Caching CUDA graphs across segments**: a graph holds 120-300 MB of its own; graphs sharing one memory pool crashed
+  with an illegal memory access when replayed out of capture order. Graphs live for one segment.
+- **fp16 accumulation** (`torch.backends.cuda.matmul.allow_fp16_accumulation`): 16 % faster passes, no measurable
+  quality change here, but only 3-11 % end to end and a real overflow risk on other voices and cards.
+- **Fewer steps**: 24 steps lost nothing measurable in English but Ukrainian WER without numbers rose from 5.3 % to
+  7.1 %; 16 steps raised the Ukrainian WER to 13 %. *Best* stays at 32.
+- `torch.compile` (no Triton in the runtime), a fused `F.rms_norm` (no faster), `empty_cache` after each segment (no
+  measurable cost).
+
 ## Zero-shot native accent (Seed-VC)
 
 The native accent of an **untrained** voice: OmniVoice speaks the English from the shipped native clip
