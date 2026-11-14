@@ -13,6 +13,9 @@
   cached GPU memory back after every job (on Windows it counts against that limit too); on Linux the system stops Mimvox first if memory runs out.
 * **Reference transcription:** Whisper for a new reference clip loads at half size (1.6 GB instead of 3.2 GB) on the
   GPU only when it fits, otherwise on the processor, and moves to the processor if the GPU runs out midway.
+* **Windows: the app opens in a moment again.** The released Windows build waited about 12 s before its window
+  appeared, on every start: its shaders were compiled at start-up instead of loaded precompiled, because the build
+  machine changed their line endings. Now they keep LF everywhere (`.gitattributes`).
 
 ## 0.2.0
 
