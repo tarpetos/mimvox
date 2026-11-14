@@ -290,11 +290,12 @@ const SAMPLES: &[(&str, &str)] = &[
     ("tr", "Bu sabah erkenden nehir kıyısında yürüyüşe çıktım. Hava serin ve gökyüzü açıktı, sesimi kaydetmek için doğru an olduğunu düşündüm."),
     ("da", "I morges gik jeg tidligt en tur langs åen. Luften var frisk og himlen klar, og jeg tænkte, at det var det rette tidspunkt at optage min stemme."),
     ("fi", "Tänä aamuna lähdin aikaisin kävelylle joen rantaan. Ilma oli raikas ja taivas kirkas, ja ajattelin, että nyt on oikea hetki äänittää ääneni."),
+    ("ro", "Azi-dimineață am ieșit devreme la o plimbare pe malul râului. Aerul era proaspăt și cerul senin, și m-am gândit că este momentul potrivit să îmi înregistrez vocea."),
     ("hu", "Ma reggel korán elindultam sétálni a folyó mentén. A levegő friss volt, az ég tiszta, és arra gondoltam, hogy most van itt a jó pillanat felvenni a hangomat."),
 ];
 
 /// Languages with reading presets (`presets.list`).
-const PRESET_LANGS: [&str; 6] = ["en", "uk", "de", "fr", "es", "pl"];
+const PRESET_LANGS: [&str; 7] = ["en", "uk", "de", "fr", "es", "pl", "ro"];
 
 /// The first sentences of a reading text, about `secs` seconds of it (`est_s` is the whole text's reading time).
 fn first_sentences(text: &str, est_s: f32, secs: f32) -> String {

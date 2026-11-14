@@ -249,7 +249,7 @@ no clear speech are left out and listed.
 Reading aloud goes into the voice chosen under **This is for**: the active voice, or **A new voice** (type its name;
 left empty it is "My voice", then "Voice 2", ...). If you have no voice yet, a new one is made.
 
-At the top, choose the **Reading language**: English, Ukrainian, German, French, Spanish or Polish. Each language has
+At the top, choose the **Reading language**: English, Ukrainian, German, French, Spanish, Polish or Romanian. Each language has
 its own texts, written for that language, in `presets/<lang>/` (`quick.md`, `standard.md`, `pro.md`). Then pick a
 preset:
 

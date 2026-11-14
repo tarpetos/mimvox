@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* **Romanian:** Speak, Book and Redub now offer Romanian. The speech model had under 100 hours of it in training
+  (the cut the other languages passed), so it was tested first: the same six sentences in three languages, from the
+  two shipped reference clips, written down again by Whisper. Romanian came out with 13 % of the words wrong, Polish
+  with 22 % and Hungarian with 39 % (both already in the list). Record has Romanian reading texts too (Quick,
+  Standard and Pro, written for Romanian, not translated), with the analysis that says which sounds a text covers:
+  a voice can be recorded and trained in Romanian from start to finish.
 * **A voice from recordings you already have:** Record's start page now begins with a card for audio or video
   files of one person (drop them or press **Choose files…**): no reading and no preset. A dialog asks whose voice it
   is, **a new voice** (named after the first file, the default) or **more recordings of the active one**, and the

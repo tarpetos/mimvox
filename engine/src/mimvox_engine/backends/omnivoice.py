@@ -79,6 +79,10 @@ LANGS: dict[str, str] = {
     "fa": "fa", "bn": "bn", "as": "as", "mn": "mn", "hu": "hu", "ba": "ba", "te": "te", "ur": "ur", "gl": "gl",
     "ml": "ml", "ka": "ka", "mr": "mr", "cs": "cs", "pa": "pa", "cy": "cy", "kn": "kn", "tr": "tr", "hi": "hi",
     "uz": "uz", "ne": "npi",
+    # Under 100 h, added after a test (asked for by users). Romanian: the same six sentences per language from the two
+    # shipped English reference clips, Whisper turbo back-transcription, numbers spelled alike on both sides: 13 % of
+    # the words wrong, against 22 % for Polish and 39 % for Hungarian (both in the list above).
+    "ro": "ro",
 }
 
 

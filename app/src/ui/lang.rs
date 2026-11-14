@@ -19,7 +19,7 @@ use crate::ui::voices::kit;
 const BUILTIN: &[(&str, &str, &str, bool)] = &[
     ("en", "English", "English", true), ("uk", "Ukrainian", "Українська", true), ("de", "German", "Deutsch", true),
     ("fr", "French", "Français", true), ("es", "Spanish", "Español", true), ("pl", "Polish", "Polski", true),
-    ("it", "Italian", "Italiano", true), ("pt", "Portuguese", "Português", true), ("cs", "Czech", "Čeština", true),
+    ("ro", "Romanian", "Română", true), ("it", "Italian", "Italiano", true), ("pt", "Portuguese", "Português", true), ("cs", "Czech", "Čeština", true),
     ("ru", "Russian", "Русский", true), ("ar", "Arabic", "العربية", false), ("as", "Assamese", "অসমীয়া", false),
     ("ba", "Bashkir", "Башҡортса", false), ("eu", "Basque", "Euskara", false), ("be", "Belarusian", "Беларуская", false),
     ("bn", "Bengali", "বাংলা", false), ("bs", "Bosnian", "Bosanski", false), ("bg", "Bulgarian", "Български", false),
