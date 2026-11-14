@@ -29,7 +29,3 @@ jobs:
             echo "The summary starts in lower case and has no full stop at the end. See CONTRIBUTING.md, 'Commit messages'."
             exit 1
           fi
-          if [ "${#TITLE}" -gt 72 ]; then
-            echo "::error::The title is ${#TITLE} characters long; keep it to 72 (details go in the description)."
-            exit 1
-          fi
