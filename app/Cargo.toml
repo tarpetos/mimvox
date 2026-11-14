@@ -32,6 +32,10 @@ flate2 = "1"
 # ... and the seek strip, the player's knob in a small window of its own (see src/ui/seekstrip.rs).
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Marks the AppImage runtime's descriptors close-on-exec (see keep_appimage_fds_to_self in src/main.rs).
+libc = "0.2"
+
 [build-dependencies]
 # Embeds assets/icon.ico (and version info) into the Windows executable; build.rs does nothing on other targets.
 winresource = "0.1"

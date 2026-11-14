@@ -553,7 +553,8 @@ fn details(s: &AppState, p: Palette, chosen: Option<&str>, kind: Kind) -> El {
                 let v = v.to_owned();
                 move |s| s.update.open = Some(update::release_page(&v))
             }).build(p));
-    let body = col().key("updates-notes").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
+    // Keyed by version: another version's notes start at the top, not where the last ones were scrolled to.
+    let body = col().key(format!("updates-notes-{v}")).w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
         .child(match notes {
             Some(n) => notes_view(p, &n),
             None => text("Loading the notes…").font(ty::BODY).color(p.text_faint),

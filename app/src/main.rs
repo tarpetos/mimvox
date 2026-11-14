@@ -43,6 +43,29 @@ fn leave_appimage_env() {
     unsafe { std::env::remove_var("PYTHONDONTWRITEBYTECODE") };
 }
 
+/// The AppImage runtime hands the app two open descriptors: the read end of the pipe that keeps the image mounted and
+/// the mount's folder. Every process the app starts would inherit them (the engine, setup, the app started again after
+/// an update), and the old image then stayed mounted, with its runtime still running, as long as any of them lived. They
+/// stay open in the app itself (closing the pipe unmounts the image) but are closed in every program it starts.
+#[cfg(target_os = "linux")]
+fn keep_appimage_fds_to_self() {
+    if std::env::var_os("APPIMAGE").is_none() {
+        return;
+    }
+    let Ok(dir) = std::fs::read_dir("/proc/self/fd") else { return };
+    let fds: Vec<i32> = dir.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).filter(|fd| *fd > 2).collect();
+    for fd in fds {
+        // SAFETY: fcntl on a descriptor number only reads and sets its flags; a stale number (the directory listing's own
+        // descriptor, closed by now) fails with EBADF and is skipped.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
+}
+
 /// The app's id: the single-instance pipe (`rune::single_instance`) and the Windows mutex below are named after it.
 const APP_ID: &str = "io.github.tarpetos.mimvox";
 /// Held while the app runs (Windows): the installer and the uninstaller check it (scripts/build/inno.py, APP_MUTEX) and
@@ -60,6 +83,8 @@ fn hold_app_mutex() {
 
 fn main() {
     leave_appimage_env();
+    #[cfg(target_os = "linux")]
+    keep_appimage_fds_to_self();
     // One Mimvox at a time: a second launch brings the running one's window forward and ends here. Headless runs
     // (snapshots, scripted recordings) open no window and may run beside the app.
     if !rune::is_headless() {

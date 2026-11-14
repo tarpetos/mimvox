@@ -9,6 +9,9 @@
   the version means a newer version is waiting.
 * **The update check runs on the welcome screen too:** it used to wait for a running speech engine, so a copy without
   the engine installed never heard of a new version.
+* **AppImage: no leftover mount after an update.** The app passed the AppImage's own open files on to every program
+  it started. An AppImage started again after an update kept the old image mounted, with its runtime still running,
+  until the new one was closed.
 
 ## 0.3.0
 
