@@ -148,7 +148,8 @@ pub fn glass_panel(p: Palette) -> El {
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(20.0, 56.0, p.shadow)
-        .shadow(3.0, 10.0, p.shadow_soft);
+        .shadow(3.0, 10.0, p.shadow_soft)
+        .cache();
     glass_edge(p, e).child(sheen(p, r))
 }
 

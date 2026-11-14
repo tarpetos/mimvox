@@ -11,24 +11,13 @@
   speech process instead of one of its own (native accent in use: 10.7 GB -> 8.4 GB), and every model process gives
   the RAM it only needed while loading back to Windows (with a trained voice and the native accent loaded: 6.5 GB of
   RAM -> 0.6 GB).
-* **Playing is light on the graphics card:** every move of the player bar redrew the whole window, 20 times a
-  second (40-80 % of the GPU in Task Manager while anything played). Now everything but the bar is drawn once into a
-  texture and reused until it changes, so a playing frame is that texture plus the bar; the bar is redrawn when its
-  knob moves a pixel or its clock a second. The big panels no longer blur the (already soft) light fields behind them.
-* **Memory safety:** Mimvox no longer runs the computer out of memory. Recording a new reference while the app was
-  busy could fill the graphics card; the NVIDIA driver then moved the overflow into system RAM until Windows ran out
-  of memory, other programs crashed and the desktop lost its wallpaper and screenshots. Now every engine process caps
-  its GPU use at what is free beyond a reserve for the desktop and other programs (1.5 GB, `MIMVOX_VRAM_RESERVE_GB`); an
-  operation that does not fit makes the other idle models step aside and is retried once, else it stops with a clear
-  message. On Windows the engine and all its workers share a memory cap that follows the system: the commit limit
-  (RAM + page file, and how far a page file Windows manages can still grow) minus what other programs use and a
-  reserve (3 %, at least 1.5 GB; `MIMVOX_RAM_LIMIT_GB` fixes it), and they end with the engine. Workers hand their
-  cached GPU memory back after every job (on Windows it counts against that limit too); on Linux the system stops Mimvox first if memory runs out.
-* **Reference transcription:** Whisper for a new reference clip loads at half size (1.6 GB instead of 3.2 GB) on the
-  GPU only when it fits, otherwise on the processor, and moves to the processor if the GPU runs out midway.
-* **Windows: the app opens in a moment again.** The released Windows build waited about 12 s before its window
-  appeared, on every start: its shaders were compiled at start-up instead of loaded precompiled, because the build
-  machine changed their line endings. Now they keep LF everywhere (`.gitattributes`).
+* **Playing and moving the pointer are light on the graphics card.** Measured on an RTX 4070 with a 165 Hz display
+  (the card idles at 12 W): moving the pointer over the window drew a whole-window frame for every pointer report,
+  36 W for as long as it moved; now a frame is drawn only when something on screen changes (12 W, also when moving
+  fast). Playing redrew the whole window for every position report; now the header, the background and each panel
+  are drawn once and reused, and the player's knob follows the audio directly at up to 60 frames a second, one small
+  frame each (about 19 W while a chapter plays). The big panels no longer blur the (already soft) light fields behind
+  them, and hover highlights settle faster.
 
 ## 0.2.0
 

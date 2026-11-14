@@ -105,7 +105,7 @@ pub enum CaptureEvent {
 pub type MeterSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
 
 /// Position reports per second while a track plays (the player bar's redraw rate). None while paused or stopped.
-pub const PROGRESS_HZ: u32 = 20;
+pub const PROGRESS_HZ: u32 = 60;
 
 /// What the player reports, from the audio thread. `track` is the id [`Player::play`] returned: a report about a
 /// track that was replaced meanwhile can still arrive and must be ignored.

@@ -675,12 +675,12 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         body = body.child(b);
     }
     body = body.child(col().key(format!("screen-{:?}", s.screen)).w_full().grow(1.0).min_h(0.0).child(page));
-    // Everything but the player bar is drawn once into a texture and reused until it changes (`El::cache`): while
-    // something plays, a frame is that texture plus the bar, not the whole window again (the bar moves up to 20
-    // times a second; redrawing every panel, shadow and gradient for it kept the GPU at 40-80 %).
-    let body = body.cache();
+    // The header, the background and every glass panel (`components::glass_panel`) are drawn once into a texture and
+    // reused until they change (`El::cache`): a frame while something plays is those textures plus the player bar,
+    // and a hover animation redraws the one panel it is in, not the whole window (measured on a 165 Hz display:
+    // moving the pointer across the window drew 165 whole-window frames a second, 36 W on the GPU against 12 W idle).
     // The player bar docks under the screen (the screen gets shorter), so it never covers a screen's controls.
-    let dock = super::playbar::view(s, p);
+    let dock = super::playbar::view(s, p, cx.layout_with(super::playbar::RAIL, |r| r[2]));
     let toasts_at = if dock.is_some() { super::playbar::DOCK_H + 14.0 } else { 26.0 };
     let mut root = el().key("root").w_full().h_full().fill(p.bg_top).child(background(p)).child(
         col().key("chrome").w_full().h_full().child(header(s, p, insets, fit).cache()).child(body).children(dock),
