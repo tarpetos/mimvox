@@ -156,7 +156,7 @@ fixed by the `MIMVOX_DATA` environment variable cannot be moved from the app.
 ### Updates
 
 An installed app checks once per launch whether a newer version exists. If one does, a banner under the header says
-so: **What's new** opens the release page, **Skip this version** hides it for good, **Later** until the next launch,
+so: **What's new** opens the Updates window, **Skip this version** hides it for good, **Later** until the next launch,
 and **Update** downloads it in the background. The download is checked against the project's signature before it is
 kept; then **Restart now** installs it and starts the new version (a running training or book pauses and continues
 afterwards), or it installs by itself when you close the app.
@@ -172,6 +172,14 @@ Your voices, results and the engine runtime are not touched by an update. When a
 packages or models, a second banner says **This version needs a setup update**: **Run setup** runs setup again into
 the same data folder, which installs only what changed, and the engine restarts by itself when it is done. To turn the check off, set
 `"check_updates": false` in `settings.json` in your data folder.
+
+The version next to **Mimvox** in the header opens the **Updates** window (when a newer version is waiting, its rim
+glows in and out). On the left are all versions from 0.2.0 on, the newest at the top, marked **New** or **Installed**. On the
+right are the chosen version's notes and what you can do with it: **Update to …** for a newer one, **Install …** for
+an older one, or nothing for the one you have. An older version downloads, is checked and installs the same way. Your
+voices, results and settings stay, and the older version offers the newest one again when it starts. **Check for
+updates** asks for the newest version at once, even one you skipped. **Release page** opens the version on GitHub. A
+`.deb` install gets the download page instead of an install button.
 
 ## 2. The window at a glance
 

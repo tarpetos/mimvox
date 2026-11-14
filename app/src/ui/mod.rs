@@ -111,6 +111,7 @@ pub fn all_scenes() -> &'static [Scene] {
         all.extend_from_slice(redub::scenes());
         all.extend_from_slice(playbar::scenes());
         all.extend_from_slice(book::scenes());
+        all.extend_from_slice(update::scenes());
         all
     })
 }
