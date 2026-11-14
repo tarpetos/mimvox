@@ -356,10 +356,21 @@ pub fn sink() -> crate::audio::PlaySink {
     })
 }
 
+/// The shortest time between two redraws of the playing bar (longer for long tracks, see [`on_progress`]).
+const REDRAW_MIN_S: f32 = 0.25;
+
 fn on_progress(s: &mut AppState, track: u64, pos_s: f32, len_s: f32) -> bool {
     let Some(n) = s.playbar.now.as_mut().filter(|n| n.track == track && n.status == Status::Playing) else { return false };
-    let changed = (n.pos_s - pos_s).abs() > 1e-3 || (n.len_s - len_s).abs() > 1e-3;
-    n.pos_s = pos_s;
+    // The bar is redrawn only when it would look different: the clock shows whole seconds and the knob moves a pixel
+    // or two per quarter second at most. Every report (20 a second) used to redraw the whole window with its blurs:
+    // 40-80 % of the GPU for as long as anything played.
+    let step = (len_s / 400.0).clamp(REDRAW_MIN_S, 1.0);
+    let started = n.pos_s <= 0.0 && pos_s > 0.0;
+    let moved = started || (pos_s - n.pos_s).abs() >= step || pos_s.floor() != n.pos_s.floor() || pos_s >= len_s - 1e-3;
+    let changed = moved || (n.len_s - len_s).abs() > 1e-3;
+    if moved {
+        n.pos_s = pos_s;
+    }
     n.len_s = len_s;
     if pos_s > 0.0 && s.playbar.watch.is_some_and(|(t, _)| t == track) {
         s.playbar.watch = None; // it plays: the output is alive
@@ -448,7 +459,7 @@ pub fn view(s: &AppState, p: Palette) -> Option<El> {
         .child(text(speed_label(speed)).font(ty::NUM).color(if speed != 1.0 { p.accent } else { p.text }))
         .child(icon_el(&icons::CHEVRON_DOWN, 11.0, p.text_dim));
     let close = round_button(p, "pb-close", &icons::CLOSE, "Close the player", false, stop);
-    // instant_changes: the position moves 20 times a second; animating each move with the layout springs kept the
+    // instant_changes: the position moves a few times a second; animating each move with the layout springs kept the
     // window redrawing (and its blurs) at the display's full rate for as long as anything played.
     let bar = row().key("playbar").role("group").label("Player").instant_changes().w_full().h(BAR_H).pl(9.0).pr(10.0).gap(10.0).center_y()
         .radius(radius::PANEL + 4.0).continuous_corners()

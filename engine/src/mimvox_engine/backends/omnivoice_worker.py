@@ -165,6 +165,8 @@ def _trim_working_set():
 
 
 def op_release(_req=None):
+    if "mod" in _zs:
+        _zs["mod"].OPS["release"]({})
     _state.update(model=None)
     _prompts.clear()
     gc.collect()
@@ -415,6 +417,31 @@ def op_status(_req=None):
     return {"loaded": _state["model"] is not None, "rss_gb": _rss_gb(), "vram_gb": _vram_gb()}
 
 
+# ------------------------------------------------------------------------- the zero-shot converter (Seed-VC)
+#
+# Hosted here instead of in a process of its own (zsvc_worker.py explains): its ops are ``zs_load``, ``zs_convert``,
+# ``zs_warm``, ``zs_release`` and ``zs_status``, each with "seed_vc" (the checkout) and "models" (the weights folder).
+# The module and its models load on the first of them.
+
+_zs = {}
+
+
+def _zs_op(name):
+    def run(req):
+        if "mod" not in _zs:
+            if name in ("release", "status"):
+                return {"loaded": False} if name == "status" else {}
+            spec = importlib.util.spec_from_file_location("mimvox_zsvc_hosted",
+                                                          os.path.join(os.path.dirname(HERE), "zsvc_worker.py"))
+            mod = importlib.util.module_from_spec(spec)
+            mod.__hosted__ = {"kit": kit, "worker": kit_worker,
+                              "argv": ["--seed-vc", req["seed_vc"], "--models", req["models"], "--device", args.device]}
+            spec.loader.exec_module(mod)
+            _zs["mod"] = mod
+        return _zs["mod"].OPS[name](req)
+    return run
+
+
 idle = []
 if args.unload_after > 0:
     idle.append((args.unload_after, _idle_unload))
@@ -422,7 +449,8 @@ if args.exit_after > 0 or kit.IDLE_EXIT_S > 0:
     idle.append((args.exit_after or kit.IDLE_EXIT_S, "exit"))
 kit_worker = kit.Worker("omnivoice", INP, OUT,
                         {"load": op_load, "synth": op_synth, "warm": op_warm, "inspect": op_inspect, "release": op_release,
-                         "status": op_status, "ping": lambda _r: {}},
+                         "status": op_status, "ping": lambda _r: {},
+                         **{f"zs_{name}": _zs_op(name) for name in ("load", "convert", "warm", "release", "status")}},
                         idle=idle)
 kit_worker.run()
 os._exit(0)
