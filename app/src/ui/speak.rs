@@ -998,16 +998,17 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
 }
 
 /// The right end of a Results header (Speak and Redub): the count badge, when there are results ("50+" while older
-/// ones are not loaded yet), and the "Save as" chip. Pinned beside the title, so the header is as tall as Style's.
-pub(crate) fn results_head(s: &AppState, p: Palette, count: usize, more: bool, chip_key: &str) -> El {
+/// ones are not loaded yet), the refresh button (the list read again from disk) and the "Save as" chip. Pinned beside the title, so the header is as tall as Style's.
+pub(crate) fn results_head(s: &AppState, p: Palette, kind: trash::Kind, count: usize, more: bool, chip_key: &str) -> El {
     row().key(format!("{chip_key}-head")).pin(None, Some(16.5), Some(22.0), None).gap(8.0).center_y()
         .children((count > 0).then(|| badge(p, &format!("{count}{}", if more { "+" } else { "" }), Tone::Neutral)))
+        .child(super::history::refresh_button(s, p, kind))
         .child(super::formats::output_chip(s, p, chip_key))
 }
 
 fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let more = super::history::has_older(s, trash::Kind::Speak);
-    let head = results_head(s, p, s.speak.takes.len(), more, "speak-outfmt");
+    let head = results_head(s, p, trash::Kind::Speak, s.speak.takes.len(), more, "speak-outfmt");
     let body = if s.speak.takes.is_empty() {
         col().key("takes-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here."))
     } else {

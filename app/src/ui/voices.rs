@@ -230,11 +230,16 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         list = list.child(voice_card(s, &p, info));
     }
 
-    let mut body = col().w_full().gap(18.0).child(kit::header(
-        &p,
-        "Your voices",
-        "Each voice keeps its own recordings and trained model. Pick one to work on.",
-    ));
+    // ↻: the voices folder read again (a voice copied in or deleted on disk shows or leaves at once).
+    let refresh = super::components::icon_button(p, "voices-refresh", &super::components::icons::REFRESH,
+        "Reload the voices from the data folder (voices added or removed on disk)", shell::refresh_voices);
+    let mut body = col().w_full().gap(18.0).child(row().w_full().gap(12.0)
+        .child(el().grow(1.0).min_w(0.0).child(kit::header(
+            &p,
+            "Your voices",
+            "Each voice keeps its own recordings and trained model. Pick one to work on.",
+        )))
+        .child(if shell::voices_loading(s) { refresh.opacity(0.5) } else { refresh }));
     if let Some(err) = &v.error {
         body = body.child(kit::notice(&p, Tone::Danger, err));
     }

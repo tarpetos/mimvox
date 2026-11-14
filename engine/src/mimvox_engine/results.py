@@ -6,7 +6,10 @@ atomically, see :func:`record`): what made it (kind, voice, text or source, lang
 is. ``outputs.list`` reads the outputs folder (not ``books/``) and returns one entry per result, newest first: a result
 with a sidecar gets its fields; an older result without one (a name ``<stamp>`` or ``redub_<stamp>``, from before
 sidecars) gets its file name, its date (mtime) and its duration (read from the file, cached for the session). The audio
-and the video of one Redub (``redub_<stamp>.mp3`` + ``redub_<stamp>.mp4``) are one entry.
+and the video of one Redub (``redub_<stamp>.mp3`` + ``redub_<stamp>.mp4``) are one entry. A file put in the folder
+from outside (any other name, no sidecar) is listed the same way, with ``external: true``: an audio file with Speak's
+results, a video alone with Redub's. The app's refresh button asks the list again, so what was copied in, renamed or
+deleted on disk shows at once. An export the engine saved next to a result (``<stem>_export.<ext>``) is not listed.
 
 ``outputs.play`` returns a WAV to play a result with (the app plays WAV only): the file itself when it is a WAV, else
 a decoded copy in ``<data>/tmp/play`` (emptied at every engine start, so it lives for the session).
@@ -160,13 +163,14 @@ def _entry(stem: str, g: _Group) -> dict[str, Any] | None:
             if side.get(k) not in (None, ""):
                 e[k] = side[k]
         return e
-    if not _LEGACY.match(stem):   # not a result of ours (a file the user put here, an export)
-        return None
+    legacy = bool(_LEGACY.match(stem))
     audio, video = _pick(g.audio), _pick(g.video)
     main = audio or video
     if main is None:
         return None
-    return {"id": stem, "kind": "redub" if stem.startswith("redub_") else "speak", "legacy": True,
+    # Ours from before sidecars: the name says which list. From outside: audio goes with Speak, a video alone with Redub.
+    kind = ("redub" if stem.startswith("redub_") else "speak") if legacy else ("redub" if audio is None else "speak")
+    return {"id": stem, "kind": kind, "legacy": True, "external": not legacy,
             "name": os.path.basename(main[0]), "created": main[1].st_mtime, "path": main[0],
             "video_path": video[0] if video else None, "duration_s": None, "elapsed_s": None,
             "format": os.path.splitext(main[0])[1].lstrip(".").lower(), "_stat": main[1]}
@@ -218,7 +222,10 @@ def list_results(data: config.DataDir, kind: str | None = None, limit: int = LIM
                  before: float | None = None) -> dict[str, Any]:
     """``{"results": [...], "more": bool}``: the results in outputs, newest first (see ``outputs.list``)."""
     entries = []
-    for stem, g in _scan(data.outputs).items():
+    groups = _scan(data.outputs)
+    for stem, g in groups.items():
+        if stem.endswith("_export") and stem[:-len("_export")] in groups and not g.sidecar:
+            continue   # an export of a result, saved next to it (media.export's default name)
         e = _entry(stem, g)
         if e is None or (kind and e["kind"] != kind) or (before is not None and e["created"] >= before):
             continue

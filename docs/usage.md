@@ -368,7 +368,9 @@ person who has given you permission.
 
 ## 4. Voices
 
-Open the Voices screen from the voice pill at the top right (**Manage voices**).
+Open the Voices screen from the voice pill at the top right (**Manage voices**). The round **↻** button at the top
+right of the screen (and in the voice menu) reads the voices folder again: a voice folder you copied into
+`<data folder>/voices`, or deleted there, shows or leaves without restarting the app.
 
 ![Your voices](screenshots/usage-voices.png)
 
@@ -603,7 +605,10 @@ Every result is also saved automatically as one file in the `outputs` folder of 
 (`outputs/<date>_<time>.wav`), with a small `<date>_<time>.result.json` next to it that remembers the text, the voice
 and the settings. So the Results list survives a restart: when the app starts it shows your latest 50 results, newest
 first, and **Show older** at the bottom of the list loads more. Results saved by an older version of the app (without
-that file) appear with their file name as the title and without "made in". After a restart a result saved as MP3 (or
+that file) appear with their file name as the title and without "made in". So do audio and video files you copy
+into the outputs folder yourself (`<data folder>/outputs`): audio with Speak's results, a video on its own with
+Redub's. The round **↻** button next to the count reads the folder again, so a file you added, renamed or deleted
+outside the app shows or leaves at once (opening Speak or Redub does the same). After a restart a result saved as MP3 (or
 any format other than WAV) takes a moment to start the first time you play it: the app makes a playback copy first.
 
 **Save as** (the chip next to the Results title, "Save as WAV" at first) chooses the format of that file: WAV, MP3,

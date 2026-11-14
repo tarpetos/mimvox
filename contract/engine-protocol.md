@@ -730,8 +730,11 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   "video_path","duration_s","elapsed_s","format"}` plus the sidecar's `voice_id`, `voice_name`, `text`, `language`,
   `accent`, `mode`, `source_name`, `to` when it has them.
 - A result saved before sidecars (`legacy: true`) is recognised by its name only: `<YYYYMMDD_HHMMSS>[_N]` is Speak,
-  `redub_<YYYYMMDD_HHMMSS>[_N]` is Redub; any other file without a sidecar is not a result (a file the user put there,
-  an export) and is skipped. It gets `name`, `created` (the file's mtime), `duration_s` (read from the file:
+  `redub_<YYYYMMDD_HHMMSS>[_N]` is Redub. Any other audio or video file without a sidecar was put there from outside
+  and is listed the same way with `external: true` (`legacy` true too): audio as `speak`, a video without audio of the
+  same stem as `redub`; `<stem>_export.<ext>` next to a result `<stem>` is an export of it (`audio.export`'s default
+  name) and is skipped. The app's refresh button asks again, so files added or removed on disk show at once. Such an
+  entry gets `name`, `created` (the file's mtime), `duration_s` (read from the file:
   libsndfile, else ffprobe; cached for the session by path, mtime and size) and `format`; `elapsed_s` and the sidecar
   fields are `null` / absent. A sidecar whose files are gone is skipped.
 - `path` is the audio file (a video-only result: the video); `path_play` is a WAV that plays it now without decoding

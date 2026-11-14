@@ -89,6 +89,26 @@ fn request(s: &mut AppState, kind: Kind, before: Option<f64>) {
     l.listed = true;
 }
 
+/// The refresh button: the list read again from the outputs folder now, so a file copied in, renamed or deleted on
+/// disk shows (or leaves) at once. Does nothing while a page of this list is on its way.
+pub fn refresh(s: &mut AppState, kind: Kind) {
+    if s.history.get(kind).req.is_none() && shell::engine_ready(s) {
+        request(s, kind, None);
+    }
+}
+
+/// A page of this list is on its way (the refresh button dims meanwhile).
+pub fn loading(s: &AppState, kind: Kind) -> bool {
+    s.history.get(kind).req.is_some()
+}
+
+/// The round ↻ button of a Results header.
+pub fn refresh_button(s: &AppState, p: Palette, kind: Kind) -> El {
+    let b = super::components::icon_button(p, &format!("{}-refresh", kind_str(kind)), &super::components::icons::REFRESH,
+        "Reload from the outputs folder (files added or removed on disk)", move |s| refresh(s, kind));
+    if loading(s, kind) { b.opacity(0.5) } else { b }
+}
+
 /// "Show older": the next page, older than the oldest result shown.
 pub fn show_older(s: &mut AppState, kind: Kind) {
     if s.history.get(kind).req.is_some() {

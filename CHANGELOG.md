@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Refresh from disk:** a round ↻ button on Speak's and Redub's Results and on the voices list (the Voices screen
+  and the voice menu) reads the folder again, so what you copied in, renamed or deleted outside the app shows or
+  leaves at once. Audio and video files you put in the outputs folder yourself are listed too, by file name: audio
+  with Speak's results, a video on its own with Redub's.
 * **Exact Ukrainian stress (new optional part, "Ukrainian speech", 1.5 GB):** Ukrainian in Speak, Book and Redub is
   read from phonemes in which the stress is written, so every word is spoken with the stress Mimvox chose, not a guess
   of the speech model. The stress comes from a Ukrainian stress dictionary, with the grammar of the sentence choosing

@@ -1792,7 +1792,7 @@ fn action_bar(s: &AppState, p: Palette) -> El {
 fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let h = &s.redub.history;
     let more = super::history::has_older(s, trash::Kind::Redub);
-    let head = speak::results_head(s, p, h.len(), more, "redub-outfmt");
+    let head = speak::results_head(s, p, trash::Kind::Redub, h.len(), more, "redub-outfmt");
     let body = if h.is_empty() {
         col().key("redubs-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &ICON, "No redubs yet", "Finished redubs appear here."))
     } else {

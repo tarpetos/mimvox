@@ -26,7 +26,7 @@
 //! Screens return a *transparent* element that fills the body (`.w_full().h_full()`); the shell paints the
 //! background and header.
 
-use super::components::{Button, Tone, accent_glass, badge, glass_card, glass_edge, icon_el, icons, status_dot, toast_stack};
+use super::components::{Button, Tone, accent_glass, badge, glass_card, glass_edge, icon_button, icon_el, icons, status_dot, toast_stack};
 use super::theme::{self, Palette, motion, radius, ty};
 use crate::audio::Player;
 use crate::engine::protocol::PausedTraining;
@@ -298,6 +298,11 @@ pub fn request(s: &mut AppState, method: &str, params: Value) -> Option<u64> {
             None
         }
     }
+}
+
+/// A `voices.list` is on its way (the refresh buttons dim meanwhile).
+pub fn voices_loading(s: &AppState) -> bool {
+    s.shell.voices_req.is_some()
 }
 
 /// Re-reads the voice list from the engine; the shell updates `shell.voices` and `shell.active_voice`.
@@ -993,6 +998,7 @@ fn voice_menu(s: &AppState, p: Palette) -> El {
         list = list.child(text("No voices yet").font(ty::CAPTION).color(p.text_faint).px(12.0).py(10.0));
     }
     let manage = Button::new("Manage voices").ghost().small().key("menu-manage").on_press(|s| set_screen(s, Screen::Voices)).build(p);
+    let reload = icon_button(p, "menu-refresh", &icons::REFRESH, "Reload the voices from the data folder", refresh_voices);
     let create = Button::new("New voice").primary().small().icon(&icons::PLUS).key("menu-new").on_press(|s| {
         s.shell.voice_menu_open = false;
         super::record::start_new_voice(s);
@@ -1006,7 +1012,7 @@ fn voice_menu(s: &AppState, p: Palette) -> El {
         .anchored("voice-pill", Side::Bottom, Align::End, 8.0)
         .transition(rune::Transition::scale(0.98))
         .child(list)
-        .child(row().w_full().justify_between().child(manage).child(create));
+        .child(row().w_full().gap(6.0).center_y().child(manage).child(el().grow(1.0)).child(reload).child(create));
     el().key("voice-menu-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(panel)
 }
 
