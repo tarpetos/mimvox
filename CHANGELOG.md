@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+* **Exact Ukrainian stress (new optional part, "Ukrainian speech", 1.5 GB):** Ukrainian in Speak, Book and Redub is
+  read from phonemes in which the stress is written, so every word is spoken with the stress Mimvox chose, not a guess
+  of the speech model. The stress comes from a Ukrainian stress dictionary, with the grammar of the sentence choosing
+  between the readings of a word (ру́ки / руки́), and a small model for words the dictionary lacks; numbers, dates and
+  abbreviations are spelled out with their cases first. A **+** before a vowel still overrides one word. It works with
+  every voice (only the timbre comes from the reference clip) and is about ten times faster than the speech model, but
+  reads evenly, like a narrator: Expressiveness and Quality do not apply to it. Install it in setup or with **Install**
+  in Speak's Style panel when the language is Ukrainian; without it, Ukrainian is spoken as before. Built on HolosTTS
+  (MIT) and patriotyk's ukrainian-word-stress with Stanza.
+
 ## 0.3.1
 
 * **Updates window:** the version next to the app's name in the header is now a button that opens it. When a newer

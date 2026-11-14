@@ -93,12 +93,14 @@ Job events of the Redub feature (`redub.progress`, `redub.transcript`, `redub.do
 [python]
 engine = "/abs/path/runtime/engine/.venv/bin/python"   # runs the engine, the OmniVoice worker and the speech worker
 rvc    = "/abs/path/runtime/applio/.venv/bin/python"   # runs the RVC worker and training (only with "training")
+holos  = "/abs/path/runtime/holos/.venv/bin/python"    # runs the HolosTTS worker (only with "ukrainian")
 
 [paths]
 applio          = "/abs/path/runtime/applio"           # Applio repo with prerequisites downloaded
 omnivoice_model = "/abs/path/runtime/models/omnivoice" # k2-fsa/OmniVoice snapshot (3.3 GB)
 seed_vc         = "/abs/path/runtime/seed-vc"          # Seed-VC source checkout (zero-shot native accent)
 seed_vc_models  = "/abs/path/runtime/models/seed-vc"   # its weights (dit/, bigvgan/, whisper-small/, 1.8 GB)
+holos_model     = "/abs/path/runtime/models/holos"     # HolosTTS weights + stanza/ (only with "ukrainian", 0.9 GB)
 
 [device]
 backend = "cuda"   # cuda | mps | cpu (detected by setup)
@@ -120,7 +122,9 @@ device, so every `cuda` check in the engine and the app applies to it too.
 `omnivoice_model` is absent the engine looks in `<runtime>/models/omnivoice` (next to the Applio folder) and reports
 `tts: missing` when nothing is there. Without `seed_vc` / `seed_vc_models` the engine looks in `<runtime>/seed-vc` and
 `<runtime>/models/seed-vc`; the converter counts as installed only with every file and setup's `.mimvox-setup-ok`
-stamp in the weights folder (`hello` -> `zero_shot_vc`). Runtimes of earlier versions had `engine` in `runtime/index-tts/.venv` and an
+stamp in the weights folder (`hello` -> `zero_shot_vc`). HolosTTS (the `ukrainian` component) needs `[python] holos`
+(without `holos_model` the engine looks in `<runtime>/models/holos`) and counts as installed only with its three weight
+files and setup's `.mimvox-setup-ok` stamp there. Runtimes of earlier versions had `engine` in `runtime/index-tts/.venv` and an
 `indextts` path; setup rewrites the file (the old `runtime/index-tts` is not used any more).
 
 ## Where the data directory is
@@ -237,7 +241,7 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 "models":{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"},
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
 "native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"],"zero_shot_vc":true,
-"components":["speech","training","translation","better_translation","native_accent","music_removal"]}`
+"components":["speech","training","translation","better_translation","native_accent","music_removal","ukrainian"]}`
 - `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl ro it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
@@ -256,7 +260,8 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 - `components`: the parts of the runtime that are installed, from the files on disk (setup's `COMPONENTS`): `speech`
   (engine, OmniVoice, Whisper: always there in a complete runtime), `training` (Applio/RVC: Train, voice match, Redub's
   Convert voice), `translation` (NLLB-200 600M: Redub's Translate & dub), `better_translation` (NLLB-200 1.3B),
-  `native_accent` (Seed-VC) and `music_removal` (Hybrid Demucs). The app offers to install a missing one where it is
+  `native_accent` (Seed-VC), `music_removal` (Hybrid Demucs) and `ukrainian` (HolosTTS: Ukrainian with exact word
+  stress, see [Ukrainian with exact stress](#ukrainian-with-exact-stress-holostts)). The app offers to install a missing one where it is
   needed (setup `--add <component>`). Without `training` runtime.toml has no `[python] rvc` / `[paths] applio` and
   `models.rvc` is `missing`. Read at engine start.
 
@@ -761,9 +766,36 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
 - **App side:** the trash button on a Speak take card and on a Redub Results row asks "Delete this result?" inline,
   stops the result if it is playing, sends this request and drops the entry from the list when the answer arrives (an
   error leaves it and shows a toast).
+### Ukrainian with exact stress (HolosTTS)
+
+With the optional `ukrainian` component installed and loaded, every Ukrainian segment (`language: "uk"` in
+`tts.generate`, Book, Redub's dub and re-speak) is spoken by HolosTTS (patriotyk, MIT) instead of OmniVoice, in a worker
+process with the interpreter of its own environment (`backends/holos_worker.py`, ops `load`, `synth`, `warm`, `stress`,
+`release`, `status`). It reads IPA phonemes that carry the stress, so the stress the text front-end chooses is the one
+that is spoken:
+- the user's marks (`+` right before a vowel, or U+0301 / `´` after it) win over everything else;
+- numbers, units, dates and abbreviations are spelled out by the same Ukrainian rules as OmniVoice's
+  (`backends/omnivoice_text.py`);
+- every other word gets its stress from lang-uk's dictionary, with Stanza's Ukrainian part-of-speech and morphology tags
+  choosing between the readings of a heteronym (patriotyk's `ukrainian-word-stress`), and from a small neural accentor
+  when the dictionary lacks the word; then `ipa-uk` makes the phonemes.
+
+The voice comes from the voice's reference clip (`reference_uk.wav` when it exists) through HolosTTS's voice encoder;
+the clip's language does not matter (only timbre and manner are taken, never the accent). `expressiveness` and
+`quality` do not apply (it has no sampling and no decoding steps); `speed` does. RVC, pauses and slot fitting are as
+for OmniVoice. Measured on an RTX 4070: about 0.1 s per second of speech (10x OmniVoice), 2.3 GB of VRAM.
+
+When the component is not installed, failed to load or is paused for a training, Ukrainian goes to OmniVoice as before
+(`backends.for_language` skips a backend that is not `available()`). The `tts` entry of `models` stays OmniVoice's.
+
+### `text.stress`
+`{"text"}` -> `{"stressed","unsure":[...]}`: the text as HolosTTS would speak it, U+0301 after each stressed vowel
+(numbers and abbreviations spelled out), and the words of two or more syllables that got no stress. `not_ready` when the
+`ukrainian` component is not installed or not loaded; `bad_request` for an empty text or more than 200,000 characters.
+
 ### Speech model and languages (OmniVoice)
 
-Every segment is spoken by OmniVoice (k2-fsa, 0.6B, CC BY-NC 4.0 weights), run by a persistent worker process with the
+Every segment (but Ukrainian with the `ukrainian` component, above) is spoken by OmniVoice (k2-fsa, 0.6B, CC BY-NC 4.0 weights), run by a persistent worker process with the
 engine's interpreter (`backends/omnivoice_worker.py`, wire format `worker_kit.py`, ops `load`, `synth`, `warm`, `release`,
 `status`, `inspect`). Its state is the `tts` entry of the `models` event. IndexTTS-2.5 is no longer used. The rest of the pipeline
 (RVC, resampling, pauses, slot fitting, events) does not depend on the model (`backends/__init__.py`).

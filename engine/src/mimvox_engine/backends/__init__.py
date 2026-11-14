@@ -8,9 +8,11 @@ segment it picks a backend for the segment's language and awaits
 which writes one mono WAV (any sample rate) to ``params.out_path`` and returns that path. RVC (when the voice is trained),
 resampling to 44.1 kHz, pauses and slot fitting happen afterwards in the pipeline, the same for every backend.
 
-The one backend today is OmniVoice (``backends/omnivoice.py``): every language, Ukrainian and English included, in a
-persistent worker process (IndexTTS-2.5 was dropped: OmniVoice matched or beat it on English at a quarter of the time
-and memory, see docs/performance.md).
+OmniVoice (``backends/omnivoice.py``) speaks every language, Ukrainian and English included, in a persistent worker
+process (IndexTTS-2.5 was dropped: OmniVoice matched or beat it on English at a quarter of the time and memory, see
+docs/performance.md). HolosTTS (``backends/holos.py``, the optional ``ukrainian`` runtime component) speaks Ukrainian
+with exact word stress; it is registered first, so it wins for Ukrainian whenever it is installed and loaded, and
+OmniVoice speaks Ukrainian otherwise.
 
 Adding a backend:
 
@@ -21,7 +23,8 @@ Adding a backend:
 2. Optional hooks: ``load(runtime)`` (called at start-up and after a training hands the GPU back), ``release()``
    (called before a training takes the GPU; free VRAM and host RAM), ``status()``, ``is_warm`` / ``forget_reference``
    (speaker-conditioning caches), ``count_tokens`` (text segmentation).
-3. Register it in :func:`_builtin` below. The first registered backend that speaks a language wins.
+3. Register it in :func:`_builtin` below. The first registered backend that speaks a language and is
+   ``available()`` wins (a backend that is not installed, failed to load or is paused for a training is skipped).
 
 ``languages()`` is what Redub's language guard and ``tts.generate``'s ``language`` parameter accept.
 """
@@ -59,6 +62,12 @@ class TtsBackend(abc.ABC):
         """``ready`` | ``loading`` | ``paused`` | ``missing``."""
         return "ready"
 
+    def available(self) -> bool:
+        """Whether :func:`for_language` may pick this backend now. The main backend is always picked (its state is
+        reported to the app and checked per request); an optional one only while it is ready, so its languages fall
+        through to the next backend otherwise."""
+        return True
+
     async def load(self, runtime: dict[str, Any]) -> None:
         """Load the model (start-up, and after a training gave the GPU back)."""
 
@@ -94,10 +103,10 @@ def all_backends() -> list[TtsBackend]:
 
 
 def for_language(lang: str) -> TtsBackend | None:
-    """The backend that speaks ``lang`` (first registered wins), or None."""
+    """The backend that speaks ``lang`` (the first registered one that is available), or None."""
     lang = (lang or "").lower()
     for b in all_backends():
-        if lang in b.languages:
+        if lang in b.languages and b.available():
             return b
     return None
 
@@ -117,5 +126,7 @@ def primary() -> "TtsBackend":
 
 
 def _builtin() -> None:
+    from .holos import HOLOS  # noqa: PLC0415
     from .omnivoice import OMNIVOICE  # noqa: PLC0415
+    register(HOLOS)       # Ukrainian with exact stress, when installed (else OmniVoice speaks Ukrainian)
     register(OMNIVOICE)

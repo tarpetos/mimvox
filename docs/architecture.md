@@ -133,11 +133,16 @@ SynthParams(out_path, temperature=0.8, quality="best", duration_factor=1.0, firs
   librosa's phase vocoder is no longer used: it made dubs sound metallic.
 - OmniVoice (`backends/omnivoice.py`, about 60 languages) is the backend; its status is the `tts` entry of the
   `models` event (IndexTTS-2.5, the earlier backend, was removed).
+- HolosTTS (`backends/holos.py`, the optional `ukrainian` component) is registered before it and speaks Ukrainian when
+  installed and loaded: IPA phonemes with the stress written in (dictionary + Stanza's morphology + an accentor), so
+  the stress is decided by the text front-end, not guessed by the model. Its worker runs with the interpreter of its
+  own environment (`runtime/holos/.venv`): patriotyk's fork of `ukrainian-word-stress` has the name of the lang-uk
+  package in the engine venv. Not installed, failed or paused, it is skipped and OmniVoice speaks Ukrainian.
 - Another backend is a module in `backends/` with a `TtsBackend` subclass, registered in `backends._builtin()`.
   In-process GPU work goes through `aio.run_gpu`, a model in another process behind a `workerproc.WorkerClient`, CPU
   work through `aio.run_io`;
   never block the loop. `load` is called at start-up and after a training, `release` before a training. The first
-  registered backend that speaks a language wins. `tts.generate`'s `language` parameter and Redub's language guard accept
+  registered backend that speaks a language and is `available()` wins. `tts.generate`'s `language` parameter and Redub's language guard accept
   every language in `backends.languages()`.
 
 ## Generation path
