@@ -24,12 +24,12 @@ fn page_scroll(content: El) -> El {
     col().w_full().h_full().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).items_center().py(24.0).px(28.0).child(content)
 }
 
-/// The languages with reading presets (the engine's list, else the six it ships with).
+/// The languages with reading presets (the engine's list, else the seven it ships with).
 fn rec_languages(r: &RecordState) -> Vec<RecLang> {
     if !r.languages.is_empty() {
         return r.languages.clone();
     }
-    ["en", "uk", "de", "fr", "es", "pl"].iter().map(|c| RecLang { code: (*c).into(), name: lang::name(c), native: lang::label(c) }).collect()
+    ["en", "uk", "de", "fr", "es", "pl", "ro"].iter().map(|c| RecLang { code: (*c).into(), name: lang::name(c), native: lang::label(c) }).collect()
 }
 
 /// The reading language as a row of native names.

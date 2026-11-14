@@ -224,7 +224,7 @@ Recording goes into the **active voice**. If you have none yet, the app creates 
 
 ![Choosing a preset and the reading language](screenshots/usage-record-picker.png)
 
-At the top, choose the **Reading language**: English, Ukrainian, German, French, Spanish or Polish. Each language has
+At the top, choose the **Reading language**: English, Ukrainian, German, French, Spanish, Polish or Romanian. Each language has
 its own texts, written for that language, in `presets/<lang>/` (`quick.md`, `standard.md`, `pro.md`). Then pick a
 preset:
 

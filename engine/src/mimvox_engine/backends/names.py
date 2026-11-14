@@ -30,7 +30,7 @@ NAMES: dict[str, tuple[str, str]] = {
 }
 
 # Listed first by the app ("Common"), in this order.
-COMMON = ("en", "uk", "de", "fr", "es", "pl", "it", "pt", "cs", "ru")
+COMMON = ("en", "uk", "de", "fr", "es", "pl", "ro", "it", "pt", "cs", "ru")
 
 
 def name(code: str) -> str:

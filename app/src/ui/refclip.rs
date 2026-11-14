@@ -284,7 +284,7 @@ const SAMPLES: &[(&str, &str)] = &[
 ];
 
 /// Languages with reading presets (`presets.list`).
-const PRESET_LANGS: [&str; 6] = ["en", "uk", "de", "fr", "es", "pl"];
+const PRESET_LANGS: [&str; 7] = ["en", "uk", "de", "fr", "es", "pl", "ro"];
 
 /// The first sentences of a reading text, about `secs` seconds of it (`est_s` is the whole text's reading time).
 fn first_sentences(text: &str, est_s: f32, secs: f32) -> String {

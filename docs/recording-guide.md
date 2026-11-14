@@ -30,7 +30,7 @@ about halfway and never touch the top.
 
 ## Presets and how much data you need
 
-The presets exist in English, Ukrainian, German, French, Spanish and Polish. Each language has its own texts, written
+The presets exist in English, Ukrainian, German, French, Spanish, Polish and Romanian. Each language has its own texts, written
 for that language (not translated), with the same parts and reading times.
 
 | Preset | Recording time | What happens | Result |
@@ -56,7 +56,7 @@ Notes:
 You can paste your own reading text instead of the presets. The app analyses it and tells you:
 
 - **Length**: too short (less than about a minute of speech), enough for zero-shot, enough to train, or great.
-- **Language**: detected from the text (or the one you pick): English, Ukrainian, German, French, Spanish or Polish.
+- **Language**: detected from the text (or the one you pick): English, Ukrainian, German, French, Spanish, Polish or Romanian.
 - **Phoneme coverage**: how many of the sounds of that language your text contains, and which are missing (for
   example `ZH`, the sound in English "measure", or `dzʲ`, the sound in Ukrainian "дзьоб"). The more of them the text
   contains, the more complete the voice. If sounds are missing, add sentences that use them (the message shows an

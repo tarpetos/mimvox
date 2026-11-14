@@ -44,6 +44,7 @@ _STOPWORDS: dict[str, frozenset[str]] = {
     "it": frozenset("il lo la gli le e è un una che non per con di sono io ma come questo della".split()),
     "pt": frozenset("o a os as e é um uma que não por com para do da eu se mas como está você".split()),
     "pl": frozenset("i w na nie się to jest że z do jak ale co tak ja ty go mi już".split()),
+    "ro": frozenset("și în să nu că este mai din care sunt dar pentru cu pe am ce de la o un".split()),
     "cs": frozenset("a je to se na v že s jsem ale jak tak co ne by do mi už".split()),
     "nl": frozenset("de het een en is van ik je dat niet op te zijn met voor maar wat".split()),
 }
@@ -54,7 +55,7 @@ def script_language(text: str) -> str | None:
     """A cheap guess of the language of a transcript from its script and letters (no model): Cyrillic is Ukrainian
     when it has і ї є ґ, Russian when it has ы э ъ ё (the larger count wins), Belarusian with ў, Serbian with ђ ј љ њ ћ
     џ, Kazakh with its own letters; Greek, Hebrew, Arabic, Devanagari, Hangul, kana, Han, Thai and Georgian by their
-    script; Latin text by a few frequent words of English and eight other languages. ``None`` when it cannot tell
+    script; Latin text by a few frequent words of English and nine other languages. ``None`` when it cannot tell
     (Cyrillic without any of those letters, Latin without a clear winner, no letters)."""
     low = (text or "").lower()
     counts = {"cyr": 0, "lat": 0, "grk": 0, "heb": 0, "ara": 0, "dev": 0, "han": 0, "kana": 0, "hang": 0,

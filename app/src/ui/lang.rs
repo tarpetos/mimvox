@@ -19,7 +19,7 @@ use crate::ui::voices::kit;
 const BUILTIN: &[(&str, &str, &str, bool)] = &[
     ("en", "English", "English", true), ("uk", "Ukrainian", "Українська", true), ("de", "German", "Deutsch", true),
     ("fr", "French", "Français", true), ("es", "Spanish", "Español", true), ("pl", "Polish", "Polski", true),
-    ("it", "Italian", "Italiano", true), ("pt", "Portuguese", "Português", true), ("cs", "Czech", "Čeština", true),
+    ("ro", "Romanian", "Română", true), ("it", "Italian", "Italiano", true), ("pt", "Portuguese", "Português", true), ("cs", "Czech", "Čeština", true),
     ("ru", "Russian", "Русский", true), ("ar", "Arabic", "العربية", false), ("as", "Assamese", "অসমীয়া", false),
     ("ba", "Bashkir", "Башҡортса", false), ("eu", "Basque", "Euskara", false), ("be", "Belarusian", "Беларуская", false),
     ("bn", "Bengali", "বাংলা", false), ("bs", "Bosnian", "Bosanski", false), ("bg", "Bulgarian", "Български", false),
@@ -32,8 +32,7 @@ const BUILTIN: &[(&str, &str, &str, bool)] = &[
     ("ko", "Korean", "한국어", false), ("lv", "Latvian", "Latviešu", false), ("lt", "Lithuanian", "Lietuvių", false),
     ("ml", "Malayalam", "മലയാളം", false), ("mt", "Maltese", "Malti", false), ("mr", "Marathi", "मराठी", false),
     ("mn", "Mongolian", "Монгол", false), ("ne", "Nepali", "नेपाली", false), ("no", "Norwegian", "Norsk", false),
-    ("fa", "Persian", "فارسی", false), ("pa", "Punjabi", "ਪੰਜਾਬੀ", false), ("ro", "Romanian", "Română", false),
-    ("sr", "Serbian", "Српски", false),
+    ("fa", "Persian", "فارسی", false), ("pa", "Punjabi", "ਪੰਜਾਬੀ", false), ("sr", "Serbian", "Српски", false),
     ("sk", "Slovak", "Slovenčina", false), ("sl", "Slovenian", "Slovenščina", false), ("sw", "Swahili", "Kiswahili", false),
     ("sv", "Swedish", "Svenska", false), ("ta", "Tamil", "தமிழ்", false), ("te", "Telugu", "తెలుగు", false),
     ("th", "Thai", "ไทย", false), ("tr", "Turkish", "Türkçe", false), ("ur", "Urdu", "اردو", false),

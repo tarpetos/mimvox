@@ -240,7 +240,7 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 "components":["speech","training","translation","better_translation","native_accent","music_removal"]}`
 - `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
-  `en uk de fr es pl it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
+  `en uk de fr es pl ro it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
   `tts.languages {}` -> `{"languages":[...]}`.
 - `device.vendor` is `[device] vendor` from runtime.toml, left out when it is not set. The app shows the backend as
   ROCm for `amd`.
@@ -479,12 +479,14 @@ Reading texts (presets, `text.analyze`) and voices carry a language as an **ISO 
 | `fr` | French | Français | 155 | 34 IPA: 14 vowels incl. nasal `ɛ̃ ɑ̃ ɔ̃`, `j w ɥ`, `ɲ ʁ` | grapheme-cluster heuristic (silent endings, nasal vowels) |
 | `es` | Spanish | Español | 140 | 25 IPA: 5 vowels, `j w`, `θ x tʃ ʝ ɲ ɾ r` | rule-based G2P |
 | `pl` | Polish | Polski | 110 | 37 IPA: 6 vowels + nasal `ɛ̃ ɔ̃`, `ɕ ʑ ʂ ʐ tɕ dʑ tʂ dʐ dz ts x ɲ w` | rule-based G2P (soft i spellings, rz, nasal vowels) |
+| `ro` | Romanian | Română | 135 | 32 IPA: 7 vowels incl. `ə ɨ`, `j w`, the semivowels `e̯ o̯`, final `ʲ`, `ʃ ʒ h ts tʃ dʒ` | rule-based G2P (ce/ci/ge/gi, che/ghi, ea/oa, glide and final i) |
 
 - Parameters named `language` accept the code in any case and with a region (`"uk-UA"`, `"en_US"` -> `uk`, `en`).
   Anything else is `bad_request` (the message lists the supported codes). More codes (e.g. `it`, `pt`, `cs`) follow
   the same scheme when presets and an inventory are added.
 - The reading pace turns word counts into `est_seconds` / `est_minutes`. It differs per language because words differ
-  in length (in the presets a Ukrainian or Polish word has about 2.0 syllables, a German one 1.6, an English one 1.4);
+  in length (in the presets a Ukrainian or Polish word has about 2.0 syllables, a Romanian one 1.8, a German one 1.6, an
+  English one 1.4);
   the figures are estimates that keep the syllable rate of every language at about 3.3-4.2 per second.
 - Phoneme symbols in `missing_phonemes` are those of the language's inventory (ARPAbet for English, IPA otherwise).
 - The language of a voice (`voices.create` / `voices.import` `language`) does not change how the voice is trained; it
@@ -888,7 +890,7 @@ decides the accent of its speech in every other language. The engine reads it fr
 - **Fallback** for sidecars written before the field existed: a script heuristic on the stored transcript. Cyrillic
   is Ukrainian when it has `і ї є ґ`, Russian with `ы э ъ ё` (the larger count wins), Belarusian with `ў`, Serbian with
   `ђ ј љ њ ћ џ`, Kazakh with its own letters, otherwise unknown; Greek, Hebrew, Arabic, Devanagari, Hangul, kana, Han,
-  Thai and Georgian by script; Latin text by counting very frequent words of `en de fr es it pt pl cs nl` (at least
+  Thai and Georgian by script; Latin text by counting very frequent words of `en de fr es it pt pl ro cs nl` (at least
   two hits and a single winner, else unknown).
 - **Unknown** (`null`) while no current sidecar exists. Whisper never runs in the engine process: the sidecar is built
   by the worker on the next `voices.warm` or generation from that clip. `voices.warm` also asks the worker to

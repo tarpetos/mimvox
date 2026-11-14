@@ -1,15 +1,15 @@
 """Languages of the reading texts: codes, reading pace, phoneme inventories, coverage thresholds and detection.
 
-Codes are ISO 639-1 (``en``, ``uk``, ``de``, ``fr``, ``es``, ``pl``). English keeps the ARPAbet analysis of
+Codes are ISO 639-1 (``en``, ``uk``, ``de``, ``fr``, ``es``, ``pl``, ``ro``). English keeps the ARPAbet analysis of
 ``dataset.phonemes`` (g2p_en / CMUdict); every other language has a pure-Python rule-based G2P in this package
-(``uk``, ``pl``, ``es``: letter/digraph rules, the spelling is close to phonemic; ``de``, ``fr``: documented
+(``uk``, ``pl``, ``es``, ``ro``: letter/digraph rules, the spelling is close to phonemic; ``de``, ``fr``: documented
 grapheme-cluster heuristics). Each module exposes ``PHONEMES`` (the inventory, canonical order), ``EXAMPLES``
 (phoneme -> a native example word) and ``phonemes_of(text)``.
 
 Reading pace (``wpm``, words per minute read aloud at the calm pace used for recording) is the English 145 wpm
 scaled by how long words are in each language (syllables per word in running text) and by the typical syllable rate
 of read speech (faster in Spanish and French, a little slower in German): in the presets a Ukrainian or Polish word has
-about 2.0 syllables, a German one 1.6, an English one 1.4, which puts every language at about 3.3-4.2 syllables per
+about 2.0 syllables, a Romanian one 1.8, a German one 1.6, an English one 1.4, which puts every language at about 3.3-4.2 syllables per
 second. These are estimates for planning (``est_seconds``), not measurements.
 
 Coverage thresholds: ``low_coverage`` is the share of the inventory below which ``trainable``/``great`` drop by one
@@ -47,6 +47,7 @@ LANGUAGES: dict[str, Language] = {
     "fr": Language("fr", "French", "Français", 155.0),
     "es": Language("es", "Spanish", "Español", 140.0),
     "pl": Language("pl", "Polish", "Polski", 110.0),
+    "ro": Language("ro", "Romanian", "Română", 135.0),
 }
 
 
@@ -118,13 +119,15 @@ _CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 _LATIN = re.compile(r"[a-zà-ɏ]")
 _TOKEN = re.compile(r"[^\W\d_]+")
 # Letters that only one of the supported Latin-script languages uses (é and ó are shared, so they do not count).
-_MARKS = {"pl": "ąęłśźżćń", "de": "äöüß", "fr": "èêàçœùâîôûëï", "es": "ñáíú¿¡"}
+# â and î are French and Romanian alike, so they count for neither.
+_MARKS = {"pl": "ąęłśźżćń", "de": "äöüß", "fr": "èêàçœùôûëï", "es": "ñáíú¿¡", "ro": "ășțşţ"}
 _STOPWORDS = {
     "en": "the and is are was of to in that it you he she we they this with for not have be on at but what",
     "de": "der die das und ist nicht ich du er sie wir ein eine mit sich auf den dem zu es auch noch wie aber",
     "fr": "le la les et est un une des que qui je tu il elle nous vous pas ce dans pour sur avec au du mais",
     "es": "el la los las y es un una que en por con para no lo se del al como pero muy yo tú está son",
     "pl": "i w nie się na że to jest z do jak ale co tak czy już mi go jego ja ty my wy był być",
+    "ro": "și în să nu că este mai din care sunt dar pentru cu pe am ai ce de la o un eu tu îmi sau iar",
 }
 _STOP = {code: set(words.split()) for code, words in _STOPWORDS.items()}
 
