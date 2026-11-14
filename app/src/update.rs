@@ -1,25 +1,3 @@
-//! App updates: finding a newer release, downloading it and installing it when the app closes.
-//!
-//! Every release (built by `.github/workflows/build.yml`) publishes `latest.json`: the version, its notes and, for each
-//! platform, the installer to download and its signature (minisign, made with the project's private key, which only
-//! the release workflow holds). The app asks for `latest.json` once per launch ([`check`]), downloads the installer
-//! for its platform on request ([`download`]: the signature is verified against [`PUBKEY`] before anything is kept),
-//! and installs it after the window is gone and the engine has exited ([`install_pending`], called by `main`):
-//!
-//! * Windows (the Inno Setup .exe): it runs with `/SILENT /SUPPRESSMSGBOXES /NORESTART`, and `/RELAUNCH=1` when the
-//!   user chose "Restart now" (scripts/build/inno.py starts the new version then).
-//! * Linux AppImage: the new AppImage replaces the file the app was started from; a file named after the old version
-//!   (`mimvox_0.1.5_x86_64.AppImage`) is renamed after the new one.
-//! * macOS: the new `Mimvox.app` replaces the installed one.
-//!
-//! A `.deb` install, a loose binary or an app bundle outside an `.app` cannot replace itself: the app only says that
-//! a new version exists and opens its download page ([`Kind::Manual`]). A build from a repo checkout never checks.
-//! The check is the app's only network request of its own; `"check_updates": false` in settings.json turns it off.
-//!
-//! The Updates dialog (the version in the header) also lists every release from [`OLDEST`] on with its notes
-//! ([`releases`], GitHub's releases API) and installs any one of them, older ones too ([`fetch`]: that release's own
-//! `latest.json`, so the installer is verified the same way). Nothing is asked for until the dialog opens.
-
 use cargo_packager_updater::semver::Version;
 use cargo_packager_updater::{Config, Update, UpdaterBuilder, WindowsConfig, WindowsUpdateInstallMode, reqwest};
 use std::path::PathBuf;
@@ -27,23 +5,20 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// The newest release's manifest (GitHub serves the latest non-pre-release's asset at this address).
+/// GitHub serves the latest non-pre-release's asset at this address.
 const ENDPOINT: &str = "https://github.com/tarpetos/mimvox/releases/latest/download/latest.json";
-/// Every published release with its notes, newest first (GitHub's API; no sign-in needed for a public repository).
 const RELEASES_API: &str = "https://api.github.com/repos/tarpetos/mimvox/releases?per_page=100";
-/// The oldest version the app offers: 0.2.0 is the first release with signed installers and a `latest.json`.
+/// 0.2.0 is the first release with signed installers and a `latest.json`.
 pub const OLDEST: &str = "0.2.0";
-/// The public half of the key the release workflow signs installers with (`cargo packager signer generate`).
+/// Public half of the release workflow's signing key (`cargo packager signer generate`).
 const PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ5RTBDMENBNjhDNkQ0MTUKUldRVjFNWm95c0RnMlNRSXdyc0NFd3BFTlYrcGdmb1BjMG5aQy8vZXBza2hpVWcrREsxYzVOQjAK";
 
-/// How this copy of the app can be updated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// Download, verify and install by itself.
     Auto,
-    /// Only point at the download page (a .deb, a loose binary).
+    /// A .deb or a loose binary: only point at the download page.
     Manual,
-    /// A development build from a repo checkout: never checks.
+    /// A build from a repo checkout.
     Never,
 }
 
@@ -60,18 +35,15 @@ pub fn kind() -> Kind {
     Kind::Auto
 }
 
-/// The `.app` bundle the running executable is in (macOS).
 fn app_bundle() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
     exe.ancestors().find(|a| a.extension().is_some_and(|e| e == "app")).map(PathBuf::from)
 }
 
-/// The page of one release (its notes and installers).
 pub fn release_page(version: &str) -> String {
     format!("https://github.com/tarpetos/mimvox/releases/tag/v{version}")
 }
 
-/// One release's manifest: `latest.json` attached to that release.
 fn manifest(version: &str) -> String {
     format!("https://github.com/tarpetos/mimvox/releases/download/v{version}/latest.json")
 }
@@ -91,18 +63,16 @@ fn config_at(endpoint: &str, relaunch: bool) -> Config {
     Config { endpoints: vec![endpoint], pubkey: PUBKEY.into(), windows: Some(windows) }
 }
 
-/// A version to install: newer than this one (the check), or any other one chosen in the Updates dialog.
 #[derive(Clone, Debug)]
 pub struct Found {
     pub version: String,
-    /// The release notes (Markdown), when the manifest has them.
     pub notes: Option<String>,
     /// `None` only in a headless scene ([`Found::preview`]).
     update: Option<Update>,
 }
 
 impl Found {
-    /// A stand-in for the scenes: it shows like a real one but cannot be downloaded.
+    /// Shows like a real one but cannot be downloaded.
     pub fn preview(version: &str, notes: Option<&str>) -> Self {
         Found { version: version.to_owned(), notes: notes.map(str::to_owned), update: None }
     }
@@ -112,8 +82,7 @@ fn current() -> Result<Version, String> {
     env!("CARGO_PKG_VERSION").parse().map_err(|e| format!("{e}"))
 }
 
-/// The installed version's order against `version`: `Greater` when `version` is newer. An unreadable version sorts
-/// as older.
+/// `Greater` when `version` is newer than the installed one; an unreadable version sorts as older.
 pub fn compare(version: &str) -> std::cmp::Ordering {
     match (Version::parse(version), current()) {
         (Ok(v), Ok(c)) => v.cmp(&c),
@@ -121,13 +90,11 @@ pub fn compare(version: &str) -> std::cmp::Ordering {
     }
 }
 
-/// One published release, for the Updates dialog.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Release {
     pub version: String,
-    /// The day it was published (`2026-11-14`), empty when unknown.
+    /// `2026-11-14`, empty when unknown.
     pub date: String,
-    /// The release notes (Markdown).
     pub notes: String,
 }
 
@@ -144,8 +111,7 @@ struct ApiRelease {
     prerelease: bool,
 }
 
-/// Every published release from [`OLDEST`] on, newest first (blocking: call it on a background thread). Drafts and
-/// pre-releases are left out.
+/// From [`OLDEST`] on, newest first, without drafts and pre-releases. Blocking.
 pub fn releases() -> Result<Vec<Release>, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -180,8 +146,7 @@ fn listed(list: Vec<ApiRelease>) -> Vec<Release> {
     out.into_iter().map(|(_, r)| r).collect()
 }
 
-/// Asks for one release's manifest, to install that version, older or newer (blocking: call it on a background
-/// thread). The installed version itself is refused.
+/// Blocking. The installed version itself is refused.
 pub fn fetch(version: &str) -> Result<Found, String> {
     let current = current()?;
     let builder = UpdaterBuilder::new(current, config_at(&manifest(version), false))
@@ -192,20 +157,17 @@ pub fn fetch(version: &str) -> Result<Found, String> {
     Ok(Found { version: update.version.clone(), notes: update.body.clone(), update: Some(update) })
 }
 
-/// Asks for the newest release (blocking: call it on a background thread). `Ok(None)`: this is the newest.
+/// Blocking. `Ok(None)`: this is the newest.
 pub fn check() -> Result<Option<Found>, String> {
     let builder = UpdaterBuilder::new(current()?, config(false)).timeout(Duration::from_secs(30));
     let update = builder.build().map_err(|e| e.to_string())?.check().map_err(|e| e.to_string())?;
     Ok(update.map(|u| Found { version: u.version.clone(), notes: u.body.clone(), update: Some(u) }))
 }
 
-/// A downloaded, verified installer, waiting for the app to close.
 static READY: Mutex<Option<(Update, Vec<u8>)>> = Mutex::new(None);
-/// Start the app again after installing ("Restart now"), not only install (a plain close).
 static RELAUNCH: AtomicBool = AtomicBool::new(false);
 
-/// Downloads the installer of `found` and verifies its signature (blocking: call it on a background thread).
-/// `progress` gets the bytes received so far and the size when known.
+/// Blocking. `progress` gets the bytes received so far and the size when known.
 pub fn download(found: &Found, progress: impl Fn(u64, Option<u64>)) -> Result<(), String> {
     let update = found.update.as_ref().ok_or("This is a preview; there is nothing to download.")?;
     let got = std::sync::atomic::AtomicU64::new(0);
@@ -216,18 +178,15 @@ pub fn download(found: &Found, progress: impl Fn(u64, Option<u64>)) -> Result<()
     Ok(())
 }
 
-/// Forgets a downloaded installer (another version is about to be downloaded instead).
 pub fn discard_pending() {
     READY.lock().unwrap_or_else(|e| e.into_inner()).take();
 }
 
-/// "Restart now": install when the app closes, then start it again.
 pub fn relaunch_after_install() {
     RELAUNCH.store(true, Ordering::Relaxed);
 }
 
-/// Called by `main` once the window is gone and the engine has exited: installs a downloaded update. On Windows the
-/// installer takes over and this process ends here.
+/// On Windows the installer takes over and this process ends here.
 pub fn install_pending() {
     let Some((mut update, bytes)) = READY.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
     let relaunch = RELAUNCH.load(Ordering::Relaxed);
@@ -250,9 +209,7 @@ pub fn install_pending() {
     }
 }
 
-/// The updated AppImage keeps its file, so a name that carries the old version (`mimvox_0.1.5_x86_64.AppImage`, as
-/// downloaded) is changed to the new one. Any other name (`Mimvox.AppImage`, chosen by the user) stays. Returns the
-/// path the AppImage has now.
+/// A name carrying the old version (as downloaded) changes to the new one; any other name stays.
 fn rename_appimage(path: PathBuf, new_version: &str) -> PathBuf {
     let old = format!("_{}_", env!("CARGO_PKG_VERSION"));
     let Some(name) = path.file_name().and_then(|n| n.to_str()).filter(|n| n.contains(&old)) else { return path };

@@ -1,17 +1,4 @@
 //! Typed mirror of contract/engine-protocol.md.
-//!
-//! Three layers:
-//! - wire envelope types (`EngineError`, `Event`),
-//! - typed payloads (`Hello`, `Voice`, `Preset`, ...) with lenient decoding (missing/null numbers become 0),
-//! - request builders returning `(method, params)` plus `parse_result` for typed responses and
-//!   `Event::parse` for typed events.
-//!
-//! Typical use:
-//! ```ignore
-//! let id = engine.send(protocol::tts_generate(&voice, "Hello", 0.8, 1.0, protocol::Quality::Best, 1.0, "en", "wav"));
-//! // later, on EngineMsg::Response { id, result: Ok(v) }:
-//! let started: protocol::TtsStarted = protocol::parse_result(v)?;
-//! ```
 
 #![allow(dead_code)]
 
@@ -21,24 +8,18 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
-// ---------------------------------------------------------------------------------------------------------------
-// Lenient deserializers
-// ---------------------------------------------------------------------------------------------------------------
-
 mod de {
     use super::*;
 
-    /// `null` or missing -> 0.0 (use with `#[serde(default)]`).
     pub fn f32_or_zero<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
         Ok(Option::<f32>::deserialize(d)?.unwrap_or(0.0))
     }
 
-    /// `null` or missing -> 0.
     pub fn u32_or_zero<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
         Ok(Option::<u32>::deserialize(d)?.unwrap_or(0))
     }
 
-    /// Accepts a string, a number or null (timestamps may be either) and returns a string.
+    /// Timestamps arrive as a string, a number or null.
     pub fn string_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
         Ok(match Value::deserialize(d)? {
             Value::String(s) => s,
@@ -47,10 +28,6 @@ mod de {
         })
     }
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Envelope
-// ---------------------------------------------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EngineError {
@@ -82,17 +59,12 @@ pub struct Event {
     pub data: Value,
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Shared enums
-// ---------------------------------------------------------------------------------------------------------------
-
-/// Readiness of a model in `hello`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelState {
     Ready,
     Loading,
-    /// Unloaded while a voice trains (the GPU is handed to training); back to `Ready` after it.
+    /// Unloaded while a voice trains; back to `Ready` after it.
     Paused,
     Missing,
     #[default]
@@ -101,7 +73,6 @@ pub enum ModelState {
 }
 
 impl ModelState {
-    /// The wire spelling (`ready`, `loading`, `missing`), `unknown` for anything else.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ready => "ready",
@@ -113,7 +84,6 @@ impl ModelState {
     }
 }
 
-/// How good a recording or a whole dataset is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
@@ -125,7 +95,6 @@ pub enum Verdict {
     Unknown,
 }
 
-/// Amount of material: decides zero-shot vs training.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
@@ -150,10 +119,6 @@ pub enum TrainStage {
     Unknown,
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// hello
-// ---------------------------------------------------------------------------------------------------------------
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Device {
     #[serde(default)]
@@ -162,7 +127,7 @@ pub struct Device {
     pub name: String,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub vram_gb: f32,
-    /// `nvidia` or `amd` for the `cuda` backend; empty for older engines and other backends.
+    /// `nvidia` or `amd` for the `cuda` backend, else empty.
     #[serde(default)]
     pub vendor: String,
 }
@@ -175,18 +140,14 @@ pub struct Models {
     pub rvc: ModelState,
 }
 
-/// A language the speech model speaks (`hello` -> `languages`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpeechLanguage {
     /// ISO 639-1 (`yue` for Cantonese).
     pub code: String,
-    /// English name.
     #[serde(default)]
     pub name: String,
-    /// Name in the language itself.
     #[serde(default)]
     pub native: String,
-    /// One of the languages listed first.
     #[serde(default)]
     pub common: bool,
 }
@@ -199,25 +160,16 @@ pub struct Hello {
     pub device: Device,
     #[serde(default)]
     pub models: Models,
-    /// Languages the speech model speaks, the common ones first (empty for an engine that does not say).
     #[serde(default)]
     pub languages: Vec<SpeechLanguage>,
-    /// Redub translators installed, best first (`"nllb-1.3b"`, `"nllb-600m"`; empty for an engine that does not say).
+    /// Best first (`"nllb-1.3b"`, `"nllb-600m"`).
     #[serde(default)]
     pub translators: Vec<String>,
-    /// The zero-shot voice converter is installed: an untrained voice can use the native accent too (`false` for an
-    /// engine that does not say).
     #[serde(default)]
     pub zero_shot_vc: bool,
-    /// The installed parts of the runtime (`speech`, `training`, `translation`, `better_translation`, `native_accent`,
-    /// `music_removal`); see `ui::setuprun::COMPONENTS`.
     #[serde(default)]
     pub components: Vec<String>,
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// voices / presets / text
-// ---------------------------------------------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Voice {
@@ -236,15 +188,12 @@ pub struct Voice {
     pub trained: bool,
     #[serde(default)]
     pub trained_epochs: Option<u32>,
-    /// A training of this voice is paused (or was interrupted by a closed app): `train.resume` continues it.
     #[serde(default)]
     pub training_paused: Option<PausedTraining>,
 }
 
-/// `voices.list` -> `training_paused`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PausedTraining {
-    /// Epoch of the saved checkpoint: where a resume continues.
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub epoch: u32,
     #[serde(default, deserialize_with = "de::u32_or_zero")]
@@ -252,12 +201,10 @@ pub struct PausedTraining {
     /// Local time without zone, `YYYY-MM-DDTHH:MM:SS`.
     #[serde(default)]
     pub paused_at: Option<String>,
-    /// The app was closed or crashed during the training (instead of a pause the user asked for).
     #[serde(default)]
     pub interrupted: bool,
 }
 
-/// One reading part of a preset or of analysed user text.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Part {
     #[serde(default, deserialize_with = "de::u32_or_zero")]
@@ -304,10 +251,6 @@ pub struct TextAnalysis {
     pub parts: Vec<Part>,
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// recording / dataset
-// ---------------------------------------------------------------------------------------------------------------
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RecordingCheck {
     #[serde(default, deserialize_with = "de::f32_or_zero")]
@@ -330,7 +273,6 @@ pub struct RecordingCheck {
     pub issues: Vec<String>,
 }
 
-/// One recorded take inside a dataset.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PartInfo {
     #[serde(default, deserialize_with = "de::u32_or_zero")]
@@ -354,10 +296,6 @@ pub struct DatasetSummary {
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub recommended_epochs: u32,
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Typed responses (`parse_result::<T>`)
-// ---------------------------------------------------------------------------------------------------------------
 
 /// `voices.list`
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -400,44 +338,36 @@ pub struct JobStarted {
     pub job: String,
 }
 
-/// `tts.generate`: the job plus the exact segmentation, known before the first chunk arrives.
+/// `tts.generate`
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TtsStarted {
     pub job: String,
-    /// Number of text segments (= number of `tts.chunk` events to expect).
+    /// Equals the number of `tts.chunk` events to expect.
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub segments: u32,
-    /// Characters per segment, in order (weights for progress and for the buffering estimate).
     #[serde(default)]
     pub segment_chars: Vec<u32>,
-    /// Why `accent: "native-us"` was not possible and the voice's own reference speaks instead (see [`NativeVoice`]).
     #[serde(default)]
     pub accent_note: Option<String>,
-    /// Set when the clip that speaks is in another language than the text (its accent carries over): a sentence for
-    /// the user. See [`ReferenceUse`].
     #[serde(default)]
     pub reference_note: Option<String>,
 }
 
-/// Which reference clip spoke a job, from its end event (`tts.done`, `redub.done` of a speech job).
+/// Which reference clip spoke a job (`tts.done`, `redub.done`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ReferenceUse {
-    /// `own` | `native-us`: whether the voice's own clip spoke, or the native-accent clip.
+    /// `own` | `native-us`.
     #[serde(default)]
     pub accent: Option<String>,
-    /// The language of the clip that spoke (`reference_<lang>.wav` by its name, `reference.wav` as detected, `en` for
-    /// the native clip); `None` while unknown.
     #[serde(default)]
     pub reference_language: Option<String>,
-    /// The clip is in another language than the speech: its accent carries over.
     #[serde(default)]
     pub reference_foreign: bool,
-    /// A sentence for the user when `reference_foreign`.
     #[serde(default)]
     pub reference_note: Option<String>,
 }
 
-/// `voices.warm`: `warming = false` means nothing will be reported (`reason`: for example `already_warm`).
+/// `voices.warm`: `warming = false` means no `voice.warm` event follows.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VoiceWarming {
     #[serde(default)]
@@ -446,15 +376,10 @@ pub struct VoiceWarming {
     pub reason: Option<String>,
 }
 
-/// Decodes the `result` of a successful response into a typed payload.
 pub fn parse_result<T: DeserializeOwned>(result: Value) -> Result<T, EngineError> {
     serde_json::from_value(result)
         .map_err(|e| EngineError::new("bad_response", format!("unexpected engine response: {e}")))
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Redub (`redub.*`)
-// ---------------------------------------------------------------------------------------------------------------
 
 /// `redub.probe`: what the engine found in an audio or video file.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -467,17 +392,16 @@ pub struct RedubProbe {
     pub channels: u32,
     #[serde(default)]
     pub has_audio: bool,
-    /// The file has a picture track (a video; cover art does not count). Absent from older engines.
+    /// A picture track; cover art does not count.
     #[serde(default)]
     pub has_video: Option<bool>,
     #[serde(default)]
     pub format: String,
-    /// Optional: a WAV copy the app can play as "the original" (set when the file itself is not a WAV).
+    /// A playable WAV copy, set when the file itself is not a WAV.
     #[serde(default)]
     pub preview_path: Option<PathBuf>,
 }
 
-/// One transcribed segment (`redub.transcript`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RedubSegment {
     #[serde(default, deserialize_with = "de::u32_or_zero")]
@@ -488,39 +412,33 @@ pub struct RedubSegment {
     pub end: f32,
     #[serde(default)]
     pub text: String,
-    /// The original-language text when `text` is a translation.
     #[serde(default)]
     pub source_text: Option<String>,
-    /// `text` is an English translation of the speech.
     #[serde(default)]
     pub translated: bool,
 }
 
-/// `redub.transcript` event.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RedubTranscript {
-    /// The language of the speech (the detected one), or of `text` for an engine that reports the text language.
     #[serde(default)]
     pub language: String,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub duration_s: f32,
     #[serde(default)]
     pub segments: Vec<RedubSegment>,
-    /// `true` when the segment texts were translated to English (`None` for an engine that does not say).
     #[serde(default)]
     pub translated: Option<bool>,
-    /// The language of the speech when `language` describes the (translated) text.
+    /// The speech language when `language` is that of the translated text.
     #[serde(default)]
     pub source_language: Option<String>,
-    /// The language the segments were translated into (with `translated: true`).
     #[serde(default)]
     pub target_language: Option<String>,
-    /// `true` when a `redub.dub` with `review: true` stopped here: this transcript is the review.
+    /// This transcript is the review of a `redub.dub` with `review: true`.
     #[serde(default)]
     pub review: Option<bool>,
 }
 
-/// One segment of the `redub.review` event: `text` is the English translation, `source_text` the original.
+/// `text` is the translation, `source_text` the original.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RedubReviewSegment {
     #[serde(default, deserialize_with = "de::u32_or_zero")]
@@ -535,22 +453,18 @@ pub struct RedubReviewSegment {
     pub source_text: String,
 }
 
-/// `redub.review` event: a `redub.dub` job with `review: true` ends here, after the translation, and waits for the
-/// user's edits (then `redub.render` respeak).
+/// `redub.review`: a `redub.dub` with `review: true` stops here, awaiting a `redub.render` respeak.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RedubReview {
-    /// Language of `text` (`"en"`).
     #[serde(default)]
     pub language: String,
-    /// Language of the speech (the detected one when the request said `"auto"`).
     #[serde(default)]
     pub source_language: String,
     #[serde(default)]
     pub segments: Vec<RedubReviewSegment>,
 }
 
-/// `redub.progress` event (transcribe stages `decode` / `load_model` / `transcribe`; render stages are free-form).
-/// `pct` is 0-100; `segment` / `segments` (1-based k of n) appear while rendering a re-spoken transcript.
+/// `pct` is 0-100; `segment` / `segments` (1-based k of n) appear only while rendering a re-spoken transcript.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RedubProgress {
     #[serde(default)]
@@ -563,12 +477,9 @@ pub struct RedubProgress {
     pub segments: Option<u32>,
 }
 
-/// `redub.done` event.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RedubDone {
-    /// The saved result in `<data>/outputs`, in the requested `output_format`.
     pub path: PathBuf,
-    /// A WAV of the same audio to play (the saved file itself when it is a WAV; else one in `<data>/tmp/play`).
     #[serde(default)]
     pub path_play: Option<PathBuf>,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
@@ -578,44 +489,36 @@ pub struct RedubDone {
     /// `"dub"`, `"convert"` or `"respeak"`.
     #[serde(default)]
     pub mode: Option<String>,
-    /// How far the spoken result ran past the original length, in seconds (`redub.dub` only, when it did).
+    /// Seconds the spoken result ran past the original length (`redub.dub` only).
     #[serde(default)]
     pub drift_s: Option<f32>,
-    /// The language the result is spoken in (`redub.dub`: `target_language`; respeak: `language`).
+    /// The spoken language for `redub.dub`; respeak reports it in `language`.
     #[serde(default)]
     pub target_language: Option<String>,
-    /// `respeak`: the language spoken.
     #[serde(default)]
     pub language: Option<String>,
-    /// The video with the new voice (`output: "video"`), next to the audio result with the same name.
     #[serde(default)]
     pub video_path: Option<PathBuf>,
-    /// Why the background could not be kept (no music-removal model, the separation failed), when it was asked for.
     #[serde(default)]
     pub background_note: Option<String>,
-    /// The clip that spoke and its language (speech jobs; empty for `convert`).
     #[serde(flatten)]
     pub reference: ReferenceUse,
 }
 
 impl RedubDone {
-    /// The WAV to play: `path_play`, else the saved file.
     pub fn play_path(&self) -> PathBuf {
         self.path_play.clone().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| self.path.clone())
     }
 }
 
-/// What `redub.render` does with the file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedubMode {
-    /// Transcribe, translate to English and speak it in the voice (`redub.dub`; a reviewed one is finished with
-    /// `redub.render` in `respeak` mode). Not a `redub.render` mode itself.
+    /// Only for `redub.dub`; not a `redub.render` mode itself.
     #[default]
     Dub,
-    /// Keep the original timing and delivery, swap the voice (needs a trained voice).
+    /// Swaps the voice, keeping timing and delivery; needs a trained voice.
     Convert,
-    /// Speak the (edited) transcript again in the voice's own delivery.
     Respeak,
 }
 
@@ -629,13 +532,10 @@ impl RedubMode {
     }
 }
 
-/// How a re-spoken or dubbed text is timed (`timing` of `redub.dub` and `redub.render` in `respeak` mode).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RedubTiming {
-    /// Fit each phrase into the original timing (may speed the speech up, never below the engine's floor).
     #[default]
     Keep,
-    /// Speak at the natural pace, one phrase after the other; the result can be longer than the source.
     Natural,
 }
 
@@ -648,12 +548,9 @@ impl RedubTiming {
     }
 }
 
-/// What a Redub job writes for a video source (`output` and `keep_background` of `redub.dub` / `redub.render`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RedubOutput {
-    /// A copy of the video with the new voice (`output: "video"`), else audio only.
     pub video: bool,
-    /// Keep the original music and sound effects under the new voice.
     pub keep_background: bool,
 }
 
@@ -664,17 +561,12 @@ impl RedubOutput {
     }
 }
 
-/// A segment sent to `redub.render` in `respeak` mode.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RedubSegmentIn {
     pub start: f32,
     pub end: f32,
     pub text: String,
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Typed events
-// ---------------------------------------------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrainProgress {
@@ -700,24 +592,22 @@ pub struct TrainDone {
     pub elapsed_s: f32,
 }
 
-/// `train.paused`: the training stopped after a checkpoint; the job is over and the GPU is back for speech.
+/// `train.paused`: the job is over and the GPU is back for speech.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrainPaused {
     #[serde(default)]
     pub voice_id: String,
-    /// Epoch of the saved checkpoint (where a resume continues).
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub epoch: u32,
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub total_epochs: u32,
     #[serde(default)]
     pub paused_at: Option<String>,
-    /// How far the training had got when it stopped (at or after `epoch`).
+    /// How far the training got before it stopped (at or after `epoch`).
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub reached_epoch: u32,
 }
 
-/// One finished text segment, final audio: play at once.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TtsChunk {
     #[serde(default, deserialize_with = "de::u32_or_zero")]
@@ -725,18 +615,16 @@ pub struct TtsChunk {
     pub path: PathBuf,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub duration_s: f32,
-    /// Total segments of the job (same as `TtsStarted::segments`).
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub segments: u32,
-    /// Seconds since the job started when this chunk became ready.
+    /// Seconds since the job started.
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub ready_s: f32,
-    /// Real-time factor of this chunk: seconds of generation per second of audio (below 1 = faster than playback).
+    /// Seconds of generation per second of audio.
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub rtf: f32,
 }
 
-/// `voice.warm` event: a voice finished preparing (`ok`), or failed (`message`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VoiceWarm {
     #[serde(default)]
@@ -749,31 +637,25 @@ pub struct VoiceWarm {
     pub message: Option<String>,
 }
 
-/// `tts.done` event.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TtsDone {
-    /// The saved result in `<data>/outputs`, in the requested `output_format`.
     pub path: PathBuf,
-    /// A WAV of the same audio to play (the saved file itself when it is a WAV; else one in `<data>/tmp/play`).
     #[serde(default)]
     pub path_play: Option<PathBuf>,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub duration_s: f32,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub elapsed_s: f32,
-    /// The clip that spoke and its language.
     #[serde(flatten)]
     pub reference: ReferenceUse,
 }
 
 impl TtsDone {
-    /// The WAV to play: `path_play`, else the saved file.
     pub fn play_path(&self) -> PathBuf {
         self.path_play.clone().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| self.path.clone())
     }
 }
 
-/// Typed view of `Event`. `job` is the job id the event belongs to.
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
     TtsChunk { job: Option<String>, chunk: TtsChunk },
@@ -789,7 +671,7 @@ pub enum EngineEvent {
     RedubReview { job: Option<String>, review: RedubReview },
     RedubDone { job: Option<String>, done: RedubDone },
     RedubError { job: Option<String>, error: EngineError },
-    /// Unknown event name or a payload that did not match the contract (kept raw, never dropped).
+    /// Unknown event or a payload that did not match the contract (kept raw).
     Other(Event),
 }
 
@@ -815,7 +697,6 @@ impl EngineEvent {
 }
 
 impl Event {
-    /// Decodes into a typed event; falls back to `EngineEvent::Other` for unknown or malformed events.
     pub fn parse(&self) -> EngineEvent {
         fn data<T: DeserializeOwned>(e: &Event) -> Option<T> {
             serde_json::from_value(e.data.clone()).ok()
@@ -840,10 +721,6 @@ impl Event {
         typed.unwrap_or_else(|| EngineEvent::Other(self.clone()))
     }
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Request builders: `(method, params)` for `EngineClient::request` / `EngineClient::send`
-// ---------------------------------------------------------------------------------------------------------------
 
 pub type Request = (&'static str, Value);
 
@@ -900,26 +777,25 @@ pub fn train_cancel(job: &str) -> Request {
     ("train.cancel", json!({ "job": job }))
 }
 
-/// Pause a running training after its next checkpoint; answered by the `train.paused` event.
+/// Pauses after the next checkpoint; answered by the `train.paused` event.
 pub fn train_pause(job: &str) -> Request {
     ("train.pause", json!({ "job": job }))
 }
 
-/// Continue the paused (or interrupted) training of a voice: answers `{"job"}` like `train.start`.
+/// Answers `{"job"}` like `train.start`.
 pub fn train_resume(voice_id: &str) -> Request {
     ("train.resume", json!({ "voice_id": voice_id }))
 }
 
-/// Throw away a paused training (its checkpoints and the flag).
+/// Throws away a paused training's checkpoints.
 pub fn train_discard(voice_id: &str) -> Request {
     ("train.cancel", json!({ "voice_id": voice_id }))
 }
 
-/// Speed/quality trade-off of `tts.generate`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Quality {
-    /// 32 OmniVoice decoding steps (the default).
+    /// 32 decoding steps.
     #[default]
     Best,
     /// 16 steps: about twice as fast, slightly less polished.
@@ -935,8 +811,7 @@ impl Quality {
     }
 }
 
-/// The native-accent speaker of `accent: "native-us"` (English spoken by a native American reference voice, then
-/// converted to the user's timbre by RVC; needs a trained voice). `Auto` lets the engine pick by the voice's pitch.
+/// Speaker for `accent: "native-us"` (needs a trained voice); `Auto` lets the engine pick by the voice's pitch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NativeVoice {
     #[default]
@@ -963,8 +838,6 @@ impl NativeVoice {
     }
 }
 
-/// Adds `accent` / `native_voice` to a speech request: `Some` asks for the native accent with that speaker, `None`
-/// leaves the default (`own`: the voice's own reference).
 fn with_accent(mut params: Value, accent: Option<NativeVoice>) -> Value {
     if let Some(v) = accent {
         params["accent"] = json!("native-us");
@@ -973,10 +846,8 @@ fn with_accent(mut params: Value, accent: Option<NativeVoice>) -> Value {
     params
 }
 
-/// `expressiveness` (default 0.8) maps to OmniVoice's sampling temperatures, `voice_match` (default 1.0) to the RVC
-/// index rate (capped by the engine for a language the voice was not recorded in). `speed` (0.8..=1.3, default 1.0) is
-/// OmniVoice's speaking speed. `language` is the ISO code of `text`. `output_format` is the format the result is saved
-/// in (`wav`, `mp3`, `flac`, `ogg`, `opus`, `m4a` or `aiff`). `accent`: see [`NativeVoice`].
+/// Defaults: `expressiveness` 0.8, `voice_match` 1.0, `speed` 1.0 (0.8..=1.3).
+/// `output_format`: `wav`, `mp3`, `flac`, `ogg`, `opus`, `m4a` or `aiff`.
 #[allow(clippy::too_many_arguments)]
 pub fn tts_generate(
     voice_id: &str,
@@ -1004,7 +875,7 @@ pub fn tts_generate(
     )
 }
 
-/// Loads a voice's models in the background; answered by `VoiceWarming`, then the `voice.warm` event.
+/// Answered by `VoiceWarming`, then the `voice.warm` event.
 pub fn voices_warm(id: &str) -> Request {
     ("voices.warm", json!({ "id": id }))
 }
@@ -1017,57 +888,43 @@ pub fn shutdown() -> Request {
     ("shutdown", json!({}))
 }
 
-// ---- redub ----
-
 pub fn redub_probe(path: &std::path::Path) -> Request {
     ("redub.probe", json!({ "path": path }))
 }
 
-/// `language`: `"auto"` or an ISO code (`"en"`, `"uk"`, ...). `translate_to`: a language code to translate every segment
-/// into (any language the speech model speaks), or `None` to keep the speech's own language. `translator`:
-/// `"nllb-1.3b"` | `"nllb-600m"`, or `None` for the best one installed.
+/// `language` is `"auto"` or an ISO code; `translator: None` picks the best one installed.
 pub fn redub_transcribe(path: &std::path::Path, language: &str, translate_to: Option<&str>, translator: Option<&str>) -> Request {
     ("redub.transcribe", json!({ "path": path, "language": language, "translate_to": translate_to, "translator": translator }))
 }
 
-/// `redub.prepare`: preloads the speech models for `path` so the first transcribe/dub starts at once, and with
-/// `separate` splits the file into voice and background in the background (for a video whose music is kept).
-/// Failures (busy, not ready) are harmless and ignored.
+/// Preloads models for `path`; `separate` also splits voice and background. Failures are harmless.
 pub fn redub_prepare(path: &std::path::Path, separate: bool) -> Request {
     ("redub.prepare", json!({ "path": path, "separate": separate }))
 }
 
-/// Parameters of `redub.dub` (transcribe, translate to `target_language`, speak in the voice).
 #[derive(Clone, Debug)]
 pub struct RedubDubParams<'a> {
     pub path: &'a std::path::Path,
     pub voice_id: &'a str,
     /// `"auto"` or a language code.
     pub source_language: &'a str,
-    /// The language to translate to and speak (any language the speech model speaks).
     pub target_language: &'a str,
-    /// `"nllb-1.3b"` (better) | `"nllb-600m"` (faster), or `None` for the best one installed.
+    /// `None` picks the best one installed.
     pub translator: Option<&'a str>,
-    /// Stop after the translation and send `redub.review` instead of speaking.
+    /// Stop after the translation and send `redub.review`.
     pub review: bool,
     pub voice_match: f32,
     pub expressiveness: f32,
     pub quality: Quality,
     pub speed: f32,
-    /// The format the result is saved in (see [`tts_generate`]).
     pub output_format: &'a str,
-    /// The native accent for an English target (see [`NativeVoice`]).
     pub accent: Option<NativeVoice>,
-    /// Keep the original timing or speak at the natural pace (a video output always keeps it).
+    /// A video output always keeps the timing.
     pub timing: RedubTiming,
-    /// Video or audio, with or without the original background.
     pub output: RedubOutput,
 }
 
-/// `redub.dub {path, voice_id, source_language, target_language, translator, review, voice_match, expressiveness, quality, speed,
-/// output_format, timing, output, keep_background}`
-/// -> `{job}`; events `redub.progress` (stages `decode`, `load_model`, `transcribe`, `translate`, `speak`, `save`),
-/// then `redub.review` (when `review`) or `redub.done`, or `redub.error`.
+/// Answers `{job}`; then `redub.progress`, and `redub.review` (with `review`), `redub.done` or `redub.error`.
 pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
     let mut params = json!({
         "path": p.path,
@@ -1087,20 +944,15 @@ pub fn redub_dub(p: &RedubDubParams<'_>) -> Request {
     ("redub.dub", with_accent(params, p.accent))
 }
 
-/// The language of the segment texts of a `respeak` render: the transcript's own language, or a translation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextLanguage {
-    /// Not known: the engine guesses from the script.
+    /// The engine guesses from the script.
     Unknown,
-    /// The speech's own language (`language`).
     Spoken(String),
-    /// Translated into this language (`translated: true`, `target_language`).
     Translated(String),
 }
 
-/// `segments` and `text_language` are only sent in `Respeak` mode (the possibly edited transcript). `output_format` is
-/// the format the result is saved in (see [`tts_generate`]). `accent` applies to an English `respeak` (see
-/// [`NativeVoice`]).
+/// `segments` and `text_language` are only sent in `Respeak` mode.
 #[allow(clippy::too_many_arguments)]
 pub fn redub_render(
     voice_id: &str,
@@ -1148,11 +1000,6 @@ pub fn redub_cancel(job: &str) -> Request {
     ("redub.cancel", json!({ "job": job }))
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Text import and audiobooks (`text.import`, `book.*`)
-// ---------------------------------------------------------------------------------------------------------------
-
-/// One chapter of an imported text.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TextChapter {
     #[serde(default)]
@@ -1161,17 +1008,15 @@ pub struct TextChapter {
     pub text: String,
     #[serde(default, deserialize_with = "de::u32_or_zero")]
     pub words: u32,
-    /// Estimated speech seconds at the language's reading pace (speed 1.0).
+    /// At the language's reading pace, speed 1.0.
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub est_s: f32,
 }
 
-/// `text.import`: the clean text of a file, cut into chapters.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TextImport {
     #[serde(default)]
     pub path: PathBuf,
-    /// The file name.
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -1180,7 +1025,7 @@ pub struct TextImport {
     pub format_label: String,
     #[serde(default)]
     pub title: String,
-    /// The text encoding found (plain-text formats only).
+    /// Plain-text formats only.
     #[serde(default)]
     pub encoding: Option<String>,
     #[serde(default)]
@@ -1193,14 +1038,13 @@ pub struct TextImport {
     pub est_s: f32,
     #[serde(default)]
     pub chapters: Vec<TextChapter>,
-    /// A suggested split when chapters are missing or very long (applied by "Split automatically"), else `None`.
+    /// A suggested split when chapters are missing or very long.
     #[serde(default)]
     pub parts: Option<TextParts>,
     #[serde(default)]
     pub warnings: Vec<String>,
 }
 
-/// `text.import` `parts`: chapters cut at hidden chapter titles, scene breaks, or into parts of about 12 minutes.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TextParts {
     /// `headings` | `breaks` | `length` | `mixed`.
@@ -1214,30 +1058,25 @@ pub fn text_import(path: &std::path::Path) -> Request {
     ("text.import", json!({ "path": path }))
 }
 
-/// Overall progress of a book (in `book.*` events and summaries).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BookTotals {
     /// 0..100, by characters read.
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub percent: f32,
-    /// Seconds of audio made so far.
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub audio_s: f32,
-    /// Seconds spent making it (all sessions).
+    /// Across all sessions.
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub elapsed_s: f32,
-    /// Generation seconds per audio second so far.
     #[serde(default)]
     pub rtf: Option<f32>,
-    /// Seconds of generation left at the measured pace.
     #[serde(default)]
     pub eta_s: Option<f32>,
-    /// The whole book's audio length, extrapolated from what is made.
+    /// Extrapolated from what is made.
     #[serde(default)]
     pub est_audio_s: Option<f32>,
 }
 
-/// A chapter of a book project with its progress (`book.get` -> `chapter_list`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BookChapterRow {
     #[serde(default, deserialize_with = "de::u32_or_zero")]
@@ -1261,7 +1100,6 @@ pub struct BookChapterRow {
     pub path: Option<PathBuf>,
 }
 
-/// A book project (`book.list` entries, `book.get`, the `book.paused` event).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BookSummary {
     pub id: String,
@@ -1278,7 +1116,7 @@ pub struct BookSummary {
     /// `new` | `running` | `paused` | `done` | `error` | `cancelled`.
     #[serde(default)]
     pub status: String,
-    /// Recorded as running by an engine that stopped (the app closed mid-book): resumable.
+    /// Left running by an engine that stopped: resumable.
     #[serde(default)]
     pub interrupted: bool,
     #[serde(default)]
@@ -1318,7 +1156,7 @@ pub struct BookStarted {
     pub reference_note: Option<String>,
 }
 
-/// `book.progress`: after every segment (and when a chapter starts).
+/// `book.progress`: after every segment and when a chapter starts.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BookProgress {
     pub id: String,
@@ -1339,7 +1177,7 @@ pub struct BookProgress {
     pub totals: BookTotals,
 }
 
-/// `book.chapter`: a chapter file is finished.
+/// `book.chapter`
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BookChapterDone {
     pub id: String,
@@ -1353,7 +1191,6 @@ pub struct BookChapterDone {
     pub rtf: Option<f32>,
 }
 
-/// `book.done`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BookDone {
     pub id: String,
@@ -1367,14 +1204,12 @@ pub struct BookDone {
     pub totals: BookTotals,
 }
 
-/// One chapter sent with `book.start`.
 #[derive(Clone, Debug, Serialize)]
 pub struct BookChapterIn<'a> {
     pub title: &'a str,
     pub text: &'a str,
 }
 
-/// The voice settings of a book (as `tts.generate`'s) plus its output options.
 pub struct BookParams<'a> {
     pub title: &'a str,
     pub source: Option<&'a str>,
@@ -1419,11 +1254,7 @@ pub fn book_play(id: &str, index: u32) -> Request {
     ("book.play", json!({ "id": id, "index": index }))
 }
 
-// ---- saved results (outputs.list / outputs.play) ----
-
-/// One saved Speak or Redub result (`outputs.list`), from its sidecar (`<stem>.result.json`) or, for a result saved
-/// before sidecars (`legacy`), from the file alone: then only `name`, `created`, `duration_s`, `format` and the paths
-/// are known.
+/// A `legacy` entry (no sidecar) knows only `name`, `created`, `duration_s`, `format` and the paths.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct OutputEntry {
     /// The file stem, unique in the outputs folder.
@@ -1432,15 +1263,13 @@ pub struct OutputEntry {
     pub kind: String,
     #[serde(default)]
     pub legacy: bool,
-    /// The saved file's name (what a legacy entry shows as its title).
     #[serde(default)]
     pub name: String,
-    /// Unix time in seconds; the list is sorted by it, newest first (`before` pages by it).
+    /// Unix seconds; the list is sorted by it, newest first.
     #[serde(default)]
     pub created: f64,
     pub path: PathBuf,
-    /// A WAV that plays it now (the file itself, or this session's copy in `<data>/tmp/play`); `None` until
-    /// `outputs.play` makes one.
+    /// `None` until `outputs.play` makes one.
     #[serde(default)]
     pub path_play: Option<PathBuf>,
     #[serde(default)]
@@ -1455,7 +1284,6 @@ pub struct OutputEntry {
     pub voice_id: Option<String>,
     #[serde(default)]
     pub voice_name: Option<String>,
-    /// Speak: the whole text.
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default)]
@@ -1472,18 +1300,15 @@ pub struct OutputEntry {
     pub to: Option<String>,
 }
 
-/// The answer of `outputs.list`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct OutputsPage {
     #[serde(default)]
     pub results: Vec<OutputEntry>,
-    /// Older results exist (ask again with `before` = the last entry's `created`).
+    /// Older results exist: ask again with `before` = the last entry's `created`.
     #[serde(default)]
     pub more: bool,
 }
 
-/// `outputs.list`: the saved results of `kind` (`speak` | `redub`), newest first, `limit` of them, older than
-/// `before` (a `created`) when given.
 pub fn outputs_list(kind: &str, limit: u32, before: Option<f64>) -> Request {
     let mut params = json!({ "kind": kind, "limit": limit });
     if let Some(b) = before {
@@ -1492,7 +1317,7 @@ pub fn outputs_list(kind: &str, limit: u32, before: Option<f64>) -> Request {
     ("outputs.list", params)
 }
 
-/// `outputs.play`: a WAV to play a saved result with (`{path, path_play}`).
+/// Answers `{path, path_play}`.
 pub fn outputs_play(path: &std::path::Path) -> Request {
     ("outputs.play", json!({ "path": path }))
 }

@@ -1,5 +1,3 @@
-//! Mimvox: record your voice, train it, speak any text with it.
-
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod audio;
@@ -14,15 +12,9 @@ use state::AppState;
 /// Noto Sans (SIL OFL, see assets/fonts/OFL.txt).
 const NOTO_REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const NOTO_BOLD: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold.ttf");
-/// The app icon (same artwork as `tools/release/icons`): the window and taskbar icon on Windows, the Dock icon on
-/// macOS. On Windows the executable also carries it as a resource for Explorer (see `build.rs`).
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
-/// An AppImage's launcher (AppRun) points `PYTHONHOME` into the image and puts the image's folders first in `PATH`,
-/// `LD_LIBRARY_PATH`, `PYTHONPATH`, `XDG_DATA_DIRS` and a few more. Every process the app starts inherits them: the
-/// setup's and the engine's Python then cannot find their standard library, and a terminal or `xdg-open` may load the
-/// wrong libraries. The image bundles no libraries the app needs at run time, so the entries inside it are dropped
-/// before anything starts (still one thread here, so changing the environment is sound).
+/// AppRun points `PYTHONHOME` and the search paths into the image; child processes must not inherit them.
 fn leave_appimage_env() {
     let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) else { return };
     let appdir = std::path::PathBuf::from(appdir);
@@ -43,10 +35,8 @@ fn leave_appimage_env() {
     unsafe { std::env::remove_var("PYTHONDONTWRITEBYTECODE") };
 }
 
-/// The AppImage runtime hands the app two open descriptors: the read end of the pipe that keeps the image mounted and
-/// the mount's folder. Every process the app starts would inherit them (the engine, setup, the app started again after
-/// an update), and the old image then stayed mounted, with its runtime still running, as long as any of them lived. They
-/// stay open in the app itself (closing the pipe unmounts the image) but are closed in every program it starts.
+/// The AppImage runtime's inherited fds (mount pipe, mount dir) keep an old image mounted while any child lives:
+/// they stay open here but close on exec.
 #[cfg(target_os = "linux")]
 fn keep_appimage_fds_to_self() {
     if std::env::var_os("APPIMAGE").is_none() {
@@ -66,10 +56,8 @@ fn keep_appimage_fds_to_self() {
     }
 }
 
-/// The app's id: the single-instance pipe (`rune::single_instance`) and the Windows mutex below are named after it.
 const APP_ID: &str = "io.github.tarpetos.mimvox";
-/// Held while the app runs (Windows): the installer and the uninstaller check it (scripts/build/inno.py, APP_MUTEX) and
-/// install or remove nothing while it is held.
+/// The installer and uninstaller wait while it is held (scripts/build/inno.py, APP_MUTEX).
 #[cfg(windows)]
 const APP_MUTEX: &str = "Local\\Mimvox-running";
 
@@ -85,8 +73,7 @@ fn main() {
     leave_appimage_env();
     #[cfg(target_os = "linux")]
     keep_appimage_fds_to_self();
-    // One Mimvox at a time: a second launch brings the running one's window forward and ends here. Headless runs
-    // (snapshots, scripted recordings) open no window and may run beside the app.
+    // Headless runs (snapshots, scripted recordings) may run beside the app.
     if !rune::is_headless() {
         if !rune::single_instance(APP_ID) {
             return;
@@ -94,9 +81,8 @@ fn main() {
         #[cfg(windows)]
         hold_app_mutex();
     }
-    // Before `run`: every window opened afterwards shows it. A failure only costs the icon.
+    // Before `run`, so every window opened afterwards shows it.
     let _ = rune::set_app_icon(ICON_PNG);
-    // Where and how large the window was closed; the first time, the default size in the middle of the main display.
     let opening = if rune::is_headless() { ui::winplace::Opening::default() } else { ui::winplace::opening() };
     let spec = AppSpec::<AppState> {
         min_size: Some((1040.0, 620.0)),
@@ -104,23 +90,17 @@ fn main() {
         fonts: &[NOTO_REGULAR, NOTO_BOLD],
         families: ("Noto Sans", "Noto Sans"),
         setup: Some(ui::shell::setup_icon),
-        // The frame hook: settles state and fires due timers; it never polls the engine or audio (see `ui::events`).
         poll: Some(ui::shell::on_frame),
         on_key: Some(ui::on_key),
         ..AppSpec::new("Mimvox", opening.size, AppState::default, ui::view)
     };
-    // The glass header is the title bar: Windows loses its native title bar (resize edges, Aero Snap and the snap
-    // layouts keep working) and the app draws the caption buttons itself (`ui::caption`, over cells Rune
-    // hit-tests as the system's caption buttons), macOS keeps its traffic lights inset into the header. Linux keeps
-    // the native frame.
+    // Windows draws its caption buttons itself (`ui::caption`, cells Rune hit-tests as the system's); macOS insets
+    // the traffic lights; Linux keeps the native frame.
     let titlebar = Titlebar::new(ui::shell::HEADER_HEIGHT)
         .traffic_lights(18.0, (ui::shell::HEADER_HEIGHT - 14.0) / 2.0)
         .custom_caption(ui::caption::CELL);
-    // Rune cannot veto a close, so the window only hides (`keep_running`) and `train::on_close` quits, or, while a
-    // training runs, brings the window back with the "Training is running" dialog.
-    // A window that opens maximized is created at its saved place, on the display it was maximized on, and maximizes
-    // there. It is not moved afterwards: moving or centring a maximized window puts it back to its normal size (on
-    // Windows, setting the position un-maximizes it).
+    // Rune cannot veto a close: the window only hides and `train::on_close` decides.
+    // A maximized window is created at its saved place and never moved: moving it un-maximizes it.
     let mut options = rune::WindowOptions::default();
     if opening.maximized {
         options.position = opening.position;
@@ -134,7 +114,6 @@ fn main() {
         .on_close(ui::train::on_close)
         .on_focus(ui::on_focus)
         .on_frame_drawn(|_| ui::stats::count(&ui::stats::FRAMES));
-    // Background threads (engine, audio, dialogs) reach the UI through this handle (`ui::events`).
     ui::events::init(app.handle());
     match opening.position {
         _ if opening.maximized => {}
@@ -143,13 +122,11 @@ fn main() {
         None => {}
     }
     app.run();
-    // A setup still running stops with the app (it resumes on the next run).
     ui::setuprun::stop_on_exit();
-    // The window is gone: now wait for the engine a quit asked to exit (it is killed after a grace period).
     if let Some(mut engine) = ui::train::take_closing_engine() {
         engine.shutdown();
     }
-    // An update downloaded this session installs now that the app and the engine are gone.
+    // Only after the app and the engine are gone.
     update::install_pending();
     ui::stats::write();
 }

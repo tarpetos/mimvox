@@ -1,10 +1,3 @@
-//! Deleting saved results: the trash button on Speak's take cards and Redub's Results rows, its inline
-//! confirmation ("Delete this result?" Delete / Cancel, like deleting a voice) and the engine request.
-//!
-//! Delete stops the result if it is playing (or loaded in the player bar), then asks the engine (`outputs.delete`,
-//! which only deletes files in `<data>/outputs` and `<data>/tmp/play`) to remove the saved file and its playback
-//! WAV. The entry leaves the list when the engine confirms; an error leaves it and shows a toast.
-
 use super::components::{Button, Tone, icon_button, icons};
 use super::playbar;
 use super::shell;
@@ -15,7 +8,6 @@ use rune::{El, row, text};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-/// Which list a result is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Speak,
@@ -24,9 +16,8 @@ pub enum Kind {
 
 #[derive(Default)]
 pub struct TrashState {
-    /// The result whose "Delete this result?" shows.
     confirm: Option<(Kind, u64)>,
-    /// `outputs.delete` requests waiting for their answer: (request id, kind, result id).
+    /// (request id, kind, result id).
     pending: Vec<(u64, Kind, u64)>,
 }
 
@@ -34,12 +25,10 @@ fn key(kind: Kind, id: u64) -> String {
     format!("{}{id}", if kind == Kind::Speak { "take" } else { "redub" })
 }
 
-/// The trash button of a result (asks first).
 pub fn button(p: Palette, kind: Kind, id: u64) -> El {
     icon_button(p, &format!("trash-{}", key(kind, id)), &icons::TRASH, "Delete this result", move |s| s.trash.confirm = Some((kind, id)))
 }
 
-/// The confirmation row replaces the result's buttons.
 pub fn confirming(s: &AppState, kind: Kind, id: u64) -> bool {
     s.trash.confirm == Some((kind, id)) || deleting(s, kind, id)
 }
@@ -48,8 +37,7 @@ fn deleting(s: &AppState, kind: Kind, id: u64) -> bool {
     s.trash.pending.iter().any(|(_, k, i)| *k == kind && *i == id)
 }
 
-/// "Delete this result?" Delete / Cancel (or "Deleting…" while the engine works). `path` is the saved file, `play`
-/// its playback WAV (the same file for a WAV result).
+/// `play` is the playback WAV (the same file for a WAV result).
 pub fn confirm_row(s: &AppState, p: Palette, kind: Kind, id: u64, path: &Path, play: &Path) -> El {
     let k = key(kind, id);
     if deleting(s, kind, id) {
@@ -96,7 +84,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// Scene helper: the confirmation open on a result.
 pub fn scene_confirm(s: &mut AppState, kind: Kind, id: u64) {
     s.trash.confirm = Some((kind, id));
 }

@@ -1,30 +1,4 @@
-//! App chrome: glass background, header (title, step tabs, voice selector, engine status), screen switching,
-//! toasts, and the event routing.
-//!
-//! ## Event convention (for screen authors)
-//!
-//! The UI is event-driven (see `ui::events`): nothing polls the engine, the audio devices or the file system, and
-//! an idle window draws nothing. Every screen module exposes these hooks:
-//!
-//! * `pub fn on_engine(s: &mut AppState, msg: &EngineMsg)` is called for **every** message the engine sends
-//!   (responses, events, exit) as it arrives, on every screen, whether or not that screen is visible. Match your own
-//!   request ids (store the `u64` returned by [`request`]) and event names (`tts.*`, `train.*`, ...).
-//! * `pub fn settle(s: &mut AppState) -> bool` runs after every event (input, an engine message, an audio or dialog
-//!   event, a timer): bring derived state up to date (send a request that waited for the engine, follow the
-//!   header's voice) and return true when that changed what the screen shows. It must only look at `AppState`:
-//!   no I/O to find out whether something happened (that is an event), and no timing.
-//! * Background work (a dialog, a disk probe, a subprocess) runs on its own thread and reports with
-//!   `events::post(|s| ...)`; playback state lives in `ui::playbar` (screens read [`super::playbar::playing`]), the
-//!   recorder reports through its meter events.
-//! * A clock that must tick while a job runs (elapsed time) is a deadline: return the job's start time from the
-//!   screen's `clock_origin`, and [`settle`] arms a timer for the next whole second while the screen shows it.
-//!
-//! The shell owns the engine and the player. Never call `EngineClient`/`Player` methods directly: use the guarded
-//! helpers [`request`], `playbar::play` / `toggle` / `play_live` / `enqueue` and [`stop_audio`], which never panic
-//! and return `None`/`Err` with a friendly message when a backend is unavailable.
-//!
-//! Screens return a *transparent* element that fills the body (`.w_full().h_full()`); the shell paints the
-//! background and header.
+//! Screens never poll: background work reports through `events::post`, and `settle` reads only `AppState`.
 
 use super::components::{Button, Tone, accent_glass, badge, glass_card, glass_edge, icon_button, icon_el, icons, status_dot, toast_stack};
 use super::theme::{self, Palette, motion, radius, ty};
@@ -40,27 +14,16 @@ use std::time::{Duration, Instant};
 
 pub use super::components::Toast;
 
-// -------------------------------------------------------------------------------------------------
-// State
-// -------------------------------------------------------------------------------------------------
-
-/// What the engine is doing, as the header shows it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum EngineStatus {
-    /// Not started yet (started a moment after launch, see `settle`).
     #[default]
     Idle,
-    /// Process spawned, waiting for its `ready` line.
     Starting { since: f64 },
-    /// Answering requests. `models` are the `hello` model states when the engine reports them.
     Ready { device: Option<String>, tts: Option<String>, rvc: Option<String> },
-    /// The process ended or could not be started.
     Stopped { code: Option<i32>, detail: String },
-    /// No engine can be started here (not installed, or this build has no engine client).
     Unavailable { reason: String },
 }
 
-/// A voice as listed by `voices.list`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VoiceInfo {
     pub id: String,
@@ -70,35 +33,28 @@ pub struct VoiceInfo {
     pub parts: u32,
     pub trained: bool,
     pub trained_epochs: u32,
-    /// A paused (or interrupted) training of this voice that can be resumed.
     pub paused: Option<PausedTraining>,
-    /// The language the voice was recorded in (`en` for voices from before languages existed).
     pub language: String,
-    /// Languages with their own reference clip (`reference_<lang>.wav`).
+    /// Languages with their own `reference_<lang>.wav`.
     pub references: Vec<String>,
-    /// The language actually spoken in `reference.wav`, detected by the engine (`reference_language`); `None` until the
-    /// speech worker has transcribed the clip (its next warm-up or generation).
+    /// Detected by the engine; `None` until the speech worker has transcribed the clip.
     pub reference_language: Option<String>,
 }
 
 impl VoiceInfo {
-    /// The recording language (`en` when unknown).
     pub fn lang(&self) -> &str {
         if self.language.is_empty() { "en" } else { &self.language }
     }
 
-    /// The language of `reference.wav` as far as it is known: the detected one, else the recording language.
     pub fn reference_lang(&self) -> &str {
         self.reference_language.as_deref().filter(|l| !l.is_empty()).unwrap_or(self.lang())
     }
 
-    /// `reference.wav` is known to be speech in another language than the voice's own (its accent carries over).
     pub fn reference_mismatch(&self) -> bool {
         self.reference_language.as_deref().is_some_and(|l| !l.is_empty() && super::lang::base(l) != super::lang::base(self.lang()))
     }
 
-    /// Speech in `code` is spoken from a clip in that language: its own `reference_<code>.wav`, or `reference.wav`
-    /// when that clip is in `code` (detected, or the recording language while the detection is not known yet).
+    /// Its own `reference_<code>.wav`, or `reference.wav` when that clip is (or is assumed to be) in `code`.
     pub fn has_reference_in(&self, code: &str) -> bool {
         let code = super::lang::base(code);
         self.references.iter().any(|r| super::lang::base(r) == code) || super::lang::base(self.reference_lang()) == code
@@ -122,48 +78,33 @@ impl VoiceInfo {
 }
 
 pub struct ShellState {
-    /// Seconds on the app clock (Rune's `Tx::clock`) at the last event. Views read it; code that stamps a start time
-    /// outside an event (a press handler) uses [`clock_now`].
+    /// App clock at the last event; outside an event (a press handler) use [`clock_now`].
     pub now: f64,
-    /// The wall-clock instant of app clock 0 (windowed runs; headless runs keep a virtual clock).
+    /// Wall-clock instant of app clock 0; headless runs keep a virtual clock.
     epoch: Option<Instant>,
-    /// When the elapsed-time clock of a running job shows its next second (see [`settle`]).
     clock_due: Option<f64>,
     pub engine: EngineStatus,
-    /// The engine runs on a CUDA GPU (`hello` -> `device.backend`); sets defaults such as "Remove background music".
     pub gpu: bool,
-    /// Voices known to the engine (refreshed by [`refresh_voices`]).
     pub voices: Vec<VoiceInfo>,
-    /// Languages the speech model speaks (`hello` -> `languages`; empty until the engine says, see `ui::lang`).
     pub languages: Vec<crate::engine::protocol::SpeechLanguage>,
-    /// Redub translators installed (`hello` -> `translators`: `"nllb-1.3b"`, `"nllb-600m"`; empty until the engine says).
     pub translators: Vec<String>,
-    /// The engine has the zero-shot voice converter (`hello` -> `zero_shot_vc`): the native accent works for an
-    /// untrained voice too.
     pub zero_shot_vc: bool,
-    /// The installed runtime components (`hello` -> `components`); `None` until the engine says.
+    /// `None` until the engine says.
     pub components: Option<Vec<String>>,
-    /// The voice used by Speak and shown in the header pill.
     pub active_voice: Option<String>,
     pub voice_menu_open: bool,
-    /// Headless previews only: the caption buttons' state to draw as if a Windows window reported it
-    /// (`caption::scenes`). `None` in the real app.
+    /// Headless previews only (`caption::scenes`); `None` in the real app.
     pub caption_preview: Option<rune::CaptionView>,
-    /// The app icon, decoded once in `setup` (see [`setup_icon`]); the brand mark draws it.
     pub icon: Option<rune::Image>,
     icon_cache: Option<rune::ImageCache>,
     pub toasts: Vec<Toast>,
-    /// Why audio is unavailable (shown on screens that play sound).
     pub audio_error: Option<String>,
-    /// The per-user data dir (voices, temporary takes, settings): the engine's `--data-dir`.
     pub data_dir: PathBuf,
-    /// A voice that `voices.warm` is still preparing (until its `voice.warm` event arrives).
     pub preparing: Option<String>,
-    /// The voice `voices.warm` was last requested for (so a voice is warmed once per engine start).
+    /// So a voice is warmed once per engine start.
     warm_for: Option<String>,
     warm_req: Option<u64>,
     next_toast: u64,
-    /// Headless snapshot / script run: never start the engine or audio.
     scripted: bool,
     voices_req: Option<u64>,
     first_voice_list: bool,
@@ -180,14 +121,12 @@ impl ShellState {
     pub fn set_engine(&mut self, status: EngineStatus) {
         self.engine = status;
     }
-    /// Whether the active voice is still being prepared by the engine (`voices.warm`).
     pub fn preparing_voice(&self) -> bool {
         self.preparing.is_some() && self.preparing == self.active_voice
     }
 }
 
-/// `AppSpec::setup`: decodes the app icon (a 512 px PNG; Rune keeps filtered mip levels, so it stays crisp at any
-/// size it is drawn at). The decode takes milliseconds and finishes before the first frame, so the mark never pops in.
+/// Decodes before the first frame so the mark never pops in; Rune keeps mip levels, so 512 px stays crisp.
 pub fn setup_icon(s: &mut AppState, waker: rune::Waker) {
     let cache = rune::ImageCache::new(waker);
     let icon = cache.load(crate::ICON_PNG);
@@ -196,7 +135,6 @@ pub fn setup_icon(s: &mut AppState, waker: rune::Waker) {
     s.shell.icon_cache = Some(cache);
 }
 
-/// The brand mark: the app icon drawn `size` pt square (the header's, and the welcome card's large one).
 pub fn brand_mark(s: &AppState, size: f32) -> El {
     let mark = el().key("brand-mark").size(size, size).a11y_hidden();
     match &s.shell.icon {
@@ -205,9 +143,7 @@ pub fn brand_mark(s: &AppState, size: f32) -> El {
     }
 }
 
-/// Headless runs (`--snap`, `--tree`, `--script`, ...) must not start processes or open audio devices. A
-/// `--realtime` run is the exception: it keeps pace with the wall clock so it can record a real session (the engine
-/// starts and work really runs), for demo videos made with `--script` and `--video`.
+/// Headless runs must not start processes or open audio; `--realtime` runs for real (demo recordings).
 pub fn headless_run() -> bool {
     let mut args = std::env::args();
     let headless = args.any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--trace" | "--video"));
@@ -246,12 +182,7 @@ impl Default for ShellState {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Public helpers for screens
-// -------------------------------------------------------------------------------------------------
-
-/// The app clock now: the wall clock in windowed runs (Rune's clock is wall time there), the last event's clock in
-/// headless runs. For start times stamped in press handlers, which get no `Tx`.
+/// For start times stamped in press handlers, which get no `Tx`.
 pub fn clock_now(s: &AppState) -> f64 {
     match s.shell.epoch {
         Some(e) => e.elapsed().as_secs_f64().max(s.shell.now),
@@ -259,13 +190,11 @@ pub fn clock_now(s: &AppState) -> f64 {
     }
 }
 
-/// Shows a toast for about 4 seconds (errors 7 seconds).
 pub fn toast(s: &mut AppState, tone: Tone, text: impl Into<String>) {
     let now = clock_now(s);
     let sh = &mut s.shell;
     sh.next_toast += 1;
     let text = text.into();
-    // Time to read it: longer messages stay longer (about 15 characters a second on top of the base time).
     let base = if tone == Tone::Danger { 7.0 } else { 4.0 };
     let life = (base + text.chars().count() as f64 / 15.0).min(14.0);
     sh.toasts.push(Toast { id: sh.next_toast, tone, text, expires: now + life });
@@ -274,20 +203,18 @@ pub fn toast(s: &mut AppState, tone: Tone, text: impl Into<String>) {
     }
 }
 
-/// Whether requests can be sent right now.
 pub fn engine_ready(s: &AppState) -> bool {
     s.engine.is_some() && matches!(s.shell.engine, EngineStatus::Ready { .. })
 }
 
-/// Runs `f`, turning a panic (an unimplemented backend) into an error string.
+/// Turns a panic (an unimplemented backend) into an error string.
 pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     catch_unwind(AssertUnwindSafe(f)).map_err(|p| {
         p.downcast_ref::<&str>().map(|m| (*m).to_owned()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "internal error".into())
     })
 }
 
-/// Sends an engine request. Returns its id (the answer comes to `on_engine` as `EngineMsg::Response`),
-/// or `None` when the engine is not running.
+/// The answer comes to `on_engine` as `EngineMsg::Response`.
 pub fn request(s: &mut AppState, method: &str, params: Value) -> Option<u64> {
     let client = s.engine.as_ref()?;
     match guard(|| client.request(method, params)) {
@@ -300,30 +227,24 @@ pub fn request(s: &mut AppState, method: &str, params: Value) -> Option<u64> {
     }
 }
 
-/// A `voices.list` is on its way (the refresh buttons dim meanwhile).
 pub fn voices_loading(s: &AppState) -> bool {
     s.shell.voices_req.is_some()
 }
 
-/// Re-reads the voice list from the engine; the shell updates `shell.voices` and `shell.active_voice`.
 pub fn refresh_voices(s: &mut AppState) {
     s.shell.voices_req = request(s, "voices.list", json!({}));
 }
 
-/// The voice currently selected in the header.
 pub fn active_voice(s: &AppState) -> Option<&VoiceInfo> {
     let id = s.shell.active_voice.as_deref()?;
     s.shell.voices.iter().find(|v| v.id == id)
 }
 
-/// Switches screen. First-run onboarding (consent, runtime setup) cannot be skipped: until it is done, every
-/// request to leave it keeps the user there.
 pub fn set_screen(s: &mut AppState, screen: Screen) {
     s.screen = if screen != Screen::Onboarding && !s.shell.scripted && super::onboarding::needed(s) { Screen::Onboarding } else { screen };
     s.shell.voice_menu_open = false;
 }
 
-/// Stops whatever plays and hides the player bar.
 pub fn stop_audio(s: &mut AppState) {
     super::playbar::stop(s);
 }
@@ -332,16 +253,12 @@ pub fn audio_unavailable(s: &AppState) -> String {
     s.shell.audio_error.clone().unwrap_or_else(|| "No audio output is available.".into())
 }
 
-/// Starts (or restarts) the engine. Called once a moment after launch (see [`settle`]) and by the Retry buttons.
-/// Its messages arrive as events ([`on_engine_msg`]); a replaced engine's late messages are dropped there.
-/// `EngineStatus::Unavailable` before setup has run.
 pub const NOT_INSTALLED: &str = "The speech engine is not installed yet.";
 
 pub fn restart_engine(s: &mut AppState) {
     if let Some(mut old) = s.engine.take() {
         let _ = guard(|| old.shutdown());
     }
-    // Nothing to start before setup: the start screen offers it (and starts the engine when it is done).
     if !super::onboarding::runtime_toml_path().is_file() {
         s.shell.engine = EngineStatus::Unavailable { reason: NOT_INSTALLED.into() };
         return;
@@ -368,8 +285,7 @@ pub fn restart_engine(s: &mut AppState) {
     }
 }
 
-/// Drops the audio output and opens the default device again: after the PC slept, or the output device changed,
-/// the old stream stays open but never asks for sound (nothing plays, the position stays at 0).
+/// After sleep or a device change the old stream stays open but never asks for sound: reopen the default device.
 pub fn restart_audio(s: &mut AppState) {
     s.player = None;
     s.shell.audio_error = None;
@@ -387,23 +303,17 @@ fn start_audio(s: &mut AppState) {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Events, settling and timers
-// -------------------------------------------------------------------------------------------------
-
 /// Start the engine this long after launch, so the first frames stay still.
 const ENGINE_START_DELAY: f64 = 0.25;
 
-/// The window has no saved place: its first frame centres it on the main display (`winplace`).
 static CENTER_ON_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn center_on_open() {
     CENTER_ON_OPEN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// The frame hook (`AppSpec::poll`). Rune runs it at the start of a frame, which only happens for input, a running
-/// animation, an event (`AppHandle::update`) or a timer that came due (`Tx::wake_at`, armed by [`settle`]); an idle
-/// window never runs it. It only settles the state: the engine, the audio and the dialogs report through events.
+/// Rune runs this only for input, an animation, an event or a due timer (armed by [`settle`]);
+/// an idle window never runs it.
 pub fn on_frame(s: &mut AppState, clock: f64, tx: &mut Tx) -> bool {
     super::stats::count(&super::stats::HOOKS);
     if CENTER_ON_OPEN.swap(false, std::sync::atomic::Ordering::Relaxed) {
@@ -423,8 +333,7 @@ pub fn on_frame(s: &mut AppState, clock: f64, tx: &mut Tx) -> bool {
     settle(s, tx)
 }
 
-/// Runs after every event: screens bring derived state up to date, a quit or toast expiry is carried out, and the
-/// timers the state needs are armed. True when what the window shows changed.
+/// True when what the window shows changed.
 pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     let now = tx.clock().max(s.shell.now);
     s.shell.now = now;
@@ -435,8 +344,6 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
             tx.wake_at(ENGINE_START_DELAY);
         } else {
             start_audio(s);
-            // Without a runtime there is nothing to start: the start screen offers setup, which starts the engine
-            // when it finishes (`setuprun::on_exit`).
             if s.onboarding.runtime_present {
                 restart_engine(s);
             } else {
@@ -462,7 +369,6 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     changed |= super::playbar::settle(s, tx);
     changed |= super::update::settle(s, tx);
 
-    // Toasts: drop the expired ones, wake for the next expiry.
     let before = s.shell.toasts.len();
     s.shell.toasts.retain(|t| t.expires > now);
     changed |= s.shell.toasts.len() != before;
@@ -470,7 +376,6 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
         tx.wake_at(next);
     }
 
-    // The elapsed-time clock of a job on the visible screen: one redraw per shown second while it runs.
     if s.shell.clock_due.is_some_and(|due| due <= now + 1e-3) {
         super::stats::count(&super::stats::TIMERS);
         s.shell.clock_due = None;
@@ -487,14 +392,12 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
         None => s.shell.clock_due = None,
     }
 
-    // Other deadlines screens keep (a debounce).
     if let Some(due) = super::onboarding::next_due(s) {
         tx.wake_at(due);
     }
     changed
 }
 
-/// The start (app clock) of the job whose elapsed time the visible screen shows, while one runs.
 fn clock_origin(s: &AppState) -> Option<f64> {
     match s.screen {
         Screen::Speak => super::speak::clock_origin(s),
@@ -504,8 +407,6 @@ fn clock_origin(s: &AppState) -> Option<f64> {
     }
 }
 
-/// An engine message (event from the client's reader thread). Messages of an engine that was stopped or replaced
-/// meanwhile are dropped.
 fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     if s.engine.as_ref().map(EngineClient::id) != Some(client) {
         return;
@@ -523,7 +424,6 @@ fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     super::history::on_engine(s, &m);
 }
 
-/// The shell's own share of engine messages: engine status, the voice list and voice warm-up.
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     match msg {
         EngineMsg::Ready(hello) => {
@@ -567,7 +467,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 }
             }
         }
-        // `voices.warm` answered: `{warming: false, reason}` means there is nothing to wait for.
         EngineMsg::Response { id, result } if s.shell.warm_req == Some(*id) => {
             s.shell.warm_req = None;
             let warming = result.as_ref().ok().and_then(|v| v.get("warming")).and_then(Value::as_bool).unwrap_or(false);
@@ -580,7 +479,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             if id.is_some() && id == s.shell.preparing.as_deref() {
                 s.shell.preparing = None;
             }
-            // The warm-up transcribed the reference clip: its detected language is known now.
             if let (Some(id), Some(l)) = (id, ev.data.get("reference_language")) {
                 set_reference_language(s, id, l);
             }
@@ -598,8 +496,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// Records the detected language of a voice's `reference.wav` from an engine message (`voice.warm`, `tts.done`,
-/// `redub.done`): a string, or `null` while unknown.
 pub fn set_reference_language(s: &mut AppState, voice_id: &str, value: &Value) {
     let lang = value.as_str().filter(|l| !l.is_empty()).map(str::to_owned);
     if let Some(v) = s.shell.voices.iter_mut().find(|v| v.id == voice_id) {
@@ -607,15 +503,13 @@ pub fn set_reference_language(s: &mut AppState, voice_id: &str, value: &Value) {
     }
 }
 
-/// Forgets what was warmed (the engine restarted, or a voice was just trained).
 fn reset_warm(s: &mut AppState) {
     s.shell.warm_for = None;
     s.shell.warm_req = None;
     s.shell.preparing = None;
 }
 
-/// Asks the engine to warm up the active voice once per engine start, whenever it becomes active (on launch with a
-/// saved voice, on selection). True when the "Preparing voice" state appeared.
+/// Once per engine start, whenever a voice becomes active. True when the "Preparing voice" state appeared.
 fn ensure_warm(s: &mut AppState) -> bool {
     if !engine_ready(s) {
         return false;
@@ -645,28 +539,20 @@ fn apply_voice_list(s: &mut AppState, list: Vec<VoiceInfo>) {
     s.shell.active_voice = keep.or_else(|| list.iter().find(|v| v.trained).or(list.first()).map(|v| v.id.clone()));
     let first = std::mem::replace(&mut s.shell.first_voice_list, false);
     s.shell.voices = list;
-    // On launch, go straight to Speak when the user already has a voice.
-    // Never past first-run consent / setup: that flow is not optional.
     if first && s.screen == Screen::Onboarding && !s.shell.voices.is_empty() && !super::onboarding::needed(s) {
         s.screen = Screen::Speak;
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// View
-// -------------------------------------------------------------------------------------------------
-
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
-    // The window's own controls over the header: macOS traffic lights (leading), Windows caption buttons
-    // (trailing, drawn by `caption`); zero where the native frame stays (Linux).
+    // Room for the window controls: macOS traffic lights (leading), Windows caption buttons (trailing), none on Linux.
     let mut insets = cx.chrome_insets();
     if let Some(preview) = s.shell.caption_preview {
         insets.trailing = 3.0 * super::caption::CELL;
         insets.caption = preview;
     }
-    // Compact by measurement, not by window width: the brand, the tabs, the pills and the caption buttons as laid out
-    // last frame. The pills' full width is remembered while the engine status shows its label.
+    // Compact only when the last layout's brand, tabs, pills and caption-button room do not fit.
     let header_w = cx.layout_with("header", |r| r[2]).unwrap_or(1300.0);
     let side = |key: &str| cx.layout_with(key, |r| r[2]).unwrap_or(0.0);
     let trailing = if insets.trailing > 0.0 { insets.trailing + 14.0 } else { 12.0 };
@@ -699,12 +585,8 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         body = body.child(b);
     }
     body = body.child(col().key(format!("screen-{:?}", s.screen)).w_full().grow(1.0).min_h(0.0).child(page));
-    // The header, the background and every glass panel (`components::glass_panel`) are drawn once into a texture and
-    // reused until they change (`El::cache`): a frame while something plays is those textures plus the player bar,
-    // and a hover animation redraws the one panel it is in, not the whole window (measured on a 165 Hz display:
-    // moving the pointer across the window drew 165 whole-window frames a second, 36 W on the GPU against 12 W idle).
-    // The player bar docks under the screen (the screen gets shorter), so it never covers a screen's controls.
-    // Menus and dialogs that open over the window (the player's seek strip steps aside for them).
+    // Header, background and glass panels are cached textures (`El::cache`): uncached, hovering across the window
+    // on a 165 Hz display drew whole frames at 36 W on the GPU against 12 W idle.
     let mut overlays: Vec<El> = Vec::new();
     if s.shell.voice_menu_open {
         overlays.push(voice_menu(s, p));
@@ -732,7 +614,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     super::formats::window_drops(root, s).child(toast_stack(p, &s.shell.toasts, toasts_at))
 }
 
-/// The active screen's element (used when the banner pushes it down).
 fn body_page(s: &AppState, cx: &mut Cx<AppState>) -> El {
     match s.screen {
         Screen::Onboarding => super::onboarding::view(s, cx),
@@ -744,11 +625,8 @@ fn body_page(s: &AppState, cx: &mut Cx<AppState>) -> El {
     }
 }
 
-/// The window ground: deep navy with a few large, soft, cool light fields (ice blue, teal, steel, deep blue)
-/// behind the glass, so the panels' backdrop blur has something to refract. Static on purpose: animating them
-/// redrew the whole window (blur included) several times a second and kept the CPU busy while idle.
+/// Static on purpose: animating the fields redrew the whole window, blur included, and kept the CPU busy idle.
 fn background(p: Palette) -> El {
-    // Each field keeps a different fixed strength (what the old breathing animation showed at rest).
     const fn field(_period: f32, phase: f32) -> f32 {
         0.55 + 0.35 * phase
     }
@@ -769,29 +647,21 @@ fn background(p: Palette) -> El {
         .child(blob("field-mid", p.aurora[0], 560.0, 420.0, field(47.0, 0.8)).pin(Some(300.0), Some(160.0), None, None))
 }
 
-// ---- header ----------------------------------------------------------------------------------------
-
 thread_local! {
-    /// Whether the last header was tight (dot-only engine status), and the pills' width when it was not.
+    /// Whether the last header was tight, and the pills' width when it was not.
     static HEADER_FIT: std::cell::Cell<(bool, f32)> = const { std::cell::Cell::new((false, 0.0)) };
 }
 
-/// Height of the header, which is also the window's title bar (`main.rs` passes it to `Titlebar::new`).
+/// Also the window's title bar height (`main.rs` passes it to `Titlebar::new`).
 pub const HEADER_HEIGHT: f32 = 56.0;
 
-/// The glass header is the window's title bar: a full-width smoked-glass strip across the top. Empty parts of it
-/// move the window and a double-click maximizes it (`window_drag`); the buttons, tabs and pills in it keep their
-/// presses. `insets` keeps the content clear of the window controls: the macOS traffic lights on the left and
-/// the Windows minimize/maximize/close buttons on the right (Rune draws those over the header's right end).
-/// How much the header must compact to fit beside the window controls.
 #[derive(Clone, Copy)]
 struct HeaderFit {
-    /// Tabs show icons only (names as tooltips).
+    /// Tabs show icons only.
     compact: bool,
-    /// The engine status shows only its dot (the label as a tooltip).
+    /// The engine status shows only its dot.
     tight: bool,
-    /// Right side minus left side width: positive pads the left gap, negative the right one, so the tabs sit on
-    /// the window's centre line.
+    /// Right minus left side width: positive pads the left gap, negative the right one.
     balance: f32,
 }
 
@@ -827,7 +697,6 @@ const STEPS: [(Screen, &str, &'static rune::Icon); 4] = [
     (Screen::Redub, "Redub", &super::redub::ICON),
 ];
 
-/// The three steps as a glass pill with an accent-tinted glass lens that springs under the current step.
 fn tabs(s: &AppState, p: Palette, compact: bool) -> El {
     // The Train tab's "Paused 118/300" badge needs more room than a percentage.
     let paused_badge = super::train::status_line(s).is_some_and(|l| l.starts_with("Paused"));
@@ -867,8 +736,6 @@ fn tabs(s: &AppState, p: Palette, compact: bool) -> El {
     bar.child(lens).child(strip)
 }
 
-/// A small pill on the Train tab while a model trains: the percentage, or an ellipsis while it starts; a pause
-/// icon with `k/N` while a training is paused.
 fn train_badge(p: Palette, line: &str, on_lens: bool, compact: bool) -> El {
     let paused = line.strip_prefix("Paused ");
     let label = match paused {
@@ -905,7 +772,6 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
                 (Tone::Success, "Ready".to_owned(), false, false)
             }
         }
-        // Before setup: nothing is wrong and nothing to retry.
         EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED => (Tone::Neutral, "Not installed".to_owned(), false, false),
         EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => (Tone::Danger, "Engine stopped".to_owned(), false, true),
     };
@@ -924,7 +790,6 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
     pill
 }
 
-/// The status pill's tooltip: what the state means, the device, and each model's state.
 fn engine_help(engine: &EngineStatus, training: bool) -> String {
     let model = |m: &Option<String>| match m.as_deref() {
         Some("ready") => "ready".to_owned(),
@@ -1030,14 +895,12 @@ fn voice_menu(s: &AppState, p: Palette) -> El {
     el().key("voice-menu-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(panel)
 }
 
-/// A glass banner under the header when the engine is not running, with a Retry button.
 fn engine_banner(s: &AppState, p: Palette) -> Option<El> {
     let (title, detail) = match &s.shell.engine {
         EngineStatus::Stopped { code, detail } => (
             "The voice engine stopped".to_owned(),
             if detail.is_empty() { code.map(|c| format!("Exit code {c}.")).unwrap_or_default() } else { detail.clone() },
         ),
-        // The start screen shows setup itself; elsewhere point there.
         EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED || s.screen == Screen::Onboarding || super::setuprun::running(s) => return None,
         EngineStatus::Unavailable { reason } => ("The voice engine is not set up yet".to_owned(), format!("{reason} Run setup on the start screen.")),
         _ => return None,

@@ -1,20 +1,3 @@
-//! Audio formats, app-wide: what the engine can read (`formats.list`), the reusable "Export as..." control, and
-//! the window-level file drop.
-//!
-//! * Import: the engine lists the extensions it can decode (audio and video). Redub's drop zone and file picker,
-//!   Record's "Import file..." and the window drop all filter with [`import_extensions`].
-//! * Export: [`export_button`] is a small button; pressing it opens a menu (format grid, quality, Export...) drawn
-//!   by [`overlay`] (the shell adds it above the screen). The chosen format and quality are remembered in
-//!   `settings.json` (`export_format`, `export_quality`). Export opens the native save dialog (rfd, on its own
-//!   thread) and then asks the engine to `audio.export`, encoding from the result's lossless playback WAV when there
-//!   is one; a WAV copy of a WAV needs no engine at all.
-//! * Results: Speak and Redub save each result as one file in the format chosen with [`output_chip`] ("Save as WAV",
-//!   in their Results headers; the menu is [`output_overlay`]). Remembered as `output_format` in `settings.json`,
-//!   default WAV, and sent with every `tts.generate` / `redub.*` job as `output_format` (see [`output_format`]).
-//! * Window drops: a file dropped anywhere lands on the screen that can use it (see [`window_drops`]); on Voices
-//!   every dropped file goes into the active voice's "Reference from media". A book or text file (EPUB, DOCX, TXT,
-//!   ...) opens on Speak from any screen (see `book::drop_file`).
-
 use super::components::{Button, Tone, dropdown_chip, glass_edge, icon_el, icons, segmented};
 use super::shell;
 use super::theme::{Palette, motion, radius, ty};
@@ -24,11 +7,11 @@ use rune::{Align, Color, El, Icon, ScrollSpec, Side, col, el, row, text};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-/// Every export format the app knows: (wire name = file extension, label).
+/// (wire name = file extension, label).
 pub const EXPORT_ALL: [(&str, &str); 7] =
     [("wav", "WAV"), ("mp3", "MP3"), ("flac", "FLAC"), ("ogg", "OGG"), ("opus", "Opus"), ("m4a", "M4A"), ("aiff", "AIFF")];
 
-/// Used until (or unless) the engine answers `formats.list`.
+/// Used until the engine answers `formats.list`.
 const DEFAULT_IMPORT: &[&str] = &[
     "wav", "mp3", "flac", "ogg", "oga", "opus", "m4a", "aac", "wma", "aiff", "aif", "mp4", "mkv", "mov", "avi", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "3gp",
 ];
@@ -43,11 +26,6 @@ pub static DOWNLOAD: Icon = Icon {
     ),
 };
 
-// -------------------------------------------------------------------------------------------------
-// State
-// -------------------------------------------------------------------------------------------------
-
-/// How much to compress a lossy export.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExportQuality {
     High,
@@ -84,13 +62,11 @@ impl ExportQuality {
     }
 }
 
-/// The open "Export as..." menu: which button it hangs from and what it exports.
 #[derive(Clone, Debug)]
 pub struct Menu {
     pub anchor: String,
-    /// The file being exported (named in the menu; the save dialog opens in its folder).
     pub src: PathBuf,
-    /// The best copy of its audio to encode from: a lossless playback WAV when there is one, else `src`.
+    /// A lossless playback WAV when there is one, else `src`.
     pub audio: PathBuf,
 }
 
@@ -106,25 +82,19 @@ struct Job {
 enum Phase {
     #[default]
     Idle,
-    /// The save dialog is open.
     Picking(Job),
-    /// `audio.export` is running.
     Exporting { req: u64, dest: PathBuf },
 }
 
 pub struct FormatsState {
-    /// Extensions the engine can read (lower case, no dot).
+    /// Lower case, no dot.
     pub import: Vec<String>,
-    /// Formats the engine can write.
     pub export: Vec<String>,
     pub format: String,
     pub quality: ExportQuality,
     pub menu: Option<Menu>,
-    /// The format Speak and Redub save results in (`output_format` in settings.json).
     pub output: String,
-    /// The open "Save results as" menu: the key of the chip it hangs from.
     pub output_menu: Option<String>,
-    /// A file drag is over the window (drives the drop highlight).
     pub over: bool,
     phase: Phase,
     list_req: Option<u64>,
@@ -152,11 +122,10 @@ impl Default for FormatsState {
 }
 
 impl FormatsState {
-    /// An export is in progress (dialog or engine).
     pub fn busy(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
     }
-    /// Headless scenes: never touch the settings file.
+    /// For headless scenes: never touch the settings file.
     pub fn scene_ready(&mut self) {
         self.settings_read = true;
     }
@@ -187,12 +156,10 @@ fn has_ext(path: &Path, exts: &[String]) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-/// Extensions the engine can read (audio and video).
 pub fn import_extensions(s: &AppState) -> Vec<String> {
     s.formats.import.clone()
 }
 
-/// A one-line summary for hints: "WAV, MP3, FLAC, M4A, MP4, MKV...".
 pub fn import_hint(s: &AppState) -> String {
     let mut shown: Vec<String> = ["wav", "mp3", "flac", "m4a", "ogg", "mp4", "mkv", "mov"]
         .iter()
@@ -204,10 +171,6 @@ pub fn import_hint(s: &AppState) -> String {
     }
     format!("{} and more", shown.join(", "))
 }
-
-// -------------------------------------------------------------------------------------------------
-// Settings (`export_format`, `export_quality` in <data dir>/settings.json)
-// -------------------------------------------------------------------------------------------------
 
 fn settings_path() -> PathBuf {
     super::onboarding::data_dir().join("settings.json")
@@ -247,10 +210,6 @@ fn write_settings(format: &str, quality: ExportQuality) {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Engine and events
-// -------------------------------------------------------------------------------------------------
-
 fn ext_list(v: Option<&Value>) -> Vec<String> {
     let Some(a) = v.and_then(Value::as_array) else { return Vec::new() };
     a.iter()
@@ -275,7 +234,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 }
                 if !exp.is_empty() {
                     s.formats.export = exp;
-                    // A remembered format the engine cannot write falls back to WAV.
                     if !s.formats.export.iter().any(|e| *e == s.formats.format) {
                         s.formats.format = s.formats.export.first().cloned().unwrap_or_else(|| "wav".into());
                     }
@@ -309,7 +267,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-/// After every event: the saved export choice once, and the format list once the engine is ready.
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
     if !s.formats.settings_read && !s.shell.scripted() {
@@ -323,7 +280,6 @@ pub fn settle(s: &mut AppState) -> bool {
     changed
 }
 
-/// The save dialog answered (event from its thread).
 fn on_picked(s: &mut AppState, choice: Option<PathBuf>) {
     if let Phase::Picking(job) = std::mem::take(&mut s.formats.phase) {
         if let Some(dest) = choice {
@@ -341,11 +297,6 @@ pub fn size_text(bytes: u64) -> String {
     if b >= 1e6 { format!("{:.1} MB", b / 1e6) } else { format!("{:.0} KB", (b / 1e3).max(1.0)) }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Export
-// -------------------------------------------------------------------------------------------------
-
-/// A small "Export as..." button for the file `src`, encoded from `audio` (its lossless playback WAV, or `src` again).
 /// `key` must be unique on screen (the menu hangs from it).
 pub fn export_button(p: Palette, key: impl Into<String>, src: &Path, audio: &Path, grow: bool) -> El {
     let (key, src, audio) = (key.into(), src.to_path_buf(), audio.to_path_buf());
@@ -376,7 +327,6 @@ fn pick_quality(s: &mut AppState, q: ExportQuality) {
     write_settings(&s.formats.format, s.formats.quality);
 }
 
-/// "Export..." in the menu: close it and open the save dialog.
 fn start_export(s: &mut AppState) {
     let Some(menu) = s.formats.menu.take() else { return };
     if s.formats.busy() {
@@ -408,7 +358,7 @@ fn finish_pick(s: &mut AppState, job: Job, mut dest: PathBuf) {
         name.push(&job.format);
         dest = PathBuf::from(name);
     }
-    // Encode from the lossless playback WAV while it exists (tmp is emptied when the engine starts), else the file.
+    // tmp is emptied when the engine starts, so the playback WAV may be gone.
     let audio = if job.audio.is_file() { job.audio } else { job.src };
     let audio_is_wav = audio.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("wav"));
     if job.format == "wav" && audio_is_wav {
@@ -436,7 +386,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// The export menu, to be added at the root (after the screens) so it draws above them. `None` when closed.
+/// Added at the root after the screens so it draws above them.
 pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
     let m = s.formats.menu.as_ref()?;
     let scrim = el().key("export-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.formats.menu = None);
@@ -497,13 +447,6 @@ pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
     Some(el().key("export-menu-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(panel))
 }
 
-// -------------------------------------------------------------------------------------------------
-// Window-level drops
-// -------------------------------------------------------------------------------------------------
-
-/// Makes `root` take files dropped anywhere in the window: Record imports them into the current part, Voices combines
-/// them into the active voice's reference from media, every other main screen opens them in Redub. Files the engine
-/// cannot read are refused with a message.
 pub fn window_drops(root: El, s: &AppState) -> El {
     let exts = s.formats.import.clone();
     root.on_drop_files(|s: &mut AppState, files, _| on_window_drop(s, files))
@@ -515,7 +458,6 @@ pub fn window_drops(root: El, s: &AppState) -> El {
 fn on_window_drop(s: &mut AppState, files: &[PathBuf]) {
     s.formats.over = false;
     let Some(path) = files.first().cloned() else { return };
-    // A book or text file (EPUB, DOCX, TXT, ...) opens on Speak, from any screen except first-run setup.
     if super::book::is_text_path(&path) {
         if s.screen != Screen::Onboarding {
             super::book::drop_file(s, path);
@@ -525,9 +467,6 @@ fn on_window_drop(s: &mut AppState, files: &[PathBuf]) {
     match s.screen {
         Screen::Onboarding => {}
         Screen::Voices => super::refmedia::drop_files(s, files),
-        // Speak and Train take no input file, and Redub takes one: recordings dropped there (or several on Redub) are
-        // somebody's voice. They go to the Record start page, which asks whose: a new voice or more of the active one
-        // (they used to replace the active voice's reference without a word).
         Screen::Speak | Screen::Train => {
             shell::set_screen(s, Screen::Record);
             super::record::import_dropped(s, files.to_vec());
@@ -544,17 +483,11 @@ fn on_window_drop(s: &mut AppState, files: &[PathBuf]) {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Result format ("Save as WAV" in the Results headers of Speak and Redub)
-// -------------------------------------------------------------------------------------------------
-
-/// The formats the engine can write (all of them until it has answered `formats.list`).
 fn writable(s: &AppState) -> Vec<&'static (&'static str, &'static str)> {
     let avail: Vec<_> = EXPORT_ALL.iter().filter(|(e, _)| s.formats.export.iter().any(|x| x == e)).collect();
     if avail.is_empty() { EXPORT_ALL.iter().collect() } else { avail }
 }
 
-/// The `output_format` to send with a Speak or Redub job: the chosen one, or WAV when the engine cannot write it.
 pub fn output_format(s: &AppState) -> String {
     let f = &s.formats.output;
     if writable(s).iter().any(|(e, _)| e == f) { f.clone() } else { "wav".to_owned() }
@@ -568,7 +501,6 @@ fn pick_output(s: &mut AppState, ext: &str) {
     }
 }
 
-/// The compact "Save as WAV" chip: the format new results are saved in. `key` anchors its menu.
 pub fn output_chip(s: &AppState, p: Palette, key: &str) -> El {
     let label = format!("Save as {}", label_of(&output_format(s)));
     let k = key.to_owned();
@@ -583,7 +515,6 @@ pub fn output_chip(s: &AppState, p: Palette, key: &str) -> El {
     .help("The format new results are saved in")
 }
 
-/// The "Save results as" menu, added at the root above the screens. `None` when closed.
 pub fn output_overlay(s: &AppState, p: Palette) -> Option<El> {
     let anchor = s.formats.output_menu.clone()?;
     let scrim = el().key("outfmt-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.formats.output_menu = None);

@@ -1,5 +1,3 @@
-//! Onboarding (first run): welcome, how it works, engine/runtime status and setup.
-
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -14,16 +12,10 @@ use crate::ui::events;
 use crate::ui::shell::EngineStatus as ShellEngine;
 use crate::ui::voices::kit::{self, BtnKind};
 
-// ---------------------------------------------------------------------------------------------
-// Paths and the settings file
-// ---------------------------------------------------------------------------------------------
-
-/// The per-user data dir (same resolution as the engine client: env, `location.toml` pointer, platform default).
 pub fn data_dir() -> PathBuf {
     crate::engine::default_data_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// `MIMVOX_RUNTIME`, else `<data dir>/runtime.toml`.
 pub fn runtime_toml_path() -> PathBuf {
     std::env::var_os("MIMVOX_RUNTIME").map(PathBuf::from).unwrap_or_else(|| data_dir().join("runtime.toml"))
 }
@@ -55,17 +47,14 @@ pub(crate) fn update_settings(f: impl FnOnce(&mut Value)) {
     write_settings(&v);
 }
 
-/// One value of the settings file (`None` when absent).
 pub fn setting(key: &str) -> Option<Value> {
     read_settings().get(key).cloned()
 }
 
-/// Sets one value of the settings file, keeping the others.
 pub fn save_setting(key: &str, value: Value) {
     update_settings(|v| v[key] = value);
 }
 
-/// The voice selected last time, if any.
 pub fn saved_active_voice() -> Option<String> {
     read_settings().get("active_voice").and_then(Value::as_str).map(str::to_string)
 }
@@ -79,7 +68,6 @@ pub fn save_active_voice(id: Option<&str>) {
     });
 }
 
-/// The speaking speed chosen on the Speak screen (0.8..=1.3, default 1.0).
 pub fn saved_speed() -> f32 {
     read_settings().get("speed").and_then(Value::as_f64).map_or(1.0, |v| (v as f32).clamp(0.8, 1.3))
 }
@@ -88,8 +76,7 @@ pub fn save_speed(speed: f32) {
     update_settings(|v| v["speed"] = json!((f64::from(speed) * 100.0).round() / 100.0));
 }
 
-/// What the Redub screen remembers: the mode (`dub` | `convert` | `respeak`), the spoken-language code (`auto`, `uk`, ...),
-/// "Review text before dubbing" and the language to translate to (`redub_target`). Each part is `None` when never saved.
+/// (mode, spoken language, review before dubbing, translate-to); each `None` when never saved.
 pub fn saved_redub_prefs() -> (Option<String>, Option<String>, Option<bool>, Option<String>) {
     let v = read_settings();
     let text = |k: &str| v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
@@ -105,12 +92,11 @@ pub fn save_redub_prefs(mode: &str, language: &str, review: bool, target: &str) 
     });
 }
 
-/// The microphone chosen on the Record screen (`None` = system default).
+/// `None` = system default.
 pub fn saved_microphone() -> Option<String> {
     read_settings().get("microphone").and_then(Value::as_str).filter(|m| !m.is_empty()).map(str::to_string)
 }
 
-/// Remembers the microphone (`None` = system default) without touching the other settings.
 pub fn save_microphone(name: Option<&str>) {
     update_settings(|v| {
         v["microphone"] = match name {
@@ -120,11 +106,6 @@ pub fn save_microphone(name: Option<&str>) {
     });
 }
 
-// ---------------------------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------------------------
-
-/// What `hello` told us about the machine.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeviceInfo {
     pub backend: Option<String>,
@@ -149,28 +130,21 @@ impl DeviceInfo {
 
 pub struct OnboardingState {
     pub runtime_present: bool,
-    /// The runtime was set up for an older version of the app than this one needs (see [`runtime_outdated`]).
     pub runtime_outdated: bool,
     pub device: Option<DeviceInfo>,
-    /// Result of the last "Run setup" press (a hint or an error).
     pub setup_note: Option<(Tone, String)>,
     pub setup_started: bool,
-    /// Where setup installs the runtime and models (editable; passed to setup as `--data-dir`).
+    /// Passed to setup as `--data-dir`.
     pub location: TextEdit,
-    /// Free space of the drive holding `location`: (path it was measured for, bytes).
+    /// (path it was measured for, bytes).
     free_space: Option<(String, Option<u64>)>,
-    /// The path the last measurement was started for.
     free_asked: String,
-    /// When to measure the edited path (app clock): a short debounce while the user types, counted from the last
-    /// change (`free_seen`).
     free_due: Option<f64>,
     free_seen: String,
-    /// The native folder dialog is open (its answer arrives as an event).
     picking: bool,
 }
 
-
-/// Free bytes on the drive that holds `path` (or its nearest existing parent). `None` when it cannot be told.
+/// Measured on `path` or its nearest existing parent.
 pub(crate) fn free_bytes(path: &str) -> Option<u64> {
     let mut p = PathBuf::from(path);
     while !p.exists() {
@@ -215,18 +189,14 @@ impl Default for OnboardingState {
     }
 }
 
-/// True when the first-run flow still has something to do (runtime setup).
 pub fn needed(s: &AppState) -> bool {
     !s.onboarding.runtime_present
 }
 
-/// The compute backend reported by the engine (`cuda`, `mps`, `cpu`), if known.
 pub fn backend(s: &AppState) -> Option<&str> {
     s.onboarding.device.as_ref().and_then(|d| d.backend.as_deref())
 }
 
-/// Re-checks `runtime.toml` now. Done on "Check again", when the window gets the focus back (setup ran in a
-/// terminal window), when a setup terminal that can be waited for ends, and after a data move. True when it changed.
 pub fn recheck(s: &mut AppState) -> bool {
     let was_outdated = s.onboarding.runtime_outdated;
     s.onboarding.runtime_outdated = runtime_outdated();
@@ -247,14 +217,13 @@ pub fn recheck(s: &mut AppState) -> bool {
     s.onboarding.runtime_present != was
 }
 
-/// The runtime version this copy of the app needs: `tools/setup/runtime_version.txt` in the bundled resources (or the
-/// repo), the file setup also reads. `None` when it cannot be found (nothing to compare).
+/// `tools/setup/runtime_version.txt`, the file setup also reads.
 fn required_runtime() -> Option<u32> {
     let text = std::fs::read_to_string(crate::engine::find_resources()?.join("tools").join("setup").join("runtime_version.txt")).ok()?;
     text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#'))?.parse().ok()
 }
 
-/// The runtime version setup wrote to `runtime.toml` (`[setup] runtime_version`); runtimes from before it count as 1.
+/// Runtimes set up before the version was recorded count as 1.
 fn installed_runtime() -> u32 {
     std::fs::read_to_string(runtime_toml_path())
         .ok()
@@ -263,17 +232,14 @@ fn installed_runtime() -> u32 {
         .map_or(1, |v| v.max(0) as u32)
 }
 
-/// An installed runtime older than this app needs (after an update that brought new packages or models).
 fn runtime_outdated() -> bool {
     runtime_toml_path().is_file() && required_runtime().is_some_and(|need| installed_runtime() < need)
 }
 
-/// "Run setup" from the banner: setup again into the current data folder (it installs only what changed).
 fn run_setup_update(s: &mut AppState) {
     super::setuprun::update_runtime(s);
 }
 
-/// Under the header while the runtime is older than this version needs, and while that setup runs.
 pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
     use super::components::{Button, glass_card, icon_el, icons, progress_bar};
     use super::setuprun;
@@ -315,17 +281,14 @@ pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
     Some(el().w_full().px(16.0).child(glass_card(p).w_full().child(row_)))
 }
 
-/// The window got the focus back.
 pub fn on_focus(s: &mut AppState) {
     if (!s.onboarding.runtime_present || s.onboarding.runtime_outdated) && !s.shell.scripted() {
         recheck(s);
     }
 }
 
-/// Free space is measured this long after the install path last changed.
 const FREE_DEBOUNCE_S: f64 = 0.4;
 
-/// After every event: measures the free space of an edited install path (after a short debounce).
 pub fn settle(s: &mut AppState) -> bool {
     if s.screen != Screen::Onboarding || s.onboarding.runtime_present || s.shell.scripted() {
         s.onboarding.free_due = None;
@@ -357,7 +320,6 @@ pub fn settle(s: &mut AppState) -> bool {
     false
 }
 
-/// The debounce deadline [`settle`] waits for, if any (the shell arms a timer for it).
 pub fn next_due(s: &AppState) -> Option<f64> {
     s.onboarding.free_due
 }
@@ -369,11 +331,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Running the setup script in a terminal window
-// ---------------------------------------------------------------------------------------------
-
-/// Opens the system folder picker on its own thread (the frame loop never waits for it).
 fn pick_location(s: &mut AppState) {
     if s.onboarding.picking || s.shell.scripted() {
         return;
@@ -404,10 +361,6 @@ fn run_setup(s: &mut AppState) {
 fn finish(s: &mut AppState) {
     s.screen = Screen::Voices;
 }
-
-// ---------------------------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------------------------
 
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
@@ -483,7 +436,6 @@ fn step(p: &Palette, n: u32, title: &str, sub: &str) -> El {
         .child(text(sub.to_string()).font(ty::CAPTION).color(p.text_dim).wrap())
 }
 
-/// The install folder (editable) and the free space on its drive.
 fn location_block(p: &Palette, o: &OnboardingState, needed_gb: f32) -> El {
     let free = o.free_space.clone();
     let (line, tone_ok) = match free {
@@ -510,7 +462,6 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
     let o = &s.onboarding;
     let mut card = kit::card(p).gap(14.0).child(text("Engine and device").font(ty::TITLE).color(p.text));
 
-    // Runtime
     let (badge, line) = if super::setuprun::running(s) {
         (kit::badge(p, "Setting up", Tone::Accent), "Installing the speech engine and its models.")
     } else if o.runtime_present {
@@ -562,7 +513,6 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
         card = card.child(kit::notice(p, *tone, msg));
     }
 
-    // Engine
     match &s.shell.engine {
         ShellEngine::Idle | ShellEngine::Starting { .. } if o.runtime_present => {
             card = card.child(text("Starting the engine...").font(ty::CAPTION).color(p.text_faint));
@@ -583,7 +533,6 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
         _ => {}
     }
 
-    // Device
     if let Some(d) = &o.device {
         card = card.child(el().w_full().h(1.0).fill(p.rim_bottom));
         let backend = match (d.backend.as_deref(), d.vendor.as_deref()) {
@@ -630,13 +579,8 @@ fn kv(p: &Palette, k: &str, v: String) -> El {
         .child(text(v).font(ty::BODY).color(p.text).grow(1.0).min_w(0.0).truncate())
 }
 
-// ---------------------------------------------------------------------------------------------
-// Scenes for headless snapshots
-// ---------------------------------------------------------------------------------------------
-
 fn base(s: &mut AppState) {
     s.screen = Screen::Onboarding;
-    // No runtime yet: the app does not start the engine and the pill says so.
     s.shell.set_engine(ShellEngine::Unavailable { reason: super::shell::NOT_INSTALLED.into() });
     s.onboarding = OnboardingState {
         runtime_present: false,
@@ -662,7 +606,6 @@ fn scene_setup_missing(s: &mut AppState) {
     base(s);
 }
 
-/// Train without the voice training component: the install card.
 fn scene_install_training(s: &mut AppState) {
     scene_ready_gpu(s);
     s.shell.components = Some(vec!["speech".into(), "translation".into()]);

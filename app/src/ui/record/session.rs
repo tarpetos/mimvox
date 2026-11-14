@@ -1,5 +1,3 @@
-//! Part-by-part recording view: big text, live meter, controls, parts sidebar and the sufficiency footer.
-
 use super::pick::level_tone;
 use super::widgets::*;
 use super::{Level, Phase, RecordState, Take, TakeStatus, Verdict};
@@ -7,7 +5,6 @@ use crate::state::{AppState, Screen};
 use crate::ui::theme;
 use rune::{Color, El, ScrollSpec, col, el, row};
 
-/// Level to act on: the engine's summary, else an estimate from the minutes saved.
 fn level_of(r: &RecordState) -> Level {
     if let Some(s) = &r.summary {
         return s.level;
@@ -84,7 +81,6 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
         .scroll_edge_fade(18.0)
         .child(txt_lh(part.text.clone(), 23.0, 500.0, 35.0, p.text).wrap().w_full());
 
-    // live meter
     let (level, clip, elapsed) = active.map_or((0.0, false, 0.0), |a| (a.level, a.clipped || a.peak >= 0.99, a.elapsed_s));
     let too_loud = clip || level_to_meter(level) > 0.92;
     let meter_row = row()
@@ -153,7 +149,6 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
         .child(meter_row)
         .child(controls);
     if over {
-        // A file is being dragged over the window: the card says where it will go.
         card.child(
             col().key("drop-hint").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center().gap(8.0).radius(theme::radius::PANEL).inert()
                 .fill(p.bg_top.alpha(0.9)).border(2.0, p.accent)

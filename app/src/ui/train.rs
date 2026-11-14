@@ -1,8 +1,3 @@
-//! Train screen: dataset summary, epochs, start, live progress, done and error states.
-//!
-//! Training runs inside the engine, so the other screens stay usable while it goes on; this
-//! module keeps listening to `train.*` events whichever screen is shown (see [`is_training`]).
-
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -60,7 +55,6 @@ impl Stage {
 pub enum Phase {
     #[default]
     Idle,
-    /// `train.start` sent, waiting for the job id.
     Starting,
     Running,
     Done { epochs: u32, elapsed_s: f32 },
@@ -86,26 +80,22 @@ enum Tag {
     Cancel,
 }
 
-/// The "app is being closed while training" dialog (see [`on_close`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum CloseDialog {
     #[default]
     Hidden,
-    /// Asking what to do with the running training.
     Ask,
-    /// "Pause and close" was chosen: waiting for `train.paused`, then the app exits by itself.
+    /// Waiting for `train.paused`, then the app exits by itself.
     Pausing,
 }
 
 pub struct TrainState {
-    /// Summary of the active voice's dataset, with the voice it was fetched for.
+    /// (voice id it was fetched for, summary).
     pub summary: Option<(String, Summary)>,
     pub summary_error: Option<String>,
-    /// Epochs control: automatic (engine decides) or this many.
     pub manual: bool,
     pub epochs: u32,
     pub phase: Phase,
-    /// The voice being trained (or just trained).
     pub voice_id: Option<String>,
     pub job: Option<String>,
     pub stage: Stage,
@@ -116,22 +106,15 @@ pub struct TrainState {
     pub elapsed_s: f32,
     started: Option<Instant>,
     pub confirm_cancel: bool,
-    /// `train.pause` was sent and the checkpoint is not on disk yet.
     pub pausing: bool,
-    /// The run being started is a resume of a paused one (`train.resume`).
     pub resuming: bool,
-    /// Asked "Discard the paused training?" on the paused screen.
     pub confirm_discard: bool,
-    /// The window close button was used while training.
     pub close: CloseDialog,
-    /// Why the close dialog could not pause (shown inside it).
     pub close_note: Option<String>,
-    /// Exit the app when the current event settles (the shell owns the `Tx` that can quit).
+    /// Carried out when the event settles: the shell owns the `Tx` that can quit.
     pub(crate) quit_requested: bool,
-    /// A short note after a cancel.
     pub note: Option<String>,
     pending: HashMap<u64, Tag>,
-    /// What the screen showed when the last event settled, to spot screen and voice changes.
     last_screen: Option<Screen>,
     last_voice: Option<String>,
 }
@@ -168,12 +151,11 @@ impl Default for TrainState {
     }
 }
 
-/// Training (or starting to train) right now; the shell can show a badge on the Train tab.
 pub fn is_training(s: &AppState) -> bool {
     matches!(s.train.phase, Phase::Starting | Phase::Running)
 }
 
-/// The paused (or interrupted) training of the active voice, else of any voice.
+/// Of the active voice, else of any voice.
 pub fn paused_run(s: &AppState) -> Option<&PausedTraining> {
     voices::active_voice_info(s).and_then(|v| v.paused.as_ref()).or_else(|| s.shell.voices.iter().find_map(|v| v.paused.as_ref()))
 }
@@ -190,24 +172,23 @@ pub fn status_line(s: &AppState) -> Option<String> {
     }
 }
 
-/// Both speech models are loaded (resuming hands the GPU over again, which needs them idle and ready).
+/// Resuming hands the GPU over again, which needs both models idle and ready.
 fn models_ready(s: &AppState) -> bool {
     matches!(&s.shell.engine, shell::EngineStatus::Ready { tts, rvc, .. } if tts.as_deref() == Some("ready") && rvc.as_deref() == Some("ready"))
 }
 
-/// Overall percentage (`train.progress.pct`) a run has reached at `epoch` of `total`: learning spans 15..95.
+/// Learning spans 15..95 of `train.progress.pct`.
 fn overall_pct(epoch: u32, total: u32) -> f32 {
     if total == 0 { 15.0 } else { 15.0 + 80.0 * (epoch.min(total) as f32 / total as f32) }
 }
 
-/// Fetches the dataset summary for the active voice.
 pub fn refresh_summary(s: &mut AppState) {
     if let Some(id) = voices::active_voice(s).map(str::to_string) {
         send(s, Tag::Summary(id.clone()), "dataset.summary", json!({ "voice_id": id }));
     }
 }
 
-/// Sends a request and remembers what it was for. `false` when the engine is not running.
+/// `false` when the engine is not running.
 fn send(s: &mut AppState, tag: Tag, method: &str, params: Value) -> bool {
     match shell::request(s, method, params) {
         Some(id) => {
@@ -218,8 +199,6 @@ fn send(s: &mut AppState, tag: Tag, method: &str, params: Value) -> bool {
     }
 }
 
-/// After every event: keeps the summary fresh (screen entry, voice change) and drops a close dialog that has
-/// nothing left to ask.
 pub fn settle(s: &mut AppState) -> bool {
     let screen_changed = s.train.last_screen != Some(s.screen);
     s.train.last_screen = Some(s.screen);
@@ -242,20 +221,13 @@ pub fn settle(s: &mut AppState) -> bool {
     changed
 }
 
-/// The start of the running training on the app clock (the Train screen's elapsed time ticks from it).
 pub fn clock_origin(s: &AppState) -> Option<f64> {
     let st = s.train.started.filter(|_| is_training(s))?;
     Some(s.shell.now - st.elapsed().as_secs_f64())
 }
 
-// ---------------------------------------------------------------------------------------------
-// Closing the window while training
-// ---------------------------------------------------------------------------------------------
-
-
-/// `App::on_close`. Rune cannot veto a close: with `keep_running` the window only hides, runs this hook, and the app
-/// keeps going. While a training runs the window is shown again with the "Training is running" dialog; otherwise the
-/// engine is stopped and the app quits. A quit that is not the user's close (system shutdown) goes straight through.
+/// Rune cannot veto a close: with `keep_running` the window only hides and this runs. A quit that is not the
+/// user's close (system shutdown) goes straight through.
 pub fn on_close(s: &mut AppState, tx: &mut Tx) {
     super::winplace::save(); // where the window was, for the next start
     if let Some(tab) = s.screen.key() {
@@ -274,9 +246,7 @@ pub fn on_close(s: &mut AppState, tx: &mut Tx) {
     quit_now(s, tx);
 }
 
-/// Stops the engine (which stops Applio) and quits. The UI thread only asks the engine to exit: waiting for it here,
-/// with the window still on screen, froze the window and Windows painted it white. `main` waits for the engine
-/// after the window is gone (`take_closing_engine`).
+/// Only asks the engine to exit: waiting here froze the window and Windows painted it white; `main` waits instead.
 fn quit_now(s: &mut AppState, tx: &mut Tx) {
     super::stats::write();
     if let Some(c) = s.engine.take() {
@@ -288,12 +258,10 @@ fn quit_now(s: &mut AppState, tx: &mut Tx) {
 
 static CLOSING_ENGINE: std::sync::Mutex<Option<crate::engine::EngineClient>> = std::sync::Mutex::new(None);
 
-/// The engine a quit asked to exit, for `main` to wait for once the app loop has ended.
 pub fn take_closing_engine() -> Option<crate::engine::EngineClient> {
     CLOSING_ENGINE.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
-/// The shell calls this after every event: true once the app should quit (after "Close anyway" or "Pause and close").
 pub fn take_quit(s: &mut AppState, tx: &mut Tx) -> bool {
     if s.train.quit_requested {
         s.train.quit_requested = false;
@@ -330,7 +298,6 @@ fn start(s: &mut AppState) {
     }
 }
 
-/// Continues the paused (or interrupted) training of the active voice from its saved checkpoint.
 fn resume(s: &mut AppState) {
     let Some(id) = voices::active_voice(s).map(str::to_string) else { return };
     let Some(pz) = paused_run(s).cloned() else { return };
@@ -355,7 +322,6 @@ fn resume(s: &mut AppState) {
     }
 }
 
-/// Asks the engine to pause after the next checkpoint (`train.paused` answers).
 fn pause(s: &mut AppState) {
     let Some(job) = s.train.job.clone() else { return };
     if s.train.pausing || s.train.stage != Stage::Train {
@@ -367,7 +333,6 @@ fn pause(s: &mut AppState) {
     }
 }
 
-/// Throws away the paused training of the active voice.
 fn discard(s: &mut AppState) {
     s.train.confirm_discard = false;
     if let Some(id) = voices::active_voice(s).map(str::to_string) {
@@ -381,7 +346,6 @@ fn cancel(s: &mut AppState) {
         send(s, Tag::Cancel, "train.cancel", json!({ "job": job }));
         s.train.note = Some("Cancelling...".into());
     } else {
-        // Not started on the engine yet: just drop the local state.
         s.train.phase = Phase::Idle;
         s.train.started = None;
     }
@@ -405,7 +369,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             let Some(tag) = s.train.pending.remove(id) else { return };
             match (tag, result) {
                 (Tag::Summary(voice), Ok(v)) => {
-                    // Ignore answers for a voice that is no longer active.
                     if voices::active_voice(s) == Some(voice.as_str()) {
                         s.train.summary_error = None;
                         let sum = Summary {
@@ -552,10 +515,6 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------------------------
-
 fn fmt_dur(secs: f32) -> String {
     let t = secs.max(0.0).round() as u64;
     let (h, m, s) = (t / 3600, (t % 3600) / 60, t % 60);
@@ -635,7 +594,6 @@ fn setup_view(s: &AppState, p: &Palette) -> El {
     let sum = t.summary.as_ref().map(|(_, x)| x);
     let mut out = col().w_full().gap(18.0);
 
-    // Dataset summary
     let mut card = kit::card(p).gap(14.0).child(text("Your recordings").font(ty::TITLE).color(p.text));
     match sum {
         Some(x) => {
@@ -684,10 +642,8 @@ fn setup_view(s: &AppState, p: &Palette) -> El {
         return out;
     }
 
-    // Epochs
     out = out.child(epochs_card(s, p));
 
-    // Estimate
     let epochs = if t.manual { t.epochs } else { sum.map_or(t.epochs, |x| x.recommended_epochs.max(1)) };
     let est = match crate::ui::onboarding::backend(s) {
         Some("cuda") => format!("About {} on an RTX 4070-class GPU.", fmt_dur(epochs as f32 * SECONDS_PER_EPOCH_CUDA)),
@@ -913,7 +869,6 @@ fn fmt_when(iso: &str) -> String {
     s.get(..16).unwrap_or(&s).to_string()
 }
 
-/// A paused or interrupted training of the active voice: where it stopped and what to do next.
 fn paused_view(s: &AppState, p: &Palette, pz: &PausedTraining, name: &str) -> El {
     let t = &s.train;
     let ready = models_ready(s);
@@ -970,7 +925,6 @@ fn paused_view(s: &AppState, p: &Palette, pz: &PausedTraining, name: &str) -> El
     col().w_full().gap(14.0).child(card).child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap())
 }
 
-/// The dialog shown when the window is closed while a training runs (`None` otherwise).
 pub fn close_overlay(s: &AppState, p: &Palette) -> Option<El> {
     let t = &s.train;
     if t.close == CloseDialog::Hidden {
@@ -1083,10 +1037,6 @@ fn failed_view(p: &Palette, msg: &str) -> El {
                 .child(kit::button(p, "Go to Voices", BtnKind::Glass, true, |s: &mut AppState| s.screen = Screen::Voices)),
         )
 }
-
-// ---------------------------------------------------------------------------------------------
-// Scenes for headless snapshots
-// ---------------------------------------------------------------------------------------------
 
 fn base(s: &mut AppState) {
     s.screen = Screen::Train;

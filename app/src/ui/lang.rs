@@ -1,11 +1,3 @@
-//! Speech languages: names for the screen and the shared language picker (a compact chip that opens a searchable
-//! glass list, "Common" first, then "All languages").
-//!
-//! The list comes from the engine (`hello` -> `languages`: every language the speech model speaks, with English and
-//! native names); until the engine has answered (and in headless scenes) the built-in copy below is used. UI strings stay
-//! English; a native name is shown only when the app font can draw it (Latin, Greek and Cyrillic scripts), otherwise the
-//! English name.
-
 use rune::{Align, Color, El, ScrollSpec, Side, TextEdit, col, el, row, text};
 
 use crate::engine::protocol::SpeechLanguage;
@@ -14,8 +6,7 @@ use crate::ui::components::{dropdown_chip, glass_edge, icon_el, icons};
 use crate::ui::theme::{Palette, motion, radius, ty};
 use crate::ui::voices::kit;
 
-/// The engine's list (OmniVoice languages with ~100 h of training data or more), used until `hello` arrives:
-/// (code, English name, native name, common).
+/// The engine's list (OmniVoice languages with ~100 h of training data or more): code, English, native, common.
 const BUILTIN: &[(&str, &str, &str, bool)] = &[
     ("en", "English", "English", true), ("uk", "Ukrainian", "Українська", true), ("de", "German", "Deutsch", true),
     ("fr", "French", "Français", true), ("es", "Spanish", "Español", true), ("pl", "Polish", "Polski", true),
@@ -39,10 +30,9 @@ const BUILTIN: &[(&str, &str, &str, bool)] = &[
     ("uz", "Uzbek", "Oʻzbek", false), ("vi", "Vietnamese", "Tiếng Việt", false), ("cy", "Welsh", "Cymraeg", false),
 ];
 
-/// Names of languages Whisper may report that the speech model does not speak (shown in Redub badges).
+/// Languages Whisper may report that the speech model does not speak.
 const EXTRA_NAMES: &[(&str, &str)] = &[("he", "Hebrew"), ("ro", "Romanian"), ("ms", "Malay"), ("mk", "Macedonian"), ("hy", "Armenian"), ("az", "Azerbaijani"), ("sq", "Albanian"), ("af", "Afrikaans"), ("tl", "Tagalog")];
 
-/// The base code of `code` ("uk-UA" -> "uk").
 pub fn base(code: &str) -> String {
     code.trim().split(['-', '_']).next().unwrap_or("").to_ascii_lowercase()
 }
@@ -51,18 +41,16 @@ fn builtin() -> Vec<SpeechLanguage> {
     BUILTIN.iter().map(|(c, n, nat, common)| SpeechLanguage { code: (*c).into(), name: (*n).into(), native: (*nat).into(), common: *common }).collect()
 }
 
-/// Every language the speech model speaks, common ones first (the engine's list, else the built-in one).
 pub fn all(s: &AppState) -> Vec<SpeechLanguage> {
     if s.shell.languages.is_empty() { builtin() } else { s.shell.languages.clone() }
 }
 
-/// Whether the voice can speak `code`.
 pub fn is_spoken(s: &AppState, code: &str) -> bool {
     let b = base(code);
     if s.shell.languages.is_empty() { BUILTIN.iter().any(|(c, ..)| *c == b) } else { s.shell.languages.iter().any(|l| l.code == b) }
 }
 
-/// English name of a code ("uk" -> "Ukrainian"); an unknown code upper-case, `""` for an empty one.
+/// An unknown code comes back upper-case.
 pub fn name(code: &str) -> String {
     let b = base(code);
     if b.is_empty() {
@@ -74,7 +62,6 @@ pub fn name(code: &str) -> String {
     EXTRA_NAMES.iter().find(|(c, _)| *c == b).map_or_else(|| b.to_uppercase(), |(_, n)| (*n).to_owned())
 }
 
-/// Native name of a code when the app font can draw it, else the English name ("uk" -> "Українська", "ja" -> "Japanese").
 pub fn label(code: &str) -> String {
     let b = base(code);
     match BUILTIN.iter().find(|(c, ..)| *c == b) {
@@ -84,7 +71,7 @@ pub fn label(code: &str) -> String {
     }
 }
 
-/// Whether Noto Sans (the app font: Latin, Greek, Cyrillic, Vietnamese) has every character of `t`.
+/// Noto Sans covers only Latin, Greek, Cyrillic and Vietnamese.
 fn drawable(t: &str) -> bool {
     t.chars().all(|c| (c as u32) < 0x0530 || (0x1E00..=0x1EFF).contains(&(c as u32)))
 }
@@ -93,28 +80,17 @@ fn display(l: &SpeechLanguage) -> String {
     if !l.native.is_empty() && drawable(&l.native) { l.native.clone() } else { l.name.clone() }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Picker
-// -------------------------------------------------------------------------------------------------
-
-/// What a picked language is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
-    /// Speak: the output language (remembered per voice).
     Speak,
-    /// Redub: the language of the speech (offers "Auto-detect").
     RedubFrom,
-    /// Redub: the language to translate to and speak.
     RedubTo,
-    /// Voices: add a reference clip for this language.
     Reference,
-    /// Voices: the language of the reference made from media files.
     MediaRef,
 }
 
 #[derive(Default)]
 pub struct PickerState {
-    /// The open picker and the key of the chip it hangs from.
     pub open: Option<(Target, String)>,
     pub search: TextEdit,
 }
@@ -144,7 +120,6 @@ fn pick(s: &mut AppState, target: Target, code: &str) {
     }
 }
 
-/// The code currently chosen for `target` (shown with a check mark).
 fn current(s: &AppState, target: Target) -> String {
     match target {
         Target::Speak => super::speak::language(s),
@@ -155,7 +130,6 @@ fn current(s: &AppState, target: Target) -> String {
     }
 }
 
-/// The languages `target` offers.
 fn options(s: &AppState, target: Target) -> Vec<SpeechLanguage> {
     let mut list = all(s);
     match target {
@@ -170,7 +144,6 @@ fn options(s: &AppState, target: Target) -> Vec<SpeechLanguage> {
     list
 }
 
-/// A compact chip showing `label` that opens the picker for `target`. `key` anchors the list.
 pub fn chip(p: &Palette, key: &str, label: &str, target: Target, enabled: bool) -> El {
     let k = key.to_owned();
     dropdown_chip(*p, key, &GLOBE, label, format!("Language: {label}"), enabled, move |s: &mut AppState| open(s, target, &k))
@@ -193,7 +166,6 @@ fn row_el(p: &Palette, target: Target, l: &SpeechLanguage, on: bool) -> El {
         .child(el().w(16.0).children(on.then(|| icon_el(&icons::CHECK, 14.0, p.accent))))
 }
 
-/// The open picker, added at the root above the screens. `None` when closed.
 pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
     let (target, anchor) = s.langpick.open.clone()?;
     let scrim = el().key("lang-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close);
@@ -246,7 +218,6 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
     Some(el().key("lang-menu-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(glass_edge(*p, panel)))
 }
 
-/// A small globe (outline, like the other icons).
 pub static GLOBE: rune::Icon = rune::Icon {
     name: "globe",
     view: 16.0,

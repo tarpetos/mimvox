@@ -1,14 +1,3 @@
-//! "Move data…": relocate the whole data folder (runtime, models, voices) to another drive or folder.
-//!
-//! Everything that happens off the UI thread (the dialog, the measurements, the subprocess's output and exit) comes
-//! back as events (`ui::events::post`).
-//!
-//! Flow: native folder picker (rfd, on its own thread) -> confirm card (size to move, free space on the target)
-//! -> the engine is stopped -> `setup.sh|setup.cmd --move-to <path> --yes` runs as a hidden subprocess; its
-//! `[move] NN% a/b GB` lines drive a progress bar -> the engine is restarted from wherever the data dir now
-//! resolves (`EngineConfig::discover`). When the move fails, the old location keeps working: the engine is simply
-//! restarted from it and the error is shown.
-
 use super::components::Tone;
 use super::events;
 use super::shell::{self, EngineStatus};
@@ -19,22 +8,16 @@ use rune::{El, col, el, row, text};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-
-/// What the move subprocess reported so far (its output lines arrive as events).
 #[derive(Default)]
 struct Shared {
     /// `(percent 0..=100, "a/b GB")` from the latest `[move] NN% ...` line.
     progress: Option<(f32, String)>,
-    /// The last lines of output (stdout and stderr) for error messages.
     tail: Vec<String>,
 }
 
-/// Result of the background measurements shown on the confirm card.
 #[derive(Clone, Debug, Default)]
 struct Facts {
-    /// Bytes in the current data folder.
     size: Option<u64>,
-    /// Free bytes on the target drive.
     free: Option<u64>,
     done: bool,
 }
@@ -43,7 +26,6 @@ struct Facts {
 enum Phase {
     #[default]
     Idle,
-    /// The folder dialog is open.
     Picking,
     Confirm { target: PathBuf, facts: Facts },
     Running { shared: Shared },
@@ -56,17 +38,11 @@ pub struct RelocateState {
 }
 
 impl RelocateState {
-    /// A move (or its dialog) is in progress: the rest of the app must wait.
     pub fn busy(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Actions
-// -------------------------------------------------------------------------------------------------
-
-/// Opens the folder picker for the new location.
 pub fn start(s: &mut AppState) {
     if s.relocate.busy() || s.shell.scripted() {
         return;
@@ -102,7 +78,6 @@ fn dir_size(dir: &Path) -> u64 {
         .sum()
 }
 
-/// The folder the data lands in: `<chosen>/mimvox` unless the chosen folder already has that name.
 fn final_target(chosen: &Path) -> PathBuf {
     if chosen.file_name().is_some_and(|n| n == "mimvox") { chosen.to_path_buf() } else { chosen.join("mimvox") }
 }
@@ -128,7 +103,6 @@ fn cancel(s: &mut AppState) {
     s.relocate.phase = Phase::Idle;
 }
 
-/// Why a move cannot start right now.
 fn blocked(s: &AppState, target: &Path) -> Option<String> {
     let cur = &s.shell.data_dir;
     if target == cur.as_path() {
@@ -180,7 +154,6 @@ fn run(s: &mut AppState) {
     let mut readers = Vec::new();
     for stream in [out.map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), err.map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
         readers.push(std::thread::spawn(move || {
-            // Blocks on each line and hands it to the UI thread as it comes.
             for line in BufReader::new(stream).split(b'\n').flatten() {
                 // Progress bars rewrite one line with \r: look at the last piece.
                 let line = String::from_utf8_lossy(&line).into_owned();
@@ -210,13 +183,11 @@ fn parse_progress(line: &str) -> Option<(f32, String)> {
     Some((pct.clamp(0.0, 100.0), detail.trim().to_owned()))
 }
 
-/// The move ended without success: bring the engine back from the old location and show why.
 fn fail(s: &mut AppState, why: String) {
     shell::restart_engine(s);
     s.relocate.phase = Phase::Failed(why);
 }
 
-/// A line of the move's output (event from a reader thread).
 fn on_line(s: &mut AppState, line: String) {
     let Phase::Running { shared } = &mut s.relocate.phase else { return };
     if let Some(p) = parse_progress(&line) {
@@ -228,7 +199,7 @@ fn on_line(s: &mut AppState, line: String) {
     }
 }
 
-/// The move ended (event from its waiter thread; `None` code = killed by a signal).
+/// `None` code = killed by a signal.
 fn on_exit(s: &mut AppState, code: Option<i32>) {
     let Phase::Running { shared } = &s.relocate.phase else { return };
     if code == Some(0) {
@@ -245,11 +216,6 @@ fn on_exit(s: &mut AppState, code: Option<i32>) {
     fail(s, why);
 }
 
-// -------------------------------------------------------------------------------------------------
-// View
-// -------------------------------------------------------------------------------------------------
-
-/// The footer block of the Voices screen.
 pub fn footer(s: &AppState, p: &Palette) -> El {
     kit::card(p).gap(10.0)
         .child(text("Data location").font(ty::TITLE).color(p.text))
@@ -261,7 +227,6 @@ fn gb(b: u64) -> String {
     format!("{:.1} GB", b as f64 / 1e9)
 }
 
-/// The dialog layer above everything (confirm, progress, error), or `None` when nothing is happening.
 pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
     let card = match &s.relocate.phase {
         Phase::Idle | Phase::Picking => return None,
@@ -314,10 +279,6 @@ fn dialog(p: &Palette, title: &str) -> El {
         .shadow(18.0, 50.0, p.shadow)
         .child(text(title.to_owned()).font(ty::TITLE).color(p.text))
 }
-
-// -------------------------------------------------------------------------------------------------
-// Headless scenes
-// -------------------------------------------------------------------------------------------------
 
 fn demo(s: &mut AppState) {
     super::voices::scenes()[0].1(s);

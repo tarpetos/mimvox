@@ -1,15 +1,3 @@
-//! Updates: the banner under the header ("Mimvox X is available", the download's progress, then "Restart now") and
-//! the Updates dialog (the version in the header): every release from `update::OLDEST` on with its notes, "Check for
-//! updates", and installing any listed version, newer or older.
-//!
-//! Once per launch (when the engine has settled: ready, stopped or not installed yet, so the check never competes
-//! with the first frames and still runs on the welcome screen) a background thread asks for the newest release
-//! (`crate::update::check`). A newer one shows the banner, unless the user skipped that version. "Update" (or a
-//! version's button in the dialog) fetches that release's manifest, downloads the installer and verifies it in the
-//! background; it installs when the app closes, or at once with "Restart now" (a running training or book pauses and
-//! continues after the restart, as on any close). Where the app cannot replace itself (a .deb, a loose binary) the
-//! banner and the dialog offer the release's download page instead.
-
 use super::components::{Button, Tone, badge, icon_button, icon_el, icons, progress_bar};
 use super::events;
 use super::shell::EngineStatus;
@@ -23,25 +11,20 @@ use std::cmp::Ordering;
 
 #[derive(Default)]
 pub struct UpdateState {
-    /// The check was started this session.
     asked: bool,
-    /// The version the banner offers or is installing.
     found: Option<Found>,
     phase: Phase,
-    /// "Later": the banner is hidden until the next launch.
+    /// "Later": hidden until the next launch.
     hidden: bool,
-    /// A link to open once the handler's frame is done (`Tx::open_url`).
+    /// Opened once the handler's frame is done (`Tx::open_url`).
     open: Option<String>,
-    /// The Updates dialog is open.
     dialog: bool,
-    /// The version shown in the dialog; `None`: the one being installed, else the installed one, else the newest.
+    /// `None`: the one being installed, else the installed one, else the newest.
     selected: Option<String>,
     list: List,
-    /// "Check for updates" is running.
     checking: bool,
-    /// What the last "Check for updates" said.
     checked: Option<(Tone, String)>,
-    /// The scenes show an installed copy's dialog from a development build.
+    /// Scenes: an installed copy's dialog from a development build.
     kind: Option<Kind>,
 }
 
@@ -58,7 +41,6 @@ enum Phase {
     Failed(String),
 }
 
-/// The releases in the dialog.
 #[derive(Default)]
 enum List {
     #[default]
@@ -73,13 +55,10 @@ fn setting(key: &str) -> Option<serde_json::Value> {
     super::onboarding::read_settings().get(key).cloned()
 }
 
-/// The engine has done what it does at launch: it answers, it stopped, or there is none to start (the welcome
-/// screen before setup).
 fn engine_settled(s: &AppState) -> bool {
     matches!(s.shell.engine, EngineStatus::Ready { .. } | EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. })
 }
 
-/// After every event: start the check once (never in a scripted run or a development build), open a pending link.
 pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     if let Some(url) = s.update.open.take() {
         let _ = tx.open_url(&url);
@@ -102,7 +81,6 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     false
 }
 
-/// Shows `found` in the banner, unless a download is already running or waiting to install.
 fn offer(s: &mut AppState, found: Found) {
     if matches!(s.update.phase, Phase::Downloading { .. } | Phase::Ready) {
         return;
@@ -116,8 +94,6 @@ fn downloading(s: &AppState) -> bool {
     matches!(s.update.phase, Phase::Downloading { .. })
 }
 
-/// Fetches `version`'s manifest, downloads its installer and verifies it, all in the background. The banner and the
-/// dialog show the progress; a finished download installs when the app closes.
 fn start_install(s: &mut AppState, version: String) {
     if downloading(s) {
         return;
@@ -169,9 +145,6 @@ fn skip(s: &mut AppState) {
     s.update.found = None;
 }
 
-// ---- the dialog's data -------------------------------------------------------------------------------------------
-
-/// Opens the Updates dialog on `version` (or the default choice) and asks for the releases the first time.
 pub fn open_dialog(s: &mut AppState, version: Option<String>) {
     s.update.dialog = true;
     s.update.selected = version;
@@ -200,7 +173,7 @@ fn load_list(s: &mut AppState) {
     });
 }
 
-/// "Check for updates": asks for the newest release whatever was skipped, and refreshes the list.
+/// Asks for the newest release whatever was skipped.
 fn check_now(s: &mut AppState) {
     if s.update.checking || s.shell.scripted() {
         return;
@@ -241,7 +214,6 @@ fn release<'a>(s: &'a AppState, version: &str) -> Option<&'a Release> {
     releases(s).iter().find(|r| r.version == version)
 }
 
-/// The version the dialog shows.
 fn selected(s: &AppState) -> Option<String> {
     let list = releases(s);
     let installing = s.update.found.as_ref().filter(|_| !matches!(s.update.phase, Phase::Offered)).map(|f| f.version.clone());
@@ -252,8 +224,6 @@ fn selected(s: &AppState) -> Option<String> {
         .or_else(|| s.update.found.as_ref().map(|f| f.version.clone()))
 }
 
-// ---- release notes -----------------------------------------------------------------------------------------------
-
 #[derive(Debug, PartialEq)]
 enum Block {
     Heading(String),
@@ -262,8 +232,7 @@ enum Block {
     Para(String),
 }
 
-/// The release notes' Markdown as headings, bullets and paragraphs. A bullet's wrapped lines join it; links keep
-/// their text; bold and code marks go.
+/// A bullet's wrapped lines join it; links keep their text; bold and code marks go.
 fn blocks(md: &str) -> Vec<Block> {
     let mut raw: Vec<(u8, String)> = Vec::new(); // kind: 0 heading, 1 item, 2 paragraph
     let mut open = false;
@@ -303,7 +272,6 @@ fn blocks(md: &str) -> Vec<Block> {
         .collect()
 }
 
-/// The text under a bold lead starts a sentence of its own.
 fn capitalized(s: String) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -334,7 +302,6 @@ fn inline(s: &str) -> String {
     out.replace("**", "").replace('`', "")
 }
 
-/// The first line of the release notes that says something (not a heading or an empty line).
 fn summary(notes: &str) -> Option<String> {
     blocks(notes).into_iter().find_map(|b| match b {
         Block::Item(Some(lead), rest) => Some(format!("{lead}: {rest}")),
@@ -370,12 +337,8 @@ fn notes_view(p: Palette, notes: &str) -> El {
     c
 }
 
-// ---- views -------------------------------------------------------------------------------------------------------
-
-/// The version in the header, a glass pill like the header's others: opens the Updates dialog. A newer version waiting
-/// turns the version accent and its rim glows in and out, slowly.
 pub fn version_button(s: &AppState, p: Palette) -> El {
-    /// One slow breath of the rim: eased in and out (the loop interpolates linearly between the stops).
+    /// Eased in and out: the loop interpolates linearly between the stops.
     const BREATHE: Cycle = Cycle {
         period: 3.2,
         phase: 0.0,
@@ -484,7 +447,6 @@ fn fraction(got: u64, total: Option<u64>) -> f32 {
     total.map_or(0.0, |t| got as f32 / t.max(1) as f32)
 }
 
-/// The Updates dialog over the window, or `None` when it is closed.
 pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
     if !s.update.dialog {
         return None;
@@ -582,7 +544,6 @@ fn details(s: &AppState, p: Palette, chosen: Option<&str>, kind: Kind) -> El {
     pane.child(head).child(body).child(action(s, p, v, kind))
 }
 
-/// What can be done with version `v`: update, install the older version, its progress, or nothing (installed).
 fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
     let foot = col().key("updates-action").w_full().gap(10.0);
     let order = update::compare(v);
@@ -641,16 +602,11 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
         .child(button.build(p)))
 }
 
-// -------------------------------------------------------------------------------------------------
-// Headless scenes
-// -------------------------------------------------------------------------------------------------
-
 const NOTES_030: &str = "\n* **Romanian:** Speak, Book and Redub now offer Romanian. Record has Romanian reading texts too (Quick,\n  Standard and Pro), so a voice can be recorded and trained in Romanian from start to finish.\n* **A voice from recordings you already have:** Record's start page now begins with a card for audio or video\n  files of one person: no reading and no preset.\n* **Player:** no Stop button any more (pause, the knob and Close cover it).\n";
 const NOTES_020: &str = "\n* **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage and .deb) and macOS on Apple\n  Silicon (.dmg), built by GitHub Actions for every release.\n* **Updates from inside the app:** a new version shows a banner under the header.\n* **Install only what you need:** the welcome screen lists the parts of the runtime with their sizes.\n";
 
 const NOTES_031: &str = "\n* **Updates window:** the version next to the app's name in the header opens it. It lists every version from\n  0.2.0 on with its notes. **Check for updates** asks for the newest version at any time.\n* **The update check runs on the welcome screen too.**\n";
 
-/// The Updates dialog over Speak, with the published versions and this one; `newer` adds a release after it.
 fn demo(s: &mut AppState, newer: bool) {
     super::speak::scene_idle(s);
     let current = env!("CARGO_PKG_VERSION");
@@ -669,7 +625,6 @@ fn demo(s: &mut AppState, newer: bool) {
     s.update.kind = Some(Kind::Auto);
 }
 
-/// The guide's picture: the installed version and the published ones, an older one chosen.
 pub fn scene_docs(s: &mut AppState) {
     demo(s, false);
     s.update.selected = Some("0.3.0".into());
@@ -693,7 +648,6 @@ pub fn scene_downloading(s: &mut AppState) {
     s.update.phase = Phase::Downloading { got: 96_468_992, total: Some(214_958_080) };
 }
 
-/// The header and the banner with a newer version waiting (the dialog closed).
 pub fn scene_waiting(s: &mut AppState) {
     super::speak::scene_idle(s);
     s.update.kind = Some(Kind::Auto);
