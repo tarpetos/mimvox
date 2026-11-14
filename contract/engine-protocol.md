@@ -980,7 +980,7 @@ only shows it.
 ### `text.import` (read a document)
 `{"path":"<absolute path>","language"?:"auto"|"<code>"}` ->
 `{"path","name","format","format_label","title","encoding","language","language_detected","words","chars","est_s",
-"chapters":[{"title","text","words","chars","est_s"}],"warnings":["..."]}`
+"chapters":[{"title","text","words","chars","est_s"}],"parts":null|{"how","chapters":[...]},"warnings":["..."]}`
 - Formats (by extension): `.txt` (any encoding: a BOM, else strict UTF-8, else BOM-less UTF-16, else cp1251 or cp1252
   by which gives plausible letters; `encoding` names the one used), `.md`/`.markdown`, `.html`/`.htm`/`.xhtml`,
   `.epub`, `.docx`, `.odt`, `.rtf`, `.fb2` (and `.fb2.zip`), `.pdf` (the text layer only), `.srt`, `.vtt`. Read with the
@@ -992,6 +992,17 @@ only shows it.
   `Chapter 1`, `CHAPTER IV`, `Розділ 1`, `Глава 3`, `Part Two`, `Prologue` (at least two of them). Text before the first
   heading becomes its own chapter when it has at least 150 words; a title page is dropped. One chapter when nothing is
   found.
+- `parts` (`autoparts.py`): a suggested split when a chapter is longer than 4,000 words (about 28 minutes), else `null`.
+  The app shows it as **Split automatically** and applies it in the draft only (with **Undo split**). Language-independent,
+  by the first rule that applies to each long chapter: `headings` (short paragraphs that look like unmarked chapter
+  titles: the plain-text heading lines above, a bare number or Roman numeral, or a short line in capitals; at least two
+  of one kind; a cluster of them with less than 150 words between them is ignored; those chapters stay whole),
+  `breaks` (paragraphs of only `* * * ⁂ # ~ § —` and the like; whole scenes grouped into parts of about 1,800 words),
+  `length` (even parts of about 1,800 words, cut between paragraphs by lexical cohesion as in TextTiling on 5-letter
+  stems of ~300 words each side, preferring the end of a dialogue, never after a paragraph that does not end a
+  sentence). `how` is that rule, or `mixed`. Titles: the found titles; for a file whose text is in one chapter
+  "<Part> N" in its language (`Частина`, `Part`, `Teil`, ...; just `N` for a language without one); for a long chapter
+  among others its title, then "<title> (2)". `chapters` are complete (short chapters included), with `words` and `est_s`.
 - `text` is clean: paragraphs separated by one blank line, whitespace collapsed inside a paragraph, soft hyphens and
   zero-width characters removed, hyphenated line breaks of a PDF joined, page numbers and running headers dropped; the
   chapter title is not repeated at the start of its text. Subtitles lose their numbers, timestamps and tags.

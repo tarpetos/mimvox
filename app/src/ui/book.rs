@@ -73,6 +73,14 @@ pub struct DraftChapter {
 pub struct Draft {
     pub file: TextImport,
     pub chapters: Vec<DraftChapter>,
+    /// The engine's suggested split (`text.import` `parts`): how it was found, and the chapters.
+    pub auto: Option<(String, Vec<DraftChapter>)>,
+    /// The chapters before "Split automatically", for "Undo split" (edits made since are dropped with it).
+    pub before_split: Option<Vec<DraftChapter>>,
+}
+
+fn draft_chapters(list: &[protocol::TextChapter]) -> Vec<DraftChapter> {
+    list.iter().map(|c| DraftChapter { title: c.title.clone(), text: c.text.clone(), words: c.words, est_s: c.est_s, include: true }).collect()
 }
 
 pub struct BookState {
@@ -220,10 +228,11 @@ fn opened(s: &mut AppState, file: TextImport, purpose: Purpose) {
     if purpose == Purpose::Auto {
         shell::toast(s, Tone::Neutral, format!("{} is long ({} words): it opened in Book mode, where each chapter becomes its own file.", file.name, group(file.words)));
     }
-    let chapters = file.chapters.iter().map(|c| DraftChapter { title: c.title.clone(), text: c.text.clone(), words: c.words, est_s: c.est_s, include: true }).collect();
+    let chapters = draft_chapters(&file.chapters);
     let mut file = file;
+    let auto = file.parts.take().filter(|p| !p.chapters.is_empty()).map(|p| (p.how, draft_chapters(&p.chapters)));
     file.chapters.clear(); // the texts live in the draft chapters (edited there)
-    s.book.draft = Some(Draft { file, chapters });
+    s.book.draft = Some(Draft { file, chapters, auto, before_split: None });
     s.book.renaming = None;
     s.book.shown = true;
 }
@@ -255,6 +264,56 @@ fn commit_rename(s: &mut AppState) {
             c.title = title;
         }
     }
+}
+
+/// "Split automatically": the engine's suggested chapters replace the current ones (kept for "Undo split").
+fn auto_split(s: &mut AppState) {
+    commit_rename(s);
+    let Some(d) = s.book.draft.as_mut() else { return };
+    let Some((_, parts)) = d.auto.as_ref() else { return };
+    if d.before_split.is_none() {
+        d.before_split = Some(std::mem::replace(&mut d.chapters, parts.clone()));
+    }
+}
+
+/// "Undo split": the chapters as they were before "Split automatically".
+fn undo_split(s: &mut AppState) {
+    s.book.renaming = None;
+    if let Some(d) = s.book.draft.as_mut() {
+        if let Some(before) = d.before_split.take() {
+            d.chapters = before;
+        }
+    }
+}
+
+/// What "Split automatically" found, for the line above the chapters.
+fn split_how(how: &str) -> &'static str {
+    match how {
+        "headings" => "at the chapter titles found in the text",
+        "breaks" => "at the scene breaks (* * *), about 12 minutes each",
+        "length" => "of about 12 minutes, between paragraphs where the story moves on",
+        _ => "at chapter titles, scene breaks and natural pauses",
+    }
+}
+
+/// The line between the totals and the chapter list: the offer to split, or the split with its undo.
+fn split_line(p: Palette, d: &Draft) -> Option<El> {
+    let (how, parts) = d.auto.as_ref()?;
+    let (msg, button) = if d.before_split.is_some() {
+        (format!("Split into {} parts {}.", d.chapters.len(), split_how(how)),
+         Button::new("Undo split").ghost().small().icon(&icons::REFRESH).key("book-undo-split")
+             .help("Back to the chapters of the file (changes made since are undone too)").on_press(undo_split))
+    } else {
+        let long = d.chapters.iter().filter(|c| c.words >= 600).count() <= 1;
+        let what = if long { "No chapters in this file" } else { "Some chapters are very long" };
+        (format!("{what}: it can be split into {} parts {}.", parts.len(), split_how(how)),
+         Button::new("Split automatically").secondary().small().icon(&icons::SPARKLE).key("book-auto-split")
+             .help("Undo puts the chapters back as they were").on_press(auto_split))
+    };
+    Some(row().key("book-split").w_full().gap(10.0).center_y().px(10.0).py(8.0).radius(super::theme::radius::CONTROL)
+        .fill(p.accent.alpha(0.07)).border(1.0, p.accent.alpha(0.2))
+        .child(text(msg).font(ty::CAPTION).color(p.text_dim).wrap().grow(1.0).min_w(0.0))
+        .child(button.build(p)))
 }
 
 /// Joins chapter `i + 1` into chapter `i` (its title becomes a paragraph of the text).
@@ -821,6 +880,9 @@ fn draft_view(s: &AppState, p: Palette, d: &Draft) -> El {
     if let Some(w) = f.warnings.first() {
         c = c.child(text(w.clone()).font(ty::CAPTION).color(p.warn).wrap());
     }
+    if let Some(split) = split_line(p, d) {
+        c = c.child(split);
+    }
     c.child(chapter_scroller(p, list)).child(bar)
 }
 
@@ -1114,6 +1176,7 @@ fn scene_file() -> TextImport {
         words: CHAPTERS.iter().map(|c| c.1).sum(),
         est_s: CHAPTERS.iter().map(|c| c.1 as f32 / 145.0 * 60.0).sum(),
         chapters: Vec::new(),
+        parts: None,
         warnings: Vec::new(),
     }
 }
@@ -1174,8 +1237,27 @@ fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
 pub fn scene_imported(s: &mut AppState) {
     scene_base(s);
     let chapters = CHAPTERS.iter().enumerate().map(|(i, (t, w))| DraftChapter { title: (*t).into(), text: String::new(), words: *w, est_s: *w as f32 / 145.0 * 60.0, include: i > 0 }).collect();
-    s.book.draft = Some(Draft { file: scene_file(), chapters });
+    s.book.draft = Some(Draft { file: scene_file(), chapters, auto: None, before_split: None });
     s.book.recent = vec![BookSummary { id: "kobzar-20261101-090000".into(), title: "Кобзар".into(), status: "done".into(), chapters: 24, chapters_done: 24, totals: protocol::BookTotals { audio_s: 31_200.0, ..Default::default() }, ..Default::default() }];
+}
+
+/// A file without chapter marks: one long chapter, and the offer to split it.
+pub fn scene_autosplit_offer(s: &mut AppState) {
+    scene_base(s);
+    let one = |title: &str, words: u32| DraftChapter { title: title.into(), text: String::new(), words, est_s: words as f32 / 145.0 * 60.0, include: true };
+    let parts = [1833, 1601, 1957, 1925, 1704, 2222, 1763, 1708, 1083].iter().enumerate()
+        .map(|(i, w)| one(&format!("Частина {}", i + 1), *w)).collect();
+    let mut file = scene_file();
+    file.title = "Тіні забутих предків".into();
+    file.name = "Тіні забутих предків - Михайло Коцюбинський.epub".into();
+    file.language = "uk".into();
+    s.book.draft = Some(Draft { file, chapters: vec![one("Тіні забутих предків", 15796)], auto: Some(("length".into(), parts)), before_split: None });
+}
+
+/// The same after "Split automatically", with "Undo split".
+pub fn scene_autosplit_done(s: &mut AppState) {
+    scene_autosplit_offer(s);
+    auto_split(s);
 }
 
 /// Chapter 4 of 9 being read.
@@ -1209,6 +1291,8 @@ pub fn scene_empty(s: &mut AppState) {
 
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
     &[
+        ("book_autosplit_offer", scene_autosplit_offer),
+        ("book_autosplit_done", scene_autosplit_done),
         ("book_empty", scene_empty),
         ("book_imported", scene_imported),
         ("book_generating", scene_generating),

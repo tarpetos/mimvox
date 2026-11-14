@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+* **Split a book automatically:** a file without chapter marks (a whole novella in one two-hour chapter) or with very
+  long chapters gets **Split automatically** above its chapter list, and **Undo split** puts the file's chapters back.
+  It works in every language: chapter titles that were not marked as headings (*Chapter 4*, *XII*, a line in capitals)
+  become chapters; scene breaks (`* * *`) are grouped into parts of about 12 minutes; otherwise even parts of about 12
+  minutes are cut between paragraphs where the story moves on, never inside a sentence. Parts are named *Частина 1*,
+  *Part 1*... in the book's language.
+
 ## 0.3.1
 
 * **Updates window:** the version next to the app's name in the header is now a button that opens it. When a newer

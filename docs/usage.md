@@ -690,6 +690,20 @@ after closing the app.
 2. Check the list. Untick what you do not want read (a table of contents, notes). Click a title to rename it.
    The split button cuts a chapter in two at the paragraph nearest its middle; the join button joins the next chapter
    into this one. The badges show the chapters, words, about how long the audio will be and how long it takes to make.
+
+   **No chapters, or very long ones?** Many files have no chapter marks Mimvox can see, and a whole novella comes in
+   as one chapter of two hours. Then a line above the list offers **Split automatically**, and **Undo split** puts the
+   chapters of the file back (with any renaming or joining done since). It looks at the shape of the text, so it works
+   in every language, and splits each chapter longer than about half an hour by the first of these it finds:
+   - **chapter titles that are not marked as headings**: lines such as *Chapter 4*, *Розділ IV*, a bare *XII* or *12*,
+     or a short line in capitals. They become the titles; such real chapters stay whole, however long.
+   - **scene breaks**: a line of `* * *`, `***`, `⁂` or a dash. Whole scenes are grouped into parts of about 12
+     minutes; a scene is never cut.
+   - otherwise **parts of about 12 minutes**, cut between paragraphs where the story moves on: where the words change
+     most, at the end of a dialogue, never in the middle of a sentence.
+
+   Parts of a file without chapters are named *Частина 1*, *Part 1* and so on in the book's language (just *1* when the
+   word is not known), since titles are read aloud; parts of a long chapter keep its title, with (2), (3).
 3. Set the voice, language and Style as for Speak. **Expressiveness** has its own value in Book mode, **0.60** by
    default: a steadier narrator for long listening. In the **Output** panel pick the format ("Save as"), and tick
    **Also make one M4B audiobook with chapter marks** if you want a single file for an audiobook player. **Read each

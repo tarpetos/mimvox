@@ -44,6 +44,7 @@ from xml.etree import ElementTree as ET
 
 from .dataset import lang
 from .dataset.text import WPM, count_words, est_seconds
+from . import autoparts
 from .registry import EngineError, method
 
 log = logging.getLogger("mimvox.textimport")
@@ -1978,8 +1979,15 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         out_chapters.append({"title": ch["title"], "text": ch["text"], "words": words, "chars": len(ch["text"]),
                              "est_s": est_seconds(words, wpm)})
     words = sum(c["words"] for c in out_chapters)
+    # A suggested split of chapters that are missing or very long (autoparts.py); the app applies it on request.
+    parts = None
+    suggested = autoparts.suggest(chapters, code)
+    if suggested:
+        parts = {"how": suggested["how"], "chapters": [
+            {"title": c["title"], "text": c["text"], "words": (w := count_words(c["text"])), "chars": len(c["text"]),
+             "est_s": est_seconds(w, wpm)} for c in suggested["chapters"]]}
     return {"path": path, "name": os.path.basename(path), "format": book["format"],
             "format_label": book["format_label"], "title": book["title"], "encoding": book["encoding"],
             "language": code, "language_detected": detected, "words": words,
             "chars": sum(c["chars"] for c in out_chapters), "est_s": est_seconds(words, wpm),
-            "chapters": out_chapters, "warnings": book["warnings"]}
+            "chapters": out_chapters, "parts": parts, "warnings": book["warnings"]}

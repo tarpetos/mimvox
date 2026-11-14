@@ -1193,8 +1193,21 @@ pub struct TextImport {
     pub est_s: f32,
     #[serde(default)]
     pub chapters: Vec<TextChapter>,
+    /// A suggested split when chapters are missing or very long (applied by "Split automatically"), else `None`.
+    #[serde(default)]
+    pub parts: Option<TextParts>,
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+/// `text.import` `parts`: chapters cut at hidden chapter titles, scene breaks, or into parts of about 12 minutes.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TextParts {
+    /// `headings` | `breaks` | `length` | `mixed`.
+    #[serde(default)]
+    pub how: String,
+    #[serde(default)]
+    pub chapters: Vec<TextChapter>,
 }
 
 pub fn text_import(path: &std::path::Path) -> Request {
