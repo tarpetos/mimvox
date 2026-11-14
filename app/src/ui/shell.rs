@@ -665,19 +665,28 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         insets.trailing = 3.0 * super::caption::CELL;
         insets.caption = preview;
     }
-    // Header width from the last layout: below these widths the header compacts so nothing slides under the
-    // window's caption buttons (icon-only tabs, then a dot-only engine status).
+    // Compact by measurement, not by window width: the brand, the tabs, the pills and the caption buttons as laid out
+    // last frame. The pills' full width is remembered while the engine status shows its label.
     let header_w = cx.layout_with("header", |r| r[2]).unwrap_or(1300.0);
-    let compact = header_w < 1260.0;
-    // Centre the tabs on the window, not between the brand and the right-hand pills: pad the lighter side by
-    // the difference (widths from the last layout), but never by more than the free room around the tabs, so a
-    // narrow window keeps the tabs as central as it can without squeezing anything.
     let side = |key: &str| cx.layout_with(key, |r| r[2]).unwrap_or(0.0);
+    let trailing = if insets.trailing > 0.0 { insets.trailing + 14.0 } else { 12.0 };
     let left = 16.0 + insets.leading + side("brand");
-    let right = (if insets.trailing > 0.0 { insets.trailing + 14.0 } else { 12.0 }) + side("right");
+    let (was_tight, mut right_full) = HEADER_FIT.get();
+    let right_now = side("right");
+    if !was_tight || right_full == 0.0 {
+        right_full = right_now;
+    }
+    let paused = super::train::status_line(s).is_some_and(|l| l.starts_with("Paused"));
+    let tabs_full = 4.0 * if paused { 132.0 } else { 100.0 } + 8.0;
+    let tabs_icons = 4.0 * 52.0 + 8.0;
+    let fixed = left + trailing + 6.0 * 14.0 + 8.0;
+    let compact = header_w < fixed + right_full + tabs_full;
+    let tight = header_w < fixed + right_full + tabs_icons;
+    HEADER_FIT.set((tight, right_full));
+    let right = trailing + right_now;
     let free = side("header-gap-l") + side("header-gap-r") + side("header-pad-l") + side("header-pad-r");
     let balance = (right - left).clamp(-free, free);
-    let fit = HeaderFit { compact, tight: header_w < 1120.0, balance };
+    let fit = HeaderFit { compact, tight, balance };
     let page = body_page(s, cx);
     let mut body = col().key("body").w_full().grow(1.0).min_h(0.0).pt(14.0).gap(12.0);
     if let Some(b) = super::update::banner(s, p) {
@@ -761,6 +770,11 @@ fn background(p: Palette) -> El {
 }
 
 // ---- header ----------------------------------------------------------------------------------------
+
+thread_local! {
+    /// Whether the last header was tight (dot-only engine status), and the pills' width when it was not.
+    static HEADER_FIT: std::cell::Cell<(bool, f32)> = const { std::cell::Cell::new((false, 0.0)) };
+}
 
 /// Height of the header, which is also the window's title bar (`main.rs` passes it to `Titlebar::new`).
 pub const HEADER_HEIGHT: f32 = 56.0;

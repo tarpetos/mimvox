@@ -85,12 +85,23 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
 pub fn scenes() -> &'static [(&'static str, fn(&mut crate::state::AppState))] {
     &[
         ("caption_idle", |s| preview(s, CaptionView::default())),
+        ("caption_crowded", crowded),
         ("caption_maximized", |s| preview(s, CaptionView { maximized: true, ..CaptionView::default() })),
         ("caption_hover_min", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Minimize), ..CaptionView::default() })),
         ("caption_hover_max", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Maximize), ..CaptionView::default() })),
         ("caption_hover_close", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Close), ..CaptionView::default() })),
         ("caption_press_close", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Close), pressed: true, ..CaptionView::default() })),
     ]
+}
+
+/// The header at its fullest: models loading (the widest engine status) and a long voice name, under the caption buttons.
+fn crowded(s: &mut crate::state::AppState) {
+    super::speak::scene_idle(s);
+    if let Some(v) = s.shell.voices.first_mut() {
+        v.name = "Gigachad Sage (UA)".into();
+    }
+    s.shell.set_engine(super::shell::EngineStatus::Ready { device: Some("cuda".into()), tts: Some("loading".into()), rvc: Some("loading".into()) });
+    preview(s, CaptionView::default());
 }
 
 fn preview(s: &mut crate::state::AppState, view: CaptionView) {
