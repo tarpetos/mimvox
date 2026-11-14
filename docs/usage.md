@@ -239,6 +239,8 @@ video), or press **Choose files…**. A dialog asks **whose voice is in these fi
 - **More recordings of "<the active voice>"**: only when it is the same person; the files join that voice's
   recordings. (This is the default when the active voice is still empty.)
 
+![The dialog that asks whose voice is in the dropped files](screenshots/usage-record-files.png)
+
 The files are cleaned and joined (silence trimmed, loudness evened out, background music removed when that is turned
 on, at most 20 minutes) and stored in the voice. The card then says how much clean speech the voice has: one clean
 minute is enough to **Speak with it**; with three minutes or more **Train a closer copy** is offered too. Files with
@@ -552,8 +554,10 @@ hardware the app holds the first segment back a little (*Getting ahead · part k
 
 The playback shows in the [player bar](#the-player-bar), where you can pause it or change its speed while it plays.
 
-The very first phrase after the app starts is slower, because the voice has to be prepared (*Preparing voice…*). Later
-phrases are much faster: leave the app open and the models stay loaded.
+The very first phrase after the app starts is slower, because the models load and the voice has to be prepared
+(*Preparing voice…*). Later phrases are much faster. After 10 minutes without use the models leave memory (an idle
+Mimvox keeps about 0.3 GB of RAM and nothing on the graphics card), so the first phrase after a break loads them
+again, in about 10 seconds.
 
 ### Results and export
 
@@ -740,6 +744,8 @@ showing what is chosen now: **Accent** (*Native (American) · closest speaker*) 
 voice · music and sounds kept · original timing*). Press **Change** on a line: its choices open in a small panel
 over the page, and nothing else moves. **Done**, or a press outside the panel, closes it.
 
+![The Output choices of a video, open in their panel](screenshots/usage-redub-output.png)
+
 ### Example: a Ukrainian video to English in a couple of clicks
 
 1. Open **Redub** and drop `interview.mp4` (a video of you speaking Ukrainian).
@@ -918,7 +924,7 @@ More detail: the [recording guide](recording-guide.md).
 | --- | --- |
 | **"The voice engine stopped"** (banner under the header, the pill says *Engine stopped*) | Press **Retry** in the banner, or press the pill. The banner shows the last error line. If it keeps stopping, look at the engine log (below) and run `./setup.sh --quick-check` (or `setup.cmd --quick-check`) to verify the install. A *"not set up yet"* message means setup has not completed: run it again. |
 | **Generation is slow** | The first phrase after start is always slower (the models and the voice are being prepared). Check the device on the welcome screen or by hovering the *Ready* pill: it should name your NVIDIA GPU. If setup reported the `cpu` backend, re-run setup on a machine with a supported GPU and current NVIDIA driver. Close other programs that use the GPU (games, other AI tools, browsers with hardware acceleration). **Fast** quality is about twice as fast per sentence. Do not train while you want to speak. |
-| **"CUDA out of memory"** | Close other programs that use the GPU. 8 GB of video memory is the practical minimum. If it persists, restart the app so the engine reloads cleanly. |
+| **"Not enough free GPU memory"** or **"not enough free memory (RAM)"** | Mimvox gives each model only the memory that is free and stops a job that does not fit, so the computer never runs out. Close other programs that use the graphics card or a lot of memory (games, video, browsers) and try again. 8 GB of video memory is the practical minimum. |
 | **The microphone is missing** | Open the microphone chip on Record: the list is refreshed every time it opens. Plug the microphone in before opening it, check that it is enabled and not muted in your system's sound settings, and that the app is allowed to use the microphone (macOS and Windows privacy settings). *"Cannot use this microphone"* shows the system's reason. A remembered microphone that is gone falls back to the system default with a warning. |
 | **"No clear speech found"** on every take | The wrong input is selected, or it is muted. Use the level test in the microphone list: the bar must move when you speak. |
 | **A file is refused** | *"That kind of file is not supported"*: use one of the formats listed in [Redub](#supported-formats-and-exporting). A video without sound gives *"This file has no audio track."* |

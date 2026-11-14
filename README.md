@@ -4,13 +4,13 @@
   <p><strong>Clone your own voice on your own computer, then type text in English, Ukrainian or about 60 other languages and hear it in your voice.</strong></p>
 </div>
 
-Mimvox is a desktop app. You read a short guided text into your microphone, the app trains a voice model
-from that recording, and from then on you type any text (English, Ukrainian and about 60 more languages) and hear it
-spoken in your own voice. Everything runs
+Mimvox is a desktop app. You drop in recordings you already have, or read a short guided text into your microphone;
+the app can train a voice model from that, and from then on you type any text (English, Ukrainian and about 60 more
+languages) and hear it spoken in your own voice. Everything runs
 on your computer: your recordings, your voice models and the generated speech are never uploaded anywhere.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Mimvox: setup, recording, training, speaking, an audiobook and dubbing in your own voice" width="880">
+  <img src="docs/demo.gif" alt="Mimvox: setup, a voice from your recordings or a reading, training, speaking, an audiobook and dubbing in your own voice" width="880">
 </p>
 
 > [!WARNING]
@@ -85,11 +85,13 @@ recordings joined with short pauses).
 
 | Feature | Description |
 | --- | --- |
-| **Guided recording presets** | Pick a preset and read the text on screen: **Quick** (about 1 minute, usable at once with no training), **Standard** (about 6-7 minutes, trains a timbre model, the validated setup) or **Pro** (about 15-20 minutes, best similarity). One part at a time, with big text, one key to start and stop, automatic saving and automatic advance. |
-| **Your own text** | Prefer to read something else? Paste your text and the app analyses it: word count, estimated reading time, **phoneme coverage** (which English sounds your text covers and which are missing), and a verdict (too short, zero-shot, trainable, great). It then splits the text into parts of about 60-90 seconds. |
+| **A voice from recordings you already have** | Drop audio or video of one person on **Record** (a voice memo, a podcast, a video): no reading and no preset. The app asks whose voice it is (a new voice, or more recordings of the selected one), cleans and joins the files, and the voice speaks at once; with three minutes or more it can also be trained. |
+| **Guided recording presets** | Or read the text on screen: **Quick** (about 1 minute, usable at once with no training), **Standard** (about 6-7 minutes, trains a timbre model, the validated setup) or **Pro** (about 15-20 minutes, best similarity), with reading texts written for English, Ukrainian, German, French, Spanish, Polish and Romanian. One part at a time, with big text, one key to start and stop, automatic saving and automatic advance. |
+| **Your own text** | Prefer to read something else? Paste your text and the app analyses it: word count, estimated reading time, **phoneme coverage** (which sounds of the language your text covers and which are missing), and a verdict (too short, zero-shot, trainable, great). It then splits the text into parts of about 60-90 seconds. |
 | **Recording quality checks** | Every take is checked right away: duration, peak level, clipping, loudness, noise floor, signal-to-noise ratio and silence. You get a plain verdict (ok, warn, bad) with advice such as "Too quiet: speak closer to the mic", so you re-record before training, not after. |
 | **One-click training** | Press **Train**. The app prepares the dataset, extracts features, trains the timbre model, builds its index, shows progress and an estimated time, and can be cancelled. The number of epochs is chosen from the length of your recording. |
-| **Fast streaming generation** | Type text in English, Ukrainian or another supported language and press **Speak**. Long text is split into segments and each segment plays as soon as it is ready, while the rest is still being generated. The models stay loaded in a persistent engine, so the second phrase is much faster than the first. |
+| **Fast streaming generation** | Type text in English, Ukrainian or another supported language and press **Speak**. Long text is split into segments and each segment plays as soon as it is ready, while the rest is still being generated. The models stay loaded while you work, so the second phrase is much faster than the first. |
+| **Light when idle, safe when full** | The models load when they are needed and leave memory after 10 idle minutes: an idle Mimvox keeps about 0.3 GB of RAM and nothing on the graphics card. Each model process is fenced to the memory that is free, so a generation that does not fit stops with a plain message; it cannot run the computer out of memory. |
 | **Audiobooks** | Open a book (EPUB, DOCX, ODT, FB2, PDF with text, TXT in any encoding, Markdown, HTML, RTF, subtitles) and **Book** mode reads it in your voice, one file per chapter (WAV, MP3, ...; optionally one M4B with chapter marks). Chapters are found from the book's structure and can be ticked, renamed, split or joined. Whole sentences, pauses that follow the punctuation, every chapter levelled to the same loudness. Pause and resume at any time, even after closing the app; progress shows the chapter, the time left and the speed. Short text files open straight in Speak. |
 | **Native English accent** | A voice recorded in Ukrainian (or any other language) would speak English with your accent. **Native (American)**, the default when the reference clip is not English, has a native US speaker from the public CMU ARCTIC corpus say the text, then gives it your timbre: with no training at all, from your reference clip (Seed-VC zero-shot voice conversion, installed by setup), or, once the voice is trained, with your own voice model at your pitch, which is closer to you. Also in Redub's Translate & dub and Re-speak into English. |
 | **Redub a video, music kept** | Drop a video and Redub translates and dubs it (or re-speaks it, or converts the voice) in your voice, then writes a copy of the video with the new voice: the original music and sound effects are separated from the old voice and kept under yours, at the original balance, and the picture is copied without re-encoding. Or save the audio only. |
@@ -124,8 +126,10 @@ recordings joined with short pauses).
    speaker-similarity score (ECAPA), RVC lifts an English paragraph from about 0.81 to about 0.94, where 0.93 is the
    score of your own real recordings against each other. For other languages than the one you recorded in, the RVC
    index is used at a lower rate so the words stay clear. Details: [docs/performance.md](docs/performance.md).
-3. **A persistent engine.** The app starts a Python engine once (a child process) and keeps OmniVoice and the RVC
-   worker loaded in GPU memory, so the first sound of a phrase comes after about 1-3 s. The app and the engine talk
+3. **A persistent engine.** The app starts a Python engine once (a child process). The engine loads OmniVoice, and
+   the RVC worker for a trained voice, when they are first needed and keeps them in GPU memory while you work, so the
+   first sound of a phrase comes after about 1-3 s; after 10 idle minutes they leave memory and the next phrase loads
+   them again (about 10 s). The app and the engine talk
    JSON lines over stdin/stdout: [contract/engine-protocol.md](contract/engine-protocol.md).
 4. **The app** is written in Rust on [Rune](https://github.com/anomalyco/rune), with microphone capture and playback
    through `cpal` and `hound`. The UI never blocks and never polls: engine messages and audio arrive as events.
@@ -157,7 +161,8 @@ More: [docs/architecture.md](docs/architecture.md).
    by itself, with a progress list in its window: about 13 GB for speech alone, about 33 GB for everything (voice
    training, translation, native accent, music removal). A part left out installs later in one click, on the screen
    that needs it.
-3. Choose a preset (or paste your own text), record, press **Train**, and start typing.
+3. Drop recordings you already have on **Record**, or choose a preset (or paste your own text) and read it. Start
+   typing; press **Train** for a closer copy of the voice.
 
 The [usage guide](docs/usage.md#1-install-and-first-start) covers the details (the first-run warnings of unsigned
 installers, the install location, updates).
@@ -211,7 +216,7 @@ engine/                Python engine (mimvox_engine), runs in the engine virtual
     backends/          speech model: OmniVoice worker, text normalization (numbers, abbreviations)
     dataset/           recording checks, text analysis, dataset management
     training/          RVC training driver
-presets/<lang>/        the guided reading texts (Quick, Standard, Pro) per language: en uk de fr es pl
+presets/<lang>/        the guided reading texts (Quick, Standard, Pro) per language: en uk de fr es pl ro
 contract/              engine-protocol.md: the app <-> engine protocol and data layout
 tools/setup/           setup.py (run by the app on first start, and by setup.sh / setup.cmd for developers)
 tools/release/         icons and release helpers
@@ -248,8 +253,8 @@ Where your data lives (voices, datasets, trained models, generated audio) is des
 | --- | --- |
 | **Setup fails to clone a repository on Windows with a TLS / certificate error.** The Git that Windows ships in some environments is MinGit, whose default TLS backend cannot verify some certificates. | Run Git with the Windows certificate store: `git -c http.sslBackend=schannel clone ...`, or set it once with `git config --global http.sslBackend schannel`. Then run `setup.cmd` again. |
 | **A model download stops with a timeout or a Hugging Face connection error.** The model files are large (several GB). | Run setup again: downloads resume and finished files are skipped. If your connection to huggingface.co is slow or filtered, set `HF_ENDPOINT` to a mirror, or `HF_HUB_DOWNLOAD_TIMEOUT=120` for a longer timeout, and retry. |
-| **"CUDA out of memory", or generation suddenly gets very slow.** OmniVoice and the RVC worker share the GPU. | Close other programs that use the GPU (games, browsers with hardware acceleration, other models). 8 GB is the practical minimum; 12 GB is comfortable. Do not train while generating. If it keeps happening, restart the app: the engine reloads cleanly. |
-| **The first phrase takes a long time.** | The first phrase loads the models (RVC alone takes about 16 s cold against 1.7 s warm). Later phrases are much faster. Leave the app open: the models stay loaded. |
+| **"Not enough free GPU memory" or "not enough free memory (RAM)".** Mimvox gives each model only the memory that is free, and stops a job that does not fit instead of letting the computer run out. | Close other programs that use the graphics card or a lot of memory (games, video, browsers with hardware acceleration, other models) and try again. 8 GB of video memory is the practical minimum; 12 GB is comfortable. Do not train while generating. |
+| **The first phrase takes a long time.** | The first phrase loads the models (RVC alone takes about 16 s cold against 1.7 s warm). Later phrases are much faster. After 10 minutes without use the models leave memory, so the first phrase after a break loads them again (about 10 s). |
 | **My recording is "too quiet".** | Move the microphone to 15-20 cm from your mouth, raise the input level in your system's sound settings, and record again. Avoid laptop microphones far from you. |
 | **My recording is "clipping" or "too loud".** | Move the microphone further away, lower the input level, and do not speak straight into it (use it slightly to the side to avoid plosives). Re-record that part. |
 | **The voice has a foreign accent in another language.** | OmniVoice carries the accent of the reference clip into the target language: an English reference gives Ukrainian with a slight English colour. Put a 7-12 s clip of you speaking that language as `reference_<lang>.wav` (for example `reference_uk.wav`) in the voice's folder; it is used for that language. For English there is also **Accent: Native (American)** (no training needed; see the usage guide). |
