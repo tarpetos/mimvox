@@ -11,13 +11,16 @@
   speech process instead of one of its own (native accent in use: 10.7 GB -> 8.4 GB), and every model process gives
   the RAM it only needed while loading back to Windows (with a trained voice and the native accent loaded: 6.5 GB of
   RAM -> 0.6 GB).
-* **Playing and moving the pointer are light on the graphics card.** Measured on an RTX 4070 with a 165 Hz display
-  (the card idles at 12 W): moving the pointer over the window drew a whole-window frame for every pointer report,
-  36 W for as long as it moved; now a frame is drawn only when something on screen changes (12 W, also when moving
-  fast). Playing redrew the whole window for every position report; now the header, the background and each panel
-  are drawn once and reused, and the player's knob follows the audio directly at up to 60 frames a second, one small
-  frame each (about 19 W while a chapter plays). The big panels no longer blur the (already soft) light fields behind
-  them, and hover highlights settle faster.
+* **Playing and moving the pointer are light on the graphics card.** Measured on an RTX 4070 with a 4K 165 Hz
+  display (the card idles at 12 W): moving the pointer over the window drew a whole-window frame for every pointer
+  report, 36 W for as long as it moved; now a frame is drawn only when something on screen changes (12 W, also when
+  moving fast). Playing redrew the whole window for every position report; now the player's knob glides 60 times a
+  second and the window is not redrawn for it at all: on Windows the fill and the knob are a small strip of their own
+  over the seek bar (about 16 W while a chapter plays; a knob moved through the window's own frames at that rate kept
+  the card at 36 W), elsewhere the bar draws them over the cached rest of the window. The header, the background and
+  each panel are drawn once and reused until they change; the big panels no longer blur the (already soft) light
+  fields behind them; hover highlights settle faster.
+* **Player:** the Stop button has a face of its own and is there only while there is something to stop or rewind.
 
 ## 0.2.0
 

@@ -680,28 +680,23 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     // and a hover animation redraws the one panel it is in, not the whole window (measured on a 165 Hz display:
     // moving the pointer across the window drew 165 whole-window frames a second, 36 W on the GPU against 12 W idle).
     // The player bar docks under the screen (the screen gets shorter), so it never covers a screen's controls.
-    let dock = super::playbar::view(s, p, cx.layout_with(super::playbar::RAIL, |r| r[2]));
+    // Menus and dialogs that open over the window (the player's seek strip steps aside for them).
+    let mut overlays: Vec<El> = Vec::new();
+    if s.shell.voice_menu_open {
+        overlays.push(voice_menu(s, p));
+    }
+    overlays.extend(super::relocate::overlay(s, &p));
+    overlays.extend(super::train::close_overlay(s, &p));
+    overlays.extend(super::formats::overlay(s, p));
+    overlays.extend(super::formats::output_overlay(s, p));
+    overlays.extend(super::lang::overlay(s, &p));
+    let dock = super::playbar::view(s, p, cx.layout_with(super::playbar::RAIL, |r| r), cx.env().scale, !overlays.is_empty());
     let toasts_at = if dock.is_some() { super::playbar::DOCK_H + 14.0 } else { 26.0 };
     let mut root = el().key("root").w_full().h_full().fill(p.bg_top).child(background(p)).child(
         col().key("chrome").w_full().h_full().child(header(s, p, insets, fit).cache()).child(body).children(dock),
     );
-    if s.shell.voice_menu_open {
-        root = root.child(voice_menu(s, p));
-    }
-    if let Some(dialog) = super::relocate::overlay(s, &p) {
-        root = root.child(dialog);
-    }
-    if let Some(dialog) = super::train::close_overlay(s, &p) {
-        root = root.child(dialog);
-    }
-    if let Some(menu) = super::formats::overlay(s, p) {
-        root = root.child(menu);
-    }
-    if let Some(menu) = super::formats::output_overlay(s, p) {
-        root = root.child(menu);
-    }
-    if let Some(menu) = super::lang::overlay(s, &p) {
-        root = root.child(menu);
+    for overlay in overlays {
+        root = root.child(overlay);
     }
     if let Some(menu) = super::playbar::overlay(s, p) {
         root = root.child(menu);

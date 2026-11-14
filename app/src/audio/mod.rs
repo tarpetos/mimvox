@@ -105,7 +105,7 @@ pub enum CaptureEvent {
 pub type MeterSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
 
 /// Position reports per second while a track plays (the player bar's redraw rate). None while paused or stopped.
-pub const PROGRESS_HZ: u32 = 60;
+pub const PROGRESS_HZ: u32 = 20;
 
 /// What the player reports, from the audio thread. `track` is the id [`Player::play`] returned: a report about a
 /// track that was replaced meanwhile can still arrive and must be ignored.
@@ -454,9 +454,14 @@ where
     let rate = config.sample_rate.0.max(1);
     let err_shared = shared.clone();
     let mut mono: Vec<f32> = Vec::new();
-    // Progress reports, counted in output samples (the audio clock), only when the position moved.
+    // Progress reports, counted in output samples (the audio clock), only when the position moved. The position
+    // reported is a smooth one: the stretcher's own advances a block at a time (uneven steps of tens of
+    // milliseconds), so between its steps the report moves on by the samples played times the speed, and takes the
+    // stretcher's value again when the two part by more than `SNAP_S` (a seek, a loop, a new track).
+    const SNAP_S: f64 = 0.12;
     let every = (rate / PROGRESS_HZ).max(1) as usize;
     let (mut since, mut last_pos) = (0usize, f64::NAN);
+    let (mut smooth, mut smooth_track) = (0.0f64, u64::MAX);
     device.build_output_stream(
         config,
         move |data: &mut [T], _| {
@@ -474,9 +479,14 @@ where
                     since = 0;
                 } else if playing {
                     since += frames;
+                    let raw = t.stretch.position().min(t.samples.len() as f64);
+                    smooth += frames as f64 * f64::from(t.speed);
+                    if smooth_track != t.id || (smooth - raw).abs() > SNAP_S * f64::from(rate) {
+                        (smooth, smooth_track) = (raw, t.id);
+                    }
                     if since >= every {
                         since = 0;
-                        let pos = t.stretch.position().min(t.samples.len() as f64);
+                        let pos = smooth.clamp(0.0, t.samples.len() as f64);
                         if pos != last_pos {
                             last_pos = pos;
                             report = Some((t.id, (pos / rate as f64) as f32, t.samples.len() as f32 / rate as f32));
