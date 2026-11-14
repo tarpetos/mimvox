@@ -991,12 +991,15 @@ fn project_view(s: &AppState, p: Palette, b: &BookSummary) -> El {
         "done" => format!("All {} chapters read", b.chapters),
         _ => format!("{} of {} chapters done · {:.0}%", b.chapters_done, b.chapters, t.percent),
     };
-    let mut facts = vec![format!("{} of audio", fmt_len(t.audio_s))];
+    let mut facts = vec![match t.est_audio_s.filter(|_| b.status != "done") {
+        Some(est) => format!("{} of about {} of audio", fmt_len(t.audio_s), fmt_len(est)),
+        None => format!("{} of audio", fmt_len(t.audio_s)),
+    }];
     if let Some(eta) = t.eta_s.filter(|_| b.status != "done") {
-        facts.push(format!("about {} left", fmt_len(eta)));
+        facts.push(format!("ready in about {}", fmt_len(eta)));
     }
-    if let Some(r) = t.rtf {
-        facts.push(format!("{r:.2}× real time"));
+    if let Some(r) = t.rtf.filter(|r| *r > 0.0) {
+        facts.push(if r < 1.0 { format!("{:.0}× faster than real time", 1.0 / r) } else { format!("{r:.1}× slower than real time") });
     }
     if b.status == "done" && t.elapsed_s > 0.0 {
         facts.push(format!("made in {}", fmt_len(t.elapsed_s)));
@@ -1025,8 +1028,8 @@ fn project_row(s: &AppState, p: Palette, b: &BookSummary, c: &BookChapterRow) ->
     let (mark, meta): (El, String) = match c.status.as_str() {
         "done" => (icon_el(&icons::CHECK, 14.0, p.ok), {
             let mut m = fmt_len(c.audio_s);
-            if let Some(r) = c.rtf {
-                m.push_str(&format!(" · {r:.2}×"));
+            if let Some(r) = c.rtf.filter(|r| *r > 0.0) {
+                m.push_str(&format!(" · made in {}", fmt_len(r * c.audio_s)));
             }
             m
         }),

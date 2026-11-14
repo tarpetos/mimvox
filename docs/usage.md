@@ -734,8 +734,9 @@ after closing the app.
    default: a steadier narrator for long listening. In the **Output** panel pick the format ("Save as"), and tick
    **Also make one M4B audiobook with chapter marks** if you want a single file for an audiobook player. **Read each
    chapter's title first** reads the title, then pauses, before the text.
-4. Press **Read the book**. The panel shows *Chapter k of n*, the percentage, how much audio is made, about how long is
-   left and the speed (for example *1.10× real time*: 10 % slower than listening). Finished chapters get a play button
+4. Press **Read the book**. The panel shows *Chapter k of n*, the percentage, how much audio is made out of the
+   expected total, when the whole book will be ready, and the speed (for example *20× faster than real time*: an hour
+   of audio takes three minutes). Finished chapters show their length, how long they took to make and a play button
    (the [player bar](#the-player-bar)); the one being read shows *part i of n*.
 5. **Pause** stops at once and frees the GPU (Speak, Redub and training wait while a book is read); **Resume**
    continues from the sentence where it stopped. **Cancel** stops and drops the unfinished chapter (finished chapters
