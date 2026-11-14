@@ -72,6 +72,7 @@ class ZsvcWorker:
         self.client = WorkerClient("zsvc", [sys.executable, *isolated(), WORKER, "--seed-vc", code, "--models", models,
                                             "--device", device], env, start_timeout=120.0)
         self.warm_refs: set[tuple] = set()   # reference states whose prompt the worker has built (cleared on exit)
+        self.client.on_release.append(self.warm_refs.clear)
 
     def alive(self) -> bool:
         return self.client.alive()

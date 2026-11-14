@@ -78,6 +78,7 @@ def safe_index(path):
 
 def op_convert(req):
     t0 = time.time()
+    kit.gpu_fence(start=True)  # Applio loads HuBERT and the voice model on the first conversion
     index = req.get("index") or ""
     if index and not os.path.isfile(index):
         index = ""

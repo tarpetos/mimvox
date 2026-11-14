@@ -68,6 +68,7 @@ import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 
 text_norm = _load_by_path("mimvox_omnivoice_text", os.path.join(HERE, "omnivoice_text.py"))
+whisper_half = _load_by_path("mimvox_whisper_half", os.path.join(os.path.dirname(HERE), "whisper_half.py"))
 
 # Reference length: OmniVoice's docs suggest 3-10 s. On a test voice the whole 19 s clip cloned a little better
 # than a 7 s cut (ECAPA similarity after RVC 0.86 vs 0.84) but needs ~3 GB more VRAM (peak 6.9 vs 3.9 GB), and next to
@@ -75,6 +76,9 @@ text_norm = _load_by_path("mimvox_omnivoice_text", os.path.join(HERE, "omnivoice
 # whole, longer ones are cut to whole sentences around REF_CUT_TARGET_S.
 REF_MAX_S = float(os.environ.get("MIMVOX_OMNIVOICE_REF_MAX_S", "12"))
 REF_CUT_MIN_S, REF_CUT_MAX_S, REF_CUT_TARGET_S = 7.0, REF_MAX_S, 10.0
+# Whisper turbo for a new reference clip: on the GPU with fp16 weights (1.6 GB + decoding) only when that fits beyond
+# the desktop's reserve next to everything else on the card, else on the CPU (about 10-20 s for a clip, once per clip).
+WHISPER_NEED_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))
 SIDECAR_VERSION = 3
 
 _state = {"model": None, "device": None}
@@ -135,6 +139,8 @@ def op_load(_req=None):
 
     t0 = time.time()
     dev = _device()
+    if dev == "cuda":
+        kit.gpu_fence(start=True)
     dtype = torch.float16 if dev in ("cuda", "mps") else torch.float32
     model = OmniVoice.from_pretrained(args.model_dir, device_map=dev if dev != "cuda" else "cuda:0", dtype=dtype)
     _state.update(model=model, device=dev)
@@ -187,23 +193,57 @@ def _load_mono(path):
     return x.mean(1), sr
 
 
-def _transcribe(x, sr):
-    """Whisper turbo on a clip, language auto-detected (not forced): ([(start, end, text)], detected language code or
-    None)."""
+def _whisper_device():
+    if (_state["device"] or _device()) != "cuda":  # `inspect` runs without the TTS model
+        return "cpu"
+    free = kit.gpu_free_gb()
+    if free >= WHISPER_NEED_GB:
+        kit.gpu_fence(start=True)
+        return "cuda"
+    _log(f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (Whisper needs "
+         f"{WHISPER_NEED_GB:.1f}): transcribing the reference on the CPU")
+    return "cpu"
+
+
+def _with_whisper(use):
+    """``use(model, device)`` with Whisper turbo loaded for this call only (fp16 on the GPU when it fits, else the CPU),
+    retried on the CPU when the GPU runs out of memory midway; the model is dropped afterwards either way."""
     import whisper
+
+    dev = _whisper_device()
+    for attempt in (dev, "cpu") if dev == "cuda" else ("cpu",):
+        wm = None
+        try:
+            if attempt == "cuda":
+                wm = whisper_half.load(whisper, "turbo", args.whisper_dir or None, "cuda")
+            else:
+                wm = whisper.load_model("turbo", download_root=args.whisper_dir or None, device="cpu")
+            return use(wm, attempt)
+        except Exception as exc:
+            if attempt != "cuda" or not kit.is_vram_error(exc):
+                raise
+            _log(f"Whisper ran out of GPU memory ({exc}); transcribing the reference on the CPU")
+        finally:
+            del wm
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            _trim_working_set()  # Whisper's weights passed through host RAM: give those pages back now
+    raise AssertionError("unreachable")
+
+
+def _16k(x, sr):
     import torchaudio
 
     x16 = torchaudio.functional.resample(torch.from_numpy(x), sr, 16000).numpy() if sr != 16000 else x
-    dev = "cuda" if (_state["device"] or _device()) == "cuda" else "cpu"  # `inspect` runs without the TTS model
-    wm = whisper.load_model("turbo", download_root=args.whisper_dir or None, device=dev)
-    try:
-        res = wm.transcribe(x16.astype(np.float32), fp16=dev == "cuda", condition_on_previous_text=False)
-    finally:
-        del wm
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        _trim_working_set()  # Whisper was loaded through host RAM: give those pages back now
+    return x16.astype(np.float32)
+
+
+def _transcribe(x, sr):
+    """Whisper turbo on a clip, language auto-detected (not forced): ([(start, end, text)], detected language code or
+    None)."""
+    x16 = _16k(x, sr)
+    res = _with_whisper(lambda wm, dev: wm.transcribe(x16, fp16=dev == "cuda", condition_on_previous_text=False))
     segs = [(float(s["start"]), float(s["end"]), s["text"].strip()) for s in res["segments"] if s["text"].strip()]
     return segs, (str(res.get("language") or "").lower() or None)
 
@@ -211,22 +251,18 @@ def _transcribe(x, sr):
 def _detect_language(x, sr):
     """Whisper turbo's language detection alone (the first 30 s of a clip): an ISO code or None."""
     import whisper
-    import torchaudio
 
-    x16 = torchaudio.functional.resample(torch.from_numpy(x), sr, 16000).numpy() if sr != 16000 else x
-    dev = "cuda" if (_state["device"] or _device()) == "cuda" else "cpu"
-    wm = whisper.load_model("turbo", download_root=args.whisper_dir or None, device=dev)
-    try:
-        audio = whisper.pad_or_trim(torch.from_numpy(x16.astype(np.float32)))
+    x16 = _16k(x, sr)
+
+    def detect(wm, _dev):
+        audio = whisper.pad_or_trim(torch.from_numpy(x16))
         mel = whisper.log_mel_spectrogram(audio, n_mels=wm.dims.n_mels).to(wm.device)
+        if next(wm.parameters()).dtype == torch.float16:
+            mel = mel.half()
         _, probs = wm.detect_language(mel)
         return max(probs, key=probs.get) if probs else None
-    finally:
-        del wm
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        _trim_working_set()
+
+    return _with_whisper(detect)
 
 
 def _pick_window(segs, total):

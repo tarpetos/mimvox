@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+* **Memory safety:** Mimvox no longer runs the computer out of memory. Recording a new reference while the app was
+  busy could fill the graphics card; the NVIDIA driver then moved the overflow into system RAM until Windows ran out
+  of memory, other programs crashed and the desktop lost its wallpaper and screenshots. Now every engine process caps
+  its GPU use at what is free beyond a reserve for the desktop and other programs (1.5 GB, `MIMVOX_VRAM_RESERVE_GB`); an
+  operation that does not fit makes the other idle models step aside and is retried once, else it stops with a clear
+  message. On Windows the engine and all its workers share a memory cap that follows the system: the commit limit
+  (RAM + page file, and how far a page file Windows manages can still grow) minus what other programs use and a
+  reserve (3 %, at least 1.5 GB; `MIMVOX_RAM_LIMIT_GB` fixes it), and they end with the engine. Workers hand their
+  cached GPU memory back after every job (on Windows it counts against that limit too); on Linux the system stops Mimvox first if memory runs out.
+* **Reference transcription:** Whisper for a new reference clip loads at half size (1.6 GB instead of 3.2 GB) on the
+  GPU only when it fits, otherwise on the processor, and moves to the processor if the GPU runs out midway.
 * **Windows: the app opens in a moment again.** The released Windows build waited about 12 s before its window
   appeared, on every start: its shaders were compiled at start-up instead of loaded precompiled, because the build
   machine changed their line endings. Now they keep LF everywhere (`.gitattributes`).

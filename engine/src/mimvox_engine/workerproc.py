@@ -12,6 +12,9 @@ Design (safe for any number of concurrent callers by construction):
 - A caller that is cancelled while its request is queued just drops out; if the request is running, a
   ``{"op":"cancel","id"}`` is sent and the owner waits for the worker's answer before sending the next request.
 - Timeouts are timers on the awaited reply (``asyncio.wait``), never polls.
+- GPU memory: a worker caps its own VRAM use (``worker_kit.gpu_fence``) and fails an op that would overfill the card
+  with code ``no_vram``. The client then asks the other workers that are idle to drop their models (``release``) and
+  retries the op once (``make_room``).
 """
 from __future__ import annotations
 
@@ -24,7 +27,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from . import aio
+from . import aio, memguard
 
 log = logging.getLogger("mimvox.worker")
 
@@ -62,8 +65,30 @@ class _Request:
         self.abandoned = False
 
 
+_CLIENTS: list[WorkerClient] = []   # every client made (a handful per engine), for make_room
+
+
+async def make_room(asking: WorkerClient) -> list[str]:
+    """Free GPU memory for ``asking``: every other worker that is running and idle drops its models (``release``;
+    each one loads them again on its next op). Returns the names of the workers that released."""
+    freed = []
+    for other in _CLIENTS[:]:  # a copy: releasing awaits, a client may be added meanwhile
+        if other is asking or not other.alive() or other.busy():
+            continue
+        try:
+            await other._call_once("release", None, None, 60.0, False)
+            freed.append(other.name)
+            for hook in other.on_release:
+                hook()
+        except Exception as exc:  # noqa: BLE001 - best effort: the retry reports what still does not fit
+            log.warning("the %s worker could not release its models: %s", other.name, exc)
+    return freed
+
+
 class WorkerClient:
     def __init__(self, name: str, argv: list[str], env: dict[str, str], start_timeout: float = 240.0) -> None:
+        _CLIENTS.append(self)
+        self.on_release: list[Callable[[], None]] = []   # run after make_room made this worker drop its models
         self.name = name
         self.argv = argv
         self.env = env
@@ -98,11 +123,20 @@ class WorkerClient:
             if not retry:
                 raise
             log.warning("%s worker died under %s (%s); retrying once", self.name, op, exc)
+        except WorkerError as exc:
+            if exc.code != "no_vram" or not retry:
+                raise
+            freed = await make_room(self)
+            if not freed:
+                raise
+            log.warning("%s: not enough GPU memory for %s; %s released their models, retrying once", self.name, op,
+                        ", ".join(freed))
         return await self._call_once(op, params, progress, timeout, start)
 
     async def _call_once(self, op: str, params: dict[str, Any] | None, progress: Progress | None,
                          timeout: float | None, start: bool) -> dict[str, Any]:
         req = _Request(next(self._ids), {"op": op, **(params or {})}, progress, timeout, start)
+        memguard.refresh()  # the memory cap follows what the other programs use now (Windows)
         self._ensure_owner()
         assert self._queue is not None
         self._queue.put_nowait(req)
@@ -205,6 +239,7 @@ class WorkerClient:
             if not exited.done():
                 exited.set_result(code)
             log.info("%s worker (pid %s) exited with code %s", self.name, proc.pid, code)
+            memguard.report(f"after the {self.name} worker exited")
 
     def _dispatch(self, raw: bytes) -> None:
         try:

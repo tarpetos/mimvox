@@ -28,7 +28,7 @@ import traceback
 from collections.abc import Callable
 from typing import Any, BinaryIO
 
-from . import __version__, aio, config, media
+from . import __version__, aio, config, media, memguard
 from .registry import EngineError, handlers, method, methods
 
 log = logging.getLogger("mimvox.server")
@@ -410,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     inp = aio.detach_stdin()
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    memguard.setup()  # before any worker starts: they inherit the memory cap
     code = 1
     try:
         code = asyncio.run(serve(args.runtime, args.data_dir, out, inp))
@@ -417,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("engine failed")
         from .training import proc  # noqa: PLC0415
         proc.kill_all_sync()  # never leave an Applio training behind
+    memguard.report("at engine exit")
     try:
         out.flush()
     except OSError:

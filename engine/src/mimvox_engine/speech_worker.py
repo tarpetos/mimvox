@@ -52,6 +52,10 @@ def _load_kit():
 
 
 kit = _load_kit()
+_wh_spec = importlib.util.spec_from_file_location(
+    "mimvox_whisper_half", os.path.join(os.path.dirname(os.path.abspath(__file__)), "whisper_half.py"))
+whisper_half = importlib.util.module_from_spec(_wh_spec)
+_wh_spec.loader.exec_module(whisper_half)
 INP, OUT = kit.open_channels()  # protocol on private descriptors; library prints go to stderr
 
 ap = argparse.ArgumentParser()
@@ -210,20 +214,24 @@ def unload_all(reason=""):
 
 
 def pick_device(need_gb, allow_cuda, *others):
-    """cuda when ``need_gb`` of VRAM is free (dropping the other models from the GPU if that makes it fit), else cpu
-    (dropping the other models too when they also sit in host RAM, so the process stays small)."""
+    """cuda when ``need_gb`` of VRAM is free beyond the desktop's reserve (``kit.VRAM_RESERVE_GB``; dropping the other
+    models from the GPU if that makes it fit), else cpu (dropping the other models too when they also sit in host RAM,
+    so the process stays small). On cuda the allocator cap (``kit.gpu_fence``) is set right away."""
     torch = _torch()
     if allow_cuda and torch.cuda.is_available():
-        free = free_vram_gb()
+        free = kit.gpu_free_gb()
         if free >= need_gb:
+            kit.gpu_fence(start=True)
             return "cuda"
         for other in others:
             if other[0] is not None and other[0].device == "cuda":
                 unload(other)
-                free = free_vram_gb()
+                free = kit.gpu_free_gb()
                 if free >= need_gb:
+                    kit.gpu_fence(start=True)
                     return "cuda"
-        log(f"only {free:.1f} GB of VRAM free (need {need_gb:.1f}): using the CPU")
+        log(f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (need {need_gb:.1f}): "
+            "using the CPU")
     for other in others:
         if other[0] is not None and other[0].device == "cpu":
             unload(other)
@@ -260,28 +268,7 @@ def _patch_whisper(whisper):
 
 
 def _load_whisper_half(whisper, name, device):
-    """fp16 weights built directly on the GPU (1.6 GB instead of 3.2 GB). LayerNorm stays fp32 (whisper casts around it)."""
-    torch = _torch()
-    path = whisper._download(whisper._MODELS[name], WHISPER_DIR, False)
-    with open(path, "rb") as fh:
-        ckpt = torch.load(fh, map_location="cpu", weights_only=True)
-    dims = whisper.model.ModelDimensions(**ckpt["dims"])
-    prev = torch.get_default_dtype()
-    torch.set_default_dtype(torch.float16)
-    try:
-        with torch.device(device):
-            model = whisper.model.Whisper(dims)
-    finally:
-        torch.set_default_dtype(prev)
-    model.load_state_dict(ckpt["model_state_dict"])
-    del ckpt
-    for m in model.modules():
-        if isinstance(m, whisper.model.LayerNorm):
-            m.float()
-    alignment = getattr(whisper, "_ALIGNMENT_HEADS", {}).get(name)
-    if alignment is not None:
-        model.set_alignment_heads(alignment)
-    return model.eval()
+    return whisper_half.load(whisper, name, WHISPER_DIR, device)
 
 
 def ensure_asr(name, allow_cuda):
@@ -840,7 +827,8 @@ def op_release(_req):
 
 
 OPS = {"load_asr": op_load_asr, "transcribe": op_transcribe, "translate": op_translate,
-       "separate_vocals": op_separate_vocals, "status": op_status, "release_gpu": op_release, "unload": op_release}
+       "separate_vocals": op_separate_vocals, "status": op_status, "release_gpu": op_release, "unload": op_release,
+       "release": op_release}
 
 
 def on_idle_unload():
