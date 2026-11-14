@@ -276,7 +276,7 @@ def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list
     """The installed parts of the runtime (setup's COMPONENTS), from the files on disk: the app offers to install the
     others where they are needed."""
     from . import rvc, speech  # noqa: PLC0415
-    from .backends import omnivoice  # noqa: PLC0415
+    from .backends import holos, omnivoice  # noqa: PLC0415
     found = {
         "speech": omnivoice.installed(ctx.runtime),
         "training": rvc.available(ctx.runtime),
@@ -284,6 +284,7 @@ def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list
         "better_translation": "nllb-1.3b" in translators,
         "native_accent": zero_shot_vc,
         "music_removal": os.path.isfile(speech.separator_path(ctx.data_dir)),
+        "ukrainian": holos.installed(ctx.runtime),
     }
     return [name for name, ok in found.items() if ok]
 

@@ -74,7 +74,7 @@ pub struct Component {
     pub what: &'static str,
 }
 
-pub const COMPONENTS: [Component; 6] = [
+pub const COMPONENTS: [Component; 7] = [
     Component { id: "speech", label: "Speech", gb: 12.6, what: "Speak and Book in about 60 languages, and Redub's Re-speak. Always installed." },
     Component { id: "training", label: "Voice training", gb: 12.0, what: "Train your voice: voice match for trained voices and Redub's Convert voice." },
     Component { id: "translation", label: "Translation", gb: 2.5, what: "Redub's Translate & dub (NLLB-200 600M)." },
@@ -86,6 +86,12 @@ pub const COMPONENTS: [Component; 6] = [
     },
     Component { id: "native_accent", label: "Native accent", gb: 2.0, what: "English with a native accent for voices that are not trained (Seed-VC, GPL-3.0)." },
     Component { id: "music_removal", label: "Music removal", gb: 0.3, what: "Keeps only the voice: Redub keeps a video's background, references come out clean." },
+    Component {
+        id: "ukrainian",
+        label: "Ukrainian speech",
+        gb: 1.5,
+        what: "Ukrainian with exact word stress in Speak, Book and Redub (HolosTTS): every word as the dictionary and the sentence say.",
+    },
 ];
 
 pub fn component(id: &str) -> Option<&'static Component> {
@@ -430,6 +436,8 @@ fn weight(id: &str) -> f32 {
         "applio_env" => 8.0,
         "applio_models" => 4.0,
         "separation" => 0.3,
+        "holos_env" => 1.0,
+        "holos_models" => 0.9,
         _ => 0.2,
     }
 }
@@ -630,6 +638,15 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
     glass_card(p).w_full().child(row_)
 }
 
+/// A component's name inside a sentence: lower case ("voice training"), except a language name ("Ukrainian speech").
+fn mid_sentence(label: &str) -> String {
+    if label.starts_with("Ukrainian") {
+        return label.to_owned();
+    }
+    let mut chars = label.chars();
+    chars.next().map(|c| c.to_lowercase().chain(chars).collect()).unwrap_or_default()
+}
+
 /// A small inline "Install" for an option that needs a component (a checkbox, a mode): one line with the button.
 pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
     use super::components::Button;
@@ -639,7 +656,7 @@ pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
     let line = if this {
         format!("Installing {}… {:.0}%", c.label, progress(s) * 100.0)
     } else {
-        format!("{what} needs {} ({:.1} GB).", c.label.to_lowercase(), c.gb)
+        format!("{what} needs {} ({:.1} GB).", mid_sentence(c.label), c.gb)
     };
     row().key(format!("install-line-{id}")).w_full().gap(8.0).center_y()
         .child(text(line).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).wrap())

@@ -70,6 +70,7 @@ pub const SCENES: &[(&str, fn(&mut AppState))] = &[
     ("speak_idle", speak::scene_idle),
     ("speak_typed", speak::scene_typed),
     ("speak_language_uk", speak::scene_language_uk),
+    ("speak_language_uk_no_extension", speak::scene_language_uk_no_extension),
     ("speak_language_picker", speak::scene_language_picker),
     ("speak_accent_native", speak::scene_accent_native),
     ("speak_accent_own", speak::scene_accent_own),

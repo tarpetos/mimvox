@@ -57,6 +57,26 @@ Apache-2.0, BSD).
   the text layer of PDF books in the audiobook import. Installed without its optional extras. The other book formats
   (EPUB, FB2, DOCX, ODT, RTF, HTML, Markdown, subtitles) are read with the Python standard library.
 
+### HolosTTS and the Ukrainian stress front-end (the optional "Ukrainian speech" component)
+
+Installed by setup into `<data>/runtime/holos` and `<data>/runtime/models/holos` only when the component is chosen;
+none of it is part of this repository or of the app's installers.
+
+- **HolosTTS** (`holos-tts` 0.4 on PyPI and the `patriotyk/HolosTTS` weights `holos.pt`, `voice_encoder.pt`,
+  `voices.pt` on Hugging Face): MIT (the repository's `LICENSE` and the licence field of the model card). Ukrainian
+  speech from IPA phonemes, with voice cloning from the voice's reference clip.
+- **ukrainian-word-stress**, patriotyk's fork (<https://gh.ali360.cloudns.ch/patriotyk/ukrainian-word-stress>, commit
+  `d5b37ea`): MIT, with lang-uk's stress dictionary in the package. It chooses between the readings of a word with
+  **Stanza** (Stanford NLP, Apache-2.0).
+- **Stanza's Ukrainian models** (tokenizer, part-of-speech tagger, multi-word tokens; `stanfordnlp/stanza-uk`), trained
+  on the **UD Ukrainian-IU** treebank, whose data is licensed **CC BY-NC-SA 4.0** (Institute for Ukrainian, mova.institute;
+  the treebank's `LICENSE.txt`). Non-commercial only, like Mimvox itself; downloaded by setup to your computer and not
+  redistributed by the project.
+- **ukrainian-accentor** (egorsmkv, MIT, commit `3dff5ec`; the model `accentor-lite.pt` ships in the package): stress for
+  words the dictionary lacks.
+- **ipa-uk** (patriotyk, MIT, commit `3faf05e`): Ukrainian text with stress marks to IPA phonemes.
+- **num2words** (LGPL-2.1, as in the engine environment), for numbers in the Ukrainian text front-end.
+
 ### Hybrid Demucs (Remove background music)
 
 - **Model code:** `torchaudio.models.hdemucs_high` in torchaudio (BSD-2-Clause, the `LICENSE` of `pytorch/audio`), a port

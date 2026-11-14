@@ -24,6 +24,7 @@ import numpy as np
 from . import accent, aio, backends, config, media, reflang, results, rvc, speech, voices, zsvc
 from . import audio_util as au
 from .backends import SynthParams
+from .backends.holos import HOLOS
 from .backends.omnivoice import OMNIVOICE
 from .registry import Context, EngineError, method
 
@@ -397,6 +398,21 @@ def check_backend_ready(backend: backends.TtsBackend) -> None:
                           else "the speech model is not available")
 
 
+@method("text.stress")
+async def text_stress(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
+    """Ukrainian text with the word stress HolosTTS would speak (U+0301 after each stressed vowel) and the words of two
+    or more syllables left without one. ``not_ready`` when the Ukrainian speech component is not installed or loaded."""
+    text = params.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise EngineError("bad_request", "'text' is required")
+    if len(text) > 200_000:
+        raise EngineError("bad_request", "text.stress takes at most 200,000 characters at a time")
+    if not HOLOS.available():
+        raise EngineError("not_ready", "Ukrainian speech (HolosTTS) is not installed or not loaded")
+    res = await HOLOS.stress(text)
+    return {"stressed": res.get("stressed", ""), "unsure": res.get("unsure", [])}
+
+
 @method("tts.generate")
 async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     data = config.data_dir(ctx)
@@ -689,6 +705,8 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
                                                                      first=True))
         if worker is not None:  # load the voice's RVC model and index too (about 16 s cold, 1.7 s warm)
             await worker.convert(src, os.path.join(warm_dir, "out.wav"), pth, idx, 1.0)
+        if lang == "uk" and HOLOS.available():  # Ukrainian with exact stress: the voice's style vector (~0.2 s)
+            await HOLOS.warm(ref)
         if choice is not None and choice.accent == "native-us":
             # The voice's pitch (pYIN, a few seconds of CPU once per clip) and the native clip's prompt (no Whisper).
             native = await aio.run_io(accent.prepare, choice, ref, 1.0)

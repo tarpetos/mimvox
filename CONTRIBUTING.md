@@ -56,7 +56,7 @@ type(scope): summary
   - `setup`: `setup.sh` / `setup.cmd` and `tools/setup`;
   - `build`, `ci`, `docs`, `release`, `deps`.
 - **summary**: what changes, as seen by a user where there is one. It starts in lower case, has no full stop at the
-  end, and keeps the whole title within 72 characters. Details belong in the description.
+  end. Keep it short; details belong in the description.
 - **Breaking change**: `!` before the colon (`feat(engine)!: ...`), with the details in the description.
 
 Examples:

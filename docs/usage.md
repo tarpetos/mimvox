@@ -83,10 +83,12 @@ the app itself on the first start, in its window; there is no script to run and 
    | Better translation | 2.7 GB | fewer mistranslations (NLLB-200 1.3B); installed only with an NVIDIA or AMD GPU |
    | Native accent | 2 GB | English with a native accent for voices that are not trained (Seed-VC) |
    | Music removal | 0.3 GB | Redub keeps a video's background music; clean references from videos (Hybrid Demucs) |
+   | Ukrainian speech | 1.5 GB | Ukrainian with exact word stress in Speak, Book and Redub (HolosTTS) |
 
    A part left out can be added later in one click: Train shows **Install** when voice training is missing, Redub
    under **Mode** for Translate & dub and Convert voice, and the same small **Install** appears next to Native accent,
-   Voice match, "Keep background music" and "Remove background music". It installs in the background with its
+   Voice match, "Keep background music", "Remove background music" and, on Speak with Ukrainian, "Exact Ukrainian
+   stress". It installs in the background with its
    progress on that screen, and the engine restarts by itself when it is done.
 3. **Install location** is where everything goes (the data folder). The default:
 
@@ -543,7 +545,21 @@ The defaults are the validated settings; you do not need to change them.
 
 ### Word stress (Ukrainian)
 
-The speech model guesses where the stress goes in each word. In Ukrainian it sometimes guesses wrong, most often on
+**With the Ukrainian speech part installed** (setup's "Ukrainian speech", or **Install** next to "Exact Ukrainian
+stress" in the Style panel when the language is Ukrainian), Ukrainian is not guessed at all. Mimvox decides the stress of
+every word and the model speaks exactly that: it reads phonemes in which the stress is written, not letters (HolosTTS).
+The stress comes from a Ukrainian stress dictionary; when a word has two readings (*ру́ки* / *руки́*), the grammar of the
+sentence chooses (part of speech, case, number); a word the dictionary does not know gets its stress from a small
+model trained for that. Numbers, dates and abbreviations are spelled out first, with their cases. It works with every
+voice, also one recorded in another language: only the timbre comes from the reference clip, never the accent.
+
+- If Mimvox stresses a word wrongly anyway (a rare word, a name, a heteronym whose grammar does not decide it, such
+  as *за́мок* / *замо́к*), put **+** before the stressed vowel and that word is spoken so: `з+амок`, `зам+ок`.
+- It reads evenly, like a narrator: **Expressiveness** and **Quality** do not change it (they are dimmed), **Speed**
+  does. It is also fast: about a tenth of a second of work per second of speech.
+- A trained voice still gets its voice match (RVC) afterwards, as in any language.
+
+**Without it**, the speech model guesses where the stress goes in each word. In Ukrainian it sometimes guesses wrong, most often on
 words stressed on the last syllable (for example *співаком* read as співАком instead of співакОм). You can tell it:
 
 - Type **+** before the stressed vowel: `співак+ом`, `з+амок` (зАмок, a castle), `зам+ок` (замОк, a lock).

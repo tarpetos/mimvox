@@ -783,6 +783,11 @@ fn hint_line(s: &AppState, p: Palette, block: Option<&'static str>) -> El {
     text("Ctrl+Enter to generate").font(ty::CAPTION).color(p.text_faint)
 }
 
+/// Ukrainian is the language and the Ukrainian speech component (HolosTTS: exact word stress) is installed.
+fn exact_ukrainian(s: &AppState) -> bool {
+    language(s) == "uk" && super::setuprun::has(s, "ukrainian")
+}
+
 pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     let trained = shell::active_voice(s).is_some_and(|v: &VoiceInfo| v.trained);
     let speed = Slider::new("speed", "Speed", s.speak.speed, 0.8, 1.3).step(0.05).decimals(2).unit("×").ends("Slower", "Faster")
@@ -827,7 +832,14 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
             c = c.child(accent_block(s, p, "speak-accent"));
         }
     }
+    // Ukrainian with exact stress (HolosTTS) reads like a narrator: no sampling to make livelier, no decoding steps.
+    let narrator = s.screen == Screen::Speak && exact_ukrainian(s);
+    let (expr, quality) = if narrator { (expr.opacity(0.5), quality.opacity(0.5)) } else { (expr, quality) };
     c = c.child(speed).child(expr).child(m).child(quality);
+    if narrator {
+        c = c.child(text("Ukrainian with exact stress reads evenly, like a narrator: Expressiveness and Quality do not change it.")
+            .font(ty::CAPTION).color(p.text_faint).wrap());
+    }
     if !trained && shell::active_voice(s).is_some() {
         c = c.child(text("Voice match applies once this voice is trained.").font(ty::CAPTION).color(p.text_faint).wrap());
     } else if trained && !super::setuprun::has(s, "training") {
@@ -846,11 +858,17 @@ fn language_row(s: &AppState, p: Palette) -> El {
             .child(text("What the text is written in").font(ty::CAPTION).color(p.text_faint)))
         .child(lang::chip(&p, "speak-lang-chip", &lang::label(&code), lang::Target::Speak, voice.is_some()));
     let mut c = col().w_full().gap(8.0).child(head);
-    // The engine turns "+" before a vowel into an upper-case vowel, the stress hint the speech model follows.
-    if code == "uk" {
-        c = c.child(text("Wrong stress? Type + before the stressed vowel: співак+ом.").font(ty::CAPTION).color(p.text_faint).wrap());
+    // With the Ukrainian speech component the engine reads Ukrainian from phonemes with the stress of a dictionary and
+    // the sentence (HolosTTS); without it OmniVoice guesses, and a "+" before a vowel is a hint it often follows.
+    if exact_ukrainian(s) {
+        c = c.child(text("Exact stress: every word as the dictionary and the sentence say. A + before a vowel changes one: співак+ом.")
+            .font(ty::CAPTION).color(p.text_faint).wrap());
+    } else if code == "uk" {
+        c = c.child(text("Wrong stress? Type + before the stressed vowel: співак+ом.").font(ty::CAPTION).color(p.text_faint).wrap())
+            .child(super::setuprun::install_line(s, p, "ukrainian", "Exact Ukrainian stress"));
     }
-    if let Some(v) = voice.filter(|v| v.lang() != code) {
+    // HolosTTS takes only the timbre from the reference clip, never its accent: a clip in another language is fine.
+    if let Some(v) = voice.filter(|v| v.lang() != code && !exact_ukrainian(s)) {
         let (rec, target) = (lang::name(v.lang()), lang::name(&code));
         let has_ref = v.references.iter().any(|r| *r == code);
         if accent_applies(s, &code) {
@@ -1093,6 +1111,12 @@ pub fn scene_language_uk(s: &mut AppState) {
     demo_voice(s, true);
     s.speak.text = TextEdit::new(SAMPLE_UK);
     s.speak.languages.insert("me".into(), "uk".into());
+}
+
+/// Ukrainian without the Ukrainian speech component: OmniVoice guesses the stress; the Style panel offers the component.
+pub fn scene_language_uk_no_extension(s: &mut AppState) {
+    scene_language_uk(s);
+    s.shell.components = Some(["speech", "training", "translation", "native_accent", "music_removal"].map(String::from).to_vec());
 }
 
 /// A voice recorded in Ukrainian, speaking English: the Accent choice, native by default.
