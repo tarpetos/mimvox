@@ -36,6 +36,83 @@ class OpError(Exception):
         self.code = code
 
 
+# ------------------------------------------------------------------------------------------- GPU memory guard
+#
+# Mimvox must never push the graphics card past full. On Windows the NVIDIA driver's "CUDA sysmem fallback" (on by
+# default since driver 536.40) does not fail an allocation that does not fit: it moves it into system RAM. A process
+# that overfills the card then eats RAM and the system commit limit, other programs crash for lack of memory, and the
+# desktop loses its own GPU resources (wallpaper, screenshots, a frozen Task Manager). So every worker caps its PyTorch
+# allocator at what it holds plus what is free on the card beyond a reserve for the desktop and other apps (measured
+# on the whole card, other processes included): past that, PyTorch raises its out-of-memory error instead, the op
+# fails with code "no_vram", and the engine frees GPU memory elsewhere and retries (workerproc.py).
+
+VRAM_RESERVE_GB = float(os.environ.get("MIMVOX_VRAM_RESERVE_GB", "1.5"))
+NO_VRAM = "not enough free GPU memory: close programs that use the graphics card (games, video, browsers) and try again"
+NO_RAM = "not enough free memory (RAM): close other programs and try again"
+
+
+def _cuda_torch(start=False):
+    """The imported torch module when CUDA is usable and (unless ``start``) already started in this process."""
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return None
+    try:
+        if not torch.cuda.is_available():
+            return None
+        if not start and not torch.cuda.is_initialized():
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return torch
+
+
+def gpu_free_gb():
+    """VRAM free on the whole card beyond the reserve, in GB (0 without CUDA). Starts CUDA when needed."""
+    torch = _cuda_torch(start=True)
+    if torch is None:
+        return 0.0
+    free, _total = torch.cuda.mem_get_info()
+    return max(0.0, free / 2**30 - VRAM_RESERVE_GB)
+
+
+def gpu_fence(start=False):
+    """Cap this process's PyTorch CUDA allocator at the memory it holds now plus what the card has free beyond
+    ``VRAM_RESERVE_GB``. Runs before every op (a no-op until the process uses CUDA); call it with ``start=True``
+    right before a model is first loaded onto the GPU. Returns the cap in GB, or None without CUDA."""
+    torch = _cuda_torch(start)
+    if torch is None:
+        return None
+    try:
+        free, total = torch.cuda.mem_get_info()
+        held = torch.cuda.memory_reserved()
+        allow = held + max(0, free - int(VRAM_RESERVE_GB * 2**30))
+        torch.cuda.set_per_process_memory_fraction(max(0.01, min(1.0, allow / total)))
+        return allow / 2**30
+    except Exception:  # noqa: BLE001 - the guard must never break an op by itself
+        return None
+
+
+def is_vram_error(exc):
+    """PyTorch's CUDA out-of-memory error (also the one ``gpu_fence``'s cap raises), or a CUDA error that says so."""
+    if type(exc).__name__ == "OutOfMemoryError":
+        return True
+    text = str(exc)
+    return "CUDA out of memory" in text or "CUBLAS_STATUS_ALLOC_FAILED" in text or "cudaErrorMemoryAllocation" in text
+
+
+def gpu_cleanup():
+    """Give cached GPU blocks back after a failed op."""
+    import gc
+
+    gc.collect()
+    torch = _cuda_torch()
+    if torch is not None:
+        try:
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001, S110 - best effort after a failed op
+            pass
+
+
 def open_channels():
     """Call first, before importing anything chatty. Returns ``(input, output)`` binary/text files of the protocol.
 
@@ -177,6 +254,7 @@ class Worker:
             fn = self.ops.get(req.get("op"))
             if fn is None:
                 raise OpError("bad_request", f"unknown op {req.get('op')!r}")
+            gpu_fence()
             result = fn(req)
             self.send({"id": rid, "ok": True, "result": result if isinstance(result, dict) else {}})
         except Cancelled:
@@ -184,8 +262,15 @@ class Worker:
         except OpError as exc:
             self.send({"id": rid, "ok": False, "code": exc.code, "error": str(exc)})
         except MemoryError:
-            self.send({"id": rid, "ok": False, "code": "internal", "error": "out of host memory"})
+            gpu_cleanup()
+            self.log(f"op {req.get('op')} ran out of RAM: {traceback.format_exc()}")
+            self.send({"id": rid, "ok": False, "code": "no_memory", "error": NO_RAM})
         except BaseException as exc:  # noqa: BLE001 - every request gets an answer
+            if is_vram_error(exc):
+                gpu_cleanup()
+                self.log(f"op {req.get('op')} ran out of GPU memory: {exc}")
+                self.send({"id": rid, "ok": False, "code": "no_vram", "error": NO_VRAM})
+                return
             self.log(f"op {req.get('op')} failed: {traceback.format_exc()}")
             self.send({"id": rid, "ok": False, "code": "internal", "error": f"{type(exc).__name__}: {exc}"})
         finally:

@@ -134,6 +134,7 @@ class OmniVoiceBackend(TtsBackend):
                 argv += ["--unload-after", str(self.unload_after_s)]
             self._client = WorkerClient("omnivoice", argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"),
                                         start_timeout=240.0)
+            self._client.on_release.append(self._warm.clear)
         return self._client
 
     # ---- lifecycle ----

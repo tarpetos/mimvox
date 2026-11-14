@@ -138,6 +138,8 @@ def op_load(_req=None):
 
     dev = _device()
     half = dev.type == "cuda"
+    if half:
+        kit.gpu_fence(start=True)
     with open(_need("dit", "config_dit_mel_seed_uvit_whisper_small_wavenet.yml"), encoding="utf-8") as fh:
         config = yaml.safe_load(fh)
     mp = recursive_munch(config["model_params"])

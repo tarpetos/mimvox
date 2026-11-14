@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+* **Memory safety:** Mimvox no longer runs the computer out of memory. Recording a new reference while the app was
+  busy could fill the graphics card; the NVIDIA driver then moved the overflow into system RAM until Windows ran out
+  of memory, other programs crashed and the desktop lost its wallpaper and screenshots. Now every engine process caps
+  its GPU use at what is free beyond a reserve for the desktop and other programs (1.5 GB, `MIMVOX_VRAM_RESERVE_GB`); an
+  operation that does not fit makes the other idle models step aside and is retried once, else it stops with a clear
+  message. On Windows the engine and all its workers share a memory cap (75 % of the RAM, `MIMVOX_RAM_LIMIT_GB`) and
+  end with the engine; on Linux the system stops Mimvox first if memory runs out.
+* **Reference transcription:** Whisper for a new reference clip loads at half size (1.6 GB instead of 3.2 GB) on the
+  GPU only when it fits, otherwise on the processor, and moves to the processor if the GPU runs out midway.
+
 ## 0.2.0
 
 * **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage

@@ -43,6 +43,10 @@ class RvcWorker:
         # -I: do not put the script directory (engine modules such as config.py) on sys.path.
         self.client = WorkerClient("rvc", [python, *isolated(), WORKER, "--applio", applio], child_env(), start_timeout=240.0)
         self.loaded_model: tuple | None = None   # (path, mtime, size) of the voice model the worker has loaded
+        self.client.on_release.append(self._released)
+
+    def _released(self) -> None:
+        self.loaded_model = None
 
     @property
     def last_error(self) -> str | None:
