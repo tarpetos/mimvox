@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-* **Updates window:** the version next to the app's name in the header is now a button that opens it. A sparkle in
-  that button means a newer version is waiting. The window lists every version from 0.2.0 on with its notes.
-  **Check for updates** asks for the newest version at any time, even one you skipped. Any listed version installs
-  from there, an older one too: it is downloaded, its signature is checked, and it installs when you close the app or
-  press **Restart now**. A `.deb` install gets each version's download page instead.
+* **Updates window:** the version next to the app's name in the header is now a button that opens it. When a newer
+  version is waiting, that button's rim glows in and out, slowly. The window lists every version from 0.2.0 on with
+  its notes. **Check for updates** asks for the newest version at any time, even one you skipped. Any listed version
+  installs from there, an older one too: it is downloaded, its signature is checked, and it installs when you close
+  the app or press **Restart now**. A `.deb` install gets each version's download page instead.
 * **The update check runs on the welcome screen too:** it used to wait for a running speech engine, so a copy without
   the engine installed never heard of a new version.
 * **AppImage: no leftover mount after an update.** The app passed the AppImage's own open files on to every program

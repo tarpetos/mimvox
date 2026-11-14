@@ -52,12 +52,6 @@ pub mod icons {
             };
         };
     }
-    /// A filled sparkle with curved sides (a glint), for small sizes where a stroked star turns into a hairline.
-    pub static GLINT: Icon = Icon {
-        name: "glint",
-        view: 16.0,
-        body: r#"<path fill="currentColor" d="M8 0.8C8.55 5.2 10.8 7.45 15.2 8C10.8 8.55 8.55 10.8 8 15.2C7.45 10.8 5.2 8.55 0.8 8C5.2 7.45 7.45 5.2 8 0.8Z"/>"#,
-    };
     stroke_icon!(PLAY, "play", r#"<path d="M5.2 3.4L12.4 8L5.2 12.6Z"/>"#);
     stroke_icon!(PAUSE, "pause", r#"<path d="M5.6 3.8V12.2M10.4 3.8V12.2"/>"#);
     stroke_icon!(STOP, "stop", r#"<rect x="4" y="4" width="8" height="8" rx="1.6"/>"#);

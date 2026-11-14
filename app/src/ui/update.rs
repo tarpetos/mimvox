@@ -17,7 +17,7 @@ use super::theme::{Palette, radius, ty};
 use super::voices::kit;
 use crate::state::AppState;
 use crate::update::{self, Found, Kind, Release};
-use rune::{Color, El, ScrollSpec, Tx, col, el, row, text};
+use rune::{Color, Cycle, El, ScrollSpec, Tx, col, el, row, text};
 use serde_json::json;
 use std::cmp::Ordering;
 
@@ -373,32 +373,35 @@ fn notes_view(p: Palette, notes: &str) -> El {
 // ---- views -------------------------------------------------------------------------------------------------------
 
 /// The version in the header, a glass pill like the header's others: opens the Updates dialog. A newer version waiting
-/// adds a small glint at the version's top right and turns the version accent.
+/// turns the version accent and its rim glows in and out, slowly.
 pub fn version_button(s: &AppState, p: Palette) -> El {
+    /// One slow breath of the rim: eased in and out (the loop interpolates linearly between the stops).
+    const BREATHE: Cycle = Cycle {
+        period: 3.2,
+        phase: 0.0,
+        stops: &[(0.0, 0.0), (0.1, 0.1), (0.2, 0.35), (0.3, 0.65), (0.4, 0.9), (0.5, 1.0), (0.6, 0.9), (0.7, 0.65), (0.8, 0.35), (0.9, 0.1), (1.0, 0.0)],
+        still: 0.7,
+        fps: 24.0,
+    };
     let waiting = s.update.found.as_ref().is_some_and(|f| update::compare(&f.version) == Ordering::Greater);
     let help = match &s.update.found {
         Some(f) if waiting => format!("Mimvox {} is available: updates and what's new", f.version),
         _ => "Updates and what's new".to_owned(),
     };
-    let pill = row().key("version-button").role("button").label("Updates").h(28.0).px(12.0).center()
-        .radius(14.0)
+    let pill = row().key("version-button").role("button").label("Updates").h(28.0).px(12.0).center().radius(14.0)
         .fill(if s.update.dialog { p.glass_hover } else { p.glass }).gradient(p.glass_top, p.glass_bottom)
-        .border_gradient(1.0, p.rim_top, if waiting { p.accent.alpha(0.45) } else { p.rim_bottom })
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(3.0, 10.0, p.shadow_soft);
     let version = text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(rune::TextStyle::new(11.5, 600.0).lh(15.0))
         .color(if waiting { p.accent } else { p.text_dim }).a11y_hidden();
+    // The glowing rim lies over the pill's own, outside the layout: the pill is the same size either way.
+    let rim = el().key("version-rim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).radius(14.0).inert()
+        .border(1.0, p.accent).cycle(BREATHE);
     super::components::glass_edge(p, pill)
         .hover(p.glass_hover).focusable(true).cursor(rune::Cursor::Pointer).motion(super::theme::motion::UI).help(help)
         .on_press(|s: &mut AppState| open_dialog(s, None))
-        // The glint is pinned in the right padding, outside the layout: the pill is the same size with it and without.
-        .child(el().child(version).children(waiting.then(|| glint(p))))
-}
-
-/// The "new version" mark: a small filled glint at the version's top right, in the pill's right padding. No glow: in
-/// the pill's corner it would light up the pill's rim.
-fn glint(p: Palette) -> El {
-    const SIZE: f32 = 7.0;
-    el().pin(None, Some(0.0), Some(-SIZE - 1.0), None).size(SIZE, SIZE).inert().child(icon_el(&icons::GLINT, SIZE, p.accent))
+        .child(version)
+        .children(waiting.then_some(rim))
 }
 
 pub fn banner(s: &AppState, p: Palette) -> Option<El> {
