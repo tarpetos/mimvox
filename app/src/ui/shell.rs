@@ -569,7 +569,8 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let tight = header_w < fixed + right_full + tabs_icons;
     HEADER_FIT.set((tight, right_full));
     let right = trailing + right_now;
-    let free = side("header-gap-l") + side("header-gap-r") + side("header-pad-l") + side("header-pad-r");
+    let tabs_now = if compact { tabs_icons } else { tabs_full };
+    let free = (header_w - left - trailing - 6.0 * 14.0 - tabs_now - right_now).max(0.0);
     let balance = (right - left).clamp(-free, free);
     let fit = HeaderFit { compact, tight, balance };
     let page = body_page(s, cx);
