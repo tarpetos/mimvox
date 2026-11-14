@@ -1,28 +1,3 @@
-"""Narration: how a book is cut, paced and levelled so it is pleasant to listen to (used by ``book.py``).
-
-Text
-    ``clean_text`` normalizes typography without removing punctuation (OmniVoice's prosody follows it, and
-    ``backends/omnivoice_text.normalize`` keeps it too): "..." -> "…", a spaced hyphen or "--" -> an em dash, ``x''``
-    TeX quotes -> curly ones, runs of "!!!" -> "!", no space before , . ; : ? !.
-
-Segments
-    ``segments`` cuts a chapter into whole sentences packed up to ``BUDGET_TOKENS`` (``tts.segment_text`` with a fixed
-    budget: no streaming schedule, never across a paragraph). A sentence is cut only when it alone is over the budget,
-    then at clause punctuation (; : — ,) with the no-stub rules of ``tts.segment_text``. Questions, exclamations,
-    quotations and dialogue lines therefore stay whole. Each segment gets a ``kind`` from how it ends and what follows,
-    and the pause after it comes from ``PAUSES`` (the one table of pause lengths).
-
-Audio
-    Every segment is trimmed of the model's own leading and trailing silence (``trim``) and faded in and out over
-    ``FADE_MS``, so the inserted pauses are exactly ``PAUSES`` and no join clicks. ``measure`` gives its loudness
-    (ITU-R BS.1770 K-weighted, gated), median pitch and speaking rate; ``Judge`` keeps the running medians of the
-    chapter so far, flags an outlier (``LOUDNESS_OUTLIER_DB``, ``PITCH_OUTLIER_ST``, a speaking rate outside
-    ``RATE_RANGE``: skipped or garbled words) for one re-generation, and evens out small level steps. A finished
-    chapter is normalized as a whole to ``TARGET_LUFS`` with peaks under ``PEAK_DBFS`` (``ChapterMeter``, streamed:
-    a chapter never sits in memory).
-
-Pure numpy / scipy; no model calls here.
-"""
 from __future__ import annotations
 
 import math
@@ -34,14 +9,12 @@ from typing import Any
 import numpy as np
 from scipy.signal import resample_poly, sosfilt, sosfilt_zi
 
-# ------------------------------------------------------------------------------------------------ constants
+BUDGET_TOKENS = 90          # OmniVoice tokens: ~270 characters, ~15 s
+EXPRESSIVENESS = 0.6        # steadier than Speak's 0.8; the user's setting wins
 
-BUDGET_TOKENS = 90          # whole sentences per segment, up to this (OmniVoice tokens; ~270 characters, ~15 s)
-EXPRESSIVENESS = 0.6        # a book's default: a steadier narrator than Speak's 0.8 (the user's setting wins)
-
-PAUSES: dict[str, int] = {  # silence heard after a segment (ms), by how it ends (see ``gap``)
+PAUSES: dict[str, int] = {  # silence heard after a segment (ms), by how it ends
     "clause": 220,      # a long sentence cut at , ; : —
-    "sentence": 440,    # . (also when ? or ! end it: see below)
+    "sentence": 440,
     "question": 440,
     "exclaim": 440,
     "ellipsis": 620,    # … mid-paragraph
@@ -55,8 +28,8 @@ FADE_MS = 8                 # fade in / out at every cut
 TRIM_DB = -42.0             # trim: frames quieter than this relative to the loudest frame are silence...
 TRIM_PAD_MS = (30, 60)      # ...keeping this much before the first / after the last loud frame (breath, decay)
 
-TARGET_LUFS = -18.0         # a chapter's integrated loudness
-PEAK_DBFS = -1.0            # ...with sample peaks under this
+TARGET_LUFS = -18.0
+PEAK_DBFS = -1.0
 MAX_GAIN_DB = 18.0
 
 LOUDNESS_OUTLIER_DB = 4.0   # a segment this far from the running median is made again (once)
@@ -72,10 +45,8 @@ _DIALOGUE = re.compile(r"^\s*[—–\-«\"“„‘'‹]")
 _CLOSERS = "\"'”’»)]›"
 
 
-# ------------------------------------------------------------------------------------------------ text
-
 def clean_text(text: str) -> str:
-    """Typography normalized for speech, punctuation kept (see the module notes). Paragraph breaks stay."""
+    """Punctuation is kept: OmniVoice's prosody follows it. Paragraph breaks stay."""
     pars = []
     for par in re.split(r"\n\s*\n", text.replace("\r\n", "\n").replace("\r", "\n")):
         p = re.sub(r"\s+", " ", par).strip()
@@ -112,8 +83,7 @@ def _end_kind(seg: str) -> str:
 
 
 def segments(title: str | None, text: str, count: Callable[[str], int]) -> list[tuple[str, int, str]]:
-    """``(segment, pause_after_ms, kind)`` for a chapter: its ``title`` (when given) as a segment of its own, then the
-    text paragraph by paragraph (see the module notes)."""
+    """``(segment, pause_after_ms, kind)``; the ``title``, when given, is a segment of its own."""
     pars = [p for p in clean_text(text).split("\n\n") if p.strip()]
     from . import tts  # noqa: PLC0415 - tts imports the speech stack; narration stays importable without it
 
@@ -141,11 +111,8 @@ def segments(title: str | None, text: str, count: Callable[[str], int]) -> list[
     return out
 
 
-# ------------------------------------------------------------------------------------------------ audio
-
 def gap(pause_ms: int) -> int:
-    """The silence to insert for a pause of ``pause_ms``: ``trim`` already leaves ``TRIM_PAD_MS`` of near-silence around
-    the speech, so the pause heard is what ``PAUSES`` says."""
+    """``trim`` already leaves ``TRIM_PAD_MS`` around the speech, so the pause heard is what ``PAUSES`` says."""
     return max(0, int(pause_ms) - sum(TRIM_PAD_MS))
 
 
@@ -161,8 +128,7 @@ def fade(x: np.ndarray, sr: int, ms: float = FADE_MS) -> np.ndarray:
 
 
 def trim(x: np.ndarray, sr: int) -> np.ndarray:
-    """The speech without the model's leading / trailing silence (10 ms frames under ``TRIM_DB`` of the loudest
-    frame), keeping ``TRIM_PAD_MS``, then faded."""
+    """Without the model's leading / trailing silence, keeping ``TRIM_PAD_MS``, then faded."""
     hop = max(1, sr // 100)
     n = len(x) // hop
     if n < 3:
@@ -255,7 +221,6 @@ def measure(x: np.ndarray, sr: int, chars: int) -> dict[str, Any]:
 
 
 class Judge:
-    """Running medians of a chapter's segments; flags outliers and evens out level steps."""
 
     def __init__(self) -> None:
         self.hist: deque[dict[str, Any]] = deque(maxlen=JUDGE_HISTORY)
@@ -310,7 +275,6 @@ class Judge:
 
 
 class ChapterMeter:
-    """Integrated loudness and sample peak of a chapter fed block by block (any block size, filter state kept)."""
 
     def __init__(self, sr: int) -> None:
         self.sr = sr

@@ -1,23 +1,4 @@
-"""Romanian: rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic).
-
-Inventory (32, IPA): 7 vowels (a e i o u, ə for ă, ɨ for â/î), the glides j w and the semivowels e̯ o̯ of the
-diphthongs ea oa, the final palatalization ʲ (lupi, pomi, ești), and 20 consonants.
-
-Rules:
-* Letters: ă ə; â î ɨ; ș ʃ; ț ts; j ʒ; h h; v v; w v; q k; y i. The cedilla spellings ş ţ are read as ș ț.
-* c g before e i are tʃ dʒ; ch gh before e i are k g. In ce ci ge gi before a o u the e/i only marks the consonant
-  (ceai, cioară, geam, giuvaer).
-* x is k s, and g z in ex- before a vowel (exemplu, examen).
-* ea is e̯ a and oa is o̯ a (seară, soare); other e, o are vowels. The words el ea ei ele eu este ești e era ... start
-  with j (the old pronouns and forms of "a fi").
-* i is the glide j at the start of a word before a vowel (iarnă), after a vowel (mai, câine) and between a consonant
-  and a vowel inside a word (piatră, fier, chiar); it stays a vowel after a consonant + l/r (prieten, scrie), before
-  another i, before u + vowel (ziua), and in the endings -ie -ia -iu (familie, România, târziu). At the end of a word after a consonant it is
-  ʲ (lupi, aici), but a full i after a consonant + l/r (negri, socri) and in a word with no other vowel (zi, și).
-* u after a vowel is the glide w (sau, ou, nouă); elsewhere a vowel.
-* Stress is not marked in writing, so a stressed final i (a citi, a veni) is read as ʲ, and hiatus (real, social)
-  as a diphthong. The analysis only counts which sounds a text has, where this does not matter.
-"""
+"""Romanian rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic)."""
 from __future__ import annotations
 
 from ._common import words

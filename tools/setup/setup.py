@@ -1,20 +1,5 @@
-"""Set Mimvox up fully on Linux, macOS and Windows: ``./setup.sh`` or ``setup.cmd``.
-
-It installs the toolchains the app is built with (Rust, a C/C++ toolchain), then builds the ML runtime under
-``<data dir>/runtime/``: the engine environment (OmniVoice, the speech model for every language, plus Whisper and NLLB
-for Redub, Hybrid Demucs for removing background music from media files, Seed-VC for the native accent of untrained
-voices) and Applio (RVC, at a pinned commit), each in its own uv virtual environment, plus every model they need, and
-writes ``<data dir>/runtime.toml`` for the app (see contract/engine-protocol.md).
-
-Every step checks what is already there and skips it, a step interrupted by Ctrl-C or a lost connection resumes
-where it stopped (git fetches, uv and Hugging Face downloads are resumable), so running it again is always safe.
-Standard library only: it runs before anything else is installed.
-
-Examples:
-    ./setup.sh                                   full setup (about 30 GB on disk, 33 GB with a GPU)
-    ./setup.sh --skip-toolchain --yes            no Rust / compiler install, no questions
-    ./setup.sh --quick-check                     verify an existing setup, download nothing
-"""
+"""Set Mimvox up fully on Linux, macOS and Windows (``./setup.sh`` or ``setup.cmd``). Standard library only: it runs
+before anything else is installed."""
 
 from __future__ import annotations
 
@@ -41,7 +26,7 @@ APP_DIR_NAME = "mimvox"
 
 
 def runtime_version() -> int:
-    """The runtime version this copy needs (tools/setup/runtime_version.txt; the app reads the same file)."""
+    """The app reads the same file."""
     path = Path(__file__).with_name("runtime_version.txt")
     try:
         lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
@@ -55,7 +40,7 @@ LOCATION_FILE = "location.toml"
 UV_ENV = "MIMVOX_UV"
 BIN_NAME = "mimvox"
 
-# Pinned upstream revisions: the ones the prototype was validated with. Bump deliberately.
+# Pinned upstream revisions: bump deliberately.
 APPLIO_URL = "https://github.com/IAHispano/Applio.git"
 APPLIO_COMMIT = "6d5d9511b7e719b1f613362bc767e841ad72fa72"
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
@@ -99,10 +84,8 @@ NLLB_FP16_SCRIPT = (
     "                                              **{key: torch.float16})\n"
     "model.save_pretrained(sys.argv[2], max_shard_size='20GB')\n"
 )
-# Zero-shot voice conversion for the native accent of untrained voices (engine zsvc.py): Seed-VC (GPL-3.0), a separately
-# downloaded runtime component, never part of this repository. Its source checkout at a pinned commit, the two packages
-# its modules import that the engine venv lacks, and the weights of its speech model (v1: DiT + Whisper-small encoder +
-# BigVGAN 22 kHz; CAM++ ships in the checkout) at pinned revisions. --no-zero-shot-vc leaves it out.
+# Seed-VC (GPL-3.0) for the native accent of untrained voices: a separately downloaded runtime component, never part
+# of this repository.
 SEEDVC_URL = "https://github.com/Plachtaa/seed-vc.git"
 SEEDVC_COMMIT = "51383efd921027683c89e5348211d93ff12ac2a8"
 SEEDVC_DIR = "seed-vc"                 # <runtime>/seed-vc (code) and <runtime>/models/seed-vc (weights)
@@ -117,14 +100,8 @@ SEEDVC_MODELS = (   # (subfolder, Hugging Face repo, revision, files)
 )
 SEEDVC_STAMP = ".mimvox-setup-ok"      # in the weights folder: the engine uses the converter only once it is there
 ZERO_SHOT_GB = 2.0   # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, BigVGAN 0.45, Whisper-small 0.97)
-# "Ukrainian speech" (engine backends/holos.py): Ukrainian with exact word stress. HolosTTS (MIT) speaks from IPA
-# phonemes, so the stress is part of its input instead of a guess: the stress comes from a dictionary and the sentence's
-# morphology (patriotyk's ukrainian-word-stress: lang-uk's dictionary + Stanza's Ukrainian part-of-speech tagger, and a
-# small neural accentor for words the dictionary lacks), the phonemes from ipa-uk. Its own environment
-# <runtime>/holos/.venv: that ukrainian-word-stress fork has the name of the lang-uk package the engine venv uses for
-# OmniVoice's stress hints. Same torch 2.8 as the engine (the uv cache hard-links the wheels, so it costs little more
-# disk). The weights (HolosTTS 0.7 GB, Stanza's Ukrainian models 0.2 GB) in <runtime>/models/holos. Without this
-# component Ukrainian is spoken by OmniVoice, as before.
+# HolosTTS (MIT): Ukrainian with exact word stress, in its own venv because its ukrainian-word-stress fork has the
+# package name of the lang-uk one the engine venv uses for OmniVoice's stress hints.
 HOLOS_DIR = "holos"                    # <runtime>/holos/.venv and <runtime>/models/holos
 HOLOS_PYTHON = "3.11"
 HOLOS_PACKAGES = (
@@ -152,27 +129,21 @@ WHISPER_MODEL = "turbo"
 WHISPER_FILE = "large-v3-turbo.pt"
 WHISPER_SHA256 = "aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a"
 WHISPER_URL = f"https://openaipublic.azureedge.net/main/whisper/models/{WHISPER_SHA256}/{WHISPER_FILE}"
-# "Remove background music" (reference from media, Record's multi-file import): torchaudio's HDEMUCS_HIGH_MUSDB_PLUS
-# weights, the very file that bundle downloads (download.pytorch.org/torchaudio/<its _model_path>), kept in
-# <data>/runtime/models/demucs; the speech worker loads them from there with torchaudio.models.hdemucs_high.
+# torchaudio's HDEMUCS_HIGH_MUSDB_PLUS weights (the file that bundle downloads); the speech worker loads them from
+# <data>/runtime/models/demucs.
 DEMUCS_URL = "https://download.pytorch.org/torchaudio/models/hdemucs_high_trained.pt"
 DEMUCS_DIR = "demucs"
 DEMUCS_FILE = "hdemucs_high_trained.pt"
 DEMUCS_SIZE = 334_697_255
 DEMUCS_SHA256 = "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816"
-# The engine environment, <runtime>/engine/.venv: the engine itself, the OmniVoice worker (k2-fsa/OmniVoice, zero-shot
-# TTS in ~60 languages) and the speech worker (Whisper + NLLB for Redub).
 ENGINE_DIR = "engine"
 ENGINE_PYTHON = "3.11"
 ENGINE_TORCH = ("torch==2.8.0", "torchaudio==2.8.0")
-# pypdf (BSD-3-Clause, pure Python, no dependencies on 3.11): the text layer of PDF books for text.import (audiobooks);
-# every other book format is read with the standard library.
+# pypdf (BSD-3-Clause, pure Python): PDF books; every other book format is read with the standard library.
 ENGINE_PACKAGES = ("omnivoice==0.2.1", "openai-whisper==20250625", "num2words==0.5.14", "sentencepiece", "g2p_en==2.1.0",
                    "soundfile", "librosa", "scipy", "numpy", "marisa-trie==1.4.1", "pypdf==6.21.4")
-# Ukrainian word stress for the OmniVoice text front-end (backends/omnivoice_stress.py, used when MIMVOX_STRESS_AUTO is
-# set): lang-uk's dictionary (12.5 MB, inside the wheel, so it works offline) in dictionary-only mode with marisa-trie.
-# Installed with --no-deps: its declared Stanza dependency (and the ~500 MB of models Stanza downloads) is only needed
-# for the context mode, which is not used.
+# --no-deps: its Stanza dependency (and the ~500 MB of models Stanza downloads) is only needed for the context mode,
+# which is not used; the dictionary-only mode works offline.
 ENGINE_NO_DEPS = ("ukrainian-word-stress==2.1.0",)
 OMNIVOICE_REPO = "k2-fsa/OmniVoice"
 OMNIVOICE_DIR = "omnivoice"   # <runtime>/models/omnivoice
@@ -189,9 +160,8 @@ BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with 
 SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 34
-# What can be installed, in order. "speech" is always installed; the rest are chosen in the app (or with
-# --components / --add) and recorded in runtime.toml ([setup] components), so a later run keeps the same set.
-# Sizes on disk in GB (the app shows them too: COMPONENTS in app/src/ui/setuprun.rs).
+# "speech" is always installed; the rest are chosen in the app (or --components / --add) and recorded in runtime.toml.
+# Sizes on disk in GB, also in COMPONENTS in app/src/ui/setuprun.rs.
 COMPONENTS = {
     "speech": 12.6,             # engine venv + OmniVoice (11) + Whisper turbo (1.6): Speak, Book, Redub's Re-speak
     "training": APPLIO_GB,      # Applio/RVC: Train, voice match for trained voices, Redub's Convert voice
@@ -204,7 +174,7 @@ COMPONENTS = {
 # Portable ffmpeg for Windows when Applio (which brings one) is not installed.
 FFMPEG_WINDOWS_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-{}-gpl.zip"
 UV_HTTP_TIMEOUT = "600"
-# Records the commit of a source tree that came as an archive (no git): see Setup._fetch_archive.
+# Records the commit of a source tree that came as an archive (no git).
 ARCHIVE_MARKER = ".mimvox-commit"
 
 # Linux packages: a C/C++ toolchain and the libraries Rune (wgpu, winit, cpal, fontconfig) builds and runs against,
@@ -258,8 +228,7 @@ def say(line: str) -> None:
 
 
 def event(**fields: object) -> None:
-    """A progress line for the app's setup screen (only with --gui): ``plan`` (the steps that will run), ``step``
-    (one step starts, succeeds or fails) and ``done``. The app shows the readable lines as the log."""
+    """Only with --gui: ``plan`` (the steps that will run), ``step`` (one starts, succeeds or fails) and ``done``."""
     if GUI:
         print("@@mimvox " + json.dumps(fields), flush=True)
 
@@ -269,7 +238,6 @@ def warn(line: str) -> None:
 
 
 def host_platform() -> str:
-    """``linux``, ``macos`` or ``windows``."""
     if sys.platform.startswith("win"):
         return "windows"
     return "macos" if sys.platform == "darwin" else "linux"
@@ -285,8 +253,7 @@ def host_arch() -> str:
 
 
 def platform_data_dir(plat: str) -> Path:
-    """Where the data directory goes by default. The runtime is about 28 GB, so on Windows this is the *local*
-    app data (never the roaming profile, which can be synced or copied)."""
+    """On Windows the *local* app data: the runtime is about 28 GB and the roaming profile can be synced or copied."""
     home = Path.home()
     if plat == "windows":
         return Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
@@ -314,7 +281,6 @@ def location_file(plat: str) -> Path:
 
 
 def read_location(plat: str) -> Path | None:
-    """The data dir named by ``location.toml``, if the file exists and is valid."""
     try:
         import tomllib
 
@@ -325,7 +291,7 @@ def read_location(plat: str) -> Path | None:
 
 
 def previous_components(data_dir: Path) -> set[str] | None:
-    """The components an earlier run installed (runtime.toml ``[setup] components``); None before there were any."""
+    """runtime.toml ``[setup] components``; None before there were any."""
     import tomllib  # noqa: PLC0415 - Python 3.11+, only needed here
 
     try:
@@ -336,7 +302,6 @@ def previous_components(data_dir: Path) -> set[str] | None:
 
 
 def has_runtime(data_dir: Path) -> bool:
-    """True when ``data_dir`` already holds an installed runtime (setup then reuses it and resumes)."""
     return (data_dir / "runtime.toml").is_file() or (data_dir / "runtime" / ENGINE_DIR).is_dir() \
         or (data_dir / "runtime" / LEGACY_INDEXTTS_DIR).is_dir()
 
@@ -389,7 +354,6 @@ class Gpu:
 
     @property
     def build(self) -> str:
-        """The torch build: cuda | rocm | mps | cpu."""
         return "rocm" if self.vendor == "amd" else self.backend
 
 
@@ -411,7 +375,6 @@ def amd_gpu() -> Gpu | None:
 
 
 def amd_gpu_name(dev: Path) -> str:
-    """The marketing name from rocminfo when ROCm is installed, else the bracket part of the lspci name."""
     rocminfo = shutil.which("rocminfo") or "/opt/rocm/bin/rocminfo"
     try:
         out = subprocess.run([rocminfo], capture_output=True, text=True, timeout=10, check=False).stdout
@@ -448,14 +411,11 @@ class Setup:
     force: bool = False
     gpu: Gpu = field(default_factory=lambda: Gpu("cpu"))
     uv_path: str = ""
-    components: set[str] = field(default_factory=lambda: set(COMPONENTS))   # what to install (see COMPONENTS)
+    components: set[str] = field(default_factory=lambda: set(COMPONENTS))
 
     @property
     def zero_shot_vc(self) -> bool:
-        """Seed-VC for the native accent of untrained voices."""
         return "native_accent" in self.components
-
-    # ---- paths -----------------------------------------------------------------------------------------------
 
     @property
     def runtime(self) -> Path:
@@ -506,8 +466,6 @@ class Setup:
     def rvc_python(self) -> Path:
         return venv_python(self.applio / ".venv", self.plat)
 
-    # ---- process helpers -------------------------------------------------------------------------------------
-
     def env(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
         env = dict(os.environ)
         for name in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONHOME", "PYTHONPATH"):
@@ -536,7 +494,7 @@ class Setup:
         return env
 
     def run(self, command: Sequence[object], cwd: Path | None = None, extra_env: Mapping[str, str] | None = None) -> int:
-        """Run a command with its output on the console. Returns the exit code (127: program not found)."""
+        """Returns the exit code (127: program not found)."""
         argv = [str(part) for part in command]
         try:
             return subprocess.run(argv, cwd=cwd or self.root, env=self.env(extra_env), check=False).returncode
@@ -544,7 +502,6 @@ class Setup:
             return 127
 
     def quiet(self, command: Sequence[object], cwd: Path | None = None) -> int:
-        """Run a command with its output discarded (probing); returns the exit code."""
         try:
             return subprocess.run([str(p) for p in command], cwd=cwd or self.root, env=self.env(), check=False,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
@@ -575,8 +532,6 @@ class Setup:
 
     def uv(self, *args: object) -> list[str]:
         return [self.uv_path, *[str(a) for a in args]]
-
-    # ---- step 1: detection -----------------------------------------------------------------------------------
 
     def detect(self) -> None:
         say(f"Platform: {self.plat} {self.arch} ({platform.platform()})")
@@ -626,9 +581,8 @@ class Setup:
         return shutil.disk_usage(self._existing_parent(self.data_dir)).free / 1e9
 
     def resolve_components(self, args: argparse.Namespace) -> None:
-        """``--components`` (exactly these), else what an earlier run installed, else everything (better_translation
-        only with a CUDA / ROCm GPU); then ``--add``, ``--better-translation`` and ``--no-zero-shot-vc``. ``speech``
-        is always in."""
+        """``--components``, else what an earlier run installed, else everything (better_translation only with a CUDA /
+        ROCm GPU); then ``--add``, ``--better-translation`` and ``--no-zero-shot-vc``. ``speech`` is always in."""
         def parse(value: str) -> set[str]:
             items = {x.strip() for x in value.split(",") if x.strip()}
             unknown = items - set(COMPONENTS)
@@ -661,12 +615,10 @@ class Setup:
         say("Components: " + ", ".join(c for c in COMPONENTS if c in chosen))
 
     def install_gb(self) -> float:
-        """Disk use of the chosen components."""
         return sum(gb for c, gb in COMPONENTS.items() if c in self.components)
 
     def announce(self) -> bool:
-        """Print where everything goes and how big it is, before anything is downloaded. Returns True when there is
-        a big download ahead (False: a runtime already exists here)."""
+        """True when a big download is ahead (False: a runtime already exists here)."""
         existing = has_runtime(self.data_dir)
         free = self.free_gb()
         say("=" * 78)
@@ -722,8 +674,8 @@ class Setup:
         return not existing
 
     def confirm(self) -> None:
-        """State the install location and size before the first download. Interactive: confirm or type another path.
-        With ``--yes`` (or without a terminal) it only prints and checks the free space."""
+        """Interactive: confirm or type another path; with ``--yes`` (or without a terminal) it only checks the free
+        space."""
         interactive = not self.assume_yes and sys.stdin.isatty()
         while True:
             try:
@@ -755,10 +707,7 @@ class Setup:
                 continue
             self.data_dir = path.resolve()
 
-    # ---- step 2: toolchains ----------------------------------------------------------------------------------
-
     def toolchains(self) -> None:
-        """Rust and the C/C++ toolchain the app is built with, plus git."""
         if self.skip_toolchain:
             # No system packages (no sudo): git is optional (the sources come as archives without it) and ffmpeg
             # comes as a portable copy where the system has none.
@@ -861,9 +810,8 @@ class Setup:
         raise SetupError("Xcode's Command Line Tools are still missing; finish their installer and run this again.")
 
     def _ffmpeg(self) -> None:
-        """ffmpeg + ffprobe decode and encode every audio/video format (Redub, imports, exports). Linux gets them with
-        the system packages; macOS through Homebrew when it is installed; Windows uses Applio's copies (see
-        ``applio_models``)."""
+        """Linux gets ffmpeg with the system packages, macOS through Homebrew when it is installed, Windows uses
+        Applio's copies."""
         if self.plat == "windows":
             return
         if shutil.which("ffmpeg") and shutil.which("ffprobe"):
@@ -880,18 +828,16 @@ class Setup:
         say("ffmpeg: installed.")
 
     def temp_dir(self) -> Path:
-        """Setup's temporary files (``<data>/tmp/setup``; see ``env``)."""
         path = self.data_dir / "tmp" / "setup"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def ffmpeg_dir(self) -> Path:
-        """Where a portable ffmpeg goes (the engine looks there too: media._find)."""
+        """The engine looks here too (media._find)."""
         return self.runtime / "ffmpeg"
 
     def _portable_ffmpeg(self) -> None:
-        """ffmpeg + ffprobe without system packages: present on PATH or in the runtime, else a static build on Linux,
-        Homebrew's on macOS when Homebrew is there. Windows uses Applio's copies (see ``applio_models``)."""
+        """On PATH or in the runtime, else a static build on Linux, Homebrew's on macOS when Homebrew is there."""
         exe = ".exe" if self.plat == "windows" else ""
         if self.plat == "windows" and "training" in self.components:
             return  # Applio's prerequisites bring ffmpeg.exe / ffprobe.exe
@@ -998,11 +944,8 @@ class Setup:
         except OSError as error:
             raise SetupError(f"Downloading {url} failed: {error}") from error
 
-    # ---- step 3: runtime -------------------------------------------------------------------------------------
-
     def ensure_repo(self, name: str, url: str, commit: str, dest: Path) -> None:
-        """Make ``dest`` a checkout of ``commit`` (shallow, resumable); re-running with the right commit is a no-op.
-        Without git (an installed app on a system without it) the commit comes as a GitHub archive instead."""
+        """Shallow, resumable checkout of ``commit``; without git it comes as a GitHub archive instead."""
         marker = dest / ARCHIVE_MARKER
         if (dest / ".git").exists() and shutil.which("git"):
             head = self.read(self.git("rev-parse", "HEAD"), dest).strip()
@@ -1028,8 +971,7 @@ class Setup:
         say(f"{name}: checked out {commit[:9]}.")
 
     def _fetch_archive(self, name: str, url: str, commit: str, dest: Path) -> None:
-        """``commit`` of a GitHub repository as a .tar.gz, unpacked over ``dest`` (files it already has, like a venv or
-        downloaded models, stay); ``ARCHIVE_MARKER`` records the commit."""
+        """Unpacked over ``dest``: files it already has (a venv, downloaded models) stay."""
         if dest.exists() and any(dest.iterdir()) and not (dest / ARCHIVE_MARKER).is_file():
             raise SetupError(f"{dest} exists and holds something else; move it away.")
         repo = url.removeprefix("https://github.com/").removesuffix(".git")
@@ -1071,9 +1013,8 @@ class Setup:
         return {"cuda": "CUDA 12.8 build; a few GB", "rocm": "ROCm build; a few GB"}.get(self.gpu.build, "")
 
     def _torch_args(self, rocm_index: str) -> list[str]:
-        """uv arguments that pick the torch build. unsafe-best-match: the PyTorch index also lists other packages
-        (requests, numpy...), older than the pins. The reinstall replaces a torch of another build: a pin such as
-        torch==2.8.0 also matches an installed 2.8.0+cpu, so uv would keep it."""
+        """unsafe-best-match: the PyTorch index also lists older copies of other packages (requests, numpy). The
+        reinstall replaces a torch of another build: torch==2.8.0 also matches an installed 2.8.0+cpu."""
         args = ["--reinstall-package", "torch", "--reinstall-package", "torchaudio"]
         if self.gpu.build in ("cuda", "rocm"):
             index = rocm_index if self.gpu.build == "rocm" else TORCH_CUDA_INDEX
@@ -1088,7 +1029,6 @@ class Setup:
         return py.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == self._stamp_value(commit)
 
     def applio_venv(self) -> None:
-        """Applio's environment: Python 3.12 and its requirements (a different torch from the engine's)."""
         if self._venv_ready(self.applio, APPLIO_COMMIT):
             say("Applio environment: ready.")
             return
@@ -1113,7 +1053,6 @@ class Setup:
         return self.runtime / "models"
 
     def whisper_model(self) -> None:
-        """The Whisper turbo checkpoint: the speech model transcribes reference clips with it, Redub transcribes."""
         py = self.engine_python()
         if not py.exists():
             raise SetupError("The engine environment is missing, so Whisper cannot be fetched.")
@@ -1125,7 +1064,6 @@ class Setup:
         fetch_checked(WHISPER_URL, whisper_dir / WHISPER_FILE, WHISPER_SHA256, "the Whisper checkpoint")
 
     def speech_models(self) -> None:
-        """Redub's translation model: NLLB-200 distilled 600M (``hf download``)."""
         py = self.engine_python()
         if not py.exists():
             raise SetupError("The engine environment is missing, so the translation model cannot be fetched.")
@@ -1148,16 +1086,13 @@ class Setup:
                 raise SetupError("The translation model download finished but files are missing; run this again.")
 
     def wants_better_translation(self) -> bool:
-        """The optional NLLB-200 1.3B (the ``better_translation`` component; by default only with a CUDA or ROCm GPU:
-        it runs on the GPU, and without one Redub uses the 600M, which is about 3x faster on a CPU)."""
+        """By default only with a CUDA or ROCm GPU: without one the 600M is about 3x faster on a CPU."""
         return "better_translation" in self.components
 
     def has_better_translation(self) -> bool:
         return self._has(self.models_dir / NLLB_BIG_DIR, NLLB_BIG_REQUIRED)
 
     def better_translation_model(self) -> None:
-        """Redub's "better translation": NLLB-200 distilled 1.3B. ``hf download`` of the fp32 checkpoint (resumable,
-        like the 600M), then stored as fp16 ``model.safetensors`` (half the disk) and the fp32 file deleted."""
         target = self.models_dir / NLLB_BIG_DIR
         fp32 = target / "pytorch_model.bin"
         if self.has_better_translation():
@@ -1196,7 +1131,6 @@ class Setup:
         say(f"Better translation model: ready ({size:.1f} GB).")
 
     def separation_model(self) -> None:
-        """Hybrid Demucs weights for "Remove background music" (torchaudio HDEMUCS_HIGH_MUSDB_PLUS, 335 MB)."""
         target = self.models_dir / DEMUCS_DIR / DEMUCS_FILE
         if target.is_file() and target.stat().st_size == DEMUCS_SIZE:
             say("Music-removal model (Hybrid Demucs): present.")
@@ -1205,17 +1139,13 @@ class Setup:
         fetch_demucs(self.models_dir)
 
     def has_zero_shot_vc(self) -> bool:
-        """The converter is complete: checkout, weights and the stamp (as the engine's ``zsvc.installed``)."""
+        """Checkout, weights and the stamp, as the engine's ``zsvc.installed`` checks."""
         files = [f"{sub}/{name}" for sub, _repo, _rev, names in SEEDVC_MODELS for name in names]
         return ((self.seed_vc / "modules" / "commons.py").is_file()
                 and self._has(self.seed_vc, ("campplus_cn_common.bin",))
                 and self._has(self.seed_vc_models, (*files, SEEDVC_STAMP)))
 
     def zero_shot_vc_runtime(self) -> None:
-        """Seed-VC for the native accent of untrained voices: the source checkout (pinned commit), its two extra
-        packages in the engine venv (munch, einops; it needs nothing else the engine does not have: torch 2.8,
-        transformers 5, librosa), the weights (``hf download`` at pinned revisions, resumable), then the stamp that
-        tells the engine it is complete. Runs offline afterwards."""
         py = self.engine_python()
         if not py.exists():
             raise SetupError("The engine environment is missing, so the zero-shot voice converter cannot be installed.")
@@ -1253,9 +1183,6 @@ class Setup:
         say("Zero-shot voice converter (Seed-VC): ready.")
 
     def engine_env(self) -> None:
-        """The engine environment (Python 3.11, torch 2.8, transformers 5): the engine, the OmniVoice worker
-        (omnivoice; num2words and the Ukrainian stress dictionary for the text front-end) and the speech worker
-        (Whisper, NLLB via transformers + sentencepiece), g2p_en for the recording-text analysis."""
         stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {' '.join(ENGINE_NO_DEPS)} "
                        f"{self.gpu.build} {self.plat}")
         stamp = self._stamp(self.engine_venv)
@@ -1285,8 +1212,6 @@ class Setup:
             stamp.write_text(stamp_value, encoding="utf-8")
 
     def holos_env(self) -> None:
-        """The Ukrainian speech environment (``ukrainian`` component): Python 3.11, the engine's torch build, HolosTTS,
-        Stanza, ipa-uk, the accentor, then patriotyk's ukrainian-word-stress with --no-deps (see HOLOS_NO_DEPS)."""
         stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(HOLOS_PACKAGES)} {' '.join(HOLOS_NO_DEPS)} "
                        f"{self.gpu.build} {self.plat}")
         stamp = self._stamp(self.holos_venv)
@@ -1309,9 +1234,6 @@ class Setup:
         stamp.write_text(stamp_value, encoding="utf-8")
 
     def holos_models_step(self) -> None:
-        """HolosTTS's weights (``hf download``, resumable) and Stanza's Ukrainian tokenizer, tagger and multi-word
-        token models (``stanza.download`` into <runtime>/models/holos/stanza), then the stamp the engine looks for.
-        The worker runs offline afterwards (HF_HUB_OFFLINE, Stanza's REUSE_RESOURCES)."""
         py = self.holos_python()
         if not py.exists():
             raise SetupError("The Ukrainian speech environment is missing, so its models cannot be fetched.")
@@ -1346,8 +1268,6 @@ class Setup:
         say("Ukrainian speech (HolosTTS): ready.")
 
     def omnivoice_models(self) -> None:
-        """The OmniVoice weights (``hf download k2-fsa/OmniVoice``, 3.3 GB). The Whisper turbo checkpoint it uses once per
-        reference clip comes with the Redub models (``speech_models``)."""
         py = self.engine_python()
         if not py.exists():
             raise SetupError("The engine environment is missing, so the OmniVoice model cannot be fetched.")
@@ -1371,7 +1291,6 @@ class Setup:
         return APPLIO_REQUIRED + (APPLIO_WINDOWS_REQUIRED if self.plat == "windows" else ())
 
     def applio_models(self) -> None:
-        """Applio's prerequisites: HiFi-GAN pretrained models, rmvpe, contentvec (and ffmpeg.exe on Windows)."""
         if not self.rvc_python().exists():
             raise SetupError("The Applio environment is missing, so its models cannot be fetched.")
         if self._has(self.applio, self.applio_required()):
@@ -1382,8 +1301,6 @@ class Setup:
                   "Downloading the Applio prerequisites", cwd=self.applio)
         if not self._has(self.applio, self.applio_required()):
             raise SetupError("The Applio prerequisites finished but files are missing; run this again.")
-
-    # ---- step 4: runtime.toml --------------------------------------------------------------------------------
 
     def write_runtime_toml(self) -> None:
         if not self.engine_python().exists():
@@ -1422,8 +1339,7 @@ class Setup:
         self.write_location()
 
     def write_location(self) -> None:
-        """Pointer file for the app: ``location.toml`` names the data dir, only when it is not the default one
-        (a stale pointer is removed when the data dir is the default again)."""
+        """``location.toml`` names the data dir only when it is not the default one; a stale pointer is removed."""
         path = location_file(self.plat)
         if self.data_dir == default_data_dir(self.plat).resolve():
             try:
@@ -1442,8 +1358,8 @@ class Setup:
             warn(f"could not write {path}: {error}. Set {DATA_ENV} to {self.data_dir} before starting the app.")
 
     def offer_legacy_removal(self, confirmed: bool) -> None:
-        """``runtime/index-tts`` (IndexTTS-2.5 of earlier versions, ~19 GB) is no longer used. It is deleted only when
-        the user says so: ``--remove-indextts``, or "y" at the prompt in an interactive terminal. Never automatically."""
+        """``runtime/index-tts`` (~19 GB) is deleted only on ``--remove-indextts`` or "y" at the prompt, never
+        automatically."""
         legacy = self.legacy_indextts
         if not legacy.is_dir():
             return
@@ -1465,8 +1381,6 @@ class Setup:
             warn(f"Could not delete everything in {legacy} (a file in use?); delete the rest by hand.")
         else:
             say("Deleted.")
-
-    # ---- step 5: quick check ---------------------------------------------------------------------------------
 
     def quick_check(self) -> list[str]:
         """Verify an existing setup without loading a model: files, interpreters, torch and the GPU."""
@@ -1517,7 +1431,6 @@ class Setup:
         return problems
 
     def _check_media(self) -> list[str]:
-        """Redub and the audio imports/exports: ffmpeg + ffprobe, and Whisper in the engine environment."""
         problems: list[str] = []
         if self.plat == "windows":
             folder = self.applio
@@ -1596,8 +1509,6 @@ class Setup:
             return [f"{label}: torch {info['torch']} cannot use the {self.gpu.backend} backend."]
         return []
 
-    # ---- step 6: the end -------------------------------------------------------------------------------------
-
     def ready_lines(self) -> list[str]:
         binary = self.root / "app" / "target" / "release" / (BIN_NAME + (".exe" if self.plat == "windows" else ""))
         lines = ["Start the app with:"]
@@ -1616,8 +1527,8 @@ class Setup:
 
 
 def fetch_checked(url: str, target: Path, sha256: str, label: str) -> None:
-    """Download ``url`` to ``target`` through a ``.part`` file that a later run continues (an HTTP range request),
-    with a progress line every 10 %, checked against ``sha256`` before it is renamed into place."""
+    """Through a ``.part`` file a later run continues (an HTTP range request), checked against ``sha256`` before the
+    rename."""
     target.parent.mkdir(parents=True, exist_ok=True)
     part = target.with_name(target.name + ".part")
     have = part.stat().st_size if part.is_file() else 0
@@ -1656,8 +1567,7 @@ def fetch_checked(url: str, target: Path, sha256: str, label: str) -> None:
 
 
 def fetch_demucs(models_dir: Path) -> Path:
-    """Download the Hybrid Demucs weights to ``<models_dir>/demucs/hdemucs_high_trained.pt``: into a ``.part`` file that
-    a later run continues (an HTTP range request), checked against the pinned SHA-256, then renamed into place."""
+    """Resumable through a ``.part`` file, checked against the pinned SHA-256."""
     folder = models_dir / DEMUCS_DIR
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / DEMUCS_FILE
@@ -1756,9 +1666,8 @@ def find_uv() -> str:
 
 
 def choose_data_dir(args: argparse.Namespace, plat: str) -> Path:
-    """``--data-dir`` > ``$MIMVOX_DATA`` > ask (interactive) > nothing: a full setup never picks a place silently.
-    Only the checks that download nothing (``--quick-check``, ``--runtime-toml-only``) fall back to location.toml or
-    the default directory."""
+    """``--data-dir`` > ``$MIMVOX_DATA`` > ask: a full setup never picks a place silently. Only ``--quick-check`` and
+    ``--runtime-toml-only`` fall back to location.toml or the default directory."""
     explicit = args.data_dir or os.environ.get(DATA_ENV)
     default = (read_location(plat) or default_data_dir(plat)).expanduser().resolve()
     if explicit:
@@ -1808,7 +1717,7 @@ def build_setup(args: argparse.Namespace) -> Setup:
 
 
 def run_move(args: argparse.Namespace) -> int:
-    """``--move-to``: see move_runtime.py. Prints ``[move]`` lines; exit code 0 only when everything went through."""
+    """``--move-to`` (move_runtime.py); exit code 0 only when everything went through."""
     import tomllib
 
     import move_runtime as mv

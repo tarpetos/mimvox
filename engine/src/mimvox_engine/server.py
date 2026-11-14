@@ -1,15 +1,3 @@
-"""JSON-lines server: ``python -m mimvox_engine serve --runtime <runtime.toml> --data-dir <dir>``.
-
-Everything runs on one asyncio event loop (see ``aio.py``):
-
-- stdin: the protocol pipe is detached from the process's standard input (``aio.detach_stdin``) and read line by line
-  as it arrives (``aio.read_lines``); each request becomes a task.
-- stdout: the real stdout is moved to a private descriptor and fd 1 / ``sys.stdout`` point at stderr, so library prints
-  (also from C code) cannot corrupt the stream. Results and events go through one queue drained by a single writer
-  coroutine (lines keep their order; a slow reader never blocks the loop: the bytes are written on a dedicated thread).
-- jobs are tasks; ``*.cancel`` cancels the task. Shutdown cancels jobs, stops the workers and Applio (process exits are
-  awaited) and only then leaves.
-"""
 from __future__ import annotations
 
 import argparse
@@ -57,7 +45,6 @@ class Server:
         self.device: dict[str, Any] = {"backend": config.backend(runtime), "name": config.backend(runtime).upper(),
                                        "vram_gb": 0.0}
 
-    # ---- output ----
     def _put(self, obj: dict[str, Any]) -> None:
         line = (json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         aio.call_soon(self._outq.put_nowait, line)
@@ -97,7 +84,6 @@ class Server:
     def _error(self, rid: Any, code: str, message: str) -> None:
         self._put({"id": rid, "error": {"code": code, "message": message}})
 
-    # ---- jobs ----
     def start_job(self, fn: Callable[[str], Any]) -> str:
         job = f"job-{next(self._job_ids)}"
         aio.call_soon(self._create_job, job, fn)
@@ -138,7 +124,6 @@ class Server:
     def job_running(self, job: str) -> bool:
         return job in self._jobs
 
-    # ---- requests ----
     def on_line(self, raw: bytes) -> None:
         line = raw.decode("utf-8", errors="replace").strip()
         if not line or self._closing:
@@ -181,13 +166,11 @@ class Server:
             log.error("request failed: %s", traceback.format_exc())
             self._error(rid, "internal", f"{type(exc).__name__}: {exc}")
 
-    # ---- shutdown ----
     def request_shutdown(self) -> None:
         if not self.stopped.done():
             self.stopped.set_result(None)
 
     async def close(self) -> None:
-        """Stop everything this engine started and wait for it: Applio (process tree), jobs, workers."""
         if self._closing:
             return
         self._closing = True
@@ -251,14 +234,13 @@ def _models() -> dict[str, str]:
 
 
 def speech_languages() -> list[dict[str, Any]]:
-    """The languages the speech model speaks, with names (``hello`` / ``ready`` ``languages``)."""
     from . import backends  # noqa: PLC0415
     from .backends import names  # noqa: PLC0415
     return names.describe(backends.languages())
 
 
 def _translators(ctx: Server) -> list[str]:
-    """The Redub translators installed (``nllb-1.3b``, ``nllb-600m``), best first; [] without the redub module."""
+    """Best first; [] without the redub module."""
     try:
         from .redub import langs  # noqa: PLC0415
     except ImportError:
@@ -267,14 +249,12 @@ def _translators(ctx: Server) -> list[str]:
 
 
 def _zero_shot_vc(ctx: Server) -> bool:
-    """Whether setup installed the zero-shot converter (the native accent of untrained voices; zsvc.py)."""
     from . import zsvc  # noqa: PLC0415
     return zsvc.installed(ctx.runtime, ctx.data_dir)
 
 
 def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list[str]:
-    """The installed parts of the runtime (setup's COMPONENTS), from the files on disk: the app offers to install the
-    others where they are needed."""
+    """Setup's COMPONENTS found on disk."""
     from . import rvc, speech  # noqa: PLC0415
     from .backends import holos, omnivoice  # noqa: PLC0415
     found = {

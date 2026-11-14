@@ -1,23 +1,5 @@
-"""Text normalization for the OmniVoice backend: digits, symbols and common abbreviations spelled out.
-
-OmniVoice reads text as written: "2026" may come out digit by digit and "т.д." letter by letter. This module turns
-them into words before synthesis. Ukrainian gets the full treatment (cases after prepositions, ordinal years and
-dates, decimals, percent and currency with plural agreement, abbreviations); English gets years, ordinals, decimals,
-percent and currency; every other language gets bare integers and decimals through ``num2words`` when it knows the
-language, else the text is left as it is.
-
-Word stress (``omnivoice_stress.py``): the user's marks in Ukrainian, Russian and Belarusian text ("+" before the vowel,
-or U+0301 / "´" after it) reach the model as an upper-case vowel (співак+ом -> співакОм), the form it follows best.
-Automatic stress for unmarked Ukrainian words from a stress dictionary is there but off by default. In other
-languages the marks are removed. The text is NFC-composed first, so "é" typed as "e" + U+0301 stays "é".
-
-Standalone on purpose: the OmniVoice worker loads this file by its path (it runs in its own interpreter and imports
-nothing else from ``mimvox_engine``); ``omnivoice_stress.py`` next to it is loaded the same way. Needs ``re`` and
-``num2words`` (installed in the OmniVoice venv); the optional automatic Ukrainian stress also needs
-``ukrainian-word-stress`` and ``marisa-trie``.
-
-    normalize(text, lang) -> text
-"""
+"""Spell out digits, symbols and abbreviations that OmniVoice would misread. Standalone: the OmniVoice worker loads
+this file by its path in its own interpreter, so it imports nothing else from ``mimvox_engine``."""
 import importlib.util
 import os
 import re
@@ -39,8 +21,6 @@ def _load_stress():
 
 _stress = _load_stress()
 
-# ------------------------------------------------------------------------------------------------- shared helpers
-
 _SPACES = re.compile(r"[ \t  ]+")
 # 1 000 000 / 1,000,000 / 1 000,5 -> plain digits (a thin or normal space between groups of three)
 _GROUPED = re.compile(r"(?<![\d,.])(\d{1,3})((?:[   ]\d{3})+)(?![\d])")
@@ -60,7 +40,7 @@ def _words(n, lang, **kw):
 
 
 def _n2w_lang(lang):
-    """num2words' name for an ISO 639-1 code, or None when it does not know the language."""
+    """None when num2words does not know the language."""
     if _n2w is None:
         return None
     alias = {"zh": "zh", "no": "no", "pt": "pt", "sr": "sr", "fa": "fa", "he": "he", "be": "be", "kk": "kz"}
@@ -73,7 +53,6 @@ def _n2w_lang(lang):
 
 
 def normalize(text, lang):
-    """Spell out what OmniVoice would misread. ``lang``: ISO 639-1 code of the text."""
     lang = (lang or "").lower()
     text = _stress.user_marks(unicodedata.normalize("NFC", text), lang)
     text = _SPACES.sub(" ", text)
@@ -88,8 +67,6 @@ def normalize(text, lang):
     text = re.sub(r"(\d+)[.,](\d+)", lambda m: _words(float(f"{m.group(1)}.{m.group(2)}"), code), text)
     return re.sub(r"\d+(?!\.\s+[A-ZÀ-ÞĀ-ſА-Я])", lambda m: _words(int(m.group()), code), text)
 
-
-# ------------------------------------------------------------------------------------------------------- English
 
 _EN_UNITS = {"%": ("percent", "percent"), "$": ("dollar", "dollars"), "€": ("euro", "euros"), "£": ("pound", "pounds")}
 
@@ -118,9 +95,7 @@ def _en(text):
     return text.replace("&", " and ")
 
 
-# ----------------------------------------------------------------------------------------------------- Ukrainian
-
-# Prepositions after which a number is in the genitive ("до 5 років", "з 10 учасників", "близько 300 людей").
+# Prepositions after which a number is in the genitive.
 _UK_GEN = {"до", "від", "з", "із", "зі", "після", "близько", "без", "для", "біля", "коло", "крім", "замість",
            "протягом", "понад?", "більше", "менше", "щонайменше", "щонайбільше", "кількох", "серед", "навколо"}
 _UK_GEN.discard("понад?")  # "понад" takes the accusative ("понад триста років")
@@ -129,7 +104,6 @@ _UK_LOC = {"у", "в", "на", "при", "об"}  # + a number + a locative noun
 _UK_MONTHS_GEN = ("січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня",
                   "жовтня", "листопада", "грудня")
 
-# Abbreviations replaced by words wherever they stand (case-insensitive).
 _UK_ABBR = [
     (r"і т\.\s?д\.", "і так далі"), (r"т\.\s?д\.", "так далі"), (r"і т\.\s?п\.", "і тому подібне"),
     (r"т\.\s?п\.", "тому подібне"), (r"і т\.\s?ін\.", "і таке інше"), (r"та ін\.", "та інші"),
@@ -161,7 +135,7 @@ _ORD_ENDINGS = {  # nominative masculine ending -> (gen m/n, dat/loc m/n, nom f,
 
 
 def _plural(n, forms):
-    """forms = (one, few, many): 1 рік, 2 роки, 5 років (11-14 are 'many')."""
+    """forms = (one, few, many); 11-14 take "many"."""
     n = abs(int(n))
     if n % 10 == 1 and n % 100 != 11:
         return forms[0]

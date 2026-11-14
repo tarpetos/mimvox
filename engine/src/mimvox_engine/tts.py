@@ -1,12 +1,3 @@
-"""tts.generate / tts.cancel / voices.warm: speech kept loaded, RVC per segment, streamed chunk by chunk; the model
-status (``models`` event) and the GPU hand-over to training.
-
-Everything here runs on the engine loop. Synthesis goes through a TTS backend (``backends/``; OmniVoice in its worker
-process, whose request queue serializes model calls by design), RVC through the RVC worker client, the zero-shot
-converter of an untrained voice's native accent through ``zsvc.py``. A generation is a producer task (synthesis, one
-segment ahead) and a consumer task (voice conversion, resample, ``tts.chunk``) joined by a bounded queue;
-``tts.cancel`` cancels the job task and with it both.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -30,13 +21,13 @@ from .registry import Context, EngineError, method
 
 log = logging.getLogger("mimvox.tts")
 
-SPEED_MIN, SPEED_MAX = 0.8, 1.3  # speaking-speed range of tts.generate / redub.render ("speed" param)
+SPEED_MIN, SPEED_MAX = 0.8, 1.3
 PAUSE_SENTENCE_MS = 200   # silence appended to a chunk that ends mid-paragraph
 PAUSE_PARAGRAPH_MS = 480  # ... and at a paragraph end
 MIN_FIRST_TOKENS = 6  # the first segment is one sentence unless that is shorter than this
 FIRST_TOKENS = 40   # cap for segment 0 (normally just the first sentence, ~13 tokens = ~4 s of speech)
-GROWTH = float(os.environ.get("MIMVOX_SEGMENT_GROWTH", "2.5"))  # each segment may hold ~2.5x the previous target (measured: lowest total time)
-LATER_TOKENS = 70   # cap for every later segment
+GROWTH = float(os.environ.get("MIMVOX_SEGMENT_GROWTH", "2.5"))  # measured: lowest total time
+LATER_TOKENS = 70
 MIN_PIECE_WORDS = 3   # a cut sentence never leaves a piece shorter than this many words...
 MIN_PIECE_SHARE = 0.3  # ...or than this share of the segment budget
 MIN_TAIL_TOKENS = 10  # a paragraph never ends in a segment shorter than this (merged into the previous one)
@@ -78,15 +69,13 @@ def _set_status(ctx: Context | None, **kv: str) -> None:
 
 
 async def wait_settled(timeout: float) -> bool:
-    """Wait (awaiting an event, not polling) until no model is ``loading``; False after ``timeout`` seconds."""
+    """Until no model is ``loading``; False after ``timeout`` seconds."""
     try:
         await asyncio.wait_for(_settled().wait(), timeout)
         return True
     except asyncio.TimeoutError:
         return False
 
-
-# --------------------------------------------------------------------------------------------- text segmentation
 
 _ABBREV = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e", "no", "inc", "ltd", "mt",
            "gen", "col", "lt", "capt", "sgt", "fig", "approx"}
@@ -111,15 +100,8 @@ def _split_sentences(par: str) -> list[str]:
 
 
 def segment_text(text: str, count: Callable[[str], int], fixed: int | None = None) -> list[tuple[str, int]]:
-    """Split ``text`` into ``(segment, pause_after_ms)`` pairs.
-
-    Sentences are never cut unless one exceeds the token budget (then at clause punctuation, then at words).
-    The first segment is a single sentence so the first audio arrives fast; later ones are packed greedily up to
-    the growing token budget, never across a paragraph break.
-
-    With ``fixed`` (narration, ``book.py``) there is no streaming schedule: every segment, the first one too, packs
-    whole sentences up to ``fixed`` tokens, and only a sentence longer than that is cut (same rules, no stubs).
-    """
+    """``(segment, pause_after_ms)`` pairs. The first segment is one sentence so the first audio arrives fast; ``fixed``
+    (narration) packs every segment up to ``fixed`` tokens, with no streaming schedule."""
     cap = fixed or LATER_TOKENS
     paragraphs = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"\n\s*\n|\r\n\s*\r\n|\n", text)]
     paragraphs = [p for p in paragraphs if p]
@@ -128,8 +110,8 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
     target = [fixed or FIRST_TOKENS]
 
     def budget() -> int:
-        """Growing schedule: segment 0 is the first sentence, then each segment may be ~GROWTH x the previous target (2.5 measured best), so
-        playback of a chunk covers generation of the next (generation runs at ~1.05-1.4x real time)."""
+        """Each segment may hold ~GROWTH x the previous target (2.5 measured best), so playing a chunk covers generating
+        the next (generation runs at ~1.05-1.4x real time)."""
         return target[0]
 
     def add(seg: str, pause: int) -> None:
@@ -142,7 +124,7 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
         segs.append((seg, pause))
 
     def words_split(words: list[str], parts: int) -> list[str]:
-        """``words`` cut into ``parts`` runs of about equal length (never an empty or one-word run when avoidable)."""
+        """About equal runs, never an empty or one-word run when avoidable."""
         goal = count(" ".join(words)) / max(parts, 1)
         out: list[str] = []
         cur: list[str] = []
@@ -150,8 +132,7 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
             left = len(words) - i  # words not placed yet, this one included
             if cur and len(out) < parts - 1 and left >= 2 and count(" ".join(cur + [w])) > goal:
                 carry: list[str] = []
-                # do not end a run on a preposition, conjunction or article ("з", "в", "the", "of"): it belongs with
-                # the word after it
+                # A run never ends on a preposition, conjunction or article ("з", "the"): it belongs with the next word.
                 while len(cur) > 1 and len(cur[-1].strip("\"'«»()")) <= 3 and not re.search(r"[,.;:!?…—–]$", cur[-1]):
                     carry.insert(0, cur.pop())
                 out.append(" ".join(cur))
@@ -165,8 +146,7 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
         return len(piece.split()) < MIN_PIECE_WORDS or count(piece) < limit * MIN_PIECE_SHARE
 
     def balanced(parts: list[str], limit: int) -> list[str]:
-        """Narration: ``parts`` (clauses) joined into the fewest pieces of at most ``limit`` tokens, cut at the
-        clause boundaries that make the pieces most even (so no stub, and no cut inside a clause)."""
+        """Fewest pieces of at most ``limit`` tokens, cut at the clause boundaries that make them most even."""
         n = len(parts)
         cost = [[count(" ".join(parts[i:j])) if j > i else 0 for j in range(n + 1)] for i in range(n + 1)]
         inf = float("inf")
@@ -193,9 +173,8 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
         return parts  # (each part fits by construction; unreachable)
 
     def pieces(sentence: str, limit: int) -> list[str]:
-        """Cut an over-budget sentence: at clause punctuation first (clauses stay whole), a clause longer than
-        LATER_TOKENS into equal runs of words, then re-pack neighbouring clauses up to ``limit``. No piece is left
-        as a stub (a last word or two on its own): a short piece joins its neighbour, or the pair is re-cut evenly."""
+        """At clause punctuation first, a clause over LATER_TOKENS into equal runs of words; no piece is left as a stub
+        (a last word or two on its own)."""
         if count(sentence) <= limit:
             return [sentence]
         out: list[str] = []
@@ -253,8 +232,6 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
 
 
 
-# ----------------------------------------------------------------------------------------------- model loading
-
 def _pick_warm_voice(data: config.DataDir) -> tuple[str | None, str | None]:
     """(reference path, voice id with an RVC model) to warm with: prefer a trained voice."""
     ref_only = None
@@ -269,10 +246,8 @@ def _pick_warm_voice(data: config.DataDir) -> tuple[str | None, str | None]:
 
 
 async def load_models(ctx: Context) -> None:
-    """Background start-up (and reload after a training): the speech model (OmniVoice worker) loads and is warmed up.
-    The RVC worker is not started here: ``rvc: ready`` means it can be, and it starts when a trained voice is warmed
-    (``voices.warm``) or first used; a voice without a model never pays for it (6.5 GB of commit, 3 GB of RAM).
-    Status changes are ``models`` events."""
+    """The RVC worker starts only when a trained voice is warmed or used: a voice without a model never pays for it
+    (6.5 GB of commit, 3 GB of RAM)."""
     data = config.data_dir(ctx)
     errors: dict[str, str] = {}
     worker = rvc.get(ctx.runtime)
@@ -333,9 +308,8 @@ async def load_models(ctx: Context) -> None:
 
 
 def _prewarm_redub() -> None:
-    """Redub's slot fitting trims clips with librosa, whose first call compiles numba kernels (measured ~20 s in the
-    middle of the first dub), and stretches them with an ffmpeg filter (the filter list is read once). Pay both once in
-    the background after start-up instead."""
+    """librosa's first call compiles numba kernels (measured ~20 s in the middle of the first dub) and the ffmpeg filter
+    list is read once: pay both after start-up."""
     try:
         import librosa  # noqa: PLC0415
 
@@ -361,10 +335,8 @@ def _voice_language(data: config.DataDir, voice_id: str) -> str:
         return "en"
 
 
-# ----------------------------------------------------------------------------------------------------- methods
-
 def duration_factor_for(speed: float) -> float:
-    """``SynthParams.duration_factor`` (length of the speech relative to natural; below 1 is faster) for a speed."""
+    """Length of the speech relative to natural (below 1 is faster)."""
     return round(1.0 / min(SPEED_MAX, max(SPEED_MIN, float(speed))), 4)
 
 
@@ -378,7 +350,6 @@ def _num(params: dict[str, Any], key: str, default: float, lo: float, hi: float)
 
 
 def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str, backends.TtsBackend]:
-    """The ``language`` parameter of a speech request (default ``en``) and the backend that speaks it."""
     lang = params.get(key) or "en"
     if not isinstance(lang, str):
         raise EngineError("bad_request", f"'{key}' must be a language code such as \"en\"")
@@ -400,8 +371,8 @@ def check_backend_ready(backend: backends.TtsBackend) -> None:
 
 @method("text.stress")
 async def text_stress(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Ukrainian text with the word stress HolosTTS would speak (U+0301 after each stressed vowel) and the words of two
-    or more syllables left without one. ``not_ready`` when the Ukrainian speech component is not installed or loaded."""
+    """Ukrainian text with HolosTTS's word stress (U+0301 after each stressed vowel) and the words of two or more
+    syllables left without one. ``not_ready`` without the Ukrainian speech component."""
     text = params.get("text")
     if not isinstance(text, str) or not text.strip():
         raise EngineError("bad_request", "'text' is required")
@@ -445,13 +416,12 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     # native-us: RVC for a trained voice, else the zero-shot converter; without either the voice's own reference
     choice = accent.choose(requested, native_voice, lang, has_pth, index_rate, zs_worker is not None)
     zs = zero_shot(ctx, choice, zs_worker, ref, quality)
-    # The clip that will speak and its real language (a foreign one carries its accent into `lang`; reflang.py).
+    # The clip that will speak and its real language (a foreign one carries its accent into `lang`).
     ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")
     segs = segment_text(text, backend.count_tokens)
     if not segs:
         raise EngineError("bad_request", "nothing to say in this text")
     # (no await between the busy check in start_exclusive and taking the slot: the loop makes it atomic)
-    # What the result's sidecar records (results.py), so it comes back after a restart.
     about = {"kind": "speak", "voice_id": voice_id, "voice_name": str(meta.get("name") or voice_id), "text": text,
              "language": lang}
     job = start_exclusive(ctx, lambda j: _generate(ctx, j, data, backend, lang, ref, segs, temperature, quality, pth,
@@ -464,8 +434,7 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 def zero_shot(ctx: Context, choice: accent.Choice, worker: zsvc.ZsvcWorker | None, ref: str,
               quality: str = "best") -> zsvc.Bound | None:
-    """The zero-shot converter of a native-accent job whose ``choice`` uses it, bound to the voice's ``ref`` (the
-    timbre it gives) and the diffusion steps of ``quality``, with the GPU turn of a tight GPU; None otherwise."""
+    """Bound to ``ref`` (the timbre) and the diffusion steps of ``quality``; None when ``choice`` does not use it."""
     if choice.converter != "zero-shot" or worker is None:
         return None
     vram = float((getattr(ctx, "device", None) or {}).get("vram_gb") or 0.0)
@@ -500,9 +469,8 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
                     index_rate: float, worker: rvc.RvcWorker | None, duration_factor: float, out_fmt: str,
                     choice: accent.Choice | None = None, voice_match: float = 1.0, zs: zsvc.Bound | None = None,
                     about: dict[str, Any] | None = None) -> None:
-    """``ref`` is the voice's reference; with a ``native-us`` ``choice`` OmniVoice speaks from the native clip instead
-    and RVC gets the native index rate and pitch, or (``zs``, an untrained voice) the zero-shot converter turns each
-    segment into the timbre of ``ref`` (accent.py). ``about`` goes into the result's sidecar (results.py)."""
+    """With a ``native-us`` ``choice`` OmniVoice speaks from the native clip and RVC (or ``zs``, for an untrained voice)
+    gives each segment the timbre of ``ref``."""
     t_start = time.time()
     choice = choice or accent.Choice("own")
 
@@ -543,7 +511,6 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
             await todo.put(None)
 
         async def consume() -> None:
-            """Voice conversion + resample + emit, in order, overlapping with the synthesis of the next segment."""
             async for i, path, pause in aio.queue_items(todo):
                 src = path
                 if zs is not None:
@@ -594,11 +561,8 @@ def _prepare_jobdir(data: config.DataDir, jobdir: str) -> None:
 
 def start_exclusive(ctx: Context, fn: Callable[[str], Awaitable[None]],
                     busy_message: str = "another generation or Redub job is running", holder: str | None = None) -> str:
-    """Start an async GPU job that takes the one generation slot (``tts.generate``, Redub and training then answer
-    ``busy``). ``fn(job)`` should call :func:`release_job` before it emits its final event; the slot is freed when it
-    ends in any case. Loop thread only (the check-and-take is atomic there). Raises ``busy`` when taken: with the
-    ``holder`` text of the job that holds the slot when it gave one (a book: "a book is being read ..."), else
-    ``busy_message``."""
+    """Take the one generation slot for ``fn(job)``, which should call :func:`release_job` before its final event. Loop
+    thread only (the check-and-take is atomic there). Raises ``busy`` with the holder's text, else ``busy_message``."""
     if _ACTIVE[0] is not None:
         raise EngineError("busy", _HOLDER[0] or busy_message)
 
@@ -621,18 +585,14 @@ def release_job(job: str) -> None:
 
 
 def is_busy() -> bool:
-    """A generation (or Redub / training GPU job, or a book) holds the generation slot."""
     return _ACTIVE[0] is not None
 
 
 def busy_message(default: str) -> str:
-    """The ``busy`` message for a request refused because the slot is taken: what holds it when that job said
-    (``start_exclusive(holder=...)``), else ``default``."""
     return _HOLDER[0] or default
 
 
 def _gc_tmp(data: config.DataDir) -> None:
-    """Drop chunk folders of finished jobs older than an hour."""
     try:
         for name in os.listdir(data.tmp):
             p = os.path.join(data.tmp, name)
@@ -643,19 +603,14 @@ def _gc_tmp(data: config.DataDir) -> None:
 
 
 def forget_reference() -> None:
-    """Drop cached speaker conditioning (call after ``reference.wav`` was replaced): the next synthesis conditions on
-    the new clip. Callable from any thread. (The OmniVoice worker also notices a changed file by itself.)"""
+    """Call after ``reference.wav`` was replaced. Callable from any thread."""
     for b in backends.all_backends():
         b.forget_reference()
 
 
-# ------------------------------------------------------------------------------------------------ voices.warm
-
 @method("voices.warm")
 async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Precompute the speaker conditioning of a voice in the background (call when the user selects a voice). With
-    ``accent: "native-us"``, also the native clip's prompt and the voice's pitch (accent.py), and for an untrained
-    voice the zero-shot converter with the voice's reference prompt."""
+    """Precompute a voice's speaker conditioning in the background (called when the user selects a voice)."""
     data = config.data_dir(ctx)
     vid = str(params.get("id") or "")
     requested, native_voice = accent.parse(params), accent.parse_voice(params)
@@ -714,9 +669,8 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
                 await OMNIVOICE.warm(native.ref.path, accent.NATIVE_LANG, native.ref.text)
                 if zs_worker is not None:  # an untrained voice: the converter and its prompt of reference.wav
                     await zs_worker.warm(ref)
-        # The real language of reference.wav (reflang.py): the warm-up above transcribed it when it spoke from it;
-        # otherwise (a reference_<lang>.wav spoke) or for a sidecar from before the language was recorded whose
-        # transcript the script heuristic cannot place, the worker builds the sidecar / detects it now (Whisper only).
+        # The warm-up above transcribed reference.wav when it spoke from it; otherwise the worker detects its language
+        # now (Whisper only).
         ref_lang = await aio.run_io(lambda: reflang.detected(ref)[0])
         if ref_lang is None:
             ref_lang = await OMNIVOICE.inspect(ref)
@@ -732,14 +686,9 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
         await aio.run_io(shutil.rmtree, warm_dir, ignore_errors=True)
 
 
-# ------------------------------------------------------------------------------------- GPU hand-over (training)
-
 async def release_gpu(ctx: Context) -> None:
-    """Free the GPU and host RAM for training: unload the speech models (on the GPU thread, after any synthesis in
-    flight) and stop the RVC, speech and zero-shot converter worker processes (their exits are awaited).
-
-    Raises ``EngineError("busy")`` while a generation is running. Until :func:`reacquire_gpu` finishes, both models
-    report ``"paused"`` in ``models_status()`` and ``tts.generate`` answers ``not_ready``."""
+    """Unload the speech models and stop the worker processes for training. Raises ``busy`` during a generation; until
+    :func:`reacquire_gpu` finishes, the models report ``paused`` and ``tts.generate`` answers ``not_ready``."""
     if _ACTIVE[0] is not None:
         raise EngineError("busy", busy_message("a generation is running; wait for it or cancel it before training"))
     _set_status(ctx, tts="paused", rvc="paused")
@@ -752,9 +701,8 @@ async def release_gpu(ctx: Context) -> None:
 
 
 def reacquire_gpu(ctx: Context) -> asyncio.Task[None] | None:
-    """Reload the speech models and start a fresh RVC worker in the background (about 50 s; ``models`` events, then
-    ``ready``). A fresh worker process also reads a freshly trained ``rvc/model.pth`` from disk. Not while the engine
-    shuts down."""
+    """Reload in the background (about 50 s); a fresh RVC worker reads a freshly trained ``rvc/model.pth``. Not while
+    the engine shuts down."""
     if aio.closing():
         return None
     return aio.spawn(load_models(ctx), name="model-reload")
@@ -762,7 +710,7 @@ def reacquire_gpu(ctx: Context) -> asyncio.Task[None] | None:
 
 @contextlib.asynccontextmanager
 async def gpu_released(ctx: Context):  # type: ignore[no-untyped-def]
-    """``async with tts.gpu_released(ctx): <train>``: release before, reload in the background after (also on error)."""
+    """Release before, reload in the background after (also on error)."""
     await release_gpu(ctx)
     try:
         yield

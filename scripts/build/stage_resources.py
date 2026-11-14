@@ -1,26 +1,6 @@
 #!/usr/bin/env python3
-"""Stage the runtime resources the installers bundle into app/target/bundle-resources/.
-
-Packaging from a staged copy (instead of pointing cargo-packager at the repo folders) keeps caches
-(__pycache__, *.pyc, .venv, ...) and user data out of the installer, and fails early with a clear
-message when a required folder is missing.
-
-Layout produced (this is also the layout the app looks for at runtime, see app/Packager.toml):
-
-    engine/src/mimvox_engine/...   engine sources (run with the engine venv interpreter)
-    presets/                           guided reading presets
-    tools/setup/                       runtime setup (setup.py), triggered by the app on first run
-    contract/                          engine protocol
-    bin/uv(.exe)                       uv, which the app runs setup with (--uv TARGET; two targets: a macOS universal
-                                       binary made with lipo; Linux: bin/uv.gz, see stage_uv)
-    DISCLAIMER.md, THIRD_PARTY_NOTICES.md, LICENSE*   optional, if present
-
-setup.sh / setup.cmd are for developers working in the repository and are not bundled: the installed app runs
-tools/setup/setup.py itself (app/src/ui/setuprun.rs).
-
-Usage: python scripts/build/stage_resources.py [--uv TARGET[,TARGET]]   (stdlib only; the build scripts run it
-through `uv run` and pass the uv target of the platform they build for)
-"""
+"""Stage the runtime resources the installers bundle into app/target/bundle-resources/ (the layout the app looks for
+at runtime, see app/Packager.toml)."""
 from __future__ import annotations
 
 import argparse

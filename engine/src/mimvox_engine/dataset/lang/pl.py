@@ -1,18 +1,4 @@
-"""Polish: rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic).
-
-Inventory (37, IPA): 8 vowels (a ɛ i ɨ ɔ u and the nasal ɛ̃ ɔ̃) and 29 consonants.
-
-Rules:
-* Digraphs: ch/h x, cz tʂ, sz ʂ, rz ʐ (ʂ after p t k ch f: przy, trzy, krzak), dż dʐ, dź dʑ, dz dz; single letters
-  ć tɕ, ś ɕ, ź ʑ, ż ʐ, ń ɲ, ł w, w v, c ts, y ɨ, ó u, e ɛ, o ɔ.
-* Soft spelling with i: ci si zi ni dzi are tɕ ɕ ʑ ɲ dʑ; before another vowel the i only marks softness (ciepło,
-  siostra), otherwise it is also the vowel i (cicho, nic). After any other consonant, i before a vowel is j (pies,
-  biały); elsewhere i is the vowel.
-* Nasal vowels: ą ę are the nasal vowels ɔ̃ ɛ̃ before fricatives and (ą) at the end of a word; before a stop or an
-  affricate they are ɔ/ɛ + a nasal consonant (m before p b, ɲ before ć dź ci dzi, n otherwise: ręka, kąt, będzie);
-  before l ł and ę at the end of a word they lose nasality (wziął, idę).
-* Final devoicing and voicing assimilation are ignored (they do not remove phonemes from the inventory).
-"""
+"""Polish rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic)."""
 from __future__ import annotations
 
 from ._common import words

@@ -1,12 +1,3 @@
-"""Redub's video output: the source split into voice and background (Hybrid Demucs in the speech worker, once per file,
-cached in ``<data>/tmp``), the new voice mixed over that background (``dubmix.py``) and the mix muxed back into the
-video with ffmpeg, the picture copied as it is (never re-encoded).
-
-Separation runs on the engine loop through the speech worker. ``redub.prepare`` starts it in the background when a
-video is chosen (``separate``), so the job usually finds the stems ready; a job that needs them while that run is
-still going joins it. A background run gives way to another GPU job (``speech.release_gpu`` stops it); a job that was
-waiting for it then runs it again itself.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -50,13 +41,13 @@ _ISO639_2 = {"arb": "ara", "pes": "fas", "zsm": "msa", "swh": "swa", "khk": "mon
 
 
 def file_key(path: str) -> str:
-    """A key for a file's current state (path, mtime, size): the preview and the stems are cached by it."""
+    """(path, mtime, size): the preview and the stems are cached by it."""
     st = os.stat(path)
     return hashlib.sha1(f"{path}|{st.st_mtime_ns}|{st.st_size}".encode("utf-8")).hexdigest()[:16]
 
 
 def language_tag(code: str | None) -> str | None:
-    """ISO 639-2 tag of a language code for the audio stream (``en`` -> ``eng``), or None."""
+    """``en`` -> ``eng``, or None."""
     nllb = langs.nllb_code(code) if code else None
     if not nllb:
         return None
@@ -64,11 +55,8 @@ def language_tag(code: str | None) -> str | None:
     return _ISO639_2.get(three, three)
 
 
-# ------------------------------------------------------------------------------------------------ options
-
 @dataclass
 class Output:
-    """What a Redub job writes: ``output`` (``video`` | ``audio``), ``keep_background`` and the source's container."""
     output: str
     keep_background: bool
     has_video: bool
@@ -80,13 +68,12 @@ class Output:
 
     @property
     def mixes(self) -> bool:
-        """The result goes through the mix (loudness, background, limiter): any video, or a kept background."""
+        """Any video, or a kept background, goes through the mix (loudness, background, limiter)."""
         return self.video or self.keep_background
 
 
 def options(params: dict[str, Any], path: str) -> Output:
-    """``output`` (``"video"`` | ``"audio"``, default audio) and ``keep_background`` (default: true for a video
-    output, else false) of a Redub job. ``output: "video"`` needs a source with a picture track. Blocking (probes)."""
+    """Defaults: ``output`` audio, ``keep_background`` true for a video output. Blocking (probes)."""
     out = params.get("output")
     out = "audio" if out in (None, "") else out
     if out not in OUTPUTS:
@@ -105,8 +92,6 @@ def options(params: dict[str, Any], path: str) -> Output:
     ext = os.path.splitext(path)[1].lower().lstrip(".")
     return Output(out, keep, has_video, ext if ext in _CONTAINERS else FALLBACK_CONTAINER)
 
-
-# ------------------------------------------------------------------------------------------------ separation
 
 @dataclass
 class Stems:
@@ -147,7 +132,7 @@ class _Run:
 
 
 _RUNS: dict[str, _Run] = {}      # file key -> separation in flight (loop thread)
-_DONE: dict[str, Stems] = {}     # file key -> finished stems
+_DONE: dict[str, Stems] = {}
 
 
 def installed(data: config.DataDir) -> bool:
@@ -155,8 +140,7 @@ def installed(data: config.DataDir) -> bool:
 
 
 def _decode(path: str, folder: str) -> tuple[str, int, int]:
-    """The source's first audio track as float32 ``(channels, n)`` at 44.1 kHz (stereo kept, more channels mixed down
-    to two) in ``<folder>/mix.npy``; returns (path, channels, n)."""
+    """``<folder>/mix.npy``: float32 ``(channels, n)`` at 44.1 kHz, at most stereo; returns (path, channels, n)."""
     info = media.probe(path)
     channels = 1 if int(info.get("channels") or 0) == 1 else 2
     y = media.decode_pcm(path, SR, channels=channels)
@@ -167,7 +151,7 @@ def _decode(path: str, folder: str) -> tuple[str, int, int]:
 
 
 def _drop_others(data: config.DataDir, keep: str) -> None:
-    """Delete the stems of other files (one cached separation at a time: they are large)."""
+    """One cached separation at a time: they are large."""
     try:
         names = os.listdir(data.tmp)
     except OSError:
@@ -210,9 +194,8 @@ async def _separate(ctx: Context, data: config.DataDir, path: str, key: str, run
 
 async def separate(ctx: Context, data: config.DataDir, path: str, progress: Callable[[str, float], None] | None = None,
                    background: bool = False) -> Stems:
-    """The stems of ``path``: cached, joined from a run in flight, or separated now. ``background`` (a preload) may be
-    stopped by another GPU job; a job (``background=False``) that was waiting for such a run starts it again.
-    Errors: ``speech.SpeechError`` (``model_missing`` without the model), ``speech.Cancelled``."""
+    """Cached, joined from a run in flight, or separated now. A ``background`` preload may be stopped by another GPU
+    job; a job that was waiting for it starts it again."""
     t0 = time.time()
     key = await aio.run_io(file_key, path)
     done = _DONE.get(key)
@@ -248,8 +231,6 @@ def forget(key: str) -> None:
     _DONE.pop(key, None)
 
 
-# ------------------------------------------------------------------------------------------------ mux
-
 def write_mix_wav(path: str, x: np.ndarray, sr: int = SR) -> str:
     """``x`` (channels, n) as a 32-bit float WAV (no rounding before the encoder)."""
     import soundfile as sf  # noqa: PLC0415
@@ -273,9 +254,8 @@ def _audio_start(path: str) -> float:
 
 
 def mux(source: str, audio: str, dest: str, container: str, language: str | None = None) -> dict[str, Any]:
-    """Write ``dest``: the picture of ``source`` (every video stream, plus its subtitles, attachments, chapters and
-    metadata where the container takes them) copied as it is, and ``audio`` (a WAV) encoded for ``container`` as the
-    only audio track. Blocking. Returns ``{"audio_codec", "faststart"}``."""
+    """Copy the picture of ``source`` (with subtitles, attachments, chapters where the container takes them) and
+    encode ``audio`` as the only audio track. Blocking."""
     exe = media.require_ffmpeg()
     _, _, encoders, _ = media._ffmpeg_lists()
     choices = [c for c in _CONTAINERS.get(container, _CONTAINERS[FALLBACK_CONTAINER]) if c[0] in encoders]

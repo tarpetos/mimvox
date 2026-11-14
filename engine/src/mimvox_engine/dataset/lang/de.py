@@ -1,21 +1,4 @@
-"""German: grapheme-cluster heuristic (no G2P model or lexicon is shipped; good enough to measure phoneme coverage).
-
-Inventory (42, IPA): 16 monophthongs (long/short pairs iː ɪ, yː ʏ, eː ɛ, øː œ, uː ʊ, oː ɔ, aː a; schwa ə and the
-vocalic r ɐ; long ä is merged with eː as most speakers do), 3 diphthongs aɪ aʊ ɔʏ and 23 consonants incl. the
-affricates pf ts tʃ.
-
-Rules, in order of priority:
-* Clusters: tsch tʃ, sch ʃ, chs ks, dt t, ch (x after a o u au, ç elsewhere; -ig at the end is ɪç), ck k, tz/z ts, pf,
-  ph f, th t, qu kv, ng ŋ, nk ŋk, x ks, ß/ss s, sp/st at the start of a word ʃp/ʃt, doubled consonants once.
-* Vowel length: ie, doubled vowels and vowel + h (before a consonant or the end) are long; a vowel before two or more
-  consonants (or ck, tz, sch, ß, ss) is short; before a single consonant + vowel or at the end of a word it is long;
-  before a single final consonant it is long, except in a list of short function words (an, in, mit, das, ...).
-* Unstressed e: final -e, -en, -el, -em and the prefixes be-/ge- are ə; final -er and r after a long vowel at the
-  end of a syllable are ɐ; r elsewhere is ʁ.
-* Final devoicing: b d g at the end of a word are p t k; s before a vowel at the start of a word or between vowels
-  is z; v is f (v between vowels is v: Klavier, Video), w is v.
-Compounds and loanwords are not recognized, so some vowel lengths are wrong; the coverage measure tolerates that.
-"""
+"""German grapheme-cluster heuristic, good enough to measure phoneme coverage (no G2P model or lexicon is shipped)."""
 from __future__ import annotations
 
 from ._common import words
@@ -56,7 +39,7 @@ _DEVOICE = {"b": "p", "d": "t", "g": "k"}
 
 
 def _consonants_after(w: str, i: int) -> int:
-    """Consonant letters from ``i`` up to the next vowel or the end (clusters such as sch/ck/ß count as two)."""
+    """Consonant letters from ``i`` to the next vowel; sch/ck/ß count as two."""
     j = i
     while j < len(w) and w[j] not in _V:
         j += 1
@@ -82,7 +65,6 @@ def word_phonemes(word: str) -> list[str]:
             out += ["ɪ", "ç"]
             break
         if c in _V:
-            # unstressed endings and prefixes
             if c == "e" and i > 0 and rest in ("e", "en", "el", "em", "es", "ern", "end"):
                 if rest in ("ern",):
                     out += ["ɐ", "n"]
@@ -138,7 +120,7 @@ def word_phonemes(word: str) -> list[str]:
             out += cl[1]
             i += len(cl[0])
             continue
-        if c == nxt:  # doubled consonant
+        if c == nxt:
             i += 1
             continue
         if c == "h" and i > 0:

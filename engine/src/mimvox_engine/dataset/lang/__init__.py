@@ -1,22 +1,3 @@
-"""Languages of the reading texts: codes, reading pace, phoneme inventories, coverage thresholds and detection.
-
-Codes are ISO 639-1 (``en``, ``uk``, ``de``, ``fr``, ``es``, ``pl``, ``ro``). English keeps the ARPAbet analysis of
-``dataset.phonemes`` (g2p_en / CMUdict); every other language has a pure-Python rule-based G2P in this package
-(``uk``, ``pl``, ``es``, ``ro``: letter/digraph rules, the spelling is close to phonemic; ``de``, ``fr``: documented
-grapheme-cluster heuristics). Each module exposes ``PHONEMES`` (the inventory, canonical order), ``EXAMPLES``
-(phoneme -> a native example word) and ``phonemes_of(text)``.
-
-Reading pace (``wpm``, words per minute read aloud at the calm pace used for recording) is the English 145 wpm
-scaled by how long words are in each language (syllables per word in running text) and by the typical syllable rate
-of read speech (faster in Spanish and French, a little slower in German): in the presets a Ukrainian or Polish word has
-about 2.0 syllables, a Romanian one 1.8, a German one 1.6, an English one 1.4, which puts every language at about 3.3-4.2 syllables per
-second. These are estimates for planning (``est_seconds``), not measurements.
-
-Coverage thresholds: ``low_coverage`` is the share of the inventory below which ``trainable``/``great`` drop by one
-level (0.80 everywhere: a single 60-90 s preset part already reaches 0.84-1.0 in every language, so only a monotonous
-or very short text falls below it); ``hint_coverage`` is the share below which ``text.analyze`` names the missing
-sounds. Every standard and pro preset covers its whole inventory.
-"""
 from __future__ import annotations
 
 import importlib
@@ -33,10 +14,10 @@ DEFAULT = "en"
 @dataclass(frozen=True)
 class Language:
     code: str
-    name: str        # English name (UI language)
-    native: str      # name in the language itself
-    wpm: float       # reading pace, words per minute
-    low_coverage: float = 0.80
+    name: str
+    native: str
+    wpm: float       # English 145 wpm scaled by syllables per word: an estimate, not measured
+    low_coverage: float = 0.80  # one 60-90 s preset part reaches 0.84-1.0 in every language
     hint_coverage: float = 0.95
 
 
@@ -52,10 +33,7 @@ LANGUAGES: dict[str, Language] = {
 
 
 def normalize_code(value: Any) -> str | None:
-    """``"uk"``, ``"UK"``, ``"uk-UA"``, ``"uk_UA"`` -> ``"uk"``; ``None`` for ``None``/``""``/``"auto"``.
-
-    Raises ``ValueError`` for a non-string or an unsupported language.
-    """
+    """``"uk-UA"``, ``"UK"`` -> ``"uk"``; ``None`` for ``None``/``""``/``"auto"``; ``ValueError`` when unsupported."""
     if value is None:
         return None
     if not isinstance(value, str):
@@ -86,7 +64,7 @@ def module(code: str) -> ModuleType:
 
 
 def backend(code: str) -> str:
-    """Which analysis is active: g2p_en / cmudict / heuristic for English, ``rules`` for the others."""
+    """g2p_en / cmudict / heuristic for English, ``rules`` for the others."""
     return module("en").backend() if code == "en" else "rules"
 
 
@@ -113,13 +91,10 @@ def coverage(text: str, code: str) -> tuple[float, list[str], dict[str, int]]:
     return (len(inv) - len(missing)) / len(inv), missing, counts
 
 
-# ------------------------------------------------------------------------------------------------- detection
-
 _CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 _LATIN = re.compile(r"[a-zà-ɏ]")
 _TOKEN = re.compile(r"[^\W\d_]+")
-# Letters that only one of the supported Latin-script languages uses (é and ó are shared, so they do not count).
-# â and î are French and Romanian alike, so they count for neither.
+# Letters only one supported Latin-script language uses (é, ó, â and î are shared).
 _MARKS = {"pl": "ąęłśźżćń", "de": "äöüß", "fr": "èêàçœùôûëï", "es": "ñáíú¿¡", "ro": "ășțşţ"}
 _STOPWORDS = {
     "en": "the and is are was of to in that it you he she we they this with for not have be on at but what",
@@ -133,9 +108,7 @@ _STOP = {code: set(words.split()) for code, words in _STOPWORDS.items()}
 
 
 def detect(text: str) -> str:
-    """Cheap guess of the language of ``text``: Cyrillic script -> ``uk`` (the only Cyrillic language supported);
-    Latin script -> the language with the most stopwords plus language-specific letters (3 points each); ``en`` when
-    nothing points anywhere (also for empty text)."""
+    """Cyrillic -> ``uk``; Latin -> most stopwords plus language-specific letters (3 points each); else ``en``."""
     t = normalize(text)
     cyr, lat = len(_CYRILLIC.findall(t)), len(_LATIN.findall(t))
     if cyr == 0 and lat == 0:

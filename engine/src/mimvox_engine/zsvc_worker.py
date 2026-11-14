@@ -1,34 +1,5 @@
-"""Persistent zero-shot voice-conversion worker: Seed-VC (Plachtaa/seed-vc, GPL-3.0), the speech model (v1, DiT with a
-Whisper-small content encoder, CAM++ speaker style, BigVGAN 22 kHz vocoder). It turns any speech into the timbre of a
-short reference clip without training; the native accent of an untrained voice uses it (``accent.py``).
-
-Runs with the engine venv's interpreter, started by ``zsvc.py`` as
-
-    python -I zsvc_worker.py --seed-vc <runtime>/seed-vc --models <runtime>/models/seed-vc [--device cuda|cpu|mps]
-                             [--unload-after S]
-
-``--seed-vc`` is the Seed-VC source checkout that setup fetches (its ``modules`` package is imported from there; it
-is not part of this repository), ``--models`` the weights setup downloads (offline afterwards):
-``dit/`` (Plachta/Seed-VC ``DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth`` + its config),
-``bigvgan/`` (nvidia/bigvgan_v2_22khz_80band_256x), ``whisper-small/`` (openai/whisper-small; only the encoder is
-kept in memory). CAM++ (``campplus_cn_common.bin``) ships in the checkout.
-
-Standalone on purpose: it imports nothing from ``mimvox_engine``; the event-driven skeleton ``worker_kit.py`` is loaded
-by its file path. Wire format: see ``worker_kit.py``.
-
-Ops (one at a time, on the op thread):
-  load     {}                                     -> {"load_s","device","vram_gb"}   (no-op when loaded)
-  convert  {"in","out","ref","steps":12,"cfg":0.7} -> {"elapsed","duration_s","sr"}
-           ``in`` speech (any rate) converted to the timbre of ``ref``; ``out`` a 22.05 kHz mono WAV of the same
-           length. The reference is used up to REF_MAX_S; its prompt (content, mel, speaker style) is cached per file
-           state. Pitch follows the reference (the model generates it; no transpose needed).
-  warm     {"ref"}                                -> {"elapsed_s"}   (loads the models, builds the reference prompt and
-                                                                     runs one short conversion, so the first real one
-                                                                     does not pay for the first DiT / vocoder run)
-  release  {}                                     -> {}   (drops the models and frees the GPU; the next op reloads)
-  status   {}                                     -> {"loaded","vram_gb"}
-Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"}.
-"""
+"""Zero-shot voice-conversion worker on Seed-VC (GPL-3.0). Standalone: it imports nothing from ``mimvox_engine`` and
+loads ``worker_kit.py`` by its file path."""
 import argparse
 import collections
 import gc
@@ -47,9 +18,8 @@ def _load_kit():
     return mod
 
 
-# Hosted: the OmniVoice worker loads this file into its own process (one PyTorch and one CUDA context for both models:
-# about 1.5 GB of commit and 1 GB of RAM less than a process of its own) and sets ``__hosted__`` first:
-# {"kit": its worker_kit, "worker": its kit.Worker, "argv": this file's arguments}. It then serves ``OPS`` itself.
+# Hosted: the OmniVoice worker loads this file into its own process (about 1.5 GB of commit and 1 GB of RAM less) and
+# first sets ``__hosted__`` = {"kit", "worker", "argv"}; it then serves ``OPS`` itself.
 HOST = globals().get("__hosted__")
 kit = HOST["kit"] if HOST else _load_kit()
 if not HOST:
@@ -69,8 +39,7 @@ HOP = 256
 REF_MAX_S = 20.0          # reference used (Seed-VC allows 25 s, but prompt + source share a 30 s context)
 CONTEXT_FRAMES = SR // HOP * 30
 OVERLAP_FRAMES = 16       # crossfade between windows of a long source
-STEPS = 12                # diffusion steps (the engine sends 12 for Best, 8 for Fast): 12 to 25 gave the same held-out
-                          # speaker similarity and WER, at half the time (docs/performance.md, "Zero-shot native accent")
+STEPS = 12                # 12 to 25 gave the same speaker similarity and WER, at half the time
 WARM_STEPS = 4            # the warm-up conversion (its output is thrown away)
 CFG = 0.7                 # inference_cfg_rate (upstream default)
 PROMPT_CACHE = 2
@@ -79,9 +48,8 @@ sys.path.insert(0, SEED_VC)
 
 
 def _stub_unused_imports():
-    """Seed-VC's modules import two packages the speech model never uses: descript-audio-codec's ``VectorQuantize``
-    (length regulator, only with ``vector_quantize``) and matplotlib (BigVGAN's plotting helpers). Install-free
-    stand-ins keep them out of the engine venv."""
+    """Seed-VC imports descript-audio-codec and matplotlib for code the speech model never runs: stand-ins keep them
+    out of the engine venv."""
     if importlib.util.find_spec("dac") is None:
         dac, nn_, quant = (types.ModuleType(n) for n in ("dac", "dac.nn", "dac.nn.quantize"))
 

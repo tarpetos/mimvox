@@ -1,21 +1,3 @@
-"""Event-loop plumbing shared by the engine modules.
-
-The engine runs on **one asyncio event loop** (``server.serve``). Nothing polls: requests, worker replies and process
-exits are awaited, timers use ``loop.call_later`` / ``asyncio.wait_for``, cancellation is task cancellation.
-
-Two executors take the blocking work off the loop:
-
-- ``GPU``: a single thread. Every in-process model call runs here, so model calls are serialized by
-  design (no lock, no "is it free yet" checks): a second request simply queues behind the first.
-- ``IO``: a small pool for blocking file / CPU work (decoding, resampling, writing files, the sync method handlers).
-
-Standard input: :func:`detach_stdin` moves the protocol pipe to a private descriptor and points fd 0 and the Windows
-``STD_INPUT_HANDLE`` at NUL. Windows serializes all I/O on a file object opened for synchronous I/O (every anonymous
-pipe is one): while a thread waits in ``ReadFile`` on the pipe, any other request on that same file object blocks until
-the read completes, i.e. until the next line arrives. Loading DLLs does such a request on the standard input handle
-(``import torch`` hung until the next request line in a measured repro), which is what deadlocked ``redub.prepare``
-in the speech worker. A private handle that nothing else touches avoids it; the speech and RVC workers do the same.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +15,7 @@ from typing import Any, BinaryIO, TypeVar
 log = logging.getLogger("mimvox.aio")
 T = TypeVar("T")
 
+# One thread: in-process model calls are serialized by design, a second request queues behind the first.
 GPU = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="gpu")
 IO = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="io")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -44,7 +27,6 @@ _closing = [False]
 
 
 def closing() -> bool:
-    """True once the engine is shutting down (nothing new is started, a training is left resumable)."""
     return _closing[0]
 
 
@@ -69,7 +51,7 @@ def on_loop_thread() -> bool:
 
 
 def call_soon(fn: Callable[..., Any], *args: Any) -> None:
-    """Run ``fn(*args)`` on the loop thread (directly when already there). Safe from any thread."""
+    """Safe from any thread."""
     if on_loop_thread():
         fn(*args)
     else:
@@ -77,7 +59,7 @@ def call_soon(fn: Callable[..., Any], *args: Any) -> None:
 
 
 def spawn(coro: Awaitable[T], name: str | None = None) -> asyncio.Task[T]:
-    """Start a background task, keep a strong reference until it ends and log an unexpected failure."""
+    """Keeps a strong reference until the task ends and logs an unexpected failure."""
     task = asyncio.ensure_future(coro)
     if name:
         task.set_name(name)
@@ -93,33 +75,26 @@ def spawn(coro: Awaitable[T], name: str | None = None) -> asyncio.Task[T]:
 
 
 def spawn_threadsafe(coro_fn: Callable[[], Awaitable[Any]], name: str | None = None) -> None:
-    """``spawn(coro_fn())`` from any thread."""
     call_soon(lambda: spawn(coro_fn(), name))
 
 
 async def run_gpu(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-    """Run ``fn`` on the single GPU thread and await its result (queued behind earlier GPU work)."""
     return await asyncio.get_running_loop().run_in_executor(GPU, functools.partial(fn, *args, **kwargs))
 
 
 async def run_io(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-    """Run blocking file / CPU work on the IO pool and await it."""
     return await asyncio.get_running_loop().run_in_executor(IO, functools.partial(fn, *args, **kwargs))
 
 
 def run_sync(coro: Awaitable[T]) -> T:
-    """Run a coroutine on the engine loop from a worker thread and block that thread until it is done (a wait on a
-    future, not a poll). For the few sync call sites (sync handlers calling an async one)."""
     if on_loop_thread():
         raise RuntimeError("run_sync() called on the loop thread")
     return asyncio.run_coroutine_threadsafe(coro, loop()).result()  # type: ignore[arg-type]
 
 
-# ------------------------------------------------------------------------------------------------ stdin
-
 def detach_stdin() -> BinaryIO:
-    """Return the protocol input as a private binary file and point fd 0 / ``STD_INPUT_HANDLE`` at NUL (see the module
-    docstring). Child processes started without an explicit stdin then inherit NUL, never the protocol pipe."""
+    """Point fd 0 / ``STD_INPUT_HANDLE`` at NUL and return the protocol pipe as a private file. Windows serializes I/O
+    on a synchronous pipe, so a pending ReadFile on stdin blocked DLL loads (``import torch``) until the next line."""
     fd = os.dup(0)  # non-inheritable (PEP 446)
     null = os.open(os.devnull, os.O_RDONLY)
     os.dup2(null, 0)
@@ -135,11 +110,8 @@ def detach_stdin() -> BinaryIO:
 
 
 async def read_lines(stream: BinaryIO) -> AsyncIterator[bytes]:
-    """Yield the lines of ``stream`` as they arrive, ending at EOF.
-
-    POSIX: an asyncio pipe reader on the loop. Windows (synchronous anonymous pipes cannot be read by the proactor) or a
-    stream that is not a pipe: one dedicated thread blocks on ``readline()`` and hands each line to the loop with
-    ``call_soon_threadsafe`` (no timeouts, no polling)."""
+    """Yield lines until EOF. Windows anonymous pipes are synchronous and cannot be read by the proactor, so there (and
+    for a non-pipe stream) a dedicated thread blocks on ``readline()``."""
     loop_ = asyncio.get_running_loop()
     if os.name != "nt":
         reader = asyncio.StreamReader(limit=64 * 1024 * 1024)
@@ -173,8 +145,7 @@ async def read_lines(stream: BinaryIO) -> AsyncIterator[bytes]:
 
 
 async def gather_or_cancel(*aws: Awaitable[Any]) -> list[Any]:
-    """Run ``aws`` concurrently; the first failure (or a cancel of the caller) cancels the others, waits for them to
-    end, and is raised. (``asyncio.TaskGroup`` semantics on Python 3.10.)"""
+    """``asyncio.TaskGroup`` on Python 3.10: the first failure cancels the others, waits for them, is raised."""
     tasks = [asyncio.ensure_future(a) for a in aws]
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
@@ -190,27 +161,21 @@ async def gather_or_cancel(*aws: Awaitable[Any]) -> list[Any]:
 
 
 async def queue_items(queue: asyncio.Queue[T | None]) -> AsyncIterator[T]:
-    """Yield the items put into ``queue`` until a ``None`` arrives (each item is awaited, never polled)."""
+    """Yield items until a ``None`` arrives."""
     item = await queue.get()
     while item is not None:
         yield item
         item = await queue.get()
 
 
-# ------------------------------------------------------------------------------------------------ processes
-
 def new_group_kwargs() -> dict[str, Any]:
-    """Popen keyword arguments that put a child into its own process group (so its whole tree can be stopped)."""
     if sys.platform == "win32":
         return {"creationflags": NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
     return {"start_new_session": True}
 
 
 async def kill_tree(pid: int, wait_for: Awaitable[Any] | None = None, grace_s: float = 5.0) -> None:
-    """Stop process ``pid`` and everything it started (Applio's train.py spawns workers).
-
-    Windows: ``taskkill /F /T`` (awaited). POSIX: SIGTERM to the process group, then SIGKILL if ``wait_for`` (normally
-    ``proc.wait()``) has not finished within ``grace_s``."""
+    """Stop ``pid`` and everything it started (Applio's train.py spawns workers)."""
     waiter = asyncio.ensure_future(wait_for) if wait_for is not None else None
     if sys.platform == "win32":
         try:
@@ -244,7 +209,6 @@ async def kill_tree(pid: int, wait_for: Awaitable[Any] | None = None, grace_s: f
 
 
 def kill_tree_sync(pid: int) -> None:
-    """Last-resort variant for an exit path without a running loop."""
     try:
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=30,

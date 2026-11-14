@@ -1,21 +1,5 @@
-"""Reference-clip analysis: candidate windows scored by SNR, speaking rate and long pauses.
-
-The speech model copies the tempo and manner of ``reference.wav``, so a clean but slow, halting clip makes the cloned voice
-sound slow. Every part is analysed once (on ``dataset.add``) into a handful of 15-20 s candidate windows. The final
-pick happens when the whole voice is known: windows whose speaking rate is close to the voice's own median rate, with
-few long pauses and a clean signal, win; parts whose preset title suggests unnatural reading (tongue twisters,
-questions, numbers) are avoided.
-
-CPU-light on purpose: one dB envelope per part (10 ms frames) plus ``scipy.signal.find_peaks``; windows are scored from
-cumulative sums, no per-window audio processing.
-
-Measures (per window):
-
-- ``rate``: syllable nuclei per second of *active* time (window minus gaps of 400 ms or more). Syllable nuclei are
-  peaks of the smoothed energy envelope (at least 3 dB above the dips around them, 70 ms apart).
-- ``pauses``: fraction of the window spent in silent gaps of 400 ms or more (0..1).
-- ``snr_db``: 90th minus 10th percentile of the frame level inside the window.
-"""
+"""Pick reference-clip windows by SNR, speaking rate and long pauses: the speech model copies the tempo and manner
+of ``reference.wav``, so a slow, halting clip makes the cloned voice slow."""
 from __future__ import annotations
 
 import math
@@ -58,12 +42,10 @@ _BAD_TITLE = re.compile(
 
 
 def title_penalty(title: str | None) -> float:
-    """Penalty for parts whose title suggests unnatural reading (tongue twisters, questions, numbers ...)."""
     return TITLE_PENALTY if title and _BAD_TITLE.search(title) else 0.0
 
 
 class PartAnalysis:
-    """Per-frame arrays of one part and O(1) window measures."""
 
     def __init__(self, y: np.ndarray, sr: int) -> None:
         from scipy.ndimage import uniform_filter1d  # noqa: PLC0415
@@ -123,8 +105,7 @@ class PartAnalysis:
 
     def windows(self, lo_s: float = WIN_MIN_S, hi_s: float = WIN_MAX_S, fallback_hi_s: float = WIN_FALLBACK_MAX_S,
                 ideal_s: float = WIN_IDEAL_S) -> list[tuple[int, int]]:
-        """Pause-aligned windows of ``lo_s``-``hi_s`` (15-20 s by default; widened to ``fallback_hi_s``, then fixed
-        windows of ``ideal_s``, when the part has none)."""
+        """Pause-aligned windows; widened to ``fallback_hi_s``, then fixed ``ideal_s`` ones, when the part has none."""
         n, cuts = len(self.fdb), self.cuts
         for lo, hi in ((lo_s, hi_s), (lo_s, fallback_hi_s)):
             out = []
@@ -144,7 +125,7 @@ class PartAnalysis:
 
 
 def part_rate(an: PartAnalysis) -> float:
-    """Median-friendly speaking rate of a whole part (syllables per active second)."""
+    """Syllables per active second of the whole part."""
     if not an.ok:
         return 0.0
     return an.measure(0, len(an.fdb))["rate"]
@@ -156,7 +137,7 @@ def window_score(m: dict[str, float], median_rate: float, title_pen: float = 0.0
     if rate > 0 and median_rate > 0:
         rate_pen = RATE_WEIGHT * abs(math.log(rate / median_rate))
     else:
-        rate_pen = RATE_WEIGHT * 0.5   # unknown rate: a mild penalty
+        rate_pen = RATE_WEIGHT * 0.5
     return round(SNR_WEIGHT * min(m["snr_db"], SNR_CAP_DB) - PAUSE_WEIGHT * m["pauses"] - rate_pen
                  - DURATION_WEIGHT * abs(m["duration_s"] - ideal_s) - title_pen - clip_pen, 2)
 
@@ -168,8 +149,8 @@ def _overlap(a: dict[str, Any], b: dict[str, Any]) -> float:
 
 
 def pick_distinct(cands: list[dict[str, Any]], count: int, max_per_part: int | None = None) -> list[dict[str, Any]]:
-    """Greedy best-first selection of ``count`` mutually (mostly) non-overlapping candidates; ``cands`` must carry a
-    ``score`` and be sorted best first. ``max_per_part`` needs a ``part`` key."""
+    """Greedy, mostly non-overlapping picks; ``cands`` carry a ``score`` and are sorted best first (and need a ``part``
+    key for ``max_per_part``)."""
     out: list[dict[str, Any]] = []
     per_part: dict[Any, int] = {}
     for c in cands:
@@ -185,11 +166,8 @@ def pick_distinct(cands: list[dict[str, Any]], count: int, max_per_part: int | N
 
 
 def analyse_part(y: np.ndarray, sr: int, proxy_median: float = 0.0, clip_pen: float = 0.0) -> dict[str, Any]:
-    """The meta entry fragment of a part: its overall ``rate`` and its best candidate windows (``cands``).
-
-    ``proxy_median`` (the median rate of the voice's other parts, 0 when unknown) only decides which windows are worth
-    keeping; the final ranking is redone by :func:`rank` once the whole voice is known.
-    """
+    """The part's ``rate`` and best windows (``cands``); ``proxy_median`` only decides which windows are kept,
+    :func:`rank` scores them again once the whole voice is known."""
     an = PartAnalysis(y, sr)
     if not an.ok:
         return {"rate": 0.0, "cands": []}
@@ -205,18 +183,14 @@ def analyse_part(y: np.ndarray, sr: int, proxy_median: float = 0.0, clip_pen: fl
 
 
 def voice_median_rate(parts_meta: dict[str, dict[str, Any]], usable: set[int] | None = None) -> float:
-    """Median of the per-part rates (parts that are usable and have a rate)."""
     rates = [float(i["rate"]) for k, i in parts_meta.items()
              if isinstance(i.get("rate"), (int, float)) and i["rate"] > 0 and (usable is None or int(k) in usable)]
     return float(np.median(rates)) if rates else 0.0
 
 
 def rank(parts_meta: dict[str, dict[str, Any]], titles: dict[int, str], usable: set[int]) -> tuple[list[dict[str, Any]], float]:
-    """All stored candidates of the usable parts, best first, scored against the voice's median rate.
-
-    Returns ``(candidates, median_rate)``; every candidate has ``part``, ``start_s``, ``end_s``, ``duration_s``,
-    ``rate``, ``pauses``, ``snr_db``, ``score`` and ``hint``.
-    """
+    """``(candidates best first, median_rate)``; each candidate has ``part``, ``start_s``, ``end_s``, ``duration_s``,
+    ``rate``, ``pauses``, ``snr_db``, ``score`` and ``hint``."""
     median = voice_median_rate(parts_meta, usable)
     out: list[dict[str, Any]] = []
     for key, info in parts_meta.items():
@@ -233,7 +207,6 @@ def rank(parts_meta: dict[str, dict[str, Any]], titles: dict[int, str], usable: 
 
 
 def hint(rate: float, median: float) -> str:
-    """``"slow"`` / ``"fast"`` / ``"natural"`` against the voice's median rate."""
     if rate <= 0 or median <= 0:
         return "natural"
     r = rate / median

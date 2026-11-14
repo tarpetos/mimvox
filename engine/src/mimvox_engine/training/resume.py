@@ -1,14 +1,5 @@
-"""Pause / resume support: checkpoint bookkeeping in Applio's log folder and the run markers in ``voice.json``.
-
-How Applio resumes (``rvc/train/train.py``): when ``core.py train`` starts and ``logs/<model>/`` holds ``G_*.pth`` and
-``D_*.pth``, it loads the newest pair (highest number in the file name), reads the ``iteration`` stored inside (the epoch
-that was finished) and continues with ``epoch + 1``. Pretrained weights are loaded only when no checkpoint exists.
-
-Applio's ``--save-only-latest`` overwrites one fixed file name in place (``G_2333333.pth``), so a crash or a kill during
-the save destroys the only checkpoint. This module instead lets Applio write ``G_<step>.pth`` / ``D_<step>.pth`` and
-removes the older pair only once the next epoch is running (the save is then complete), so a valid checkpoint always
-exists. Torn files (no zip directory at the end) are detected without loading them and the previous pair is used.
-"""
+"""Applio resumes from the highest-numbered G/D pair and ``--save-only-latest`` overwrites the only checkpoint in
+place, so here an older pair is removed only once the next epoch runs."""
 from __future__ import annotations
 
 import json
@@ -45,8 +36,6 @@ def checkpoint_every(total_epochs: int) -> int:
     return max(1, min(total_epochs, CHECKPOINT_EVERY))
 
 
-# ------------------------------------------------------------------------------------------------ checkpoints
-
 def _is_zip(path: Path) -> bool:
     """A finished ``torch.save`` file is a zip archive whose directory sits at the end; a torn write has none."""
     try:
@@ -68,7 +57,6 @@ def _pairs(logdir: Path) -> dict[int, dict[str, Path]]:
 
 
 def newest_valid_step(logdir: Path) -> int | None:
-    """Step number of the newest G/D pair that is complete on disk, or ``None``."""
     pairs = _pairs(logdir)
     for step in sorted(pairs, reverse=True):
         pair = pairs[step]
@@ -78,11 +66,8 @@ def newest_valid_step(logdir: Path) -> int | None:
 
 
 def prune_checkpoints(logdir: Path, keep_step: int | None) -> None:
-    """Delete every G/D pair except ``keep_step`` and the per-save weight exports of other steps.
-
-    With ``keep_step=None`` all checkpoints go. Applio's own pick is "highest number", so leaving a torn newer pair
-    next to a valid older one would make it load the torn one: call this with the valid step before every start.
-    """
+    """``keep_step=None`` deletes all. Applio loads the highest-numbered pair even when it is torn: call this with the
+    valid step before every start."""
     for p in list(logdir.glob("*.pth")):
         c = _CKPT.match(p.name)
         w = _WEIGHTS.match(p.name)
@@ -93,14 +78,13 @@ def prune_checkpoints(logdir: Path, keep_step: int | None) -> None:
 
 
 def repair(logdir: Path) -> int | None:
-    """Make the folder safe to resume from: keep only the newest valid pair. Returns its step (``None`` = no pair)."""
+    """Keep only the newest valid pair; returns its step."""
     step = newest_valid_step(logdir)
     prune_checkpoints(logdir, step)
     return step
 
 
 def features_ready(logdir: Path) -> bool:
-    """The preprocess and extract outputs Applio's ``train`` needs are all there."""
     if not (logdir / "config.json").is_file() or not (logdir / "filelist.txt").is_file():
         return False
     for name in FEATURE_DIRS:
@@ -112,8 +96,6 @@ def features_ready(logdir: Path) -> bool:
             return False
     return True
 
-
-# ---------------------------------------------------------------------------------------------- orphan workers
 
 def _pid_is_applio(pid: int) -> bool:
     try:
@@ -130,10 +112,8 @@ def _pid_is_applio(pid: int) -> bool:
 
 
 def kill_orphans(logdir: Path) -> None:
-    """Stop Applio training workers left over from an engine that was killed without cleaning up.
-
-    ``train.py`` records its worker PIDs in ``config.json``; only python processes among them are touched.
-    """
+    """Workers of an engine killed without cleanup: ``train.py`` records their PIDs in ``config.json``; only python
+    processes among them are touched."""
     try:
         pids = json.loads((logdir / "config.json").read_text(encoding="utf-8")).get("process_pids") or []
     except (OSError, ValueError, AttributeError):
@@ -153,7 +133,6 @@ def kill_orphans(logdir: Path) -> None:
 
 
 def discard_logdir(runtime: dict[str, Any], voice_id: str) -> None:
-    """Delete the Applio folder of a voice (paused or abandoned run), after stopping workers that might still use it."""
     logdir = logdir_for(runtime, voice_id)
     if logdir is None or not logdir.exists():
         return

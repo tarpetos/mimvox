@@ -1,5 +1,3 @@
-"""Names of the speech languages (``hello`` ``languages``): English name, name in the language itself, and the
-"common" set the app lists first. Codes are those of ``backends.languages()`` (ISO 639-1, ``yue`` for Cantonese)."""
 from __future__ import annotations
 
 from typing import Any
@@ -29,18 +27,15 @@ NAMES: dict[str, tuple[str, str]] = {
     "ro": ("Romanian", "Română"),
 }
 
-# Listed first by the app ("Common"), in this order.
 COMMON = ("en", "uk", "de", "fr", "es", "pl", "ro", "it", "pt", "cs", "ru")
 
 
 def name(code: str) -> str:
-    """English name of ``code`` (the code upper-cased when unknown)."""
     return NAMES.get(code, (code.upper(), code))[0]
 
 
 def describe(codes: set[str] | list[str]) -> list[dict[str, Any]]:
-    """``[{"code","name","native","common"}]``: the common languages first (in ``COMMON`` order), then the rest by
-    English name."""
+    """``[{"code","name","native","common"}]``, the ``COMMON`` languages first."""
     have = set(codes)
     first = [c for c in COMMON if c in have]
     rest = sorted((c for c in have if c not in COMMON), key=name)

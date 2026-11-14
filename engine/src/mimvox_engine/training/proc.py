@@ -1,9 +1,3 @@
-"""Run an Applio CLI step as an asyncio subprocess, stream its output line by line, stop its whole process tree.
-
-The output is read with ``await stdout.read()`` as it arrives (tqdm redraws with ``\\r``, so lines are split on ``\\r``
-and ``\\n``); the exit is awaited. A stop (cancel, pause, engine shutdown) kills the tree (Windows: ``taskkill /T``,
-POSIX: the process group) and awaits the exit. No polling anywhere.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -22,20 +16,17 @@ _LIVE: set[asyncio.subprocess.Process] = set()
 
 
 async def kill_all() -> None:
-    """Stop every running Applio step (engine shutdown) and await the exits."""
     procs = list(_LIVE)
     if procs:
         await asyncio.gather(*(aio.kill_tree(p.pid, p.wait()) for p in procs), return_exceptions=True)
 
 
 def kill_all_sync() -> None:
-    """Last resort when the loop is gone."""
     for p in list(_LIVE):
         aio.kill_tree_sync(p.pid)
 
 
 class Step:
-    """One Applio subprocess. ``await run(on_line)`` returns its exit code; ``await kill()`` stops its tree."""
 
     def __init__(self, cmd: list[str], cwd: str, env: dict[str, str] | None = None) -> None:
         self.cmd = cmd
@@ -80,7 +71,7 @@ class Step:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         pending = ""
         chunk = await proc.stdout.read(65536)
-        while chunk:  # until EOF; every read is awaited
+        while chunk:
             pending += decoder.decode(chunk)
             parts = _SPLIT.split(pending)
             pending = parts.pop()  # incomplete tail; tqdm redraws with \r so it is flushed by the next update

@@ -1,14 +1,3 @@
-"""Shared media layer: ffmpeg discovery, probing, one decoder for every engine input, and ``audio.export``.
-
-Every module that reads a user's audio file goes through :func:`read_audio` (or :func:`decode_to_wav`), so any
-format ffmpeg understands works everywhere: wav, mp3, m4a/aac, flac, ogg/vorbis, opus, wma, aiff and the audio track
-of mp4, mkv, mov, webm, avi. Plain WAV / FLAC / AIFF files are read natively (no process); everything else, and
-anything libsndfile refuses, is decoded by ffmpeg.
-
-ffmpeg lookup order: ``MIMVOX_FFMPEG`` (a file or a folder), the Applio runtime root (``paths.applio`` in
-runtime.toml; Applio's prerequisites put ``ffmpeg.exe`` / ``ffprobe.exe`` there on Windows), ``<runtime>/ffmpeg``
-(the portable build setup downloads on Linux when the system has none), then ``PATH`` (the system ffmpeg).
-"""
 from __future__ import annotations
 
 import json
@@ -35,8 +24,7 @@ _runtime: dict[str, Any] = {}
 _cache: dict[str, Any] = {}
 _lock = threading.Lock()
 
-# Extensions we advertise for import, with the ffmpeg demuxer names and decoders that make each one work.
-# (kind, demuxers (any), decoders (any))
+# ext -> (kind, demuxers (any), decoders (any)) that make the import of that extension work.
 _IMPORT: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     "wav": ("audio", ("wav",), ("pcm_s16le",)),
     "mp3": ("audio", ("mp3",), ("mp3", "mp3float")),
@@ -73,8 +61,6 @@ _EXPORT: dict[str, dict[str, Any]] = {
 }
 QUALITIES = ("high", "standard", "small")
 
-
-# ------------------------------------------------------------------------------------------- tool discovery
 
 def configure(runtime: dict[str, Any]) -> None:
     """Remember runtime.toml (for the Applio ffmpeg) and forget earlier lookups."""
@@ -133,7 +119,7 @@ def require_ffmpeg() -> str:
 
 
 def _run(cmd: list[str], timeout: float = 3600.0, data: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
-    """Run a tool to completion; ``data`` is fed to its stdin (otherwise stdin is closed)."""
+    """``data`` is fed to stdin, otherwise stdin is closed."""
     stdin: dict[str, Any] = {"stdin": subprocess.DEVNULL} if data is None else {"input": data}
     try:
         return subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=_FLAGS, **stdin)
@@ -161,8 +147,6 @@ def _check_file(path: Any) -> str:
         raise EngineError("not_found", f"file not found: {path}")
     return path
 
-
-# ----------------------------------------------------------------------------------------------------- probe
 
 def probe(path: str) -> dict[str, Any]:
     """``{duration_s, sample_rate, channels, has_audio, format}`` plus ``codec`` and ``has_video``."""
@@ -210,8 +194,7 @@ def probe(path: str) -> dict[str, Any]:
 
 
 def is_video(path: str) -> bool:
-    """True for the video containers listed for import (mp4, mkv, mov, webm, avi and their aliases), by extension:
-    cheap, no process."""
+    """By extension: cheap, no process."""
     ext = os.path.splitext(str(path))[1].lower().lstrip(".")
     ext = _IMPORT_ALIASES.get(ext, ext)
     return ext in _IMPORT and _IMPORT[ext][0] == "video"
@@ -223,8 +206,6 @@ def _float(v: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
 
-
-# ---------------------------------------------------------------------------------------------------- decode
 
 def decode_pcm(path: str, sr: int, max_s: float | None = None, channels: int = 1) -> np.ndarray:
     """ffmpeg decode of the first audio track to float32 at ``sr`` (only the first ``max_s`` seconds if given): mono
@@ -248,13 +229,8 @@ def decode_pcm(path: str, sr: int, max_s: float | None = None, channels: int = 1
 
 
 def read_audio(path: str, sr: int | None = None, max_s: float | None = None) -> tuple[np.ndarray, int]:
-    """Mono float32 samples of any supported audio / video file and their sample rate.
-
-    ``sr=None`` keeps the file's own rate (what the dataset tools measure); an integer resamples to it. ``max_s`` reads
-    only the first that many seconds (bounds the memory of a long file).
-    Errors: ``bad_request`` (missing path, unreadable, no audio track), ``not_found``, ``not_ready`` (ffmpeg missing
-    for a format libsndfile cannot read).
-    """
+    """Mono float32 samples and their rate; ``sr=None`` keeps the file's own rate, ``max_s`` bounds the memory of a long
+    file by reading only its start."""
     path = _check_file(path)
     ext = os.path.splitext(path)[1].lower()
     if ext in _NATIVE_EXT:
@@ -283,7 +259,7 @@ def read_audio(path: str, sr: int | None = None, max_s: float | None = None) -> 
 
 
 def decode_to_wav(src: str, dst: str, sr: int = 44100) -> float:
-    """Write the first audio track of ``src`` as a mono 16-bit WAV at ``sr`` to ``dst``; returns its duration."""
+    """Mono 16-bit WAV of the first audio track; returns its duration."""
     y, rate = read_audio(src, sr=sr)
     if len(y) == 0:
         raise EngineError("bad_request", "This file has no audio.")
@@ -293,9 +269,8 @@ def decode_to_wav(src: str, dst: str, sr: int = 44100) -> float:
 
 
 def play_wav(src: str, dst: str, sr: int, channels: int | None = None) -> str:
-    """Write the first audio track of ``src`` to ``dst`` as a 16-bit WAV at ``sr`` (``channels`` 1 for mono, ``None``
-    keeps the file's own), atomically (a ``.part`` file, then a rename); returns ``dst``. ffmpeg streams it (a long
-    file never sits in memory); without ffmpeg libsndfile reads it whole (mono). Blocking: call it on the IO pool."""
+    """Atomic 16-bit WAV of the first audio track; ``channels=None`` keeps the file's own. ffmpeg streams it, without
+    ffmpeg libsndfile reads it whole (mono). Blocking: call it on the IO pool."""
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     part = f"{dst}.part-{os.getpid()}-{threading.get_ident()}.wav"
     try:
@@ -320,10 +295,7 @@ def play_wav(src: str, dst: str, sr: int, channels: int | None = None) -> str:
     return dst
 
 
-# ------------------------------------------------------------------------------------------ format support
-
 def _ffmpeg_lists() -> tuple[set[str], set[str], set[str], str]:
-    """(demuxers, decoders, encoders, version line) of the found ffmpeg; cached."""
     with _lock:
         if "lists" in _cache:
             return _cache["lists"]
@@ -358,7 +330,7 @@ def _ffmpeg_lists() -> tuple[set[str], set[str], set[str], str]:
 
 
 def formats() -> dict[str, Any]:
-    """What this machine can read and write (see ``formats.list`` in the contract)."""
+    """The ``formats.list`` reply: what this machine can read and write."""
     demuxers, decoders, encoders, version = _ffmpeg_lists()
     if not version:  # no ffmpeg: libsndfile only
         avail = sf.available_formats()
@@ -381,17 +353,14 @@ def formats_list(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return formats()
 
 
-# ------------------------------------------------------------------------------------------- time stretch
-
-# Speed-up filters for speech, best first. rubberband (only in builds with librubberband) with its speech setting
-# ("crispness 6": short window, independent phases); atempo is ffmpeg's built-in WSOLA, in every build. Both keep the
-# pitch and sound far cleaner on speech than a phase vocoder (librosa's time_stretch, which made dubs metallic).
+# Best first; both keep the pitch and sound far cleaner on speech than a phase vocoder. rubberband is only in builds
+# with librubberband ("crispness 6" settings), atempo (WSOLA) is in every build.
 _STRETCH_FILTERS = (("rubberband", "rubberband=tempo={rate:.6f}:window=short:phase=independent"),
                     ("atempo", "atempo={rate:.6f}"))
 
 
 def _ffmpeg_filters() -> set[str]:
-    """Names of the filters of the found ffmpeg (empty without one); cached. Blocking: call it on the IO pool."""
+    """Cached. Blocking: call it on the IO pool."""
     with _lock:
         if "filters" in _cache:
             return _cache["filters"]
@@ -412,16 +381,13 @@ def _ffmpeg_filters() -> set[str]:
 
 
 def stretch_filters() -> list[str]:
-    """The time-stretch filters this machine's ffmpeg has, best first (``rubberband``, ``atempo``); empty without one."""
     have = _ffmpeg_filters()
     return [name for name, _ in _STRETCH_FILTERS if name in have]
 
 
 def time_stretch(y: np.ndarray, sr: int, rate: float) -> tuple[np.ndarray, str] | None:
-    """``y`` (mono float32 at ``sr``) played ``rate`` times faster with its pitch kept (the result is about
-    ``len(y) / rate`` samples long) and the name of the filter that did it: ffmpeg's ``rubberband`` when the build has
-    it, else ``atempo``. ``None`` when neither is available or works; the caller then keeps the clip as it is.
-    Blocking (one short ffmpeg run, raw samples through pipes): call it on the IO pool."""
+    """``y`` played ``rate`` times faster with its pitch kept, and the filter used; ``None`` when no filter works (the
+    caller keeps the clip). Blocking: call it on the IO pool."""
     exe = ffmpeg_path()
     if not exe or len(y) == 0:
         return None
@@ -446,8 +412,6 @@ def time_stretch(y: np.ndarray, sr: int, rate: float) -> tuple[np.ndarray, str] 
             _cache.get("filters", set()).discard(name)
     return None
 
-
-# ------------------------------------------------------------------------------------------------- export
 
 def export(path: str, fmt: str, dest: str | None = None, quality: str = "standard") -> dict[str, Any]:
     path = _check_file(path)
@@ -524,14 +488,11 @@ def audio_export(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return export(params.get("path"), params.get("format"), params.get("dest"), params.get("quality") or "standard")
 
 
-# -------------------------------------------------------------------------------------------- saved results
-
 PLAY_DIR = "play"  # <data>/tmp/play: playback WAVs of results saved in another format (tmp is emptied at start)
 
 
 def output_format(params: dict[str, Any], key: str = "output_format") -> str:
-    """The ``output_format`` of a job request (default ``wav``), checked against what this machine can write.
-    Blocking (the first call lists the ffmpeg encoders): call it on the IO pool."""
+    """Default ``wav``, checked against what this machine can write. Blocking: call it on the IO pool."""
     v = params.get(key)
     if v in (None, ""):
         return "wav"
@@ -549,14 +510,8 @@ def output_format(params: dict[str, Any], key: str = "output_format") -> str:
 
 def save_result(data: config.DataDir, track: np.ndarray, sr: int, prefix: str, fmt: str,
                 also_free: tuple[str, ...] = ()) -> dict[str, str]:
-    """Save a finished result as ONE file ``<data>/outputs/<prefix><stamp>.<ext>`` in ``fmt``. ``track`` is mono
-    ``(n,)`` or ``(channels, n)``; ``also_free`` are other extensions the name must be free for (a Redub video saved
-    next to its audio under the same name).
-
-    The app plays WAV only, so another format also gets a 16-bit playback WAV in ``<data>/tmp/play/`` (the same name),
-    from which the saved file is encoded (``export``: ffmpeg, else libsndfile). ``track`` is mono float32 at ``sr``
-    (44.1 kHz from Speak and Redub; MP3 cannot store 40 kHz). Returns ``{"path", "path_play", "format"}``; if the
-    encoder fails anyway, the result is kept as WAV in outputs instead of being lost (``format`` says ``wav``)."""
+    """The app plays WAV only, so another ``fmt`` also gets a playback WAV in ``<data>/tmp/play/``. ``also_free``: other
+    extensions the name must be free for. If the encoder fails, the result is kept as WAV (``format`` says so)."""
     from . import audio_util as au  # noqa: PLC0415 - only results need it (it imports scipy)
 
     ext = _EXPORT[fmt]["ext"]
@@ -568,7 +523,7 @@ def save_result(data: config.DataDir, track: np.ndarray, sr: int, prefix: str, f
         return (any(os.path.exists(os.path.join(data.outputs, f"{nm}.{e}")) for e in (ext, *also_free))
                 or os.path.exists(os.path.join(play_dir, f"{nm}.wav")))
 
-    while taken(name):  # a free name, not a wait
+    while taken(name):
         n += 1
         name = f"{prefix}{stamp}_{n}"
     os.makedirs(data.outputs, exist_ok=True)
@@ -602,9 +557,8 @@ def _inside(path: str, folder: str) -> bool:
 
 
 def delete_outputs(data: config.DataDir, paths: list[Any]) -> dict[str, Any]:
-    """Delete saved results: files in ``<data>/outputs`` and playback WAVs in ``<data>/tmp/play`` only. Every path is
-    checked before anything is deleted (absolute, resolved through symlinks, a file inside one of those folders); one
-    that is not refuses the whole request with ``bad_request``. A file already gone is not an error."""
+    """Delete files in ``<data>/outputs`` and ``<data>/tmp/play`` only: one path outside them refuses the whole request
+    (``bad_request``). A file already gone is not an error."""
     allowed = (data.outputs, os.path.join(data.tmp, PLAY_DIR))
     checked: list[str] = []
     for p in paths:
@@ -616,15 +570,14 @@ def delete_outputs(data: config.DataDir, paths: list[Any]) -> dict[str, Any]:
         if os.path.isdir(real):
             raise EngineError("bad_request", "'path' must be a file, not a folder")
         checked.append(real)
-        # A result in outputs may have siblings with the same name: a Redub of a video saves the audio and the video
-        # side by side (redub_<stamp>.mp3 + redub_<stamp>.mp4), and every result has its sidecar
-        # (<stamp>.result.json, see results.py). They are one result and go together.
+        # A Redub of a video saves its audio and video under one name, and every result has a .result.json sidecar: they
+        # are one result and go together.
         if _inside(real, data.outputs):
             folder, stem = os.path.dirname(real), os.path.splitext(os.path.basename(real))[0]
             try:
                 for name in os.listdir(folder):
                     sib = os.path.join(folder, name)
-                    same = os.path.splitext(name)[0] == stem or name == stem + ".result.json"  # + its sidecar
+                    same = os.path.splitext(name)[0] == stem or name == stem + ".result.json"
                     if same and os.path.isfile(sib) and _inside(os.path.realpath(sib), data.outputs):
                         checked.append(os.path.realpath(sib))
             except OSError:

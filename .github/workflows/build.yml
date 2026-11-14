@@ -1,20 +1,3 @@
-# Builds the desktop installers on GitHub-hosted runners (free for public repositories) with the scripts in
-# scripts/build/, and publishes them as a GitHub Release when a version tag is pushed.
-#
-#   git tag v0.1.6 && git push origin v0.1.6   build every installer and publish the release "v0.1.6" (notes:
-#                                              that version's section of CHANGELOG.md) with latest.json, the manifest
-#                                              the app's updater reads (src/update.rs)
-#   Actions > Build installers > Run workflow  build every installer; download them from the run's artifacts
-#
-# Targets: Windows x64 (setup .exe, Inno Setup), Linux x64 (AppImage and .deb), macOS
-# Apple Silicon (.dmg; Intel Macs cannot run the speech engine, current PyTorch has no builds for them). The installers
-# carry only the app and the engine sources; the
-# app's first-run setup downloads Python, PyTorch and the models.
-#
-# Updates: with the CARGO_PACKAGER_SIGN_PRIVATE_KEY(_PASSWORD) secrets, cargo-packager signs every installer (and packs
-# the macOS .app into a signed .app.tar.gz); the release job lists the signed installers per platform in latest.json.
-# The key pair was made with `cargo packager signer generate`; its public half is PUBKEY in app/src/update.rs. Builds
-# without the secrets (a run in a fork) are simply unsigned.
 name: Build installers
 
 on:
@@ -95,7 +78,6 @@ jobs:
       - name: Build (Windows)
         if: matrix.kind == 'windows'
         shell: pwsh
-        # The setup .exe (Inno Setup, dark, in the app's colours); the .msi is no longer shipped.
         run: ./scripts/build/build-win.ps1 -Format setup
 
       - name: Build (Linux)
@@ -151,7 +133,6 @@ jobs:
           awk -v v="## $VERSION" '$0 == v {on = 1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then echo "See CHANGELOG.md." > notes.md; fi
           cd out
-          # The macOS update bundle gets a versioned name.
           if [ -f Mimvox.app.tar.gz ]; then
             mv Mimvox.app.tar.gz "Mimvox_${VERSION}_aarch64.app.tar.gz"
             mv Mimvox.app.tar.gz.sig "Mimvox_${VERSION}_aarch64.app.tar.gz.sig"

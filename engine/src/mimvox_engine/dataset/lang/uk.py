@@ -1,19 +1,4 @@
-"""Ukrainian: rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic).
-
-Inventory (38, IPA): 6 vowels and 32 consonants, counting the soft (palatalized) dentals as their own phonemes.
-
-Rules:
-* Letters map one to one: а a, е e, и ɪ, і i, о o, у u, б b, в ʋ, г ɦ, ґ g, д d, ж ʒ, з z, й j, к k, л l, м m, н n,
-  п p, р r, с s, т t, ф f, х x, ц ts, ч tʃ, ш ʃ; щ is ʃ + tʃ.
-* дж / дз are single affricates (джерело, дзвін, бджола), except across the prefixes від-, під-, над-, перед-, од-
-  (піджарити, підземний), where they are д + ж / д + з.
-* Softening: д т з с ц л н р дз become dʲ tʲ zʲ sʲ tsʲ lʲ nʲ rʲ dzʲ before ь and before і я ю є. Other consonants stay
-  hard (their slight palatalization before і is an allophone).
-* Iotation: я ю є are j + a/u/e at the start of a word, after a vowel, after the apostrophe or after ь; after a
-  consonant they only soften it. ї is always j + i.
-* -ться / -тся are tsʲ tsʲ a / ts ts a, -шся is sʲ sʲ a (the usual assimilations). Other assimilations are ignored.
-* Stress and final voicing do not change phonemes here (Ukrainian keeps voiced consonants at the end of a word).
-"""
+"""Ukrainian rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic)."""
 from __future__ import annotations
 
 from ._common import words
@@ -77,7 +62,6 @@ def word_phonemes(w: str) -> list[str]:
             out += ["ʃ", "tʃ"]
             i += 1
             continue
-        # -ться / -тся / -шся at the end of a word (сміється, вчишся)
         if c in "тш" and w.endswith(("ться", "тся", "шся"), i) and w[i:] in ("ться", "тся", "шся"):
             ph = {"ться": "tsʲ", "тся": "ts", "шся": "sʲ"}[w[i:]]
             out += [ph, ph, "a"]

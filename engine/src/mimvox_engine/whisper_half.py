@@ -1,6 +1,5 @@
-"""Whisper with fp16 weights built directly on the GPU: 1.6 GB of VRAM for turbo instead of 3.2 GB (no fp32 copy is
-ever made). Shared by the standalone workers (``speech_worker.py``, the OmniVoice worker),
-which load this file by its path. LayerNorm stays fp32 (whisper casts around it)."""
+"""Whisper with fp16 weights built directly on the GPU (1.6 GB of VRAM for turbo instead of 3.2 GB). Standalone: the
+workers load this file by its path. LayerNorm stays fp32 (whisper casts around it)."""
 import os
 
 
