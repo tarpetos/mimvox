@@ -394,7 +394,7 @@ The active voice's card has a **Reference clip** section showing the clip in use
 You can also make the reference from existing audio or video of the same speaker, for example several talks or voice
 memos. One noisy source makes a metallic clone, so the app combines many files and picks the cleanest piece.
 
-1. On the active voice, press **Use other recordings** under the reference clip (it unfolds), and choose the language
+1. On the active voice, press **Use other recordings** under the reference clip (it opens in a panel over the page), and choose the language
    the media is in (the chip; by default the voice's own language).
 2. Leave **Remove background music** ticked if the files have music or effects under the voice (videos usually do).
    The app then keeps only the voice of each file before cleaning it, which makes a cleaner reference: music under the
@@ -430,8 +430,8 @@ Details:
 A voice speaks every language of the speech model, but with the accent of its reference clip: an English reference
 gives Ukrainian with a slight English colour. A short clip of you speaking the other language fixes that.
 
-1. Press **Other languages** under the reference clip (it unfolds; the line lists the languages that already have a
-   clip), then press **Add a language** and pick the language.
+1. Press **Other languages** under the reference clip (it opens in a panel over the page; the line lists the
+   languages that already have a clip), then press **Add a language** and pick the language.
 2. The app shows a short sample text in that language. Press **Record** and read it at your natural pace (about 10
    seconds), or press **Import file…** to use an existing recording in that language.
 3. The take is checked (*Sounds good*, *Usable* or *Not usable*). Press **Use for <language>**.
@@ -737,7 +737,8 @@ Expressiveness do not apply to Convert voice, which keeps the original pace.
 
 The options of a mode appear once a file is chosen. Choices that are set once and rarely touched are one line each,
 showing what is chosen now: **Accent** (*Native (American) · closest speaker*) and **Output** (*Video with the new
-voice · music and sounds kept · original timing*). Press **Change** on a line to open it; one is open at a time.
+voice · music and sounds kept · original timing*). Press **Change** on a line: its choices open in a small panel
+over the page, and nothing else moves. **Done**, or a press outside the panel, closes it.
 
 ### Example: a Ukrainian video to English in a couple of clicks
 

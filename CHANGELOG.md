@@ -15,9 +15,9 @@
   first time. A window closed maximized opens maximized, on the display it was closed on (not on the one the app
   was started from).
 * **The app opens on the tab it was closed on** (Speak the first time).
-* **Less on screen at once.** Settings that are set once and rarely touched are one line that says what is chosen
-  and unfolds on a press, one at a time. Voices: **Use other recordings** and **Other languages** under the
-  reference clip (they filled the card). Redub: the mode's options appear once a file is chosen; **Accent** and
+* **Less on screen at once.** Settings that are set once and rarely touched are one line that says what is chosen.
+  A press opens the choices in a panel over the page, so nothing on the page moves or jumps. Voices: **Use other
+  recordings** and **Other languages** under the reference clip (they filled the card). Redub: the mode's options appear once a file is chosen; **Accent** and
   **Output** (video or audio, the background, the timing) are a line each; Re-speak first asks only what transcribing
   needs, and once there is a transcript its settings fold into **Transcription**, **Accent** and **Output**, so the
   transcript gets the room.

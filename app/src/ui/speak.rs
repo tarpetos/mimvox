@@ -878,18 +878,12 @@ fn language_row(s: &AppState, p: Palette) -> El {
     c
 }
 
-/// The "Accent" choice (Speak's Style panel, Redub's Translate & dub to English and Re-speak in English): "Native
-/// (American)" or "Like my recordings"; with Native, the native speaker (Auto / Male / Female). A trained voice gets
-/// Native through its RVC model, an untrained one through the engine's zero-shot converter; an untrained voice on an
-/// engine without that converter shows it disabled, with the other ways to English without an accent: install it,
-/// train the voice, or add an English clip ("Add an English clip" opens Voices on it).
-pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
-    accent_choices(s, p, key, true)
-}
-
-/// The accent in a few words ("Native (American) · male speaker"), for a folded row.
+/// The accent in a few words ("Native (American) · male speaker"), for a one-line row.
 pub(crate) fn accent_summary(s: &AppState) -> String {
-    if !(native_possible(s) && s.speak.native_accent) {
+    if !native_possible(s) {
+        return "Like my recordings · the native accent is not set up yet".to_owned();
+    }
+    if !s.speak.native_accent {
         return "Like my recordings".to_owned();
     }
     let who = match s.speak.native_voice {
@@ -900,8 +894,12 @@ pub(crate) fn accent_summary(s: &AppState) -> String {
     format!("Native (American) · {who}")
 }
 
-/// The Accent choice itself; `titled` adds the "Accent" label (off where a row above already names it).
-pub(crate) fn accent_choices(s: &AppState, p: Palette, key: &str, titled: bool) -> El {
+/// The "Accent" choice (Speak's Style panel, Redub's Translate & dub to English and Re-speak in English): "Native
+/// (American)" or "Like my recordings"; with Native, the native speaker (Auto / Male / Female). A trained voice gets
+/// Native through its RVC model, an untrained one through the engine's zero-shot converter; an untrained voice on an
+/// engine without that converter shows it disabled, with the other ways to English without an accent: install it,
+/// train the voice, or add an English clip ("Add an English clip" opens Voices on it).
+pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     let voice = shell::active_voice(s);
     let trained = voice.is_some_and(|v| v.trained);
     let possible = native_possible(s);
@@ -938,7 +936,7 @@ pub(crate) fn accent_choices(s: &AppState, p: Palette, key: &str, titled: bool) 
         format!("English gets the accent of {source}.")
     };
     let mut c = col().key(key.to_owned()).w_full().gap(8.0)
-        .children(titled.then(|| text("Accent").font(ty::LABEL).color(p.text)))
+        .child(text("Accent").font(ty::LABEL).color(p.text))
         .child(pick)
         .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap());
     if !native {

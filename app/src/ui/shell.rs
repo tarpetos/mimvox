@@ -699,7 +699,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
     overlays.extend(super::formats::output_overlay(s, p));
-    overlays.extend(super::lang::overlay(s, &p));
+    overlays.extend(super::redub::fold_overlay(s, p));
+    overlays.extend(super::refclip::more_overlay(s, &p));
+    overlays.extend(super::lang::overlay(s, &p)); // after the panels: a language chip inside one opens above it
     overlays.extend(super::record::files_overlay(s, &p));
     let dock = super::playbar::view(s, p, cx.layout_with(super::playbar::RAIL, |r| r), cx.env().scale, !overlays.is_empty());
     let toasts_at = if dock.is_some() { super::playbar::DOCK_H + 14.0 } else { 26.0 };
