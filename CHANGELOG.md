@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-* **Books per voice:** the book list shows the books of the active voice, and choosing another voice opens its
-  unfinished book instead of the other voice's. A book whose voice was deleted shows with every voice.
+* **Each book shows its voice:** the book list names the voice each book was read with (or *voice deleted*), the
+  active voice's books first; on start the active voice's unfinished book opens.
 * **A book draft survives a restart:** an opened file with its chapters as you left them (split, joined, renamed,
   ticked) comes back when you open the app again, until you read it or close it.
 * **Refresh from disk:** a round ↻ button on Speak's and Redub's Results and on the voices list (the Voices screen

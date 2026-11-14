@@ -76,7 +76,6 @@ pub struct BookState {
     /// The first list after the engine started may bring back an unfinished book.
     first_list: bool,
     pub recent: Vec<BookSummary>,
-    seen_voice: Option<String>,
     pub m4b: bool,
     pub read_titles: bool,
     pub expressiveness: f32,
@@ -108,7 +107,6 @@ impl Default for BookState {
             listed: false,
             first_list: false,
             recent: Vec::new(),
-            seen_voice: None,
             m4b: false,
             read_titles: true,
             expressiveness: EXPRESSIVENESS,
@@ -588,19 +586,22 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
     }
 }
 
-fn orphan(s: &AppState, b: &BookSummary) -> bool {
-    b.voice_id.as_ref().is_some_and(|v| !s.shell.voices.is_empty() && !s.shell.voices.iter().any(|x| &x.id == v))
-}
-
-fn belongs(s: &AppState, b: &BookSummary) -> bool {
-    match (&b.voice_id, &s.shell.active_voice) {
-        (Some(v), Some(active)) => v == active || orphan(s, b),
-        _ => true,
+fn voice_label(s: &AppState, b: &BookSummary) -> Option<String> {
+    let id = b.voice_id.as_ref()?;
+    match s.shell.voices.iter().find(|v| &v.id == id) {
+        Some(v) => Some(v.name.clone()),
+        None if !s.shell.voices.is_empty() => Some("voice deleted".into()),
+        None => None,
     }
 }
 
+fn of_active_voice(s: &AppState, b: &BookSummary) -> bool {
+    b.voice_id.is_some() && b.voice_id == s.shell.active_voice
+}
+
 fn unfinished_of_voice(s: &AppState) -> Option<String> {
-    s.book.recent.iter().find(|r| unfinished(r) && belongs(s, r)).map(|r| r.id.clone())
+    let mut open = s.book.recent.iter().filter(|r| unfinished(r));
+    open.clone().find(|r| of_active_voice(s, r)).or_else(|| open.next()).map(|r| r.id.clone())
 }
 
 fn unfinished(b: &BookSummary) -> bool {
@@ -757,30 +758,8 @@ fn keep_draft(s: &mut AppState) -> bool {
     false
 }
 
-fn follow_voice(s: &mut AppState) -> bool {
-    if s.shell.active_voice == s.book.seen_voice {
-        return false;
-    }
-    let first = s.book.seen_voice.is_none();
-    s.book.seen_voice = s.shell.active_voice.clone();
-    if first || s.book.draft.is_some() || s.book.running() {
-        return false;
-    }
-    if s.book.project.as_ref().is_some_and(|b| !belongs(s, b)) {
-        s.book.project = None;
-    }
-    if s.book.project.is_none() && s.book.get_req.is_none() {
-        if let Some(id) = unfinished_of_voice(s) {
-            let (m, p) = protocol::book_id_request("book.get", &id);
-            s.book.get_req = shell::request(s, m, p);
-        }
-    }
-    true
-}
-
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
-    changed |= follow_voice(s);
     if !s.shell.scripted() {
         changed |= keep_draft(s);
     }
@@ -1132,15 +1111,16 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         .child(el().key("book-opt-titles").w_full().child(titles));
     let mut list = col().w_full().gap(6.0);
     let shown = s.book.project.as_ref().map(|b| b.id.as_str());
-    let mine: Vec<&BookSummary> = s.book.recent.iter().filter(|b| belongs(s, b)).take(12).collect();
-    for b in mine.iter().copied() {
+    let mut books: Vec<&BookSummary> = s.book.recent.iter().collect();
+    books.sort_by_key(|b| !of_active_voice(s, b));
+    for b in books.iter().copied().take(12) {
         let id = b.id.clone();
         let id2 = b.id.clone();
         let (word, tone) = status_word(b);
         let on = shown == Some(b.id.as_str());
         let mut detail = format!("{} of {} chapters · {}", b.chapters_done, b.chapters, fmt_len(b.totals.audio_s));
-        if orphan(s, b) {
-            detail.push_str(" · voice deleted");
+        if let Some(voice) = voice_label(s, b) {
+            detail = format!("{voice} · {detail}");
         }
         let mut card = row().key(format!("book-recent-{}", b.id)).w_full().px(10.0).py(8.0).gap(8.0).center_y().radius(radius::CONTROL)
             .fill(if on { p.accent.alpha(0.12) } else { p.glass_hover.alpha(0.0) }).hover(p.glass_hover).focusable(true)
@@ -1153,10 +1133,8 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         }
         list = list.child(card);
     }
-    let books = if mine.is_empty() {
-        let who = shell::active_voice(s).map(|v| format!("with {}", v.name)).unwrap_or_default();
-        col().key("book-recent-empty").w_full().child(text(format!("Books you read {who} appear here, so you can come back to them.").replace("  ", " "))
-            .font(ty::CAPTION).color(p.text_faint).wrap())
+    let books = if books.is_empty() {
+        col().key("book-recent-empty").w_full().child(text("Books you read appear here, so you can come back to them.").font(ty::CAPTION).color(p.text_faint).wrap())
     } else {
         col().key("book-recent").w_full().gap(8.0).child(text("Your books").font(ty::LABEL).color(p.text_dim)).child(list)
     };
@@ -1384,38 +1362,24 @@ mod voice_tests {
 
     fn state() -> AppState {
         let mut s = AppState::default();
-        s.shell.voices = ["taras", "sage"].iter().map(|v| VoiceInfo { id: (*v).into(), name: (*v).into(), ..Default::default() }).collect();
-        s.shell.active_voice = Some("taras".into());
-        s.book.recent = vec![book("a", "taras", "paused"), book("b", "sage", "paused"), book("c", "deleted-voice", "done")];
+        s.shell.voices = ["taras", "sage"].iter().map(|v| VoiceInfo { id: (*v).into(), name: v.to_uppercase(), ..Default::default() }).collect();
+        s.shell.active_voice = Some("sage".into());
+        s.book.recent = vec![book("a", "taras", "paused"), book("b", "sage", "paused"), book("c", "gone", "done")];
         s
     }
 
     #[test]
-    fn a_voice_sees_its_books_and_the_orphans() {
+    fn every_book_is_listed_with_its_voice() {
         let s = state();
-        let ids: Vec<&str> = s.book.recent.iter().filter(|b| belongs(&s, b)).map(|b| b.id.as_str()).collect();
-        assert_eq!(ids, ["a", "c"]);
-        assert!(orphan(&s, &s.book.recent[2]) && !orphan(&s, &s.book.recent[1]));
+        let labels: Vec<Option<String>> = s.book.recent.iter().map(|b| voice_label(&s, b)).collect();
+        assert_eq!(labels, [Some("TARAS".into()), Some("SAGE".into()), Some("voice deleted".into())]);
+    }
+
+    #[test]
+    fn the_active_voices_unfinished_book_opens_first() {
+        let mut s = state();
+        assert_eq!(unfinished_of_voice(&s).as_deref(), Some("b"));
+        s.shell.active_voice = Some("nobody".into());
         assert_eq!(unfinished_of_voice(&s).as_deref(), Some("a"));
-    }
-
-    #[test]
-    fn switching_the_voice_closes_the_other_voices_book() {
-        let mut s = state();
-        follow_voice(&mut s);
-        s.book.project = Some(book("a", "taras", "paused"));
-        s.shell.active_voice = Some("sage".into());
-        follow_voice(&mut s);
-        assert!(s.book.project.is_none());
-    }
-
-    #[test]
-    fn a_draft_or_a_running_book_stays_when_the_voice_changes() {
-        let mut s = state();
-        follow_voice(&mut s);
-        s.book.project = Some(book("a", "taras", "running"));
-        s.shell.active_voice = Some("sage".into());
-        follow_voice(&mut s);
-        assert_eq!(s.book.project.as_ref().map(|b| b.id.as_str()), Some("a"));
     }
 }

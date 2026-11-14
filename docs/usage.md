@@ -728,8 +728,8 @@ after closing the app.
    The draft is kept while you work on it: close the app and the same file opens again with your chapters, names
    and ticks, ready to read. It is forgotten once you press **Read the book** (the book then lives in the list) or
    close the file.
-   **Your books** in the Output panel are the books of the active voice: choose another voice and its books show,
-   and its unfinished one opens. A book whose voice was deleted shows with every voice, marked *voice deleted*.
+   **Your books** in the Output panel lists every book with the voice it was read with (*voice deleted* when that
+   voice is gone), the active voice's books first.
 3. Set the voice, language and Style as for Speak. **Expressiveness** has its own value in Book mode, **0.60** by
    default: a steadier narrator for long listening. In the **Output** panel pick the format ("Save as"), and tick
    **Also make one M4B audiobook with chapter marks** if you want a single file for an audiobook player. **Read each
