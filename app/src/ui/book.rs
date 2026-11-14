@@ -76,11 +76,11 @@ pub struct BookState {
     /// The first list after the engine started may bring back an unfinished book.
     first_list: bool,
     pub recent: Vec<BookSummary>,
+    seen_voice: Option<String>,
     pub m4b: bool,
     pub read_titles: bool,
     pub expressiveness: f32,
     settings_loaded: bool,
-    /// The draft is kept in `book-draft.json` until it is read or closed; the fingerprint of what is on disk.
     draft_restored: bool,
     draft_saved: Option<u64>,
     pub(crate) settings_dirty: bool,
@@ -108,6 +108,7 @@ impl Default for BookState {
             listed: false,
             first_list: false,
             recent: Vec::new(),
+            seen_voice: None,
             m4b: false,
             read_titles: true,
             expressiveness: EXPRESSIVENESS,
@@ -564,7 +565,7 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
         if std::mem::replace(&mut b.first_list, false) {
             let want = match &b.project {
                 Some(p) => Some(p.id.clone()),
-                None if b.draft.is_none() => b.recent.iter().find(|r| unfinished(r)).map(|r| r.id.clone()),
+                None if b.draft.is_none() => unfinished_of_voice(s),
                 None => None,
             };
             if let Some(id) = want {
@@ -585,6 +586,21 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
             Err(e) => shell::toast(s, Tone::Danger, friendly(e)),
         }
     }
+}
+
+fn orphan(s: &AppState, b: &BookSummary) -> bool {
+    b.voice_id.as_ref().is_some_and(|v| !s.shell.voices.is_empty() && !s.shell.voices.iter().any(|x| &x.id == v))
+}
+
+fn belongs(s: &AppState, b: &BookSummary) -> bool {
+    match (&b.voice_id, &s.shell.active_voice) {
+        (Some(v), Some(active)) => v == active || orphan(s, b),
+        _ => true,
+    }
+}
+
+fn unfinished_of_voice(s: &AppState) -> Option<String> {
+    s.book.recent.iter().find(|r| unfinished(r) && belongs(s, r)).map(|r| r.id.clone())
 }
 
 fn unfinished(b: &BookSummary) -> bool {
@@ -705,7 +721,6 @@ fn fingerprint(d: &Draft) -> u64 {
     h.finish()
 }
 
-/// Restores the draft once, then writes it (off the UI thread) whenever it changes, and removes it once it is gone.
 fn keep_draft(s: &mut AppState) -> bool {
     if !s.book.draft_restored {
         s.book.draft_restored = true;
@@ -742,12 +757,33 @@ fn keep_draft(s: &mut AppState) -> bool {
     false
 }
 
+fn follow_voice(s: &mut AppState) -> bool {
+    if s.shell.active_voice == s.book.seen_voice {
+        return false;
+    }
+    let first = s.book.seen_voice.is_none();
+    s.book.seen_voice = s.shell.active_voice.clone();
+    if first || s.book.draft.is_some() || s.book.running() {
+        return false;
+    }
+    if s.book.project.as_ref().is_some_and(|b| !belongs(s, b)) {
+        s.book.project = None;
+    }
+    if s.book.project.is_none() && s.book.get_req.is_none() {
+        if let Some(id) = unfinished_of_voice(s) {
+            let (m, p) = protocol::book_id_request("book.get", &id);
+            s.book.get_req = shell::request(s, m, p);
+        }
+    }
+    true
+}
+
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
+    changed |= follow_voice(s);
     if !s.shell.scripted() {
         changed |= keep_draft(s);
     }
-    // A click anywhere else takes the focus from the title field: that ends the rename, as Enter does.
     if s.book.renaming.as_ref().is_some_and(|(_, edit)| !edit.focused) {
         commit_rename(s);
         changed = true;
@@ -1096,12 +1132,16 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         .child(el().key("book-opt-titles").w_full().child(titles));
     let mut list = col().w_full().gap(6.0);
     let shown = s.book.project.as_ref().map(|b| b.id.as_str());
-    for b in s.book.recent.iter().take(12) {
+    let mine: Vec<&BookSummary> = s.book.recent.iter().filter(|b| belongs(s, b)).take(12).collect();
+    for b in mine.iter().copied() {
         let id = b.id.clone();
         let id2 = b.id.clone();
         let (word, tone) = status_word(b);
         let on = shown == Some(b.id.as_str());
-        let detail = format!("{} of {} chapters · {}", b.chapters_done, b.chapters, fmt_len(b.totals.audio_s));
+        let mut detail = format!("{} of {} chapters · {}", b.chapters_done, b.chapters, fmt_len(b.totals.audio_s));
+        if orphan(s, b) {
+            detail.push_str(" · voice deleted");
+        }
         let mut card = row().key(format!("book-recent-{}", b.id)).w_full().px(10.0).py(8.0).gap(8.0).center_y().radius(radius::CONTROL)
             .fill(if on { p.accent.alpha(0.12) } else { p.glass_hover.alpha(0.0) }).hover(p.glass_hover).focusable(true)
             .on_press(move |s: &mut AppState| open_book(s, &id))
@@ -1113,8 +1153,10 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         }
         list = list.child(card);
     }
-    let books = if s.book.recent.is_empty() {
-        col().key("book-recent-empty").w_full().child(text("Books you read appear here, so you can come back to them.").font(ty::CAPTION).color(p.text_faint).wrap())
+    let books = if mine.is_empty() {
+        let who = shell::active_voice(s).map(|v| format!("with {}", v.name)).unwrap_or_default();
+        col().key("book-recent-empty").w_full().child(text(format!("Books you read {who} appear here, so you can come back to them.").replace("  ", " "))
+            .font(ty::CAPTION).color(p.text_faint).wrap())
     } else {
         col().key("book-recent").w_full().gap(8.0).child(text("Your books").font(ty::LABEL).color(p.text_dim)).child(list)
     };
@@ -1328,5 +1370,52 @@ mod draft_tests {
         for other in [renamed, unticked, joined] {
             assert_ne!(fingerprint(&other), fingerprint(&d));
         }
+    }
+}
+
+#[cfg(test)]
+mod voice_tests {
+    use super::*;
+    use crate::ui::shell::VoiceInfo;
+
+    fn book(id: &str, voice: &str, status: &str) -> BookSummary {
+        BookSummary { id: id.into(), title: id.into(), voice_id: Some(voice.into()), status: status.into(), chapters: 3, chapters_done: 1, ..Default::default() }
+    }
+
+    fn state() -> AppState {
+        let mut s = AppState::default();
+        s.shell.voices = ["taras", "sage"].iter().map(|v| VoiceInfo { id: (*v).into(), name: (*v).into(), ..Default::default() }).collect();
+        s.shell.active_voice = Some("taras".into());
+        s.book.recent = vec![book("a", "taras", "paused"), book("b", "sage", "paused"), book("c", "deleted-voice", "done")];
+        s
+    }
+
+    #[test]
+    fn a_voice_sees_its_books_and_the_orphans() {
+        let s = state();
+        let ids: Vec<&str> = s.book.recent.iter().filter(|b| belongs(&s, b)).map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["a", "c"]);
+        assert!(orphan(&s, &s.book.recent[2]) && !orphan(&s, &s.book.recent[1]));
+        assert_eq!(unfinished_of_voice(&s).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn switching_the_voice_closes_the_other_voices_book() {
+        let mut s = state();
+        follow_voice(&mut s);
+        s.book.project = Some(book("a", "taras", "paused"));
+        s.shell.active_voice = Some("sage".into());
+        follow_voice(&mut s);
+        assert!(s.book.project.is_none());
+    }
+
+    #[test]
+    fn a_draft_or_a_running_book_stays_when_the_voice_changes() {
+        let mut s = state();
+        follow_voice(&mut s);
+        s.book.project = Some(book("a", "taras", "running"));
+        s.shell.active_voice = Some("sage".into());
+        follow_voice(&mut s);
+        assert_eq!(s.book.project.as_ref().map(|b| b.id.as_str()), Some("a"));
     }
 }

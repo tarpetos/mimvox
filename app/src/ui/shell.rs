@@ -552,7 +552,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         insets.trailing = 3.0 * super::caption::CELL;
         insets.caption = preview;
     }
-    // Compact only when the last layout's brand, tabs, pills and caption-button room do not fit.
     let header_w = cx.layout_with("header", |r| r[2]).unwrap_or(1300.0);
     let side = |key: &str| cx.layout_with(key, |r| r[2]).unwrap_or(0.0);
     let trailing = if insets.trailing > 0.0 { insets.trailing + 14.0 } else { 12.0 };
@@ -648,7 +647,6 @@ fn background(p: Palette) -> El {
 }
 
 thread_local! {
-    /// Whether the last header was tight, and the pills' width when it was not.
     static HEADER_FIT: std::cell::Cell<(bool, f32)> = const { std::cell::Cell::new((false, 0.0)) };
 }
 
