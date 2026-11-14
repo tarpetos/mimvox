@@ -15,6 +15,12 @@
 *.json text eol=lf
 *.txt text eol=lf
 *.lock text eol=lf
+*.js text eol=lf
+*.jsonl text eol=lf
+# Rune's shaders are hashed byte for byte to pick the precompiled DX12 / Metal bytecode
+# (app/vendor/rune-patched/src/render/dxbc.rs): a CRLF checkout (core.autocrlf=true, also GitHub's Windows
+# runners) changes the hash, and the app then compiles the shaders with FXC on every start (12 s instead of 0.3 s).
+*.wgsl text eol=lf
 
 # Binary files: never normalise or diff
 *.png binary
@@ -41,3 +47,6 @@
 *.exe binary
 *.AppImage binary
 *.deb binary
+*.ttf binary
+*.dxbc binary
+*.metallib binary

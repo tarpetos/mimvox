@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+* **Windows: the app opens in a moment again.** The released Windows build waited about 12 s before its window
+  appeared, on every start: its shaders were compiled at start-up instead of loaded precompiled, because the build
+  machine changed their line endings. Now they keep LF everywhere (`.gitattributes`).
+
 ## 0.2.0
 
 * **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage
