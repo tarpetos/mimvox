@@ -1,25 +1,4 @@
-"""``voices.reference_from_media`` / ``voices.media_cancel`` / ``voices.clear_media``: a reference clip chosen from
-many media files of the same speaker.
-
-The speech model clones from one short clip, so a single noisy source (a compressed news intro, music under the voice)
-makes the clone sound metallic. Here the user drops many audio / video files; each is decoded to mono 44.1 kHz,
-optionally reduced to its vocals (``remove_music``: Hybrid Demucs in the speech worker, see :class:`_Separator`),
-DC-removed, trimmed at both ends, its long pauses shortened and its loudness normalised, and the files are joined with
-short gaps into ``<voice>/reference_media.wav`` (the *media pool*, at most 20 minutes). Every file is analysed on its
-own with the pace / SNR analysis of the dataset (``pace.py``), into pause-aligned windows of 8-12 s (the speech model
-uses a clip of up to 12 s whole), so no window spans two files. The best window becomes the reference:
-``reference.wav`` for the voice's own language, ``reference_<lang>.wav`` for another one.
-
-The pool is not a dataset part: training data never changes. Its best windows are stored in ``dataset/meta.json``
-(``media``) and offered by ``voices.reference_candidates`` (``source: "media"``), so the user can listen and pick
-another one with ``voices.set_reference {"source": "media", ...}`` (see ``reference.py``). A reference taken from the
-pool is a manual choice: ``dataset.add`` / ``dataset.remove`` keep it.
-
-The job runs on the engine loop; decoding and analysis run on the IO pool, one file at a time (bounded memory: a file
-is decoded only as far as the pool still has room), the vocal separation of a file in the speech worker process.
-Cancelling stops at the next step (a running separation stops at its next 10 s segment); the pool, the meta entry and
-the reference are installed together at the end (a cancelled job changes nothing).
-"""
+"""A voice's reference clip chosen from many media files of the same speaker."""
 from __future__ import annotations
 
 import asyncio
@@ -40,31 +19,28 @@ from ._audio import HOP_S, write_wav
 log = logging.getLogger("mimvox.media_ref")
 
 SR = 44100
-GAP_S = 0.4                    # silence between two files in the pool
-MAX_POOL_S = 20 * 60.0         # the pool stops growing here (files after it are listed as unused)
-DECODE_SLACK_S = 120.0         # decode a little more than the room left: trimming and shorter pauses remove some
+GAP_S = 0.4
+MAX_POOL_S = 20 * 60.0
+DECODE_SLACK_S = 120.0
 MAX_FILES = 500
-LONG_PAUSE_S, KEEP_PAUSE_S = 0.7, 0.3   # inner silences longer than LONG_PAUSE_S are shortened to KEEP_PAUSE_S
-MIN_SPEECH_S = 3.0             # a file with less than this after cleaning is skipped
-FADE_S = 0.005                 # ramps at the cuts of a shortened pause
+LONG_PAUSE_S, KEEP_PAUSE_S = 0.7, 0.3
+MIN_SPEECH_S = 3.0
+FADE_S = 0.005
 
-# Reference windows: the speech model uses a clip of up to 12 s whole (longer ones it cuts to 7-12 s itself).
+# The speech model uses a clip of up to 12 s whole and cuts longer ones itself.
 WIN_LO_S, WIN_HI_S, WIN_FALLBACK_HI_S, WIN_IDEAL_S = 8.0, 12.0, 15.0, 10.0
-KEEP_PER_FILE = 12             # best distinct windows kept per file before the pool-wide ranking
-KEEP_TOTAL = 24                # windows stored in meta.json for voices.reference_candidates
+KEEP_PER_FILE = 12
+KEEP_TOTAL = 24
 N_SHOW, MAX_SHOW_PER_FILE = 5, 2
-# remove_music "auto": a video file is separated when its quiet parts sit less than this below its speech (something
-# plays under the voice) and the GPU can be used. A clean recording has 40-60 dB here, speech over music 10-30 dB.
+# Measured: a clean recording has 40-60 dB here, speech over music 10-30 dB.
 AUTO_BACKGROUND_SNR_DB = 35.0
 
-_RUNNING: dict[str, str] = {}  # voice id -> job id (loop thread only)
+_RUNNING: dict[str, str] = {}  # voice id -> job id; loop thread only
 
 
 class _Skip(Exception):
     """A file that cannot be used; the message is shown to the user."""
 
-
-# --------------------------------------------------------------------------------------------- per-file processing
 
 def _silent_runs(sil: np.ndarray) -> list[tuple[int, int]]:
     d = np.diff(np.concatenate([[0], sil.astype(np.int8), [0]]))
@@ -72,8 +48,6 @@ def _silent_runs(sil: np.ndarray) -> list[tuple[int, int]]:
 
 
 def _shorten_pauses(y: np.ndarray, sr: int, m: dict[str, Any]) -> np.ndarray:
-    """Inner silences longer than LONG_PAUSE_S shortened to KEEP_PAUSE_S (half kept at each side, short ramps at the
-    cut), so the pool is mostly speech and the windows hold more of it."""
     sil = m["_frame_db"] < m["_silence_thr"]
     hop = max(int(sr * HOP_S), 1)
     long_f, half_f = int(LONG_PAUSE_S / HOP_S), int(KEEP_PAUSE_S / 2.0 / HOP_S)
@@ -83,7 +57,7 @@ def _shorten_pauses(y: np.ndarray, sr: int, m: dict[str, Any]) -> np.ndarray:
     pos = 0
     for a, b in _silent_runs(sil):
         if b - a <= long_f or a == 0 or b >= len(sil):
-            continue  # short, or at an edge (trim_silence keeps a little padding there on purpose)
+            continue  # edges keep the padding trim_silence leaves on purpose
         cut_a, cut_b = (a + half_f) * hop, (b - half_f) * hop
         if cut_b - cut_a < ramp_n * 2 or cut_a <= pos:
             continue
@@ -104,7 +78,6 @@ def _shorten_pauses(y: np.ndarray, sr: int, m: dict[str, Any]) -> np.ndarray:
 
 
 def _cut_at_pause(y: np.ndarray, sr: int, m: dict[str, Any], limit_s: float) -> np.ndarray:
-    """``y`` cut to at most ``limit_s``, at the last pause in the 10 s before the limit when there is one."""
     hop = max(int(sr * HOP_S), 1)
     end_f = int(limit_s / HOP_S)
     sil = np.flatnonzero(m["_frame_db"][max(end_f - int(10.0 / HOP_S), 0):end_f] < m["_silence_thr"])
@@ -113,7 +86,7 @@ def _cut_at_pause(y: np.ndarray, sr: int, m: dict[str, Any], limit_s: float) -> 
 
 
 def _decode(path: str, room_s: float) -> dict[str, Any]:
-    """Decode one file (IO thread): ``{"y": DC-free float32 at SR, "truncated", "snr_db"}``; raises ``_Skip``."""
+    """IO thread. Returns ``{"y", "truncated", "snr_db"}``; raises ``_Skip``."""
     if not os.path.isfile(path):
         raise _Skip("file not found")
     limit = room_s + DECODE_SLACK_S
@@ -135,8 +108,7 @@ def _dc(y: np.ndarray) -> np.ndarray:
 
 
 def _finish(y: np.ndarray, truncated: bool, room_s: float, analyse: bool) -> dict[str, Any]:
-    """Clean one decoded file (IO thread). Returns ``{"y": float32 at SR, "truncated", "clip_pen", "rate",
-    "windows"}``; raises ``_Skip`` with a reason for the user."""
+    """IO thread. Returns ``{"y", "truncated", "clip_pen", "rate", "windows"}``; raises ``_Skip``."""
     sr = SR
     m0 = quality.measure(y, sr)
     if m0["speech_db"] <= -90.0 or m0["snr_db"] < 6.0:
@@ -145,7 +117,7 @@ def _finish(y: np.ndarray, truncated: bool, room_s: float, analyse: bool) -> dic
     y = store.trim_silence(y, sr, m0)
     del m0
     m = quality.measure(y, sr)
-    if m["snr_db"] >= quality.SNR_BAD_DB:  # in a noisy file quiet syllables pass for silence: leave its pauses alone
+    if m["snr_db"] >= quality.SNR_BAD_DB:  # in a noisy file quiet syllables pass for silence
         y = _shorten_pauses(y, sr, m)
         m = quality.measure(y, sr)
     if len(y) > room_s * sr:
@@ -166,7 +138,7 @@ def _finish(y: np.ndarray, truncated: bool, room_s: float, analyse: bool) -> dic
         for a, b in an.windows(WIN_LO_S, WIN_HI_S, WIN_FALLBACK_HI_S, WIN_IDEAL_S):
             mm = an.measure(a, b)
             scored.append({**mm, "score": pace.window_score(mm, rate, 0.0, clip_pen, WIN_IDEAL_S)})
-        spoken = [c for c in scored if c["rate"] > 0]  # windows with under 3 s of speech have no rate: last resort
+        spoken = [c for c in scored if c["rate"] > 0]  # windows with under 3 s of speech have no rate
         scored = spoken or scored
         scored.sort(key=lambda c: -c["score"])
         wins = _distinct(scored, KEEP_PER_FILE)
@@ -175,8 +147,6 @@ def _finish(y: np.ndarray, truncated: bool, room_s: float, analyse: bool) -> dic
 
 async def _clean(path: str, room_s: float, analyse: bool = True, separate: _Separator | None = None,
                  on_separate: speech.Progress | None = None) -> dict[str, Any]:
-    """Decode, optionally separate (``separate``: the job's separator, which decides per file) and clean one file.
-    Returns what :func:`_finish` does plus ``music_removed``; raises ``_Skip``."""
     d = await aio.run_io(_decode, path, room_s)
     y, removed = d.pop("y"), False
     if separate is not None and separate.wanted(path, d["snr_db"]):
@@ -190,12 +160,7 @@ async def _clean(path: str, room_s: float, analyse: bool = True, separate: _Sepa
 
 
 class _Separator:
-    """Removes background music from decoded files: the speech worker's ``separate_vocals`` (torchaudio's Hybrid
-    Demucs, HDEMUCS_HIGH_MUSDB_PLUS, vocals stem), one file at a time through ``.npy`` files in ``<data>/tmp``.
-
-    ``mode`` is the ``remove_music`` param: True (every file), False (none) or None ("auto": a video file with sound
-    under the voice, see AUTO_BACKGROUND_SNR_DB, and only when the GPU can be used). It never fails the job: without
-    the model, or when the worker fails, files are used as decoded and :attr:`reason` says why."""
+    """Vocal separation in the speech worker; ``mode`` None is "auto". Never fails the job: ``reason`` says why."""
 
     NOT_INSTALLED = "the music-removal model is not installed (run setup again)"
 
@@ -208,7 +173,7 @@ class _Separator:
         self.worker = speech.get(ctx.runtime, data.root)
         self.gpu = config.backend(ctx.runtime) == "cuda" and "paused" not in tts.models_status().values()
         self.workdir = os.path.join(data.tmp, f"separate-{tag}")
-        self.installed: bool | None = None   # checked on the first file that wants it
+        self.installed: bool | None = None
         self.failed = False
         self.reason: str | None = "turned off" if mode is False else None
         self.count = 0
@@ -227,17 +192,14 @@ class _Separator:
         return True
 
     def summary(self) -> dict[str, Any]:
-        """``music_removed`` / ``music_files`` / ``music_reason`` / ``music_device`` of a done event or a result."""
         if self.count == 0:
             reason = self.reason or "no background sound found under the voice"
         else:
-            reason = self.reason if self.failed else None   # removed from some files, then the worker failed
+            reason = self.reason if self.failed else None
         return {"music_removed": self.count > 0, "music_files": self.count, "music_reason": reason,
                 "music_device": self.device}
 
     async def run(self, y: np.ndarray, on_progress: speech.Progress | None) -> np.ndarray | None:
-        """The vocals of ``y`` (same length), or None when they cannot be had (``reason`` is set). Cancelling the
-        caller cancels the worker op."""
         if self.installed is None:
             self.installed = await aio.run_io(os.path.isfile, self.model)
         if not self.installed:
@@ -282,7 +244,6 @@ def _remove_many(*paths: str) -> None:
 
 
 def _music_mode(params: dict[str, Any]) -> bool | None:
-    """``remove_music``: true / false / "auto" (the default; also null)."""
     v = params.get("remove_music", "auto")
     if v is None or v == "auto":
         return None
@@ -292,7 +253,6 @@ def _music_mode(params: dict[str, Any]) -> bool | None:
 
 
 def _distinct(cands: list[dict[str, Any]], count: int, per_file: int | None = None) -> list[dict[str, Any]]:
-    """Best-first selection of mostly non-overlapping windows (``pace.MAX_OVERLAP``), at most ``per_file`` per file."""
     out: list[dict[str, Any]] = []
     per: dict[Any, int] = {}
     for c in cands:
@@ -309,7 +269,6 @@ def _distinct(cands: list[dict[str, Any]], count: int, per_file: int | None = No
 
 
 def rank(cands: list[dict[str, Any]], median: float) -> list[dict[str, Any]]:
-    """Pool windows re-scored against the pool's median rate, best first."""
     out = []
     for c in cands:
         m = {k: float(c[k]) for k in ("start_s", "end_s", "duration_s", "rate", "pauses", "snr_db")}
@@ -319,16 +278,12 @@ def rank(cands: list[dict[str, Any]], median: float) -> list[dict[str, Any]]:
 
 
 def show_candidates(media_meta: dict[str, Any]) -> list[dict[str, Any]]:
-    """The pool windows ``voices.reference_candidates`` offers (best first, a few per file when there are several)."""
     files = len(media_meta.get("files") or [])
     ranked = rank(list(media_meta.get("cands") or []), float(media_meta.get("rate_median") or 0.0))
     return _distinct(ranked, N_SHOW, MAX_SHOW_PER_FILE if files >= 3 else None)
 
 
-# --------------------------------------------------------------------------------------------- targets
-
 def target_name(code: str | None) -> str:
-    """``reference.wav`` for the voice's own language (``code`` None), else ``reference_<code>.wav``."""
     return "reference.wav" if not code else f"reference_{code}.wav"
 
 
@@ -342,9 +297,7 @@ def _drop_sidecar(vdir: str, name: str) -> None:
 
 def write_target(vdir: str, meta: dict[str, Any], start_s: float, end_s: float, code: str | None,
                  info: dict[str, Any]) -> dict[str, Any]:
-    """Cut ``[start_s, end_s]`` of the pool into the target file and record the choice (store lock held by the
-    caller): ``meta['reference']`` for ``reference.wav`` (a manual choice), ``meta['media']['current']`` for a language
-    reference. Returns the recorded entry."""
+    """The caller holds the store lock."""
     clip, sr = store.cut_media(vdir, start_s, end_s)
     name = target_name(code)
     write_wav(os.path.join(vdir, name), clip, sr)
@@ -360,7 +313,6 @@ def write_target(vdir: str, meta: dict[str, Any], start_s: float, end_s: float, 
 
 
 def file_at(media_meta: dict[str, Any], start_s: float, end_s: float) -> dict[str, Any] | None:
-    """The pool file that holds ``[start_s, end_s]`` (most of it), or None."""
     best, best_len = None, 0.0
     for f in media_meta.get("files") or []:
         inter = min(end_s, float(f["end_s"])) - max(start_s, float(f["start_s"]))
@@ -369,10 +321,7 @@ def file_at(media_meta: dict[str, Any], start_s: float, end_s: float) -> dict[st
     return best
 
 
-# --------------------------------------------------------------------------------------------- the job
-
 def _language(ctx: Context, vid: str, value: Any) -> str | None:
-    """None for the voice's own language (reference.wav), else the code of another speech language."""
     from .. import config, voices  # noqa: PLC0415
     from .reference import _speech_language  # noqa: PLC0415
 
@@ -427,11 +376,6 @@ async def reference_from_media(ctx: Context, params: dict[str, Any]) -> dict[str
 
 @method("media.combine")
 async def combine(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Many media files of one speaker joined into one WAV, cleaned like the media pool (decoded to mono 44.1 kHz,
-    DC removed, trimmed, long pauses shortened, loudness normalised, 0.4 s between files, at most 20 minutes) and
-    written to ``<data>/tmp/combined/``. Record imports the result as one take (it then goes through
-    ``recording.check`` -> ``dataset.add`` like any other file). Unreadable files are skipped and listed.
-    ``remove_music`` (true / false / "auto") separates the vocals first, as in ``voices.reference_from_media``."""
     paths = _paths(params)
     sep = _Separator(ctx, _music_mode(params), f"combine-{time.time_ns():x}")
     out_dir = os.path.join(ctx.data_dir, "tmp", "combined")
@@ -486,7 +430,6 @@ async def media_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("voices.clear_media")
 async def clear_media(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Delete the media pool and its candidates. References already cut from it stay."""
     vid = params.get("id", params.get("voice_id"))
     vdir = store._voice_dir(ctx, {"voice_id": vid})
     if str(vid) in _RUNNING:
@@ -525,13 +468,13 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
     unused: list[str] = []
     cands: list[dict[str, Any]] = []
     rates: list[float] = []
-    pos = 0  # samples in the pool so far (gaps included)
+    pos = 0
     gap = np.zeros(int(GAP_S * SR), dtype=np.int16)
     tmp = os.path.join(vdir, f"{store.MEDIA_POOL}.{job}.tmp.wav")
     sep = _Separator(ctx, music, job)
 
     def separating(k: int) -> speech.Progress:
-        def cb(stage: str, pct: float) -> None:  # load_model 0-10 %, separate 10-100 % of this file's middle part
+        def cb(stage: str, pct: float) -> None:
             sub = 0.1 * pct if stage == "load_model" else 10.0 + 0.9 * pct
             progress("separate", 85.0 * (k + 0.1 + 0.8 * sub / 100.0) / n, k)
         return cb
@@ -579,7 +522,7 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
         ranked = rank(cands, median)
         keep = _distinct(ranked, KEEP_TOTAL)
         best = keep[0] if keep else None
-        busy = tts.is_busy()  # loop thread: a generation that started meanwhile keeps its reference
+        busy = tts.is_busy()  # on the loop thread: a generation that started meanwhile keeps its reference
         progress("apply", 97.0)
         media_meta = {"version": 1, "pool": f"{int(time.time() * 1000):x}",
                       "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "language": code,
@@ -605,13 +548,13 @@ async def _job(ctx: Context, job: str, vid: str, vdir: str, paths: list[str], co
         _remove(tmp)
         return
     finally:
-        sep.close()  # at most two .npy files
+        sep.close()
 
     warming = False
     if ref is not None:
         tts.forget_reference()
         if code is None:
-            try:  # the existing warm path, as voices.set_reference does
+            try:
                 warming = bool((await tts.voices_warm(ctx, {"id": vid})).get("warming"))
             except EngineError:
                 pass
@@ -644,11 +587,10 @@ def _remove(path: str) -> None:
 
 def _install(vdir: str, tmp: str, media_meta: dict[str, Any], best: dict[str, Any] | None,
              code: str | None) -> dict[str, Any] | None:
-    """Put the new pool in place, record it in meta.json and write the best window as the reference (IO thread)."""
     with store._LOCK:
         os.replace(tmp, os.path.join(vdir, store.MEDIA_POOL))
         meta = store._load_meta(vdir)
-        meta["media"] = media_meta  # a reference cut from an older pool keeps its file (its "pool" id differs)
+        meta["media"] = media_meta
         ref = None
         if best is not None:
             f = file_at(media_meta, best["start_s"], best["end_s"]) or {}

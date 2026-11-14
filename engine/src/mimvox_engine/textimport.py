@@ -1,28 +1,4 @@
-"""Book import for audiobooks: clean text and chapter structure from a text file (``text.import``).
-
-Every format is turned into the same thing: a book title and a list of chapters, each a title plus paragraphs. Most
-readers first produce a flat list of *blocks* (a heading with its level, or a paragraph) and one shared step cuts it
-into chapters: the highest heading level that occurs at least twice starts the chapters, a single heading above it at
-the start is the book title, other headings above it are read as the first paragraph of the next chapter (a "Part
-Two" between chapters), deeper headings stay in the text as paragraphs. EPUB (its table of contents), FB2 (nested
-sections), PDF (bookmarks) and plain text (heading lines such as ``Chapter 1`` / ``Розділ 1``) bring their own chapters.
-
-Shared rules (``_finish``): text before the first chapter is kept as an "Opening" chapter when it has at least 150
-words, otherwise dropped as a title page (unless it is all there is); a chapter does not repeat its title as its first
-paragraph; chapters without words are dropped (a "Part" chapter with little text of its own hands its title and text to
-the next chapter instead); a table of contents (a chapter named so, or made mostly of chapter headings; in plain text
-three or more headings in a row with no text between them) and a leading title-page chapter are dropped; paragraphs
-are joined with one blank line, whitespace is collapsed, control, zero-width and soft-hyphen characters are removed
-and typographic ligatures expanded. Footnotes, note references, page-number markers and illustration captions are not
-part of the text.
-
-Readers use the standard library only: ``zipfile`` + ``ElementTree`` for EPUB, DOCX, ODT and FB2, ``html.parser`` for
-HTML/XHTML, a small converter of our own for RTF (``\\uN`` and ``\\'hh`` escapes in the document's or font's code page,
-heading styles from the stylesheet). PDF needs ``pypdf`` (imported when used; text layer only, no OCR; AES-encrypted
-files would need its optional ``cryptography`` backend and are refused with a clear message). Markdown code blocks
-are dropped: they are not meant to be read aloud. Subtitles (SRT/VTT) become flowing text, with sound descriptions
-such as ``[Music]`` removed and a paragraph break wherever the speech pauses for 2 s or more.
-"""
+"""Book import (``text.import``): a title and chapters of paragraphs from a text file of any supported format."""
 from __future__ import annotations
 
 import codecs
@@ -59,17 +35,17 @@ _FORMAT = {".txt": "txt", ".md": "md", ".markdown": "md", ".html": "html", ".htm
            ".epub": "epub", ".docx": "docx", ".odt": "odt", ".rtf": "rtf", ".fb2": "fb2", ".fb2.zip": "fb2",
            ".pdf": "pdf", ".srt": "srt", ".vtt": "vtt"}
 MAX_BYTES = 300 * 1024 * 1024
-MAX_MEMBER = 512 * 1024 * 1024     # uncompressed size of one archive member we read (zip bombs)
-OPENING_WORDS = 150                # text before the first chapter is kept as its own chapter from this many words
-PART_WORDS = 60                    # a "Part" with less text of its own (an epigraph) opens the next chapter instead
-SAMPLE_CHARS = 20_000              # language detection sample, spread over the book
+MAX_MEMBER = 512 * 1024 * 1024     # zip bombs
+OPENING_WORDS = 150
+PART_WORDS = 60
+SAMPLE_CHARS = 20_000
 
 
 @dataclass
 class _Ch:
     title: str
     paras: list[str] = field(default_factory=list)
-    part: bool = False             # a "Part"/"Book" heading: with (almost) no text, it opens the next chapter
+    part: bool = False             # a "Part" heading: with almost no text of its own it opens the next chapter
     lead: list[str] = field(default_factory=list)
 
 
@@ -85,8 +61,6 @@ class _Book:
 Block = tuple[str, int, str]       # ("h", level, text) | ("p", 0, text)
 
 
-# ------------------------------------------------------------------------------------------------------ cleaning
-
 _TRANS: dict[int, Any] = {c: " " for c in range(0x20)}
 _TRANS.update({0x7F: " ", **{c: " " for c in range(0x80, 0xA0)}})
 _TRANS.update({c: None for c in (0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0xFFFD, 0x200E, 0x200F,
@@ -98,12 +72,10 @@ _WORDISH = re.compile(r"[^\W_]")
 
 
 def _clean(text: str) -> str:
-    """One paragraph: NFC, no control/zero-width/soft-hyphen characters, single spaces, trimmed."""
     return _WS.sub(" ", unicodedata.normalize("NFC", text).translate(_TRANS)).strip()
 
 
 def _key(text: str) -> str:
-    """Comparison key: lower-case words only."""
     return " ".join(re.findall(r"[^\W_]+", text.casefold()))
 
 
@@ -125,7 +97,6 @@ def _roman_value(word: str) -> int:
 
 
 def _tidy_title(title: str) -> str:
-    """Clean a title; an ALL-CAPS one gets its words capitalised (roman numerals stay upper case)."""
     t = _clean(title).strip(" .:-–—")
     letters = [c for c in t if c.isalpha()]
     if len(letters) >= 4 and all(c.isupper() for c in letters):
@@ -138,14 +109,11 @@ def _join_title(head: str, sub: str) -> str:
     return f"{head} {sub}" if head[-1:] in ".:!?—–-" else f"{head}. {sub}"
 
 
-# ------------------------------------------------------------------------------------------------------ decoding
-
 _BOMS = ((codecs.BOM_UTF32_LE, "utf-32-le"), (codecs.BOM_UTF32_BE, "utf-32-be"), (codecs.BOM_UTF8, "utf-8"),
          (codecs.BOM_UTF16_LE, "utf-16-le"), (codecs.BOM_UTF16_BE, "utf-16-be"))
 
 
 def _plausible(text: str) -> float:
-    """Share of characters that are letters, digits, whitespace or common punctuation."""
     if not text:
         return 0.0
     good = sum(1 for c in text if c.isalnum() or c.isspace() or c in ".,;:!?'\"-()–—«»„“”‘’…")
@@ -153,8 +121,6 @@ def _plausible(text: str) -> float:
 
 
 def _decode(data: bytes, hint: str | None = None) -> tuple[str, str]:
-    """Decode a text file: BOM, BOM-less UTF-16, strict UTF-8, ``hint`` (a declared charset), then a guess between
-    windows-1251 (Cyrillic), windows-1250 (Central European) and windows-1252 (Western)."""
     for bom, enc in _BOMS:
         if data.startswith(bom):
             return data[len(bom):].decode(enc, errors="replace"), enc
@@ -215,10 +181,8 @@ def _markup_charset(data: bytes) -> str | None:
     return (m.group(1) or m.group(2)).decode("ascii", "replace") if m else None
 
 
-# ------------------------------------------------------------------------------------------------- chaptering
-
 def _chapters_from_blocks(blocks: list[Block], max_level: int = 3) -> tuple[list[_Ch], list[str], str]:
-    """(chapters, preamble paragraphs, title candidate) from headings + paragraphs (see the module docstring)."""
+    """(chapters, preamble paragraphs, title candidate)."""
     counts: dict[int, int] = {}
     for kind, level, _ in blocks:
         if kind == "h" and level <= max_level:
@@ -251,7 +215,6 @@ def _chapters_from_blocks(blocks: list[Block], max_level: int = 3) -> tuple[list
 
 
 def _strip_title(title: str, paras: list[str]) -> list[str]:
-    """Drop up to two leading short paragraphs that repeat the chapter title (or a part of it)."""
     key = _key(title)
     if not key:
         return paras
@@ -277,7 +240,6 @@ _TOC_NAMES = {"contents", "table of contents", "list of illustrations", "illustr
 
 
 def _is_toc(ch: _Ch, title_keys: set[str]) -> bool:
-    """A table of contents: named so, or text made mostly of chapter headings / titles of other chapters."""
     if _key(ch.title) in _TOC_NAMES:
         return True
     total = toc = 0
@@ -321,15 +283,13 @@ def _finish(book: _Book, fallback_title: str) -> tuple[str, list[dict[str, str]]
             continue
         out.append({"title": ctitle, "text": "\n\n".join(carry + lead + paras)})
         carry, carry_text = [], False
-    if carry_text and out:                  # a trailing "Part" with a little text of its own: keep it
+    if carry_text and out:                  # a trailing "Part" with a little text of its own
         out[-1]["text"] += "\n\n" + "\n\n".join(carry)
     for i, ch in enumerate(out, 1):
         if not ch["title"]:
             ch["title"] = title if len(out) == 1 else f"Chapter {i}"
     return title, out
 
-
-# ------------------------------------------------------------------------------------- plain text: heading lines
 
 _KW = (r"chapter|part|book|volume|розділ|глава|частина|книга|том|kapitel|teil|buch|chapitre|partie|livre|tome|"
        r"capítulo|capitulo|parte|libro|rozdział|rozdzial|część|czesc|księga|ksiega")
@@ -417,7 +377,7 @@ def _is_subtitle(s: str, wrapped: bool) -> bool:
 
 
 def _find_headings(lines: list[str], wrapped: bool) -> list[tuple[int, int, str, bool]]:
-    """Heading lines as (first line, line after the heading, title, is_part); [] unless at least two are found."""
+    """(first line, line after the heading, title, is_part); [] unless at least two are found."""
     found: dict[str, list[tuple[int, int, str, bool]]] = {"kw": [], "single": [], "roman": []}
     n = len(lines)
     for i, raw in enumerate(lines):
@@ -472,8 +432,7 @@ def _find_headings(lines: list[str], wrapped: bool) -> list[tuple[int, int, str,
 
 
 def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) -> list[tuple[int, int, str, bool]]:
-    """A table of contents: three or more headings in a row with (almost) no text between them. Its lines are blanked
-    and its headings dropped; the text after its last entry (front matter) stays."""
+    """Blanks ``lines`` of each table of contents (3+ headings with almost no text between them)."""
     small = [count_words(" ".join(lines[heads[k][1]:heads[k + 1][0]])) < 20 for k in range(len(heads) - 1)]
     keep = [True] * len(heads)
     k = 0
@@ -484,7 +443,7 @@ def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) ->
         m = k
         while m < len(small) and small[m]:
             m += 1
-        if m - k + 1 >= 3:                                   # heads k..m
+        if m - k + 1 >= 3:
             first = heads[k][0]
             for i in range(first - 1, max(-1, first - 12), -1):    # its "Contents" header and untitled entries
                 s = lines[i].strip()
@@ -502,7 +461,6 @@ def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) ->
 
 
 def _join_lines(parts: list[str], dehyphenate: bool) -> str:
-    """Join wrapped lines of one paragraph, healing words broken at a line end."""
     out: list[str] = []
     for s in parts:
         if out:
@@ -524,7 +482,6 @@ def _line_width(lines: list[str]) -> int:
 
 
 def _is_wrapped(lines: list[str]) -> bool:
-    """Hard-wrapped text: lines of a fixed width (~60-100 characters), most of them close to it."""
     nonblank = [s.strip() for s in lines if s.strip()]
     if len(nonblank) < 8:
         return False
@@ -601,8 +558,6 @@ def _plain_text_book(text: str) -> _Book:
         book.chapters.append(_Ch(title, _lines_to_paras(lines[end:stop], wrapped, width, indent_breaks), part))
     return book
 
-
-# -------------------------------------------------------------------------------------------------- markdown
 
 _MD_INLINE = (
     (re.compile(r"!\[[^\]]*\]\([^)]*\)"), ""),                       # images
@@ -712,8 +667,6 @@ def _markdown_book(text: str) -> _Book:
     return book
 
 
-# ------------------------------------------------------------------------------------------------------ HTML
-
 _BLOCK_TAGS = {"p", "div", "section", "article", "main", "li", "ul", "ol", "dl", "dt", "dd", "blockquote", "pre",
                "table", "tr", "header", "footer", "figure", "figcaption", "hr", "body", "address", "center",
                "caption", "details", "summary", "form", "fieldset", "legend", "tbody", "thead", "tfoot", "aside",
@@ -721,8 +674,7 @@ _BLOCK_TAGS = {"p", "div", "section", "article", "main", "li", "ul", "ol", "dl",
 _SKIP_TAGS = {"script", "style", "nav", "noscript", "template", "svg", "math", "iframe", "object", "button", "select",
               "textarea", "rt", "rp", "audio", "video", "canvas", "map", "figcaption"}
 _VOID_TAGS = {"br", "img", "hr", "meta", "link", "input", "area", "base", "col", "embed", "source", "track", "wbr"}
-# Not read aloud: page-break markers, note references and footnote/endnote bodies (EPUB 3 semantics, ARIA roles, and
-# the class names Project Gutenberg and common converters use, on inline/paragraph elements only).
+# Not read aloud: page breaks, note references and notes (EPUB 3 types, ARIA roles, Gutenberg and converter classes).
 _NOISE = re.compile(r"\b(?:doc-)?(?:pagebreak|noteref|footnotes?|endnotes?|rearnotes?)\b", re.IGNORECASE)
 _NOISE_CLASS = re.compile(r"^(?:foot|end|rear)notes?$|^page-?(?:num|number|break)$|^noteref$|^fnref$|^footnote-?ref$|"
                           r"^caption$|^pg-boilerplate$", re.IGNORECASE)
@@ -731,7 +683,7 @@ _NOISE_CLASS_TAGS = {"a", "span", "sup", "sub", "aside", "p", "div", "small"}
 
 
 class _HtmlBlocks(HTMLParser):
-    """HTML/XHTML -> blocks (headings h1-h6, paragraphs); element ids map to the index of the block they start."""
+    """``anchors``: element id -> index of the block it starts."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -831,14 +783,12 @@ def _html_book(text: str) -> _Book:
     return _Book(title=page_title or title, chapters=chapters, preamble=preamble)
 
 
-# ------------------------------------------------------------------------------------------------- XML helpers
-
 def _local(tag: Any) -> str:
     return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
 
 
 def _find(elem: ET.Element, *path: str) -> ET.Element | None:
-    """First descendant chain matching local names (``_find(root, "description", "title-info")``)."""
+    """A descendant chain by local names: ``_find(root, "description", "title-info")``."""
     cur: ET.Element | None = elem
     for name in path:
         if cur is None:
@@ -856,7 +806,6 @@ def _text_of(elem: ET.Element | None) -> str:
 
 
 def _attr(elem: ET.Element, name: str) -> str:
-    """Attribute by local name (any namespace)."""
     for k, v in elem.attrib.items():
         if _local(k) == name:
             return v
@@ -888,15 +837,12 @@ def _read_member(zf: zipfile.ZipFile, name: str) -> bytes:
 
 
 def _zip_names(zf: zipfile.ZipFile) -> dict[str, str]:
-    """Lower-case (and unquoted) member name -> real name, for tolerant lookups."""
     out: dict[str, str] = {}
     for n in zf.namelist():
         out.setdefault(n.lower(), n)
         out.setdefault(unquote(n).lower(), n)
     return out
 
-
-# ------------------------------------------------------------------------------------------------------ EPUB
 
 @dataclass
 class _TocNode:
@@ -907,8 +853,6 @@ class _TocNode:
 
 
 class _NavParser(HTMLParser):
-    """Every ``<nav>`` of an EPUB 3 navigation document as a tree; :meth:`toc` picks the table of contents."""
-
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.navs: list[tuple[str, list[_TocNode]]] = []
@@ -995,7 +939,6 @@ def _ncx_nodes(elem: ET.Element, base: str) -> list[_TocNode]:
 
 
 def _fix_nodes(nodes: list[_TocNode], base: str) -> None:
-    """Nav hrefs (relative to the nav document) -> archive paths + fragments; titles cleaned."""
     for n in nodes:
         n.title = _clean(n.title)
         if n.path:
@@ -1057,7 +1000,6 @@ def _epub_book(path: str) -> _Book:
                 nav_map = _find(_xml(data), "navMap")
                 if nav_map is not None:
                     toc = _ncx_nodes(nav_map, posixpath.dirname(ncx_path))
-        # the spine documents, concatenated as blocks
         blocks: list[Block] = []
         start: dict[str, int] = {}
         anchors: dict[str, dict[str, int]] = {}
@@ -1078,8 +1020,7 @@ def _epub_book(path: str) -> _Book:
             return None
         return start[n.path] + anchors[n.path].get(n.frag, 0) if n.frag else start[n.path]
 
-    # Chapters: the top level of the TOC; a node whose children are separate documents (a part split into chapter
-    # files, or a lone root entry) is replaced by itself + its children.
+    # A TOC node whose children are separate documents (a part split into chapter files) gives its children.
     picked: list[tuple[int, str, bool]] = []
 
     def pick(nodes: list[_TocNode], depth: int) -> None:
@@ -1113,8 +1054,6 @@ def _epub_book(path: str) -> _Book:
         book.chapters.append(_Ch(title, [t for _, _, t in blocks[p:stop]], part))
     return book
 
-
-# ------------------------------------------------------------------------------------------------------ DOCX
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -1212,8 +1151,6 @@ def _docx_book(path: str) -> _Book:
     return book
 
 
-# ------------------------------------------------------------------------------------------------------- ODT
-
 _ODT_SKIP = {"tracked-changes", "annotation", "annotation-end", "note", "table-of-content", "alphabetical-index",
              "illustration-index", "table-index", "object-index", "user-index", "bibliography", "sequence-decls",
              "variable-decls", "user-field-decls", "forms"}
@@ -1294,8 +1231,6 @@ def _odt_book(path: str) -> _Book:
     book.chapters, book.preamble = chapters, preamble
     return book
 
-
-# -------------------------------------------------------------------------------------------------------- FB2
 
 _FB2_INLINE_SKIP = {"image", "binary"}
 
@@ -1391,8 +1326,6 @@ def _fb2_book(path: str) -> _Book:
                 _fb2_paras(list(c), book.preamble if not book.chapters else book.chapters[-1].paras)
     return book
 
-
-# -------------------------------------------------------------------------------------------------------- RTF
 
 _RTF_TOKEN = re.compile(r"\\([a-zA-Z]{1,32})(-?\d{1,10})? ?|\\'([0-9a-fA-F]{2})|\\([^a-zA-Z])|([{}])|[\r\n]+|"
                         r"([^\\{}\r\n]+)")
@@ -1546,7 +1479,6 @@ def _rtf_book(data: bytes) -> _Book:
                 flush_bytes()
                 end_para()
             continue
-        # control word
         num = int(param) if param is not None else None
         if star:
             star = False
@@ -1646,8 +1578,6 @@ def _rtf_book(data: bytes) -> _Book:
     return book
 
 
-# -------------------------------------------------------------------------------------------------------- PDF
-
 _PAGE_NUM = re.compile(r"^[\W_]*(?:page|стор(?:інка)?\.?|seite|p\.)?\s*(\d{1,4}|[ivxlcdm]{1,7})"
                        r"(?:\s*(?:of|/|з|из|von)\s*\d{1,4})?[\W_]*$", re.IGNORECASE)
 _TERMINAL = ".!?…:\"'»”’)"
@@ -1702,7 +1632,7 @@ def _pdf_book(path: str) -> _Book:
     if n_pages >= 4 and textless >= max(2, n_pages // 10):
         book.warnings.append(f"{textless} of {n_pages} pages have no text layer (scanned images or pictures) and "
                              "were skipped.")
-    # running headers/footers: the first/last two lines of a page that repeat (numbers ignored) on many pages
+    # running headers/footers: first/last two lines of a page repeated (numbers ignored) on many pages
     if n_pages >= 4:
         seen: dict[str, int] = {}
         for p in pages:
@@ -1818,8 +1748,6 @@ def _pdf_book(path: str) -> _Book:
     return book
 
 
-# -------------------------------------------------------------------------------------------------- subtitles
-
 _TIME = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})")
 _CUE_TAGS = re.compile(r"<[^>]*>|\{\\[^}]*\}|\{[^}]*\}")
 _SOUND = re.compile(r"\[[^\]]*\]|[♪♫♬]+")
@@ -1869,8 +1797,6 @@ def _subtitles_book(text: str) -> _Book:
     return book
 
 
-# ---------------------------------------------------------------------------------------------------- extract
-
 def _format_of(path: str) -> str:
     low = path.lower()
     if low.endswith(".fb2.zip"):
@@ -1883,8 +1809,6 @@ def _bad_file(label: str, what: str) -> EngineError:
 
 
 def extract(path: str) -> dict[str, Any]:
-    """Read ``path`` and return ``{"format", "format_label", "title", "chapters": [{"title", "text"}], "encoding",
-    "warnings"}``. Raises :class:`EngineError` (``bad_request`` / ``not_ready``)."""
     ext = _format_of(path)
     if ext not in SUPPORTED:
         kind = f"'{ext}'" if ext else "(a file without an extension)"
@@ -1979,7 +1903,7 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         out_chapters.append({"title": ch["title"], "text": ch["text"], "words": words, "chars": len(ch["text"]),
                              "est_s": est_seconds(words, wpm)})
     words = sum(c["words"] for c in out_chapters)
-    # A suggested split of chapters that are missing or very long (autoparts.py); the app applies it on request.
+    # only a suggestion: the app applies it on request
     parts = None
     suggested = autoparts.suggest(chapters, code)
     if suggested:

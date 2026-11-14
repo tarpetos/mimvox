@@ -1,20 +1,5 @@
-"""The real language of a voice's reference clips, and which clip speaks a given output language.
-
-OmniVoice copies the accent of the reference clip, so English spoken from a clip of Ukrainian speech has a Ukrainian
-accent, whatever ``voice.json`` ``language`` says. The language is read, never guessed from the voice:
-
-- ``reference_<lang>.wav`` is in ``<lang>`` by its name (``voices.add_reference``, the media pool for another
-  language).
-- ``reference.wav``: the OmniVoice worker transcribes it with Whisper turbo once per clip state and records Whisper's
-  detected language in the sidecar ``reference.omnivoice.json`` (``"language"``). Sidecars written before that field
-  existed have only the transcript: a cheap script heuristic on it is the fallback (``script_language``). Without a
-  current sidecar (a new clip the worker has not seen yet) the language is unknown (``None``) until the next warm-up or
-  generation builds it; Whisper never runs in the engine process.
-
-For output language L the clip is ``reference_L.wav`` when it exists, else ``reference.wav``; when the latter is known
-to be in another language than L the result is marked *foreign* (``reference_foreign``, ``reference_note``): the
-output carries that clip's accent. See contract/engine-protocol.md, "Reference language".
-"""
+"""The real language of a voice's reference clips: OmniVoice copies the clip's accent, so it is read from the clip's
+sidecar (Whisper in the OmniVoice worker), never guessed from ``voice.json``."""
 from __future__ import annotations
 
 import json
@@ -26,16 +11,12 @@ from .backends import names
 
 SIDECAR_SUFFIX = ".omnivoice.json"
 
-# -------------------------------------------------------------------------------------- script heuristic (fallback)
-
 _UK_ONLY = set("іїєґ")
 _RU_ONLY = set("ыэъё")
 _BE_ONLY = set("ў")
 _SR_ONLY = set("ђјљњћџ")
 _KK_ONLY = set("әғқңөұүһ")
 
-# A few very frequent function words per Latin-script language (lower case, whole words). Enough to tell the common
-# languages apart in a 10-20 s transcript; a tie or no hit is "unknown".
 _STOPWORDS: dict[str, frozenset[str]] = {
     "en": frozenset("the and is are was were to of a in that it you i this with for not have be on what".split()),
     "de": frozenset("der die das und ist nicht ich du ein eine zu den mit sie es wir auf für dass".split()),
@@ -52,11 +33,6 @@ _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
 def script_language(text: str) -> str | None:
-    """A cheap guess of the language of a transcript from its script and letters (no model): Cyrillic is Ukrainian
-    when it has і ї є ґ, Russian when it has ы э ъ ё (the larger count wins), Belarusian with ў, Serbian with ђ ј љ њ ћ
-    џ, Kazakh with its own letters; Greek, Hebrew, Arabic, Devanagari, Hangul, kana, Han, Thai and Georgian by their
-    script; Latin text by a few frequent words of English and nine other languages. ``None`` when it cannot tell
-    (Cyrillic without any of those letters, Latin without a clear winner, no letters)."""
     low = (text or "").lower()
     counts = {"cyr": 0, "lat": 0, "grk": 0, "heb": 0, "ara": 0, "dev": 0, "han": 0, "kana": 0, "hang": 0,
               "thai": 0, "geo": 0}
@@ -107,13 +83,10 @@ def script_language(text: str) -> str | None:
             "thai": "th", "geo": "ka"}.get(script)
 
 
-# ------------------------------------------------------------------------------------------------- the sidecar
-
 _ALIAS = {"iw": "he", "in": "id", "jv": "jw", "nb": "no", "cmn": "zh"}  # as redub/langs.py
 
 
 def norm(code: Any) -> str | None:
-    """A language code as the engine writes it (``uk``, ``en``; Whisper's aliases mapped), or None."""
     if not isinstance(code, str) or not code.strip():
         return None
     c = code.strip().lower().replace("_", "-").split("-")[0]
@@ -125,8 +98,6 @@ def sidecar_path(wav: str) -> str:
 
 
 def read_sidecar(wav: str) -> dict[str, Any] | None:
-    """The OmniVoice sidecar of ``wav`` when it describes the clip as it is now (same mtime and size), else None.
-    IO thread (a stat and a small read)."""
     try:
         st = os.stat(wav)
         with open(sidecar_path(wav), encoding="utf-8") as fh:
@@ -139,9 +110,7 @@ def read_sidecar(wav: str) -> dict[str, Any] | None:
 
 
 def detected(wav: str) -> tuple[str | None, str | None]:
-    """(language, how) of a clip from its current sidecar: ``how`` is ``"whisper"`` (recorded by the worker),
-    ``"transcript"`` (the script heuristic on an older sidecar's transcript) or None (no current sidecar, or the
-    transcript says nothing)."""
+    """(language, how): ``how`` is ``"whisper"``, ``"transcript"`` (the script heuristic) or None."""
     side = read_sidecar(wav)
     if side is None:
         return None, None
@@ -159,21 +128,14 @@ def per_language(vdir: str) -> list[str]:
 
 
 def describe(vdir: str) -> dict[str, Any]:
-    """``voices.list`` fields: ``reference_language`` (the detected language of ``reference.wav``, None while unknown)
-    and ``reference_languages`` (``{lang: detected}`` for every ``reference_<lang>.wav``; the detected language, None
-    while the worker has not transcribed it). IO thread."""
     out: dict[str, Any] = {"reference_language": detected(os.path.join(vdir, "reference.wav"))[0]}
     out["reference_languages"] = {code: detected(os.path.join(vdir, f"reference_{code}.wav"))[0]
                                   for code in per_language(vdir)}
     return out
 
 
-# ------------------------------------------------------------------------------------------- output-time choice
-
 def for_output(reference: str, lang: str) -> tuple[str, str | None]:
-    """(clip, its language) that speaks output language ``lang`` for the voice whose reference is ``reference``:
-    ``reference_<lang>.wav`` (language ``lang``) when it exists, else ``reference.wav`` with its detected language
-    (None while unknown). The same choice as ``backends.omnivoice.reference_for``. IO thread."""
+    """Must make the same choice as ``backends.omnivoice.reference_for``."""
     lang = (lang or "").lower()
     alt = os.path.join(os.path.dirname(reference), f"reference_{lang}.wav")
     if lang and os.path.isfile(alt):
@@ -182,7 +144,6 @@ def for_output(reference: str, lang: str) -> tuple[str, str | None]:
 
 
 def note(clip_lang: str, lang: str) -> str:
-    """The warning for speech in ``lang`` spoken from a clip in ``clip_lang``."""
     clip, out = names.name(clip_lang), names.name(lang)
     text = (f"The reference clip is {clip} speech, so the {out} carries a {clip} accent. Add an {out} reference "
             if out[:1] in "AEIOU" else
@@ -194,9 +155,6 @@ def note(clip_lang: str, lang: str) -> str:
 
 
 def fields(reference: str, lang: str, native: bool = False) -> dict[str, Any]:
-    """End-event / answer fields of a speech job in ``lang``: ``reference_language`` (the language of the clip that
-    speaks; ``en`` for the native accent's clip, None while unknown), ``reference_foreign`` and, when foreign,
-    ``reference_note``. IO thread."""
     if native:
         return {"reference_language": "en", "reference_foreign": False}
     _clip, clip_lang = for_output(reference, lang)

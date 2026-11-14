@@ -1,22 +1,7 @@
-"""Dataset levels, human messages and the training-epoch recommendation (shared by text analysis and the store).
-
-Level thresholds (minutes of speech) and why:
-
-* ``< 0.5``  too_short: the speech model needs a few seconds of reference, but under 30 s the best 15 s clip is hard to choose
-  and there is no variety (pitch, pace, emotion) to speak of.
-* ``< 3``    zero_shot: enough for an instant zero-shot clone (the reference is 15-30 s) but too little for RVC training,
-  which overfits and sounds metallic on so little data.
-* ``3 - 10`` trainable: RVC training gives a clear gain. The validated setup is 6.4 min.
-* ``>= 10``  great: best similarity; more data keeps helping up to about 20 min.
-
-Low phoneme coverage (below the language's ``low_coverage``, 0.80 of the inventory for every language today: the 39
-English ARPAbet phonemes, the 38 Ukrainian phonemes, ... see ``dataset.lang``) downgrades the level by one step,
-because the model would never have heard those sounds.
-"""
 from __future__ import annotations
 
 TOO_SHORT_MIN = 0.5
-ZERO_SHOT_MIN = 3.0
+ZERO_SHOT_MIN = 3.0   # below this RVC training overfits and sounds metallic
 GREAT_MIN = 10.0
 LOW_COVERAGE = 0.80
 
@@ -39,11 +24,6 @@ def level_for(minutes: float, coverage: float | None = None, low_coverage: float
 
 
 def recommended_epochs(minutes: float) -> int:
-    """RVC epochs for ``minutes`` of speech; 0 when the data is too small to train (below ``ZERO_SHOT_MIN``).
-
-    The curve itself lives in ``training.plan.recommended_epochs`` (the same number ``train.start`` uses for
-    ``epochs: null``), so ``dataset.summary`` and the actual training can never disagree.
-    """
     if minutes < ZERO_SHOT_MIN:
         return 0
     from ..training.plan import recommended_epochs as plan_epochs  # noqa: PLC0415 - training imports the registry only

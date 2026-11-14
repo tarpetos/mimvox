@@ -1,4 +1,3 @@
-"""Language tables: Whisper codes -> NLLB-200 codes. (The languages the voice can speak: ``backends.languages()``.)"""
 from __future__ import annotations
 
 import os
@@ -6,13 +5,11 @@ import os
 NLLB_DIR_NAME = "nllb-200-distilled-600M"
 NLLB_REPO = "facebook/nllb-200-distilled-600M"
 
-# Translators (NLLB-200), best first: id -> folder under <data>/runtime/models (setup downloads them; the 1.3B is
-# optional and stored as fp16 safetensors).
+# best first
 TRANSLATORS = {"nllb-1.3b": "nllb-200-distilled-1.3B", "nllb-600m": NLLB_DIR_NAME}
 
 
 def installed_translators(models_root: str) -> list[str]:
-    """The translators whose files are in ``models_root``, best first (``hello`` -> ``translators``)."""
     out = []
     for name, folder in TRANSLATORS.items():
         d = os.path.join(models_root, folder)
@@ -21,7 +18,6 @@ def installed_translators(models_root: str) -> list[str]:
             out.append(name)
     return out
 
-# Whisper language code -> NLLB-200 language code (languages NLLB does not have are absent).
 NLLB = {
     "en": "eng_Latn", "zh": "zho_Hans", "de": "deu_Latn", "es": "spa_Latn", "ru": "rus_Cyrl", "ko": "kor_Hang",
     "fr": "fra_Latn", "ja": "jpn_Jpan", "pt": "por_Latn", "tr": "tur_Latn", "pl": "pol_Latn", "ca": "cat_Latn",
@@ -41,7 +37,6 @@ NLLB = {
     "ba": "bak_Cyrl", "su": "sun_Latn", "yue": "yue_Hant", "jw": "jav_Latn", "sa": "san_Deva",
 }
 
-# Common names Whisper may return that differ from the table above.
 _ALIAS = {"iw": "he", "in": "id", "jv": "jw", "nb": "no", "cmn": "zh"}
 
 
@@ -55,8 +50,6 @@ def nllb_code(code: str | None) -> str | None:
 
 
 def script_language_guess(text: str) -> str | None:
-    """A crude language guess from the script, used only when the caller does not say what language a text is in.
-    Returns ``None`` for Latin text (assumed speakable), else a code that is not speakable."""
     cyr = sum(1 for ch in text if "Ѐ" <= ch <= "ӿ")
     lat = sum(1 for ch in text if ch.isascii() and ch.isalpha())
     if cyr > lat:

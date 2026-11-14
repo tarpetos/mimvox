@@ -1,9 +1,6 @@
-"""Redub rendering: ``convert`` (RVC over the original audio, same timing) and ``respeak`` (TTS per transcript
-segment, fitted into the original time slots, or at a natural pace placed one after the other).
+"""Redub rendering: ``convert`` (RVC over the original audio) and ``respeak`` (TTS per transcript segment).
 
-Async, on the engine loop: synthesis is awaited from the TTS backend (GPU thread), RVC from the RVC worker client (or,
-for the native accent of an untrained voice, the zero-shot converter, ``zsvc.py``), and the numpy and ffmpeg work runs
-on the IO pool. Cancel by cancelling the awaiting task."""
+Runs on the engine loop with the numpy and ffmpeg work on the IO pool; cancel by cancelling the awaiting task."""
 from __future__ import annotations
 
 import asyncio
@@ -23,28 +20,26 @@ from ..registry import EngineError
 
 log = logging.getLogger("mimvox.redub.render")
 
-SR = au.OUT_SR                  # 44.1 kHz working / output rate
-CHUNK_MIN_S, CHUNK_MAX_S = 15.0, 30.0   # convert chunks are cut at the quietest point between these lengths
-MIN_TAIL_S = 2.0                # a shorter remainder is merged into the previous chunk
-SILENT_PEAK = 1e-4              # a chunk quieter than this is copied, not converted
-GAP_S = 0.12                    # silence kept before the next original start when fitting a clip
-MIN_AVAIL_S = 0.25              # never fit a clip into less than this
-CLIP_GAP_S = 0.05               # minimum silence between two placed clips
-FIT_TOL_S = 0.02                # a clip at most this much longer than its room is left alone (GAP_S absorbs it)
-FIT_FLOOR = 0.85                # slot fitting never makes the speech model go faster than this (docs/performance.md)
-FACTOR_MAX = 1.25               # nor slower than this over the user's pace
-FACTOR_LO, FACTOR_HI = 0.65, 1.4  # hard limits of the combined (slot x speed) factor
-NATURAL_PAUSE_S = 0.5           # timing "natural": a pushed segment keeps its original pause, up to this long
+SR = au.OUT_SR
+CHUNK_MIN_S, CHUNK_MAX_S = 15.0, 30.0
+MIN_TAIL_S = 2.0
+SILENT_PEAK = 1e-4
+GAP_S = 0.12
+MIN_AVAIL_S = 0.25
+CLIP_GAP_S = 0.05
+FIT_TOL_S = 0.02
+FIT_FLOOR = 0.85                # measured: faster than this OmniVoice drops weak consonants and short words
+FACTOR_MAX = 1.25
+FACTOR_LO, FACTOR_HI = 0.65, 1.4
+NATURAL_PAUSE_S = 0.5
 TIMINGS = ("keep", "natural")
-MAX_STRETCH = 1.15              # ffmpeg time-stretch (rubberband, else atempo; media.time_stretch), faster only
-INITIAL_SEC_PER_CHAR = 0.068    # prior for the speaking rate (about 14.7 characters per second)
+MAX_STRETCH = 1.15
+INITIAL_SEC_PER_CHAR = 0.068
 PRIOR_CHARS = 40
 
 
 Progress = Callable[..., None]
 
-
-# ------------------------------------------------------------------------------------------------ helpers
 
 def _fade(x: np.ndarray, ms: float = 5.0) -> np.ndarray:
     n = min(int(SR * ms / 1000.0), len(x) // 2)
@@ -63,7 +58,6 @@ def _fit_length(x: np.ndarray, n: int) -> np.ndarray:
 
 
 def split_chunks(x: np.ndarray, sr: int) -> list[tuple[int, int]]:
-    """Cut ``x`` into ~15-30 s pieces at the quietest 20 ms frame in each window (a pause when there is one)."""
     n = len(x)
     if n <= int(CHUNK_MAX_S * sr):
         return [(0, n)]
@@ -98,13 +92,11 @@ def _read_converted(src: str, dst: str, n_in: int, sr_in: int) -> np.ndarray:
 
 async def _rvc_clip(worker: rvc.RvcWorker, x: np.ndarray, sr: int, workdir: str, tag: str, pth: str, idx: str,
                     index_rate: float, timeout: float = 180.0, pitch: int = 0) -> np.ndarray:
-    """One RVC call on an in-memory clip; returns 44.1 kHz audio of exactly the length of the input at 44.1 kHz."""
     return await _converted(lambda src, dst: worker.convert(src, dst, pth, idx, index_rate, timeout=timeout,
                                                             pitch=pitch), x, sr, workdir, tag)
 
 
 async def _zs_clip(zs: zsvc.Bound, x: np.ndarray, sr: int, workdir: str, tag: str) -> np.ndarray:
-    """One zero-shot conversion of an in-memory clip (the native accent of an untrained voice); like ``_rvc_clip``."""
     return await _converted(zs.convert, x, sr, workdir, tag)
 
 
@@ -122,11 +114,8 @@ async def _converted(convert: Callable[[str, str], Awaitable[Any]], x: np.ndarra
     return await aio.run_io(_read_converted, src, dst, len(x), sr)
 
 
-# ------------------------------------------------------------------------------------------------ convert
-
 async def convert(source: np.ndarray, workdir: str, worker: rvc.RvcWorker, pth: str, idx: str, index_rate: float,
                   progress: Progress) -> np.ndarray:
-    """RVC over the whole source (44.1 kHz mono) in chunks; the result has exactly the source length."""
     chunks = await aio.run_io(split_chunks, source, SR)
     total = len(source)
     out = np.zeros(total, dtype=np.float32)
@@ -146,10 +135,7 @@ async def convert(source: np.ndarray, workdir: str, worker: rvc.RvcWorker, pth: 
     return out
 
 
-# ------------------------------------------------------------------------------------------------ respeak
-
 def _trim_clip(y: np.ndarray, sr: int) -> np.ndarray:
-    """Cut leading/trailing silence of a TTS clip (keeps 20 ms before and 60 ms after the speech)."""
     import librosa  # noqa: PLC0415
 
     if len(y) == 0 or float(np.max(np.abs(y))) < 1e-4:
@@ -166,17 +152,8 @@ def _load_trimmed(path: str) -> tuple[np.ndarray, int]:
 
 
 def segment_factor(est: float, own: float, room: float, user_factor: float) -> float:
-    """The ``duration_factor`` of a clip when the original timing is kept, before it is spoken.
-
-    ``est`` is the clip's estimated natural length, ``own`` the original segment's length (``end - start``), ``room`` the
-    time it may take (up to the next segment's start minus ``GAP_S``: its slot plus the silence after it) and
-    ``user_factor`` the user's pace (``1 / speed``; the length the user wants relative to natural). Gentle first:
-      1. a clip shorter than its own length at the user's pace is slowed toward that length (up to ``FACTOR_MAX``);
-      2. a longer one that fits the room keeps the user's pace and runs into the following silence;
-      3. otherwise the model speaks faster, but never below ``FIT_FLOOR`` (or the user's own pace when that is already
-         faster): below it OmniVoice drops weak consonants and short words (docs/performance.md, "Redub pace").
-    What still does not fit is time-stretched after synthesis (``stretch_rate``) and then overruns. Clamped to
-    ``FACTOR_LO``-``HI``; within 4 % of 1 it is exactly 1."""
+    """``est``: the clip's estimated natural length; ``own``: the original segment's length; ``room``: the time the
+    clip may take (its slot and the silence after it); ``user_factor``: ``1 / speed``."""
     if est <= 0:
         return natural_factor(user_factor)
     at_pace = est * user_factor
@@ -192,22 +169,17 @@ def segment_factor(est: float, own: float, room: float, user_factor: float) -> f
 
 
 def natural_factor(user_factor: float) -> float:
-    """The ``duration_factor`` of a clip spoken at the user's pace with no fitting (``timing: "natural"``)."""
     factor = min(FACTOR_HI, max(FACTOR_LO, user_factor))
     return 1.0 if abs(factor - 1.0) < 0.04 else factor
 
 
 def stretch_rate(dur: float, room: float) -> float:
-    """How much faster a spoken clip of ``dur`` seconds is played to fit ``room``: 1.0 when it fits (within
-    ``FIT_TOL_S``), else ``dur / room`` capped at ``MAX_STRETCH`` (the rest overruns)."""
     if dur <= room + FIT_TOL_S:
         return 1.0
     return min(dur / room, MAX_STRETCH)
 
 
 class _Rate:
-    """Running estimate of the voice's natural seconds per character (calibrates ``duration_factor``)."""
-
     def __init__(self) -> None:
         self.seconds = INITIAL_SEC_PER_CHAR * PRIOR_CHARS
         self.chars = float(PRIOR_CHARS)
@@ -223,11 +195,11 @@ class _Rate:
 
 
 class _Track:
-    """The output track; only the consumer task mixes into it (on the IO pool, one clip at a time)."""
+    """Only the consumer task mixes into it, one clip at a time."""
 
     def __init__(self, total_s: float) -> None:
         self.data = np.zeros(int(total_s * SR) + 1, dtype=np.float32)
-        self.end = 0   # furthest sample any clip reaches
+        self.end = 0
 
     def mix(self, pos: int, y: np.ndarray) -> None:
         end = pos + len(y)
@@ -241,26 +213,8 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
                   worker: rvc.RvcWorker | None, pth: str, idx: str, index_rate: float, workdir: str,
                   progress: Progress, speed: float = 1.0, lang: str = "en", ref_text: str | None = None,
                   pitch: int = 0, zs: zsvc.Bound | None = None, timing: str = "keep") -> tuple[np.ndarray, dict[str, Any]]:
-    """Speak every segment and place it on a silent track of ``total_s`` (it grows when the speech runs past the end).
-    Synthesis runs one segment ahead of a second task that does RVC and mixing (bounded queue).
-
-    ``speed`` (0.8-1.3) is the user's pace: ``duration_factor`` ``1/speed`` is the length the user wants relative to
-    natural speech. ``lang`` is the language the texts are spoken in (it picks the TTS backend). ``ref_text`` (a shipped
-    clip's transcript) and ``pitch`` (RVC transpose) are set for the native accent (accent.py); ``zs`` (an untrained
-    voice's native accent) converts every clip with the zero-shot converter instead of RVC.
-
-    ``timing="keep"`` fits each clip into the original timing (see ``segment_factor``): a clip's room is its slot plus
-    the silence after it, up to ``GAP_S`` before the next segment's start. A longer clip first runs into that silence at
-    the user's pace; if the room is still too short, ``duration_factor`` goes down to ``FIT_FLOOR`` (never further:
-    below it the speech model swallows sounds), then an ffmpeg stretch (rubberband, else atempo) of at most 1.15x, and
-    what is left overruns: the following segments are pushed later. Without a stretch filter the clip simply overruns.
-
-    ``timing="natural"`` speaks every clip at the user's pace (no fitting, no stretch) and places it at its original
-    start, or, when the previous clip is still speaking then, after it with the original pause between the two segments
-    (at most ``NATURAL_PAUSE_S``). The result may be longer than the source.
-
-    Speech is never cut and two clips never overlap. ``stats`` reports ``drift_s`` (how much longer the output is than
-    the source) and ``max_push_s`` (the largest delay of any segment's start)."""
+    """Speech is never cut and two clips never overlap: a clip that does not fit pushes the following ones later, and
+    the track grows past ``total_s`` when it must."""
     backend = backends.for_language(lang)
     if backend is None:
         raise EngineError("bad_request", f"no voice model speaks {lang!r}")
@@ -277,7 +231,7 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
     no_stretch = [False]
 
     async def produce() -> None:
-        last_end = None   # where the previous clip's speech ends on the track
+        last_end = None
         for i, seg in enumerate(segments):
             text = seg["text"]
             start = float(seg["start"])
@@ -294,7 +248,7 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
             own = max(float(seg["end"]) - start, 0.4)
             if keep:
                 next_start = float(segments[i + 1]["start"]) if i + 1 < n else max(total_s, float(seg["end"]))
-                room = max(next_start - GAP_S - pos_s, MIN_AVAIL_S)  # the slot and the silence after it
+                room = max(next_start - GAP_S - pos_s, MIN_AVAIL_S)
                 factor = segment_factor(rate.per_char * len(text), own, room, user_factor)
             else:
                 room = float("inf")
@@ -348,7 +302,7 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
             progress("speak", 5 + 90.0 * (i + 1) / n, segment=i, segments=n)
 
     await aio.gather_or_cancel(produce(), consume())
-    out = track.data[:max(int(total_s * SR), track.end)]  # no padding: the output ends with the source or the last clip
+    out = track.data[:max(int(total_s * SR), track.end)]
     stats["drift_s"] = round(max(len(out) / float(SR) - total_s, 0.0), 2)
     stats["timing"] = timing
     stats["max_push_s"] = round(max_push[0], 2)

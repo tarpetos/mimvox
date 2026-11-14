@@ -1,21 +1,7 @@
-"""Host memory guard: Mimvox must never run the computer out of memory.
+"""Host memory guard: a Windows Job Object caps the commit of the engine and its workers; Linux raises the OOM score.
 
-Windows: the engine puts itself in a Job Object at start-up; every worker it starts (and their children: training,
-ffmpeg) lands in the same job. The job caps the memory all of them may commit together (``JOB_OBJECT_LIMIT_JOB_MEMORY``):
-the system's commit limit (RAM + page file, counting how far a page file Windows may still grow can grow on its disk)
-minus what every other program has committed, minus a reserve (3 % of the limit, at least 1.5 GB). It is set at start-up and recomputed before every worker op (``refresh``), so it shrinks when
-other programs grow and grows when they shrink; ``MIMVOX_RAM_LIMIT_GB`` fixes it instead. Not a share of the RAM: under WDDM every GPU
-allocation is charged to the process's commit too (so it can be paged out), so a worker with 6 GB on the card commits
-6 GB plus its own RAM (measured: a PyTorch process holding 2 GB of VRAM commits 3.6 GB; the engine with OmniVoice, RVC
-and the zero-shot converter peaked at 18.9 GB on a 12 GB card). Past the cap an allocation fails inside a Mimvox
-process (the op fails or the worker restarts, the app says why) instead of the system commit limit filling up, where
-other programs crash and the desktop breaks. The job also ends with the engine (``KILL_ON_JOB_CLOSE``), so a
-crashed engine never leaves a worker holding VRAM and RAM.
-
-Linux: the kernel's OOM killer picks the process with the highest score when memory runs out; the engine raises its
-own score (inherited by the workers), so Mimvox is stopped first and other programs are left alone.
-
-macOS: nothing to set (memory pressure handling is the system's).
+Under WDDM every GPU allocation is charged to commit too (measured: 2 GB of VRAM commits 3.6 GB), so the cap comes
+from the system commit limit, not from the RAM.
 """
 from __future__ import annotations
 
@@ -26,27 +12,26 @@ import sys
 
 log = logging.getLogger("mimvox.memory")
 
-RESERVE_SHARE = 0.03          # of the system commit limit, always left to everything else
+RESERVE_SHARE = 0.03
 RESERVE_MIN_GB = 1.5
-LOW_CAP_GB = 12.0             # below this, warn: generation with voice match may not fit
-LINUX_OOM_SCORE_ADJ = 500     # 0..1000 added to the OOM killer's score (raising it needs no privileges)
+LOW_CAP_GB = 12.0
+LINUX_OOM_SCORE_ADJ = 500     # raising it needs no privileges
 
-_job: dict[str, object] = {}  # Windows: {"handle", "limit"} once the job is set up
+_job: dict[str, object] = {}
 
 
 def setup() -> None:
-    """Call once, first thing in the engine process (before any worker starts). Never raises."""
+    """Call before any worker starts: the workers inherit the job and the OOM score."""
     try:
         if sys.platform == "win32":
             _setup_windows()
         elif sys.platform.startswith("linux"):
             _setup_linux()
-    except Exception:  # the guard must not stop the engine
+    except Exception:
         log.exception("could not set up the memory guard")
 
 
 def refresh() -> None:
-    """Windows: recompute the cap from the system's commit now (cheap; a no-op elsewhere or with a fixed cap)."""
     if "handle" not in _job or os.environ.get("MIMVOX_RAM_LIMIT_GB"):
         return
     try:
@@ -57,24 +42,20 @@ def refresh() -> None:
         if abs(new - old) >= 2**30:
             log.info("memory cap now %.1f GB (Mimvox uses %.1f GB, other programs %.1f GB of the %.1f GB limit)",
                      new / 2**30, ours / 2**30, (committed - ours) / 2**30, commit_limit / 2**30)
-    except Exception:  # keep the previous cap
+    except Exception:
         log.debug("could not refresh the memory cap", exc_info=True)
 
 
 def peak_gb() -> float | None:
-    """Windows: the most memory the job (the engine and all its workers) has committed at once, in GB."""
     info = _query()
     return None if info is None else info.PeakJobMemoryUsed / 2**30
 
 
 def report(when: str) -> None:
-    """Log the job's peak commit against its cap (Windows; nothing elsewhere)."""
     peak = peak_gb()
     if peak is not None:
         log.info("memory %s: peak %.1f GB of the %.1f GB cap", when, peak, float(_job["limit"]) / 2**30)
 
-
-# --------------------------------------------------------------------------------------------------- Windows
 
 @functools.cache
 def _structs():  # type: ignore[no-untyped-def]
@@ -133,8 +114,7 @@ def _k32():  # type: ignore[no-untyped-def]
 
 
 def _system_commit() -> tuple[int, int]:
-    """(commit limit, committed now) of the whole system, in bytes. The limit includes what the page files may still
-    grow by (``page_file_growth``): Windows enlarges them when commit nears the limit."""
+    """(commit limit, committed now) in bytes. The limit counts page file growth: Windows enlarges them near it."""
     ctypes, wintypes, _, PerfInfo = _structs()
     psapi = ctypes.WinDLL("psapi", use_last_error=True)
     psapi.GetPerformanceInfo.argtypes = [ctypes.c_void_p, wintypes.DWORD]
@@ -145,16 +125,14 @@ def _system_commit() -> tuple[int, int]:
     growth = 0
     try:
         growth = page_file_growth(_paging_files(), pi.PhysicalTotal * pi.PageSize, _file_size, _disk_free)
-    except Exception:  # count no growth
+    except Exception:
         log.debug("could not read the page file settings", exc_info=True)
     return pi.CommitLimit * pi.PageSize + growth, pi.CommitTotal * pi.PageSize
 
 
 def page_file_growth(entries: list[str], phys_total: int, file_size, disk_free) -> int:  # type: ignore[no-untyped-def]
-    """Bytes the page files may still grow by. ``entries`` are the ``PagingFiles`` registry lines (``"d:\\pagefile.sys
-    16384 16384"``: initial and maximum MB, ``0 0`` or none: managed by the system, ``"?:\\pagefile.sys"``: all of it
-    managed by the system, on the system drive). A system-managed file may reach three times the RAM; growth stops at
-    the disk's free space."""
+    """``entries``: ``PagingFiles`` registry lines, "path initial_mb max_mb"; ``0 0``, no numbers or a ``?:`` path
+    mean system-managed, which may reach three times the RAM."""
     total = 0
     for entry in entries:
         parts = entry.split()
@@ -196,7 +174,6 @@ def _disk_free(path: str) -> int:
 
 
 def _job_commit() -> int:
-    """What the job's processes have committed now (their private bytes), in bytes."""
     ctypes, wintypes, _, _ = _structs()
     k32 = _k32()
     psapi = ctypes.WinDLL("psapi", use_last_error=True)
@@ -250,7 +227,7 @@ def _setup_windows() -> None:
     job = k32.CreateJobObjectW(None, None)
     if not job:
         raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
-    _job["handle"] = job  # stays open for the engine's life (closing it ends the job and its processes)
+    _job["handle"] = job  # never closed: closing it kills the job's processes
     limit = _limit_bytes(commit_limit, committed)
     _set_limit(limit)
     if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
@@ -264,7 +241,6 @@ def _setup_windows() -> None:
 
 
 def _limit_bytes(commit_limit: int, others: int) -> int:
-    """The cap: the commit limit minus what the other programs have committed and the reserve; 1 GB at the least."""
     override = os.environ.get("MIMVOX_RAM_LIMIT_GB")
     if override:
         return int(float(override) * 2**30)
@@ -285,8 +261,6 @@ def _query():  # type: ignore[no-untyped-def]
     except Exception:  # noqa: BLE001
         return None
 
-
-# ----------------------------------------------------------------------------------------------------- Linux
 
 def _setup_linux() -> None:
     path = "/proc/self/oom_score_adj"

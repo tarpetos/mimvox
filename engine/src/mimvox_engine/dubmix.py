@@ -1,16 +1,6 @@
-"""Mixing a new voice over the background of the original (Redub's video output). numpy / scipy only.
+"""Mixing a new voice over the background of the original (Redub's video output).
 
-Arrays are float32 ``(channels, n)`` at one sample rate (a mono voice is ``(n,)``). The steps, in ``mix``:
-
-1. **Loudness.** The new voice is set to the integrated loudness (ITU-R BS.1770-4: K-weighting, 400 ms blocks,
-   absolute gate -70 LUFS, relative gate -10 LU) of the original vocals stem, so the voice-to-background balance of
-   the original is kept. Without a vocals stem the original mixture's loudness is the target.
-2. **Ducking, only if the original had it.** The original ducked when its background stem is clearly quieter
-   (``DUCK_MIN_DB``) while the original voice speaks than in the pauses. Then the background is lowered by that much
-   (at most ``DUCK_MAX_DB``) where the new voice speaks and the original did not (where both speak the original
-   ducking is already in the stem). Otherwise the background is left alone.
-3. **No clipping.** A look-ahead peak limiter keeps the sum under ``CEILING`` (-1 dBFS); it only acts on the peaks
-   that would pass it.
+Arrays are float32 ``(channels, n)``; a mono voice is ``(n,)``.
 """
 from __future__ import annotations
 
@@ -19,27 +9,25 @@ from typing import Any
 
 import numpy as np
 
-HOP_S = 0.1              # analysis frames (100 ms; four of them make a BS.1770 block)
+HOP_S = 0.1              # four frames make a 400 ms BS.1770 block
 ABS_GATE = -70.0
 REL_GATE = -10.0
-ACTIVE_BELOW_TOP_DB = 30.0   # a frame is speech when within this much of the loud frames (95th percentile)
-ACTIVE_FLOOR_DB = -60.0      # ... and above this (dBFS)
-DUCK_MIN_DB = 3.0        # the original counts as ducked from this difference on
+ACTIVE_BELOW_TOP_DB = 30.0
+ACTIVE_FLOOR_DB = -60.0
+DUCK_MIN_DB = 3.0
 DUCK_MAX_DB = 10.0
 DUCK_ATTACK_S, DUCK_RELEASE_S = 0.1, 0.4
-GAIN_LIMIT_DB = 24.0     # the voice is never moved by more than this
-CEILING = 10 ** (-1.0 / 20)  # -1 dBFS
-LIMIT_RAMP_S = 0.05      # the limiter's gain falls over this before a peak and recovers over it after
+GAIN_LIMIT_DB = 24.0
+CEILING = 10 ** (-1.0 / 20)
+LIMIT_RAMP_S = 0.05
 
 
 def as2d(x: np.ndarray) -> np.ndarray:
     return x.reshape(1, -1) if x.ndim == 1 else x
 
 
-# ------------------------------------------------------------------------------------------------ loudness
-
 def _biquads(sr: int) -> list[tuple[np.ndarray, np.ndarray]]:
-    """The two BS.1770 K-weighting stages at ``sr`` (a +4 dB high shelf, then the RLB high-pass), as (b, a)."""
+    """The two BS.1770 K-weighting stages (high shelf, then the RLB high-pass) as (b, a)."""
     out = []
     for kind, gain, q, fc in (("shelf", 4.0, 1 / math.sqrt(2), 1500.0), ("hp", 0.0, 0.5, 38.0)):
         a_ = 10 ** (gain / 40.0)
@@ -59,7 +47,7 @@ def _biquads(sr: int) -> list[tuple[np.ndarray, np.ndarray]]:
 
 
 def frame_power(x: np.ndarray, sr: int, weighted: bool = True) -> np.ndarray:
-    """Mean square per ``HOP_S`` frame, summed over the channels (K-weighted when ``weighted``): shape (frames,).
+    """Mean square per ``HOP_S`` frame, summed over the channels: shape (frames,).
     Filtered in one-minute pieces, so a long track does not need a float64 copy of itself."""
     from scipy.signal import lfilter, lfilter_zi  # noqa: PLC0415
 
@@ -88,8 +76,8 @@ def _db(p: np.ndarray | float) -> Any:
 
 
 def lufs_from_frames(power: np.ndarray, mask: np.ndarray | None = None) -> float:
-    """Integrated loudness of K-weighted frame powers (``frame_power``): 400 ms blocks every 100 ms, gated. With
-    ``mask`` (per frame) only the blocks whose frames are all in it count. ``-inf`` when nothing passes the gates."""
+    """BS.1770 gated loudness of ``frame_power`` output. With ``mask`` only blocks whose frames are all in it count;
+    ``-inf`` when nothing passes the gates."""
     if len(power) < 4:
         return float("-inf")
     blocks = (power[:-3] + power[1:-2] + power[2:-1] + power[3:]) / 4.0
@@ -109,11 +97,7 @@ def lufs(x: np.ndarray, sr: int) -> float:
     return lufs_from_frames(frame_power(x, sr))
 
 
-# ------------------------------------------------------------------------------------------------ activity
-
 def active_frames(power: np.ndarray) -> np.ndarray:
-    """Frames where the track is clearly sounding (speech in a voice track): within ``ACTIVE_BELOW_TOP_DB`` of its
-    loud frames and above ``ACTIVE_FLOOR_DB``; single-frame gaps are bridged."""
     if len(power) == 0:
         return np.zeros(0, dtype=bool)
     db = _db(power)
@@ -121,7 +105,7 @@ def active_frames(power: np.ndarray) -> np.ndarray:
     act = db > max(top - ACTIVE_BELOW_TOP_DB, ACTIVE_FLOOR_DB)
     gap = ~act
     bridged = gap.copy()
-    bridged[1:-1] = gap[1:-1] & (gap[:-2] | gap[2:])   # a lone silent frame between two active ones counts as active
+    bridged[1:-1] = gap[1:-1] & (gap[:-2] | gap[2:])   # a lone silent frame counts as active
     return ~bridged
 
 
@@ -133,9 +117,7 @@ def _dilate(mask: np.ndarray, frames: int) -> np.ndarray:
 
 
 def duck_depth(bg_power: np.ndarray, orig_active: np.ndarray) -> tuple[float, float]:
-    """(ducking applied, difference measured) in dB: how much quieter the original background is while the original
-    voice speaks than in its pauses (frames near speech are left out of the pauses). The applied depth is 0 below
-    ``DUCK_MIN_DB`` and capped at ``DUCK_MAX_DB``."""
+    """(ducking applied, difference measured) in dB of the original background under its voice."""
     n = min(len(bg_power), len(orig_active))
     bg, act = bg_power[:n], orig_active[:n]
     pause = ~_dilate(act, 3)
@@ -147,8 +129,6 @@ def duck_depth(bg_power: np.ndarray, orig_active: np.ndarray) -> tuple[float, fl
 
 
 def _duck_gain(new_active: np.ndarray, orig_active: np.ndarray, depth_db: float, n: int, sr: int) -> np.ndarray | None:
-    """Per-sample background gain: ``-depth_db`` where the new voice speaks and the original did not, with a short
-    attack and a slower release. None when there is nothing to duck."""
     if depth_db <= 0:
         return None
     frames = (n + int(HOP_S * sr) - 1) // int(HOP_S * sr)
@@ -158,10 +138,9 @@ def _duck_gain(new_active: np.ndarray, orig_active: np.ndarray, depth_db: float,
     k2 = min(len(orig_active), frames)
     orig = np.zeros(frames, dtype=bool)
     orig[:k2] = orig_active[:k2]
-    want &= ~orig
+    want &= ~orig   # where the original voice spoke, its ducking is already in the stem
     if not want.any():
         return None
-    # Start one attack ahead of the speech, hold a release after it, then soften the steps: a per-frame gain in dB.
     from scipy.ndimage import uniform_filter1d  # noqa: PLC0415
     held = want.copy()
     for k in range(1, max(int(round(DUCK_ATTACK_S / HOP_S)), 1) + 1):
@@ -175,34 +154,26 @@ def _duck_gain(new_active: np.ndarray, orig_active: np.ndarray, depth_db: float,
     return (10.0 ** (g / 20.0)).astype(np.float32)
 
 
-# ------------------------------------------------------------------------------------------------ limiter
-
 def limit(x: np.ndarray, sr: int, ceiling: float = CEILING) -> tuple[np.ndarray, float]:
-    """``x`` (channels, n) with its peaks held under ``ceiling`` by a look-ahead limiter (the gain falls before a
-    peak and recovers after it; the channels share one gain). Returns (x, the largest reduction in dB)."""
+    """Look-ahead peak limiter, one gain for all channels. Returns (x, the largest reduction in dB)."""
     peak = float(np.max(np.abs(x))) if x.size else 0.0
     if peak <= ceiling:
         return x, 0.0
     from scipy.ndimage import minimum_filter1d, uniform_filter1d  # noqa: PLC0415
     need = np.minimum(1.0, ceiling / np.maximum(np.max(np.abs(x), axis=0), 1e-9)).astype(np.float32)
     r = max(int(LIMIT_RAMP_S * sr), 1)
-    # A minimum over 2r then a mean over r never exceeds the gain a sample needs (each mean window lies inside the
-    # minimum windows that contain the peak), and ramps over r samples instead of jumping.
+    # A minimum over 2r then a mean over r never exceeds the gain a sample needs, and ramps instead of jumping.
     g = uniform_filter1d(minimum_filter1d(need, size=2 * r + 1), size=r + 1)
-    g = np.minimum(g, need)   # numerical safety: never above what a sample needs
+    g = np.minimum(g, need)   # float rounding
     out = (x * g).astype(np.float32, copy=False)
     np.clip(out, -ceiling, ceiling, out=out)
     return out, round(float(-20.0 * math.log10(max(float(g.min()), 1e-9))), 2)
 
 
-# ------------------------------------------------------------------------------------------------ the mix
-
 def mix(voice: np.ndarray, sr: int, background: np.ndarray | None, vocals: np.ndarray | None,
         original: np.ndarray | None = None) -> tuple[np.ndarray, dict[str, Any]]:
-    """The new voice (mono ``(n,)``) over ``background`` (``(channels, m)``, or None for the voice alone), at the
-    loudness of the original ``vocals`` stem (or, without it, of the ``original`` mixture). Returns the mix
-    ``(channels, max(n, m))`` (one channel without a background) and a report: ``voice_gain_db``, ``target_lufs``,
-    ``voice_lufs``, ``background_lufs``, ``duck_db`` (applied), ``duck_measured_db`` and ``limited_db``."""
+    """The voice at the loudness of the original ``vocals`` stem (else of the ``original`` mixture) over
+    ``background``. Returns the mix ``(channels, max(n, m))`` and a report of the gains in dB."""
     channels = background.shape[0] if background is not None else 1
     voice = np.asarray(voice, dtype=np.float32).reshape(-1)
     v2 = np.broadcast_to(voice, (channels, len(voice)))

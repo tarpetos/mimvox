@@ -1,20 +1,5 @@
-"""Async client of a persistent JSON-lines worker process (``rvc_worker.py``, ``speech_worker.py``; wire format in
-``worker_kit.py``).
-
-Design (safe for any number of concurrent callers by construction):
-
-- **One owner task per worker** consumes a request queue. It starts the process when needed (the next request after a
-  crash or an idle exit restarts it), writes one request, awaits its reply, then takes the next one. Only the owner
-  writes requests, so nothing is interleaved, and no lock is ever held while a reply is awaited.
-- **A reader task** per process does ``async for line in proc.stdout`` and resolves the request future with the
-  matching ``id``; ``progress`` lines call the request's callback. At EOF it awaits the process exit and fails every
-  pending future at once (``WorkerDied``), so a crash never leaves a caller waiting.
-- A caller that is cancelled while its request is queued just drops out; if the request is running, a
-  ``{"op":"cancel","id"}`` is sent and the owner waits for the worker's answer before sending the next request.
-- Timeouts are timers on the awaited reply (``asyncio.wait``), never polls.
-- GPU memory: a worker caps its own VRAM use (``worker_kit.gpu_fence``) and fails an op that would overfill the card
-  with code ``no_vram``. The client then asks the other workers that are idle to drop their models (``release``) and
-  retries the op once (``make_room``).
+"""Async client of a persistent JSON-lines worker process. One owner task per worker writes the requests and a reader
+task resolves their futures, so concurrent callers never interleave and no lock is held while a reply is awaited.
 """
 from __future__ import annotations
 
@@ -35,12 +20,10 @@ Progress = Callable[[dict[str, Any]], None]
 
 
 class WorkerDied(Exception):
-    """The worker process ended (crash, kill, idle exit) while a request was queued for it or running."""
+    """The worker process ended while a request was queued for it or running."""
 
 
 class WorkerError(Exception):
-    """The worker answered ``ok: false`` (``code`` is the worker's error code), or did not start / answer in time."""
-
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
@@ -65,12 +48,11 @@ class _Request:
         self.abandoned = False
 
 
-_CLIENTS: list[WorkerClient] = []   # every client made (a handful per engine), for make_room
+_CLIENTS: list[WorkerClient] = []
 
 
 async def make_room(asking: WorkerClient) -> list[str]:
-    """Free GPU memory for ``asking``: every other worker that is running and idle drops its models (``release``;
-    each one loads them again on its next op). Returns the names of the workers that released."""
+    """Every other running, idle worker drops its models. Returns the names of those that did."""
     freed = []
     for other in _CLIENTS[:]:  # a copy: releasing awaits, a client may be added meanwhile
         if other is asking or not other.alive() or other.busy():
@@ -88,7 +70,7 @@ async def make_room(asking: WorkerClient) -> list[str]:
 class WorkerClient:
     def __init__(self, name: str, argv: list[str], env: dict[str, str], start_timeout: float = 240.0) -> None:
         _CLIENTS.append(self)
-        self.on_release: list[Callable[[], None]] = []   # run when the worker dropped its models (make_room, exit)
+        self.on_release: list[Callable[[], None]] = []
         self.name = name
         self.argv = argv
         self.env = env
@@ -100,22 +82,20 @@ class WorkerClient:
         self._exited: asyncio.Future[int] | None = None
         self._ready: asyncio.Future[None] | None = None
         self._pending: dict[int, _Request] = {}
-        self.current: _Request | None = None   # the request the worker is running now
+        self.current: _Request | None = None
         self.last_error: str | None = None
         self.pid: int | None = None
 
-    # ---- state ----
     def alive(self) -> bool:
         return self._proc is not None and self._proc.returncode is None
 
     def busy(self) -> bool:
         return self.current is not None or (self._queue is not None and not self._queue.empty())
 
-    # ---- requests ----
     async def call(self, op: str, params: dict[str, Any] | None = None, progress: Progress | None = None,
                    timeout: float | None = None, start: bool = True, retry: bool = True) -> dict[str, Any]:
-        """Run ``op`` and return its result. A worker that dies under the request is restarted and the request retried
-        once (``retry``). ``start=False``: answer ``{}`` without starting a process when none is running."""
+        """A worker that dies under the request is restarted and the request retried once (``retry``).
+        ``start=False``: answer ``{}`` without starting a process when none is running."""
         try:
             return await self._call_once(op, params, progress, timeout, start)
         except WorkerDied as exc:
@@ -136,7 +116,7 @@ class WorkerClient:
     async def _call_once(self, op: str, params: dict[str, Any] | None, progress: Progress | None,
                          timeout: float | None, start: bool) -> dict[str, Any]:
         req = _Request(next(self._ids), {"op": op, **(params or {})}, progress, timeout, start)
-        memguard.refresh()  # the memory cap follows what the other programs use now (Windows)
+        memguard.refresh()
         self._ensure_owner()
         assert self._queue is not None
         self._queue.put_nowait(req)
@@ -149,8 +129,7 @@ class WorkerClient:
             raise
 
     def cancel_current(self, op: str | None = None, when: Callable[[dict[str, Any]], bool] | None = None) -> None:
-        """Ask the worker to stop the op it is running (only if it is ``op``, when given, and ``when(request)`` holds,
-        when given). Its caller gets ``WorkerCancelled`` (or the result, if the op cannot stop any more)."""
+        """Its caller gets ``WorkerCancelled``, or the result if the op cannot stop any more."""
         cur = self.current
         if (cur is not None and (op is None or cur.msg.get("op") == op) and (when is None or when(cur.msg))
                 and self.alive()):
@@ -193,7 +172,6 @@ class WorkerClient:
         if req.done.done() and not req.done.cancelled():
             req.done.exception()  # mark it retrieved even when the caller has gone away
 
-    # ---- process ----
     async def _spawn(self) -> None:
         loop = asyncio.get_running_loop()
         kwargs: dict[str, Any] = {}
@@ -288,7 +266,7 @@ class WorkerClient:
             log.warning("%s worker pipe closed: %s", self.name, exc)
 
     async def stop(self, graceful: bool = True) -> None:
-        """End the process: ``quit`` and await its exit (5 s), else kill. Pending requests fail with ``WorkerDied``."""
+        """Pending requests fail with ``WorkerDied``."""
         proc, exited = self._proc, self._exited
         if proc is None or proc.returncode is not None:
             return
@@ -311,21 +289,18 @@ class WorkerClient:
             await asyncio.shield(exited)
 
     async def close(self) -> None:
-        """Stop the process and the owner task (engine shutdown)."""
         await self.stop()
         if self._queue is not None:
             self._queue.put_nowait(None)
 
 
 def isolated() -> list[str]:
-    """Interpreter flags for a worker: ``-I`` (isolated: no user site, no PYTHON* variables), plus the engine's bytecode
-    cache folder (``PYTHONPYCACHEPREFIX``, which ``-I`` would ignore), so no ``__pycache__`` lands next to the sources."""
+    """``-I`` ignores ``PYTHONPYCACHEPREFIX``, so the engine's bytecode cache folder is passed with ``-X``."""
     prefix = sys.pycache_prefix
     return ["-I", "-X", f"pycache_prefix={prefix}"] if prefix else ["-I"]
 
 
 def child_env(**extra: str) -> dict[str, str]:
-    """Environment of a worker: UTF-8, unbuffered, and without the engine's PYTHONPATH (it imports nothing from here)."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1", **extra)
     env.pop("PYTHONPATH", None)
     return env

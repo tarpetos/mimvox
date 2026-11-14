@@ -1,33 +1,5 @@
-"""Reading presets (``presets/<lang>/<id>.md``) and the ``presets.list`` handler.
-
-Layout: one folder per language, named by its ISO 639-1 code (``presets/en``, ``presets/uk``, ``presets/de``, ...),
-each with ``quick.md``, ``standard.md`` and ``pro.md``. The texts are written for each language (not translated), so
-their word counts differ while the reading times match. A flat legacy layout (``presets/*.md``) is read as English.
-
-File format (hand-parsed, no YAML dependency)::
-
-    ---
-    id: standard
-    title: Standard
-    description: One sentence shown on the card.
-    target_minutes: 6.5
-    trains_rvc: true
-    language: uk
-    ---
-    ## Part title
-    First paragraph of the part.
-
-    Second paragraph of the part.
-
-    ## Next part title
-    ...
-
-``## `` headings start a new part; blank lines separate paragraphs. ``title`` and ``description`` are UI strings
-(English); part titles and texts are in the preset's language. ``est_seconds`` is computed from the word count at the
-language's reading pace (``dataset.lang``: 145 words per minute for English). The folder of the language comes first;
-``language:`` in the front matter is informational. The presets root is ``$MIMVOX_PRESETS`` when set, otherwise
-``presets/`` at the repository (or bundle) root, found by walking up from this file
-(``engine/src/mimvox_engine/dataset`` -> repo root).
+"""Reading presets, ``presets/<lang>/<id>.md``: front matter between ``---`` lines, then ``## `` part headings and
+paragraphs separated by blank lines (hand-parsed, no YAML dependency).
 """
 from __future__ import annotations
 
@@ -112,7 +84,6 @@ def _language_dir(root: Path, code: str) -> Path | None:
 
 
 def available_languages() -> list[str]:
-    """Codes that have presets, in the order of ``lang.LANGUAGES`` (English first)."""
     root = presets_dir()
     if not root.is_dir():
         return []
@@ -138,7 +109,6 @@ def load_presets(language: str = lang.DEFAULT) -> list[dict[str, Any]]:
 
 
 def get_preset(preset_id: str, language: str | None = lang.DEFAULT) -> dict[str, Any] | None:
-    """The preset ``preset_id`` in ``language`` (English when ``None`` or when that language has no such preset)."""
     code = language if language in lang.LANGUAGES else lang.DEFAULT
     found = next((p for p in load_presets(code) if p["id"] == preset_id), None)
     if found is None and code != lang.DEFAULT:

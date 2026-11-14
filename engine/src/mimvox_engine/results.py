@@ -1,18 +1,6 @@
-"""Saved Speak and Redub results across restarts: the metadata sidecar of each result, ``outputs.list`` and
-``outputs.play`` (see contract/engine-protocol.md).
+"""Saved Speak and Redub results: their ``.result.json`` sidecars, ``outputs.list`` and ``outputs.play``.
 
-Every result saved by ``tts.done`` / ``redub.done`` gets ``<data>/outputs/<stem>.result.json`` next to it (written
-atomically, see :func:`record`): what made it (kind, voice, text or source, languages, accent, mode) and how long it
-is. ``outputs.list`` reads the outputs folder (not ``books/``) and returns one entry per result, newest first: a result
-with a sidecar gets its fields; an older result without one (a name ``<stamp>`` or ``redub_<stamp>``, from before
-sidecars) gets its file name, its date (mtime) and its duration (read from the file, cached for the session). The audio
-and the video of one Redub (``redub_<stamp>.mp3`` + ``redub_<stamp>.mp4``) are one entry. A file put in the folder
-from outside (any other name, no sidecar) is listed the same way, with ``external: true``: an audio file with Speak's
-results, a video alone with Redub's. The app's refresh button asks the list again, so what was copied in, renamed or
-deleted on disk shows at once. An export the engine saved next to a result (``<stem>_export.<ext>``) is not listed.
-
-``outputs.play`` returns a WAV to play a result with (the app plays WAV only): the file itself when it is a WAV, else
-a decoded copy in ``<data>/tmp/play`` (emptied at every engine start, so it lives for the session).
+``outputs.play`` always returns a WAV: the app plays WAV only.
 """
 from __future__ import annotations
 
@@ -33,27 +21,21 @@ SIDECAR = ".result.json"
 KINDS = ("speak", "redub")
 LIMIT_DEFAULT, LIMIT_MAX = 50, 500
 PLAY_SR = 44100
-# What save_result writes (media._EXPORT) and the video containers a Redub muxes into.
 _AUDIO = {"wav", "mp3", "flac", "ogg", "opus", "m4a", "aiff"}
-# A result saved before sidecars: "<stamp>" (Speak) or "redub_<stamp>" (Redub), "_<n>" when the second was taken.
+# Saved before sidecars: "<stamp>" or "redub_<stamp>", "_<n>" when the second was taken.
 _LEGACY = re.compile(r"^(redub_)?\d{8}_\d{6}(_\d+)?$")
-# Sidecar fields copied into a list entry (when present).
 _FIELDS = ("voice_id", "voice_name", "text", "language", "accent", "mode", "source_name", "to")
 
-_durations: dict[tuple[str, int, int], float] = {}   # (path, mtime_ns, size) -> seconds, for the session
+_durations: dict[tuple[str, int, int], float] = {}
 _dur_lock = threading.Lock()
 
-
-# --------------------------------------------------------------------------------------------- the sidecar
 
 def sidecar_path(result_path: str) -> str:
     return os.path.splitext(result_path)[0] + SIDECAR
 
 
 def record(saved: dict[str, Any], fields: dict[str, Any]) -> None:
-    """Write the sidecar of a result just saved (``saved``: what ``media.save_result`` returned, ``fields``: what made
-    it, see the contract). Atomic (a temporary file, then a rename). A failure is logged, never raised: the result
-    itself is saved, it only would not come back after a restart with its details. IO thread."""
+    """IO thread. Never raises: the result itself is already saved."""
     path = str(saved.get("path") or "")
     if not path:
         return
@@ -93,11 +75,7 @@ def _read_sidecar(path: str) -> dict[str, Any] | None:
     return obj if isinstance(obj, dict) and obj.get("kind") in KINDS else None
 
 
-# ------------------------------------------------------------------------------------------------ the list
-
 class _Group:
-    """The files of one stem in outputs."""
-
     def __init__(self) -> None:
         self.audio: list[tuple[str, os.stat_result]] = []
         self.video: list[tuple[str, os.stat_result]] = []
@@ -116,7 +94,7 @@ def _scan(outputs: str) -> dict[str, _Group]:
             if name.startswith(".") or name.endswith(".tmp") or ".part" in name:
                 continue
             try:
-                if not e.is_file():   # books/ and any other folder
+                if not e.is_file():
                     continue
                 st = e.stat()
             except OSError:
@@ -134,7 +112,7 @@ def _scan(outputs: str) -> dict[str, _Group]:
 
 
 def _pick(files: list[tuple[str, os.stat_result]], name: str | None = None) -> tuple[str, os.stat_result] | None:
-    """The file named ``name`` when there is one, else the oldest (an export saved next to a result is newer)."""
+    """``name`` when present, else the oldest: an export saved next to a result is newer."""
     if not files:
         return None
     if name:
@@ -145,13 +123,12 @@ def _pick(files: list[tuple[str, os.stat_result]], name: str | None = None) -> t
 
 
 def _entry(stem: str, g: _Group) -> dict[str, Any] | None:
-    """The list entry of one stem (without its duration when it has no sidecar), or None when it is not a result."""
     side = _read_sidecar(g.sidecar) if g.sidecar else None
     if side is not None:
         audio = _pick(g.audio, os.path.basename(str(side.get("path") or "")))
         video = _pick(g.video, os.path.basename(str(side.get("video_path") or "")))
         main = audio or video
-        if main is None:   # the files are gone, only the sidecar is left
+        if main is None:
             return None
         e: dict[str, Any] = {"id": stem, "kind": side["kind"], "legacy": False, "name": os.path.basename(main[0]),
                              "created": _num(side.get("created")) or main[1].st_mtime,
@@ -168,7 +145,6 @@ def _entry(stem: str, g: _Group) -> dict[str, Any] | None:
     main = audio or video
     if main is None:
         return None
-    # Ours from before sidecars: the name says which list. From outside: audio goes with Speak, a video alone with Redub.
     kind = ("redub" if stem.startswith("redub_") else "speak") if legacy else ("redub" if audio is None else "speak")
     return {"id": stem, "kind": kind, "legacy": True, "external": not legacy,
             "name": os.path.basename(main[0]), "created": main[1].st_mtime, "path": main[0],
@@ -181,8 +157,6 @@ def _num(v: Any) -> float | None:
 
 
 def _duration(path: str, st: os.stat_result) -> float | None:
-    """Seconds of audio in ``path``: libsndfile in-process when it can (wav, flac, ogg, mp3), else ffprobe; cached for
-    the session by path, mtime and size."""
     key = (path, st.st_mtime_ns, st.st_size)
     with _dur_lock:
         if key in _durations:
@@ -205,9 +179,7 @@ def _duration(path: str, st: os.stat_result) -> float | None:
 
 
 def _play_cached(data: config.DataDir, path: str) -> str | None:
-    """A WAV that plays ``path`` now, without decoding: the file itself when it is a WAV, else its copy in
-    ``<data>/tmp/play`` when there is one (tmp is emptied at every engine start, so the copy is from this session:
-    written by save_result with the result, or decoded by ``outputs.play``)."""
+    """Without decoding: the WAV itself, or its copy in tmp (emptied at every engine start)."""
     if path.lower().endswith(".wav"):
         return path
     dst = _play_dst(data, path)
@@ -220,12 +192,11 @@ def _play_dst(data: config.DataDir, path: str) -> str:
 
 def list_results(data: config.DataDir, kind: str | None = None, limit: int = LIMIT_DEFAULT,
                  before: float | None = None) -> dict[str, Any]:
-    """``{"results": [...], "more": bool}``: the results in outputs, newest first (see ``outputs.list``)."""
     entries = []
     groups = _scan(data.outputs)
     for stem, g in groups.items():
         if stem.endswith("_export") and stem[:-len("_export")] in groups and not g.sidecar:
-            continue   # an export of a result, saved next to it (media.export's default name)
+            continue   # media.export's default name for an export of that result
         e = _entry(stem, g)
         if e is None or (kind and e["kind"] != kind) or (before is not None and e["created"] >= before):
             continue
@@ -257,10 +228,7 @@ def outputs_list(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
                         float(before) if before is not None else None)
 
 
-# ------------------------------------------------------------------------------------------------ playback
-
 def playable(data: config.DataDir, path: Any) -> dict[str, str]:
-    """``{"path", "path_play"}`` for a result in outputs (see ``outputs.play``). IO thread."""
     if not isinstance(path, str) or not path or not os.path.isabs(path):
         raise EngineError("bad_request", "'path' must be an absolute file path")
     real = os.path.realpath(path)

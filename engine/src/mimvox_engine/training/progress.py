@@ -1,11 +1,9 @@
-"""Turn Applio's console output into ``train.progress`` numbers (stage weights, epoch, ETA)."""
 from __future__ import annotations
 
 import re
 import time
 from collections import deque
 
-# Share of the overall percentage per stage; train covers 15..95 and ends with the index build.
 WEIGHTS = {"preprocess": (0.0, 5.0), "extract": (5.0, 15.0), "train": (15.0, 95.0), "index": (95.0, 100.0)}
 
 _BAR = re.compile(r"(\d+)/(\d+)\s*\[")
@@ -14,18 +12,16 @@ _BATCH = re.compile(r"batch=(\d+)/(\d+)")
 
 
 class Tracker:
-    """Feed it lines of the current stage; read ``snapshot()`` for the numbers to emit."""
-
     def __init__(self, total_epochs: int) -> None:
         self.total_epochs = total_epochs
         self.stage = "preprocess"
-        self.frac = 0.0            # 0..1 inside the current stage
-        self.epoch = 0             # epoch being trained (1-based) once training started
+        self.frac = 0.0
+        self.epoch = 0
         self.epochs_done = 0
         self._phase = 0            # extract: 0 pitch, 1 embeddings
-        self._epoch_marks: deque[float] = deque(maxlen=31)  # monotonic time of recent epoch ends
+        self._epoch_marks: deque[float] = deque(maxlen=31)
         self.last_step: int | None = None
-        self._batches_seen = 0     # batch lines seen in the current epoch (cached data is shuffled, so ids are not ordered)
+        self._batches_seen = 0     # counted: cached data is shuffled, so batch ids are not ordered
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage
@@ -33,7 +29,7 @@ class Tracker:
         self._phase = 0
 
     def feed(self, line: str) -> bool:
-        """Update from one output line; True when something progress-relevant changed."""
+        """True when something progress-relevant changed."""
         st = self.stage
         if st == "train":
             return self._feed_train(line)
@@ -85,8 +81,7 @@ class Tracker:
         if self.stage != "train" or len(self._epoch_marks) < 3:
             return None
         marks = list(self._epoch_marks)
-        # Median of recent epoch durations, ignoring the slow outliers (checkpoint saves, a busy system) so the
-        # estimate moves smoothly instead of doubling after one slow epoch.
+        # slow outliers (checkpoint saves) are ignored, so one slow epoch does not double the estimate
         gaps = sorted(b - a for a, b in zip(marks, marks[1:]))
         median = gaps[len(gaps) // 2]
         typical = [g for g in gaps if g <= 1.5 * median] or gaps

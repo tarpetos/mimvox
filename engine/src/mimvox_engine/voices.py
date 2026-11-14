@@ -1,4 +1,3 @@
-"""voices.list / create / rename / delete, plus helpers other modules use to read a voice."""
 from __future__ import annotations
 
 import glob
@@ -18,11 +17,10 @@ from . import config, media
 from .registry import Context, EngineError, method
 
 _LOCK = threading.RLock()
-_DURATIONS: dict[tuple[str, int, int], float] = {}  # (path, mtime_ns, size) -> seconds
+_DURATIONS: dict[tuple[str, int, int], float] = {}
 
 
-# Cyrillic -> Latin: the Ukrainian national transliteration (KMU 2010; "Мій голос" -> "mii-holos"), plus the
-# letters of Russian, Belarusian and the other Cyrillic alphabets. Word-initial forms are in _CYR_FIRST.
+# The Ukrainian national transliteration (KMU 2010), plus the letters of the other Cyrillic alphabets.
 _CYR = {
     "а": "a", "б": "b", "в": "v", "г": "h", "ґ": "g", "д": "d", "е": "e", "є": "ie", "ж": "zh", "з": "z", "и": "y",
     "і": "i", "ї": "i", "й": "i", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s",
@@ -42,8 +40,6 @@ _LATIN = {"ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "
 
 
 def transliterate(text: str) -> str:
-    """Latin letters for a name in another script (Cyrillic, Greek; accents dropped from Latin letters). Characters
-    of other scripts are dropped."""
     low = text.lower()
     out: list[str] = []
     prev_letter = False
@@ -63,7 +59,6 @@ def transliterate(text: str) -> str:
 
 
 def slugify(name: str) -> str:
-    """The voice id made from a name: ``Anna`` -> ``anna``, ``Мій голос`` -> ``mii-holos``, ``Zoë`` -> ``zoe``."""
     slug = re.sub(r"[^a-z0-9]+", "-", transliterate(name)).strip("-")
     return slug[:48].strip("-") or "voice"
 
@@ -89,7 +84,7 @@ def read_meta(data: config.DataDir, voice_id: str) -> dict[str, Any]:
 
 
 def update_meta(data: config.DataDir, voice_id: str, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
-    """Read ``voice.json``, let ``mutate`` change it in place and write it back atomically (under the module lock)."""
+    """``mutate`` changes the dict in place; written back atomically under the module lock."""
     with _LOCK:
         meta = read_meta(data, voice_id)
         mutate(meta)
@@ -98,7 +93,6 @@ def update_meta(data: config.DataDir, voice_id: str, mutate: Callable[[dict[str,
 
 
 def paused_training(meta: dict[str, Any]) -> dict[str, Any] | None:
-    """The public part of a paused (or interrupted) training run recorded in ``voice.json``, or ``None``."""
     p = meta.get("training_paused")
     if not isinstance(p, dict) or not isinstance(p.get("epoch"), int) or not isinstance(p.get("total_epochs"), int):
         return None
@@ -127,7 +121,7 @@ def _wav_seconds(path: str) -> float:
 def _trained_epochs(vdir: str, meta: dict[str, Any]) -> int | None:
     if isinstance(meta.get("trained_epochs"), int):
         return meta["trained_epochs"]
-    for name in ("meta.json", "train.json"):  # written by the training module, if it records it
+    for name in ("meta.json", "train.json"):
         try:
             with open(os.path.join(vdir, "rvc", name), encoding="utf-8") as fh:
                 value = json.load(fh).get("epochs")
@@ -139,7 +133,6 @@ def _trained_epochs(vdir: str, meta: dict[str, Any]) -> int | None:
 
 
 def describe(data: config.DataDir, voice_id: str) -> dict[str, Any]:
-    """The voice object of the contract (``voices.list`` item)."""
     meta = read_meta(data, voice_id)
     vdir = data.voice(voice_id)
     parts = sorted(glob.glob(os.path.join(vdir, "dataset", "part*.wav")))
@@ -169,7 +162,6 @@ def _language_references(vdir: str) -> list[str]:
 
 
 def _reference_languages(vdir: str) -> dict[str, Any]:
-    """``reference_language`` / ``reference_languages``: the real language of the clips (reflang.py)."""
     from . import reflang  # noqa: PLC0415 - lazy, as above
 
     try:
@@ -194,7 +186,6 @@ def _clean_name(params: dict[str, Any]) -> str:
 
 
 def _clean_language(params: dict[str, Any]) -> str:
-    """The voice's recording language (ISO 639-1, see ``dataset.lang``); ``en`` when absent or ``auto``."""
     from .dataset import lang  # noqa: PLC0415 - lazy: keeps this module importable on its own
 
     try:
@@ -242,8 +233,7 @@ def voices_create(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("voices.rename")
 def voices_rename(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """``{"id","name"}`` renames; ``{"id","language"}`` (name optional) changes the recording language, e.g. when the
-    first texts read into a still empty voice are in another language."""
+    """``{"id", "name"}`` renames; ``{"id", "language"}`` (name optional) changes the recording language."""
     data = config.data_dir(ctx)
     vid = params.get("id")
     name = _clean_name(params) if "name" in params or "language" not in params else None
@@ -273,8 +263,6 @@ def voices_delete(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-# --------------------------------------------------------------------------------------------------- voices.import
-
 _PART_FILE = re.compile(
     r"^part(\d+)\.(?:wav|mp3|m4a|aac|flac|ogg|oga|opus|wma|aif|aiff|mp4|mkv|mov|webm|avi)$", re.IGNORECASE)
 _EPOCHS_IN_NAME = re.compile(r"_(\d+)e(?:_|\.)")
@@ -302,13 +290,7 @@ def _atomic_copy(src: str, dst: str) -> None:
 
 
 def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Create a voice from material that already exists (recordings and, optionally, a trained RVC model).
-
-    ``reference_path`` becomes ``reference.wav`` (mono 16-bit WAV, as recorded: no trimming). Every ``part<N>.wav`` in
-    ``dataset_dir`` goes through ``dataset.add`` (trim, normalise, quality verdict). ``rvc_model`` / ``rvc_index``
-    are copied to ``rvc/model.pth`` / ``rvc/model.index`` and the voice counts as trained: no retraining needed.
-    On any failure the half-made voice is removed again.
-    """
+    """A failure removes the half-made voice again."""
     data = config.data_dir(ctx)
     ref_src = _existing_file(params, "reference_path")
     pth_src = _existing_file(params, "rvc_model")
@@ -344,7 +326,7 @@ def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             for n, path in parts:
                 add(ctx, {"voice_id": vid, "part_index": n, "path": path})
         if ref_src:
-            y, sr = media.read_audio(ref_src)  # any format the shared decoder reads
+            y, sr = media.read_audio(ref_src)
             sf.write(data.reference(vid), y, sr, subtype="PCM_16", format="WAV")
         if not os.path.isfile(data.reference(vid)):
             raise EngineError("bad_request", "no usable reference could be made from these recordings")

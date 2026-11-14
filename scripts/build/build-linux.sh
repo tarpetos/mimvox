@@ -5,27 +5,18 @@
 #   --formats appimage,deb   which installers to build (default: both; comma separated)
 #   --skip-compile           reuse app/target/release (only re-stage resources and re-package)
 #
-# Output: dist/mimvox_<version>_amd64.deb and dist/*.AppImage (dist/ is git-ignored).
-#
-# What it does: checks the toolchain, installs cargo-packager when missing, stages the runtime resources
-# (engine sources, presets, setup tools, contract; NOT the heavy models) into app/target/bundle-resources,
-# compiles the release binary and runs `cargo packager` with app/Packager.toml. The header of that file documents
-# where the installed app finds its bundled resources at runtime.
-#
-# Knobs: CARGO_PACKAGER_VERSION (default below), CARGO_BUILD_JOBS (default 6), CARGO_TARGET_DIR.
-# Cargo runs under `flock /tmp/mimvox-cargo.lock` (when flock exists) so only one Rust build runs at a time on a shared machine.
+# Output: dist/mimvox_<version>_amd64.deb and dist/*.AppImage.
+# Env: CARGO_PACKAGER_VERSION, CARGO_BUILD_JOBS (default 6), CARGO_TARGET_DIR.
 set -euo pipefail
 
 PACKAGER_VERSION="${CARGO_PACKAGER_VERSION:-0.11.8}"
 BIN_NAME="mimvox"
-# Cap parallel compiler jobs (a full Rust + wgpu build is memory hungry); override with CARGO_BUILD_JOBS.
+# a full Rust + wgpu build is memory hungry
 JOBS="${CARGO_BUILD_JOBS:-6}"
 export CARGO_BUILD_JOBS="$JOBS"
 LOCK=()
 if command -v flock >/dev/null 2>&1; then LOCK=(flock /tmp/mimvox-cargo.lock); fi
 
-# The repo root is two folders above this script, so the build works from any directory
-# and from a path that contains spaces.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
 APP_DIR="$REPO_ROOT/app"
@@ -64,14 +55,11 @@ if [[ ",$FORMATS," == *",deb,"* ]]; then
 fi
 if [[ ",$FORMATS," == *",appimage,"* ]]; then
     need file "Install it: sudo apt install file"
-    # cargo-packager downloads linuxdeploy on first use, so the first AppImage build needs the network.
-    # Run the AppImage tools without FUSE (containers, WSL) and without their bundled, outdated `strip`,
-    # which chokes on modern .relr.dyn sections.
+    # No FUSE in containers and WSL; the tools' bundled, outdated `strip` chokes on .relr.dyn sections.
     export APPIMAGE_EXTRACT_AND_RUN=1
     export NO_STRIP=true
 fi
 
-# The version in Packager.toml must match the crate, otherwise the installer lies about it.
 cargo_version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)"
 packager_version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Packager.toml | head -n1)"
 if [ "$cargo_version" != "$packager_version" ]; then
@@ -85,7 +73,7 @@ if ! command -v cargo-packager >/dev/null 2>&1; then
 fi
 
 echo "[build-linux] Staging bundled resources..." >&2
-# The app runs setup with the bundled uv (a static musl build runs on every distribution).
+# a static musl uv runs on every distribution
 case "$(uname -m)" in
     aarch64|arm64) UV_TARGET=aarch64-unknown-linux-musl ;;
     *) UV_TARGET=x86_64-unknown-linux-musl ;;

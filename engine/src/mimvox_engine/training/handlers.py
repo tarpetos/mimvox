@@ -1,10 +1,6 @@
-"""``train.start`` / ``train.pause`` / ``train.resume`` / ``train.cancel``: train an RVC model for one voice through
-Applio's CLI (``core.py``), with pause and resume (see ``resume.py`` for how Applio's checkpoints are used).
+"""RVC training through Applio's CLI, with pause and resume.
 
-Event-driven on the engine loop: the job is a task, each Applio step an asyncio subprocess whose output lines drive the
-progress events and the checkpoint bookkeeping (``_Watch``). ``train.cancel`` cancels the task (the step kills its
-process tree and awaits the exit); ``train.pause`` lets the watcher stop the tree right after a checkpoint is safely
-on disk, or when a timer (``PAUSE_PATIENCE_S``) runs out. Blocking file work goes to the IO pool.
+A pause stops Applio only after a checkpoint is confirmed on disk (``_Watch``), or when ``PAUSE_PATIENCE_S`` runs out.
 """
 from __future__ import annotations
 
@@ -50,9 +46,9 @@ log = logging.getLogger("mimvox.training")
 _VOICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
 _FINAL_PTH = re.compile(r"^(?P<m>.+)_(?P<e>\d+)e_(?P<s>\d+)s\.pth$")
 
-# Loop-thread state (only the event loop changes it, so no locks).
-_runs: dict[str, "_Run"] = {}   # job id -> run (pause needs the live process)
-_active: str | None = None      # voice id being trained (one training at a time)
+# Only the event loop changes these, so no locks.
+_runs: dict[str, "_Run"] = {}
+_active: str | None = None
 
 
 class _Cancelled(Exception):
@@ -60,11 +56,11 @@ class _Cancelled(Exception):
 
 
 class _Paused(Exception):
-    """The Applio process was stopped on purpose after a checkpoint (``train.pause``)."""
+    """Applio was stopped on purpose after a checkpoint."""
 
 
 class _Shutdown(Exception):
-    """The engine is shutting down: Applio was stopped, the run marker stays (an "interrupted" run at next start)."""
+    """The run marker stays, so the next engine start sees an interrupted run."""
 
 
 class _StepFailed(Exception):
@@ -74,8 +70,6 @@ class _StepFailed(Exception):
 
 
 class _Run:
-    """State of one training job (what ``train.pause`` needs to stop it)."""
-
     def __init__(self) -> None:
         self.step: Step | None = None
         self.tracker: Tracker | None = None
@@ -83,14 +77,14 @@ class _Run:
         self.pause_requested = False
         self.pause_t = 0.0
         self.pause_timer: asyncio.TimerHandle | None = None
-        self.pause_stop = False     # the process is being killed because of a pause, not a cancel
-        self.kept_epoch: int | None = None  # set when a failed run left a resumable checkpoint behind
+        self.pause_stop = False
+        self.kept_epoch: int | None = None
 
     def request_pause(self) -> None:
         if not self.pause_requested:
             self.pause_requested = True
             self.pause_t = time.monotonic()
-            # A timer, not a poll: if no checkpoint is confirmed within the patience, stop anyway.
+            # if no checkpoint is confirmed within the patience, stop anyway
             self.pause_timer = asyncio.get_running_loop().call_later(PAUSE_PATIENCE_S + 0.1, self._recheck)
         self._recheck()
 
@@ -114,27 +108,21 @@ class _Run:
 
 
 class _Watch:
-    """Follows the end-of-epoch lines of one Applio training process to know which checkpoint is safely on disk,
-    and decides when a requested pause may stop the process.
-
-    Applio prints the end-of-epoch line first and saves the checkpoint right after it, so the save of epoch ``e`` is
-    known to be complete only once a line of epoch ``e + 1`` shows up. A kill in between would tear the files; the
-    pause therefore waits for that confirmation (older pairs are removed only then, see ``resume.prune_checkpoints``).
-    """
+    """Applio prints the end-of-epoch line before it saves the checkpoint, so the save of epoch ``e`` is complete only
+    once a line of epoch ``e + 1`` shows up; a kill in between would tear the files."""
 
     def __init__(self, run: "_Run", tracker: Tracker, logdir: Path, total: int, saved: tuple[int, int] | None,
                  spe: int | None, on_confirm) -> None:
         self.run, self.tracker, self.logdir, self.total = run, tracker, logdir, total
         self.every = checkpoint_every(total)
         self.saved = saved                      # (epoch, step) of the newest confirmed checkpoint
-        self.spe = spe                          # steps per epoch, learned from the end-of-epoch lines
+        self.spe = spe                          # steps per epoch
         self.inflight: tuple[int, int] | None = None
         self.on_confirm = on_confirm
         self.last_done = tracker.epochs_done
-        self._books: asyncio.Future[Any] | None = None   # the last bookkeeping write (they run in order)
+        self._books: asyncio.Future[Any] | None = None   # bookkeeping writes run in order
 
     def feed(self) -> None:
-        """Called for every output line of the train step (loop thread)."""
         t = self.tracker
         if t.epochs_done != self.last_done:
             self.last_done = t.epochs_done
@@ -148,7 +136,6 @@ class _Watch:
         self._maybe_stop()
 
     def _book(self, epoch: int, step_no: int, spe: int | None) -> None:
-        """Prune older checkpoints and record the confirmed one, on the IO pool, after the previous bookkeeping."""
         prev = self._books
 
         async def work() -> None:
@@ -163,7 +150,6 @@ class _Watch:
         self._books = aio.spawn(work(), name="train-checkpoint")
 
     async def settle(self) -> None:
-        """Wait for the bookkeeping writes in flight (before the run's end is recorded)."""
         if self._books is not None:
             await asyncio.gather(self._books, return_exceptions=True)
 
@@ -177,7 +163,7 @@ class _Watch:
         if self.inflight is not None or t.epochs_done >= self.total:
             return  # a save is being written, or the training is about to finish by itself
         if self.saved is None:
-            return  # nothing to resume from yet: wait for the first checkpoint
+            return  # nothing to resume from yet
         if self.saved[0] >= t.epochs_done or time.monotonic() - run.pause_t >= PAUSE_PATIENCE_S:
             run.stop_for_pause()
 
@@ -196,7 +182,7 @@ def _atomic_copy(src: Path, dst: Path) -> None:
 
 
 def _dataset_sig(dataset_dir: Path) -> str:
-    """Fingerprint of the recorded parts: a paused run only resumes on the data it extracted its features from."""
+    """A paused run only resumes on the data it extracted its features from."""
     h = hashlib.sha1()
     for p in dataset_parts(dataset_dir):
         st = p.stat()
@@ -211,7 +197,7 @@ def _paused_info(ctx: Context, voice_id: str) -> dict[str, Any] | None:
 
 
 def _set_meta(ctx: Context, voice_id: str, **changes: Any) -> None:
-    """Set keys of ``voice.json``; a value of ``None`` removes the key."""
+    """A value of ``None`` removes the key."""
     def mutate(meta: dict[str, Any]) -> None:
         for k, v in changes.items():
             if v is None:
@@ -305,13 +291,12 @@ async def _launch(ctx: Context, voice_id: str, voice_dir: Path, epochs: int | No
         raise EngineError("busy", "a training is already running")
     if tts.is_busy():
         raise EngineError("busy", "a generation is running; wait for it or cancel it before training")
-    _active = voice_id   # (no await since the checks: the loop makes check-and-take atomic)
+    _active = voice_id   # no await since the checks: the loop makes check-and-take atomic
     run = _Run()
     gpu = contextlib.AsyncExitStack()
     try:
-        # Hand the GPU over before answering (awaited: the models are unloaded and the worker processes have exited).
-        # The context is closed by the job when it ends (done, error, cancel or pause): the speech models then reload
-        # in the background.
+        # Awaited before answering: the models are unloaded and the worker processes have exited. The job closes
+        # the context when it ends, and the speech models reload.
         await gpu.enter_async_context(tts.gpu_released(ctx))
         if discard_first:
             await aio.run_io(_discard_paused, ctx, voice_id)
@@ -348,8 +333,7 @@ async def train_pause(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("train.cancel")
 async def train_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    """Cancel a running job (``{"job"}``: its task is cancelled, which stops the Applio tree), or discard a paused run
-    (``{"voice_id"}``)."""
+    """``{"job"}`` cancels a running job, ``{"voice_id"}`` discards a paused run."""
     job = params.get("job")
     voice_id = params.get("voice_id")
     if isinstance(job, str):
@@ -364,8 +348,6 @@ async def train_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     raise EngineError("bad_request", "job or voice_id is missing")
 
 
-# --------------------------------------------------------------------------------------------------------------
-
 async def _job(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path, total: int, seconds: float,
                gpu: contextlib.AsyncExitStack, resume: dict[str, Any] | None) -> None:
     global _active
@@ -377,7 +359,7 @@ async def _job(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path
     except _Paused:
         pass  # `train.paused` was emitted by _train
     except _Shutdown:
-        pass  # the engine is going away: the run stays recorded as running and becomes "interrupted" at next start
+        pass  # the run stays recorded as running and is "interrupted" at the next start
     except (_Cancelled, asyncio.CancelledError, KeyboardInterrupt):
         if not aio.closing():
             ctx.emit("train.error", {"code": "cancelled", "message": "Training was cancelled."}, job=job)
@@ -393,13 +375,13 @@ async def _job(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path
         ctx.emit("train.error", {"code": "internal", "message": f"Training failed: {e}{kept}"}, job=job)
     finally:
         run.close()
-        await gpu.aclose()  # reload the speech model and the RVC worker (also after an error, a cancel or a pause)
+        await gpu.aclose()
         _runs.pop(job, None)
         _active = None
 
 
 def _is_oom(tail: list[str]) -> bool:
-    """GPU out-of-memory, or the Triton/ptxas kernel compiler failing to get host memory (same cure: free memory)."""
+    """Also the Triton/ptxas kernel compiler failing to get host memory: the same cure."""
     low = "\n".join(tail).lower()
     return any(m in low for m in ("out of memory", "ptxas fatal", "memory allocation failure", "bad allocation"))
 
@@ -424,7 +406,6 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
     last_emit = [0.0]
     log_dir = Path(ctx.data_dir) / "tmp"
     await aio.run_io(log_dir.mkdir, parents=True, exist_ok=True)
-    # Full Applio output for diagnostics; a resumed run appends to the log of the paused one.
     applog = await aio.run_io((log_dir / f"train_{voice_id}.log").open, "a" if resume else "w", encoding="utf-8")
     paused = False
     kept = False
@@ -505,7 +486,7 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
             **({"steps_per_epoch": spe} if spe else {})))
 
         if not skip_prepare:
-            # a fresh model every time (stale features would be reused)
+            # stale features would be reused
             await aio.run_io(shutil.rmtree, logdir, ignore_errors=True)
             tracker.set_stage("preprocess")
             emit(force=True)
@@ -644,7 +625,6 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
 
 def _commit_pause(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path, logdir: Path, total: int,
                   model: str) -> None:
-    """The Applio process is gone: record where a resume continues and tell the app."""
     watch = run.watch
     tracker = run.tracker
     step_no = repair(logdir)  # also drops a torn newer pair, so Applio cannot pick it up on resume
@@ -674,7 +654,6 @@ def _commit_pause(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: P
 
 
 def _read_plan(ctx: Context, voice_id: str) -> dict[str, Any]:
-    """Batch size / GPU cache of the run that is ending, taken from its ``training_run`` marker."""
     try:
         run = voices.read_meta(config.data_dir(ctx), voice_id).get("training_run") or {}
     except EngineError:
@@ -686,13 +665,8 @@ def _read_plan(ctx: Context, voice_id: str) -> dict[str, Any]:
     return out
 
 
-# -------------------------------------------------------------------------------------- start-up recovery
-
 def recover_interrupted(ctx: Context) -> None:
-    """Called once when the engine starts: a voice whose ``training_run`` marker is still set lost its engine
-    (app closed or crashed) during a training. If its Applio folder holds a valid checkpoint the run becomes a paused
-    one with ``interrupted: true`` so it can be resumed; the folder itself is never touched here beyond dropping a
-    torn newer checkpoint pair."""
+    """At engine start: a ``training_run`` marker still set means the engine died during that training."""
     data = config.data_dir(ctx)
     for vid in voices.list_voice_ids(data):
         try:
@@ -736,10 +710,7 @@ def recover_interrupted(ctx: Context) -> None:
 def _train_args(model: str, total: int, batch: int, cache: bool) -> list[str]:
     args = [
         "train", "--model-name", model, "--sample-rate", str(SAMPLE_RATE), "--total-epoch", str(total),
-        # G/D checkpoints are what a resume continues from (pause, closed app, crash): one pair every few epochs.
-        # No --save-only-latest: that overwrites one file in place, so a kill during the save would destroy the only
-        # checkpoint. The watcher (_Watch) removes older pairs once the next epoch runs. The final weights are always
-        # exported at the last epoch.
+        # No --save-only-latest: it overwrites the checkpoint in place, so a kill during the save would destroy it.
         "--save-every-epoch", str(checkpoint_every(total)),
         "--batch-size", str(batch), "--gpu", "0", "--pretrained", "--vocoder", "HiFi-GAN",
         "--index-algorithm", "Auto",
@@ -765,8 +736,7 @@ def _drop_checkpoints(logdir: Path) -> None:
 
 
 async def on_shutdown() -> None:
-    """Engine shutdown: stop the Applio tree of a running training and await its exit. The run's marker stays in
-    ``voice.json``, so the next engine start turns it into an interrupted, resumable run (see ``recover_interrupted``)."""
+    """The run's marker stays in ``voice.json``, so the next engine start resumes it as interrupted."""
     from . import proc  # noqa: PLC0415
 
     await proc.kill_all()

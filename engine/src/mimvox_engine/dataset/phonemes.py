@@ -1,9 +1,4 @@
-"""Text -> ARPAbet phonemes (stress stripped) with graceful degradation.
-
-Order of preference: g2p_en (present in the engine venv; its CMUdict lookup plus the neural fallback for unknown
-words, run without the POS tagger so no NLTK tagger download is needed) -> NLTK's CMUdict if only that is available ->
-a small letter/digraph heuristic. ``backend()`` tells which one is active.
-"""
+"""Text to ARPAbet phonemes: g2p_en, else NLTK's CMUdict, else a letter heuristic."""
 from __future__ import annotations
 
 import contextlib
@@ -33,7 +28,7 @@ def _load() -> None:
     if _state["backend"] is not None:
         return
     try:
-        # g2p_en calls nltk.download() at import when data is missing, and nltk prints to stdout: keep stdout clean.
+        # g2p_en may call nltk.download() at import, which prints to stdout: keep stdout clean.
         with contextlib.redirect_stdout(sys.stderr):
             from g2p_en import G2p
             from g2p_en.expand import normalize_numbers
@@ -144,7 +139,6 @@ def _expand_digits(text: str) -> str:
 
 
 def phonemes_of(text: str) -> list[str]:
-    """ARPAbet phoneme sequence (no stress, no word boundaries) for ``text``."""
     _load()
     b = _state["backend"]
     if b == "g2p_en":
