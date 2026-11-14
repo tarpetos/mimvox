@@ -2,7 +2,8 @@
 //! of the main display at its default size, not maximized.
 //!
 //! Saved when the window closes: the outer position in desktop pixels, the content size in points, and whether it
-//! was maximized (then the size and place from before stay, so un-maximizing returns to them). A place that is no
+//! was maximized (then the size from before stays, so un-maximizing returns to it; a maximized window is not moved
+//! when it opens, because moving it would un-maximize it). A place that is no
 //! longer on any display (a monitor unplugged since) is not used: the window opens centred. Wayland hides window
 //! positions, so there only the size is kept.
 

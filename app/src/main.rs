@@ -103,10 +103,12 @@ fn main() {
         .on_frame_drawn(|_| ui::stats::count(&ui::stats::FRAMES));
     // Background threads (engine, audio, dialogs) reach the UI through this handle (`ui::events`).
     ui::events::init(app.handle());
+    // A window that opens maximized is left where it is: moving or centring a maximized window puts it back to its
+    // normal size (on Windows, setting the position un-maximizes it), so it opened maximized and then shrank.
     match opening.position {
+        _ if opening.maximized => {}
         Some(position) => app.handle().set_position(position),
-        // (Not a maximized window: centring it would put it back to its normal size.)
-        None if !rune::is_headless() && !opening.maximized => ui::shell::center_on_open(),
+        None if !rune::is_headless() => ui::shell::center_on_open(),
         None => {}
     }
     app.run();
