@@ -216,6 +216,9 @@ impl Redub {
 }
 
 pub struct RedubState {
+    /// The "Output" line is unfolded (video or audio, the background, the timing).
+    /// The folded section of the options that is open (one at a time).
+    pub fold: Option<Fold>,
     file: Option<Source>,
     pub mode: RedubMode,
     /// The language of the speech (`auto` or a code).
@@ -260,6 +263,7 @@ pub struct RedubState {
 impl Default for RedubState {
     fn default() -> Self {
         RedubState {
+            fold: None,
             file: None,
             mode: RedubMode::Dub,
             from: "auto".into(),
@@ -426,6 +430,67 @@ fn timing_block(s: &AppState, p: Palette, key: &str) -> El {
     col().key(key.to_owned()).w_full().gap(3.0)
         .child(kit::checkbox(&p, on, "Keep original timing", toggle_keep_timing).opacity(if forced { 0.55 } else { 1.0 }))
         .child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
+}
+
+/// The parts of the options that fold into one line each. They are set once and rarely touched, and open they
+/// filled the panel; one is open at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fold {
+    /// Re-speak: the spoken language, "Translate the transcript" and "Transcribe again".
+    Transcription,
+    Accent,
+    Output,
+}
+
+/// A folded section's line: its name, what is chosen now, and "Change" / "Hide". `pinned` is a section that
+/// something keeps open (a running job, a warning): the line then only names it.
+fn fold_row(p: Palette, key: &str, title: &str, summary: &str, open: bool, pinned: bool, which: Fold) -> El {
+    let r = row().key(key.to_owned()).w_full().gap(10.0).center_y().px(6.0).py(6.0).radius(radius::CONTROL)
+        .child(text(title.to_owned()).font(ty::LABEL).color(p.text).a11y_hidden())
+        .child(text(summary.to_owned()).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).truncate().a11y_hidden());
+    if pinned {
+        return r;
+    }
+    r.role("button").label(title.to_owned()).hover(p.glass_hover).focusable(true)
+        .on_press(move |s: &mut AppState| s.redub.fold = if s.redub.fold == Some(which) { None } else { Some(which) })
+        .child(text(if open { "Hide" } else { "Change" }).font(ty::CAPTION).color(p.accent).a11y_hidden())
+}
+
+/// The Accent choice as one line ("Native (American) · closest speaker") that unfolds. While the native accent is
+/// not in use the choice stays open: it carries the hint about what to install or add.
+fn accent_section(s: &AppState, p: Palette, key: &str) -> El {
+    if !(speak::native_possible(s) && s.speak.native_accent) {
+        return el().w_full().max_w(420.0).child(speak::accent_block(s, p, key));
+    }
+    let open = s.redub.fold == Some(Fold::Accent);
+    let mut c = col().key(format!("{key}-section")).w_full().gap(10.0)
+        .child(fold_row(p, &format!("{key}-head"), "Accent", &speak::accent_summary(s), open, false, Fold::Accent));
+    if open {
+        c = c.child(el().w_full().max_w(420.0).child(speak::accent_choices(s, p, key, false)));
+    }
+    c
+}
+
+/// What comes out, as one line; the choices (video or audio, the background, the timing) unfold under it.
+fn output_section(s: &AppState, p: Palette, key: &str) -> El {
+    let r = &s.redub;
+    let video = source_is_video(r);
+    let mut what: Vec<&str> = Vec::new();
+    if video {
+        what.push(if r.video_out { "Video with the new voice" } else { "Audio only" });
+        what.push(if r.keep_bg { "music and sounds kept" } else { "voice alone" });
+    }
+    what.push(if keep_timing(r) { "original timing" } else { "natural pace" });
+    let open = r.fold == Some(Fold::Output);
+    let head = fold_row(p, &format!("{key}-output-head"), "Output", &what.join(" · "), open, false, Fold::Output);
+    let mut c = col().key(format!("{key}-output-section")).w_full().gap(10.0).child(head);
+    if open {
+        if video {
+            c = c.child(output_block(s, p, &format!("{key}-output")));
+        }
+        c = c.child(timing_block(s, p, &format!("{key}-timing")));
+    }
+    c
 }
 
 /// "Output: Video with new voice / Audio only" and "Keep background music and sounds" (video sources, every mode).
@@ -1117,10 +1182,16 @@ fn main_panel(s: &AppState, p: Palette) -> El {
     if let Some(e) = &s.redub.error {
         body = body.child(kit::notice(&p, Tone::Danger, e));
     }
-    body = match s.redub.mode {
-        RedubMode::Dub => body.child(dub_block(s, p)),
-        RedubMode::Convert => body.child(convert_block(s, p)),
-        RedubMode::Respeak => body.child(respeak_block(s, p)),
+    // The mode's options show once there is a file to apply them to: before that the panel is the file and the
+    // three things that can be done with it, nothing else.
+    body = if s.redub.file.is_none() {
+        body.child(text("Choose a file above: the options for the chosen mode appear then.").font(ty::CAPTION).color(p.text_dim).wrap())
+    } else {
+        match s.redub.mode {
+            RedubMode::Dub => body.child(dub_block(s, p)),
+            RedubMode::Convert => body.child(convert_block(s, p)),
+            RedubMode::Respeak => body.child(respeak_block(s, p)),
+        }
     };
     let mut bottom = col().key("redub-bottom").w_full().gap(12.0);
     if let Some(r) = s.redub.result.and_then(|id| s.redub.history.iter().find(|h| h.id == id)) {
@@ -1337,24 +1408,20 @@ fn dub_block(s: &AppState, p: Palette) -> El {
         options = options.child(text(note).font(ty::CAPTION).color(p.text_faint).wrap());
     }
     if speak::accent_applies(s, &r.to) {
-        options = options.child(el().w_full().max_w(420.0).child(speak::accent_block(s, p, "dub-accent")));
+        options = options.child(accent_section(s, p, "dub-accent"));
     }
     if translator_choice(s) {
         options = options.child(translation_quality(r, p));
     } else if super::setuprun::has(s, "translation") && !super::setuprun::has(s, "better_translation") {
         options = options.child(super::setuprun::install_line(s, p, "better_translation", "Fewer mistranslations"));
     }
-    if source_is_video(r) {
-        options = options.child(output_block(s, p, "dub-output"));
-    }
-    options = options.child(timing_block(s, p, "dub-timing"));
+    options = options.child(output_section(s, p, "dub"));
     options = options.child(col().w_full().gap(3.0).child(review)
         .child(text(format!("Stops after the translation so you can fix the {to_name} before it is spoken.")).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
     let mut c = col().key("dub-block").w_full().gap(12.0);
     if !r.reviewing {
         // While the review is open the table gets the room; the choices are locked in until it is done or discarded.
-        let from_name = if r.from.eq_ignore_ascii_case("auto") { "Any language".to_owned() } else { lang_name(&r.from) };
-        c = c.child(text(format!("{from_name} → {to_name}, in your voice.")).font(ty::CAPTION).color(p.text_dim).wrap()).child(options);
+        c = c.child(options);
     }
     if shell::active_voice(s).is_none() {
         c = c.child(kit::notice(&p, Tone::Warning, "No voice selected. Add a voice first (from files or by reading aloud), or pick one at the top right."))
@@ -1436,22 +1503,34 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
     } else {
         "Your voice speaks the transcript in its own language.".to_owned()
     };
+    let spoken = row().w_full().gap(10.0).center_y().child(text("Spoken language").font(ty::LABEL).color(p.text)).child(from);
+    let translating = col().w_full().gap(3.0).child(tr)
+        .child(text(tr_note).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0));
     let mut options = glass_card(p).key("respeak-options").w_full().padding(14.0).gap(12.0)
-        .opacity(if busy { 0.6 } else { 1.0 })
-        .child(row().w_full().gap(10.0).center_y().child(text("Spoken language").font(ty::LABEL).color(p.text)).child(from))
-        .child(col().w_full().gap(3.0).child(tr)
-            .child(text(tr_note).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
-    // English without an English reference clip: the same Accent choice as Speak and Translate & dub.
-    if respeak_lang(r).is_some_and(|l| speak::accent_applies(s, &l)) {
-        options = options.child(el().w_full().max_w(420.0).child(speak::accent_block(s, p, "respeak-accent")));
+        .opacity(if busy { 0.6 } else { 1.0 });
+    let mut c = col().key("respeak-block").w_full().gap(12.0);
+    if r.segments.is_empty() {
+        // Step one: only what transcribing needs. How it is spoken and what comes out wait for the transcript.
+        options = options.child(spoken).child(translating).child(transcribe_row(s, p));
+        c = c.child(text("Transcribes the speech so you can fix or translate the words, then says them again in your voice's own delivery.").font(ty::CAPTION).color(p.text_dim).wrap());
+    } else {
+        // Step two: the transcript gets the room; the choices are one line each.
+        let pinned = matches!(r.job, Job::Transcribing(_)) || unspeakable_lang(s).is_some();
+        let open = pinned || r.fold == Some(Fold::Transcription);
+        let heard = r.transcript_lang.as_deref().filter(|l| !l.trim().is_empty()).map(lang_name).unwrap_or_else(|| from_label(&r.from));
+        let summary = if r.translate { format!("{heard} · translated to {to_name}") } else { format!("{heard} · not translated") };
+        options = options.gap(6.0).child(fold_row(p, "respeak-transcription-head", "Transcription", &summary, open, pinned, Fold::Transcription));
+        if open {
+            options = options.child(col().key("respeak-transcription").w_full().gap(12.0).pb(6.0)
+                .child(spoken).child(translating).child(transcribe_row(s, p)));
+        }
+        // English without an English reference clip: the same Accent choice as Speak and Translate & dub.
+        if respeak_lang(r).is_some_and(|l| speak::accent_applies(s, &l)) {
+            options = options.child(accent_section(s, p, "respeak-accent"));
+        }
+        options = options.child(output_section(s, p, "respeak"));
     }
-    if source_is_video(r) {
-        options = options.child(output_block(s, p, "respeak-output"));
-    }
-    let options = options.child(timing_block(s, p, "respeak-timing")).child(transcribe_row(s, p));
-    let mut c = col().key("respeak-block").w_full().gap(12.0)
-        .child(text("Transcribes the speech so you can fix or translate the words, then says them again in your voice's own delivery.").font(ty::CAPTION).color(p.text_dim).wrap())
-        .child(options);
+    c = c.child(options);
     if let Some(l) = unspeakable_lang(s) {
         c = c.child(kit::notice(&p, Tone::Warning, &format!("This text is {l}, which your voice cannot speak yet. Use Translate & dub, or tick “Translate the transcript” and transcribe again.")))
             .child(row().child(Button::new("Use Translate & dub").small().key("respeak-use-dub").on_press(|s| set_mode(s, RedubMode::Dub)).build(p)));
@@ -1960,6 +2039,7 @@ fn demo_video(s: &mut AppState) {
 fn scene_dub_timing_video(s: &mut AppState) {
     scene_dub_ready(s);
     demo_video(s);
+    s.redub.fold = Some(Fold::Output);
 }
 
 /// The same with "Audio only" and the timing switch turned off for videos: natural pace, the hint warns about the sync.
@@ -1989,6 +2069,7 @@ fn scene_respeak_video_audio(s: &mut AppState) {
     scene_transcript(s);
     demo_video(s);
     s.redub.video_out = false;
+    s.redub.fold = Some(Fold::Output);
 }
 
 /// A video dub at the separation stage.
@@ -2031,6 +2112,7 @@ fn scene_dub_done_video(s: &mut AppState) {
 fn scene_respeak_timing_keep(s: &mut AppState) {
     scene_transcript(s);
     s.redub.keep_timing = [Some(true), None];
+    s.redub.fold = Some(Fold::Output);
 }
 
 /// Translate & dub with both translators installed: "Translation quality" is offered (Better chosen).
@@ -2121,12 +2203,14 @@ fn scene_dub_accent(s: &mut AppState) {
         v.language = "uk".into();
     }
     demo_history(s);
+    s.redub.fold = Some(Fold::Accent);
 }
 
 /// The same with an untrained voice and the zero-shot converter installed: Native, from the reference clip.
 fn scene_dub_accent_zero_shot(s: &mut AppState) {
     scene_dub_accent_untrained(s);
     s.shell.zero_shot_vc = true;
+    s.redub.fold = Some(Fold::Accent);
 }
 
 /// The same with an untrained voice and no zero-shot converter: the choice is disabled with the hint.
@@ -2164,6 +2248,7 @@ fn scene_dub_accent_foreign_ref(s: &mut AppState) {
 fn scene_respeak_accent(s: &mut AppState) {
     scene_transcript(s);
     s.shell.voices[0].reference_language = Some("uk".into());
+    s.redub.fold = Some(Fold::Accent);
 }
 
 /// The same untrained without the zero-shot converter: disabled, with the hint to install it, train or add an

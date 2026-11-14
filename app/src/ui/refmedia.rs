@@ -449,8 +449,7 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
     let chip_label = if st.lang.is_none() { format!("{} (voice)", lang::label(&code)) } else { lang::label(&code) };
     let head = row().w_full().gap(10.0).center_y()
         .child(col().gap(1.0).min_w(0.0).grow(1.0)
-            .child(text("Reference from media").font(ty::LABEL).color(p.text))
-            .child(text("Combine many files of the same speaker; the cleanest 8-12 s become the reference.").font(ty::CAPTION).color(p.text_faint).wrap()))
+            .child(text("Many files of the same speaker are combined; the cleanest 8-12 s become the reference clip.").font(ty::CAPTION).color(p.text_faint).wrap()))
         .child(lang::chip(p, "refmedia-lang", &chip_label, lang::Target::MediaRef, !busy));
     let mut c = col().key("refmedia").w_full().gap(10.0).child(head);
 

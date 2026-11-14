@@ -12,7 +12,13 @@
   reading. The voice menu's **New voice** opens Record set to a new voice (it did nothing when Record was already
   open), and creating an empty voice on the Voices screen goes on to Record for it.
 * **The window remembers its size and place,** and opens in the middle of the main display, not maximized, the
-  first time.
+  first time. A window closed maximized opens maximized.
+* **Less on screen at once.** Settings that are set once and rarely touched are one line that says what is chosen
+  and unfolds on a press, one at a time. Voices: **Use other recordings** and **Other languages** under the
+  reference clip (they filled the card). Redub: the mode's options appear once a file is chosen; **Accent** and
+  **Output** (video or audio, the background, the timing) are a line each; Re-speak first asks only what transcribing
+  needs, and once there is a transcript its settings fold into **Transcription**, **Accent** and **Output**, so the
+  transcript gets the room.
 * **Clearer empty states:** Train and Speak without a voice offer **Add a voice**; Speak's "Reference from media…"
   is **More recordings of this voice…**.
 * **Much lighter on memory:** an idle Mimvox held 19 GB of memory and 4 GB of the graphics card; now the models leave

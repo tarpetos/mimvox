@@ -393,8 +393,8 @@ The active voice's card has a **Reference clip** section showing the clip in use
 You can also make the reference from existing audio or video of the same speaker, for example several talks or voice
 memos. One noisy source makes a metallic clone, so the app combines many files and picks the cleanest piece.
 
-1. In the **Reference from media** block of the active voice, choose the language the media is in (the chip; by default
-   the voice's own language).
+1. On the active voice, press **Use other recordings** under the reference clip (it unfolds), and choose the language
+   the media is in (the chip; by default the voice's own language).
 2. Leave **Remove background music** ticked if the files have music or effects under the voice (videos usually do).
    The app then keeps only the voice of each file before cleaning it, which makes a cleaner reference: music under the
    reference makes the clone sound metallic. It is a little slower (on an NVIDIA GPU about a second per minute of media;
@@ -429,7 +429,8 @@ Details:
 A voice speaks every language of the speech model, but with the accent of its reference clip: an English reference
 gives Ukrainian with a slight English colour. A short clip of you speaking the other language fixes that.
 
-1. In the **Other languages** part of the reference section, press **Add a language** and pick the language.
+1. Press **Other languages** under the reference clip (it unfolds; the line lists the languages that already have a
+   clip), then press **Add a language** and pick the language.
 2. The app shows a short sample text in that language. Press **Record** and read it at your natural pace (about 10
    seconds), or press **Import file…** to use an existing recording in that language.
 3. The take is checked (*Sounds good*, *Usable* or *Not usable*). Press **Use for <language>**.
@@ -733,6 +734,10 @@ There are three modes.
 The Style panel on the right (Speed, Expressiveness, Voice match, Quality) is the same as on Speak. Speed and
 Expressiveness do not apply to Convert voice, which keeps the original pace.
 
+The options of a mode appear once a file is chosen. Choices that are set once and rarely touched are one line each,
+showing what is chosen now: **Accent** (*Native (American) · closest speaker*) and **Output** (*Video with the new
+voice · music and sounds kept · original timing*). Press **Change** on a line to open it; one is open at a time.
+
 ### Example: a Ukrainian video to English in a couple of clicks
 
 1. Open **Redub** and drop `interview.mp4` (a video of you speaking Ukrainian).
@@ -756,7 +761,7 @@ both models got them wrong. Other slang can still come out wrong: use **Review t
 
 ### Keep original timing
 
-Translate & dub and Re-speak both have **Keep original timing**:
+Translate & dub and Re-speak both have **Keep original timing**, under **Output** (press **Change** on that line):
 
 - **On** (the default for a video): *fits each phrase into the original timing; may speed up speech.* A longer
   sentence first uses the pause after it, at your pace; if that is not enough, it is spoken a bit faster, but never
@@ -775,7 +780,8 @@ further. Speech is never cut off and sentences never overlap.
 
 ### Dub a video and keep its music
 
-When the file is a video, every mode shows two more choices:
+When the file is a video, every mode has two more choices (in Translate & dub and Re-speak they are under **Output**:
+press **Change** on that line):
 
 - **Output: Video with new voice / Audio only.** *Video with new voice* (the default for a video, remembered) saves a
   copy of the video with your voice; the picture is copied as it is, not re-encoded, so it keeps its full quality
@@ -796,7 +802,7 @@ Example: a Ukrainian video into English, keeping the music.
    and music right away, in the background, while you choose the options; on a GPU this takes about 2 seconds for
    2 minutes of video.
 2. Keep **Translate & dub**, **From** Auto-detect (or Ukrainian), **To** English.
-3. Keep **Output: Video with new voice** and **Keep background music and sounds** ticked.
+3. Leave **Output** as it is: the line reads *Video with the new voice · music and sounds kept · original timing*.
 4. Press **Translate & dub**. After the speaking, the progress shows *Mixing your voice with the background* and
    *Writing the video*.
 5. The Done card has **Open video** (it opens in your system's video player), **Result** to hear the audio in the
@@ -847,8 +853,10 @@ best on a clean recording of speech; for a video, the voice is separated first a
 1. Choose a file and select **Re-speak**.
 2. Set **Spoken language** (or Auto-detect). Tick **Translate the transcript** and pick **To** if you want it in
    another language.
-3. Press **Transcribe**. The transcript appears as editable lines with their times.
-4. Fix the words, delete lines you do not want, then press **Render**. Transcribing again replaces your edits.
+3. Press **Transcribe**. The transcript appears as editable lines with their times, and the settings above it fold
+   into one line each (**Transcription**, **Accent** when it applies, **Output**), so the transcript gets the room.
+4. Fix the words, delete lines you do not want, then press **Render**. To transcribe again (another language, or with
+   the translation), press **Change** on the **Transcription** line; transcribing again replaces your edits.
 
 **Keep original timing** works as in Translate & dub (see [Keep original timing](#keep-original-timing)): on, each
 line is fitted into its original time; off, the lines are spoken at your natural pace one after the other.

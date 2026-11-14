@@ -158,6 +158,15 @@ pub struct LangRef {
     importing: bool,
 }
 
+/// The extra sections under the reference clip, folded until asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum More {
+    /// "Use other recordings": the reference from media files.
+    Media,
+    /// Reference clips in other languages.
+    Languages,
+}
+
 #[derive(Default)]
 pub struct RefState {
     pending: HashMap<u64, Kind>,
@@ -172,6 +181,8 @@ pub struct RefState {
     pub loading: bool,
     pub applying: bool,
     pub open: bool,
+    /// Which of the card's extra sections is unfolded (one at a time, so the card stays short).
+    pub more: Option<More>,
     pub error: Option<String>,
     /// A language reference being added (record / import, check, save).
     pub adding: Option<LangRef>,
@@ -693,7 +704,6 @@ fn languages_block(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let busy = r.adding.as_ref().is_some_and(|a| a.phase != AddPhase::Ready && a.phase != AddPhase::Checked);
     let head = row().w_full().gap(10.0).center_y().justify_between()
         .child(col().gap(1.0).min_w(0.0).grow(1.0)
-            .child(text("Other languages").font(ty::LABEL).color(p.text))
             .child(text(format!("Recorded in {own}. A short clip in another language makes speech in it sound native.")).font(ty::CAPTION).color(p.text_faint).wrap()))
         .child(lang::chip(p, "refclip-add-lang", "Add a language", lang::Target::Reference, !busy));
     let mut c = col().key("refclip-langs").w_full().gap(8.0).child(head);
@@ -906,11 +916,41 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
             c = c.child(list);
         }
     }
-    c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(super::refmedia::block(s, p, info, r.pool.is_some()));
+    // The two extra sections are folded into one line each and unfold one at a time: all of it open at once was
+    // more than anyone could take in. A section with something going on in it (files hovering or being combined, a
+    // result to read, a language clip being added) is open by itself.
+    let media = &r.media;
+    let media_live = media.voice.as_deref() == Some(info.id.as_str()) && (media.busy() || media.outcome.is_some() || media.error.is_some());
+    let media_open = r.more == Some(More::Media) || media_live || (s.formats.over && s.screen == crate::state::Screen::Voices);
+    let media_note = if r.pool.is_some() { "Combined files are in use" } else { "Combine files of the same speaker into a cleaner reference" };
+    c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(p, "more-media", "Use other recordings", media_note, media_open, More::Media));
+    if media_open {
+        c = c.child(super::refmedia::block(s, p, info, r.pool.is_some()));
+    }
     if r.current.is_some() || !info.references.is_empty() || r.adding.is_some() {
-        c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(languages_block(s, p, info));
+        let langs_open = r.more == Some(More::Languages) || r.adding.is_some();
+        let have: Vec<String> = info.references.iter().map(|c| super::lang::label(c)).collect();
+        let note = if have.is_empty() { "A short clip in another language makes speech in it sound native".to_owned() } else { have.join(", ") };
+        c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(p, "more-langs", "Other languages", &note, langs_open, More::Languages));
+        if langs_open {
+            c = c.child(languages_block(s, p, info));
+        }
     }
     el().w_full().padding(12.0).radius(radius::CONTROL).fill(p.well).border(1.0, p.well_rim).child(c)
+}
+
+/// The folded line of an extra section: its name, what it holds, and a chevron. A press unfolds it (and folds the
+/// other one).
+fn more_row(p: &Palette, key: &str, title: &str, note: &str, open: bool, which: More) -> El {
+    row().key(key.to_owned()).role("button").label(title.to_owned()).w_full().gap(10.0).center_y().px(6.0).py(7.0).radius(radius::CONTROL)
+        .hover(p.glass_hover).focusable(true)
+        .on_press(move |s: &mut AppState| {
+            let r = &mut s.voices.refclip;
+            r.more = if r.more == Some(which) { None } else { Some(which) };
+        })
+        .child(text(title.to_owned()).font(ty::LABEL).color(p.text).a11y_hidden())
+        .child(text(note.to_owned()).font(ty::CAPTION).color(p.text_faint).grow(1.0).min_w(0.0).truncate().a11y_hidden())
+        .child(text(if open { "Hide" } else { "Show" }).font(ty::CAPTION).color(p.accent).a11y_hidden())
 }
 
 // ---------------------------------------------------------------------------------------------

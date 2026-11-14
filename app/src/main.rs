@@ -105,7 +105,8 @@ fn main() {
     ui::events::init(app.handle());
     match opening.position {
         Some(position) => app.handle().set_position(position),
-        None if !rune::is_headless() => ui::shell::center_on_open(),
+        // (Not a maximized window: centring it would put it back to its normal size.)
+        None if !rune::is_headless() && !opening.maximized => ui::shell::center_on_open(),
         None => {}
     }
     app.run();
