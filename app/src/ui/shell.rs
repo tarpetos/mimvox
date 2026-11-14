@@ -696,6 +696,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         overlays.push(voice_menu(s, p));
     }
     overlays.extend(super::relocate::overlay(s, &p));
+    overlays.extend(super::update::overlay(s, &p));
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
     overlays.extend(super::formats::output_overlay(s, p));
@@ -780,8 +781,7 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
     let brand = row().key("brand").gap(10.0).center_y().window_drag()
         .child(mark)
         .child(text("Mimvox").font(ty::TITLE).color(p.text))
-        .child(text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(ty::CAPTION).color(p.text_faint)
-            .help("Early version: expect bugs. Report problems on the project's GitHub page."));
+        .child(super::update::version_button(s, p));
     let right = row().key("right").gap(8.0).center_y().window_drag().child(engine_pill(s, p, fit.tight)).child(voice_pill(s, p));
     let bar = col().key("header").w_full().h(HEADER_HEIGHT).fill(p.glass).gradient(p.glass_top, p.glass_bottom)
         .shadow(6.0, 24.0, p.shadow_soft).window_drag()
