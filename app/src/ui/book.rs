@@ -304,7 +304,7 @@ fn start_blocker(s: &AppState) -> Option<&'static str> {
         _ => return Some("The engine is not running. Press Retry above."),
     }
     if shell::active_voice(s).is_none() {
-        return Some("Record your voice first, or pick one at the top right.");
+        return Some("Add a voice first (from files or by reading aloud), or pick one at the top right.");
     }
     if s.speak.is_generating() {
         return Some("Wait for the text being spoken to finish.");

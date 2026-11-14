@@ -179,9 +179,16 @@ the same data folder, which installs only what changed, and the engine restarts 
 - **Engine pill** on the right: *Ready*, *Loading models…*, *Training · speech paused*, *Models missing* or
   *Engine stopped*. When the engine has stopped, press it to restart.
 - **Voice pill** at the far right: the active voice. Open it to switch voices, see whether each one is *Trained* or
-  *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice**.
-- **Dropping files** anywhere on the window works on every screen: on Record they become the current part's take, on
-  Voices they build a reference from media, and elsewhere a single file opens in Redub (see the sections below).
+  *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice** (the Record start page, set to make a
+  new voice).
+- **Dropping files** anywhere on the window works on every screen. Recordings dropped on Record's start page, on Speak
+  or on Train are somebody's voice: a dialog asks whether they are **a new voice** or **more recordings of the active
+  one** (see [Use recordings you already have](#use-recordings-you-already-have)). While a reading is open on Record
+  they become the current part's take, on Voices they build a reference from media for the active voice, and on Redub
+  a single file is the file to redub.
+- **The window** opens where and as large as you closed it, and on the tab you closed it on; the first time it opens
+  in the middle of the main display, not maximized, on Speak. Closed maximized, it opens maximized on the same
+  display.
 - **The player bar** appears at the bottom of the window whenever something plays (see below).
 
 ### The player bar
@@ -194,7 +201,7 @@ buttons, and messages pop up just above it.
 
 ![The player bar under Speak](screenshots/usage-player.png)
 
-- **Play / Pause**, and **Stop**, which halts the track and rewinds it to the start (the bar stays; Play starts it again). The **×** at the right end ends playback and hides the bar.
+- **Play / Pause**. The **×** at the right end ends playback and hides the bar.
 - The **title** of what plays (the start of the text, the file name, the clip) and where it comes from
   (*Speak · result*, *Redub · original*, *Voices · My voice*, *Record*).
 - The **time** played and the total, with a **seek bar**: click or drag anywhere on it to jump. With the seek bar
@@ -218,11 +225,29 @@ bar shows the finished result and seeking works.
 
 ## 3. Record
 
-Recording goes into the **active voice**. If you have none yet, the app creates one named "My voice" and selects it.
+Record is where a voice comes from. Its start page offers two ways, and either one gives a voice that can speak at
+once:
+
+![The Record start page: recordings you already have, or a reading](screenshots/usage-record-picker.png)
+
+### Use recordings you already have
+
+No reading and no preset: drop audio or video files of one person on the card at the top (a voice memo, a podcast, a
+video), or press **Choose files…**. A dialog asks **whose voice is in these files**:
+
+- **A new voice** (the default): type its name; the files become a voice of their own.
+- **More recordings of "<the active voice>"**: only when it is the same person; the files join that voice's
+  recordings. (This is the default when the active voice is still empty.)
+
+The files are cleaned and joined (silence trimmed, loudness evened out, background music removed when that is turned
+on, at most 20 minutes) and stored in the voice. The card then says how much clean speech the voice has: one clean
+minute is enough to **Speak with it**; with three minutes or more **Train a closer copy** is offered too. Files with
+no clear speech are left out and listed.
 
 ### Pick a preset and a reading language
 
-![Choosing a preset and the reading language](screenshots/usage-record-picker.png)
+Reading aloud goes into the voice chosen under **This is for**: the active voice, or **A new voice** (type its name;
+left empty it is "My voice", then "Voice 2", ...). If you have no voice yet, a new one is made.
 
 At the top, choose the **Reading language**: English, Ukrainian, German, French, Spanish or Polish. Each language has
 its own texts, written for that language, in `presets/<lang>/` (`quick.md`, `standard.md`, `pro.md`). Then pick a
@@ -334,7 +359,8 @@ Open the Voices screen from the voice pill at the top right (**Manage voices**).
 ### Create, rename, delete and switch voices
 
 - **Create:** type a name under **New voice** (for example "My voice") and press **Create voice**. A new voice has no
-  recordings yet: go to Record next. (Record also creates "My voice" by itself when there is none.)
+  recordings yet, so the app goes straight on to Record's start page for it. (Record also makes a new voice by
+  itself: from files, or with **This is for: A new voice**.)
 - **Active voice:** the voice with the *Active* badge is the one Record, Train, Speak and Redub use. Press **Use this
   voice** on another card, or pick it from the voice pill at the top, to switch.
 - **Rename:** press **Rename**, edit the name, press **Save**. Only the shown name changes; the voice's folder keeps its
@@ -368,8 +394,8 @@ The active voice's card has a **Reference clip** section showing the clip in use
 You can also make the reference from existing audio or video of the same speaker, for example several talks or voice
 memos. One noisy source makes a metallic clone, so the app combines many files and picks the cleanest piece.
 
-1. In the **Reference from media** block of the active voice, choose the language the media is in (the chip; by default
-   the voice's own language).
+1. On the active voice, press **Use other recordings** under the reference clip (it opens in a panel over the page), and choose the language
+   the media is in (the chip; by default the voice's own language).
 2. Leave **Remove background music** ticked if the files have music or effects under the voice (videos usually do).
    The app then keeps only the voice of each file before cleaning it, which makes a cleaner reference: music under the
    reference makes the clone sound metallic. It is a little slower (on an NVIDIA GPU about a second per minute of media;
@@ -404,7 +430,8 @@ Details:
 A voice speaks every language of the speech model, but with the accent of its reference clip: an English reference
 gives Ukrainian with a slight English colour. A short clip of you speaking the other language fixes that.
 
-1. In the **Other languages** part of the reference section, press **Add a language** and pick the language.
+1. Press **Other languages** under the reference clip (it opens in a panel over the page; the line lists the
+   languages that already have a clip), then press **Add a language** and pick the language.
 2. The app shows a short sample text in that language. Press **Record** and read it at your natural pace (about 10
    seconds), or press **Import file…** to use an existing recording in that language.
 3. The take is checked (*Sounds good*, *Usable* or *Not usable*). Press **Use for <language>**.
@@ -708,6 +735,11 @@ There are three modes.
 The Style panel on the right (Speed, Expressiveness, Voice match, Quality) is the same as on Speak. Speed and
 Expressiveness do not apply to Convert voice, which keeps the original pace.
 
+The options of a mode appear once a file is chosen. Choices that are set once and rarely touched are one line each,
+showing what is chosen now: **Accent** (*Native (American) · closest speaker*) and **Output** (*Video with the new
+voice · music and sounds kept · original timing*). Press **Change** on a line: its choices open in a small panel
+over the page, and nothing else moves. **Done**, or a press outside the panel, closes it.
+
 ### Example: a Ukrainian video to English in a couple of clicks
 
 1. Open **Redub** and drop `interview.mp4` (a video of you speaking Ukrainian).
@@ -731,7 +763,7 @@ both models got them wrong. Other slang can still come out wrong: use **Review t
 
 ### Keep original timing
 
-Translate & dub and Re-speak both have **Keep original timing**:
+Translate & dub and Re-speak both have **Keep original timing**, under **Output** (press **Change** on that line):
 
 - **On** (the default for a video): *fits each phrase into the original timing; may speed up speech.* A longer
   sentence first uses the pause after it, at your pace; if that is not enough, it is spoken a bit faster, but never
@@ -750,7 +782,8 @@ further. Speech is never cut off and sentences never overlap.
 
 ### Dub a video and keep its music
 
-When the file is a video, every mode shows two more choices:
+When the file is a video, every mode has two more choices (in Translate & dub and Re-speak they are under **Output**:
+press **Change** on that line):
 
 - **Output: Video with new voice / Audio only.** *Video with new voice* (the default for a video, remembered) saves a
   copy of the video with your voice; the picture is copied as it is, not re-encoded, so it keeps its full quality
@@ -771,7 +804,7 @@ Example: a Ukrainian video into English, keeping the music.
    and music right away, in the background, while you choose the options; on a GPU this takes about 2 seconds for
    2 minutes of video.
 2. Keep **Translate & dub**, **From** Auto-detect (or Ukrainian), **To** English.
-3. Keep **Output: Video with new voice** and **Keep background music and sounds** ticked.
+3. Leave **Output** as it is: the line reads *Video with the new voice · music and sounds kept · original timing*.
 4. Press **Translate & dub**. After the speaking, the progress shows *Mixing your voice with the background* and
    *Writing the video*.
 5. The Done card has **Open video** (it opens in your system's video player), **Result** to hear the audio in the
@@ -822,8 +855,10 @@ best on a clean recording of speech; for a video, the voice is separated first a
 1. Choose a file and select **Re-speak**.
 2. Set **Spoken language** (or Auto-detect). Tick **Translate the transcript** and pick **To** if you want it in
    another language.
-3. Press **Transcribe**. The transcript appears as editable lines with their times.
-4. Fix the words, delete lines you do not want, then press **Render**. Transcribing again replaces your edits.
+3. Press **Transcribe**. The transcript appears as editable lines with their times, and the settings above it fold
+   into one line each (**Transcription**, **Accent** when it applies, **Output**), so the transcript gets the room.
+4. Fix the words, delete lines you do not want, then press **Render**. To transcribe again (another language, or with
+   the translation), press **Change** on the **Transcription** line; transcribing again replaces your edits.
 
 **Keep original timing** works as in Translate & dub (see [Keep original timing](#keep-original-timing)): on, each
 line is fitted into its original time; off, the lines are spoken at your natural pace one after the other.

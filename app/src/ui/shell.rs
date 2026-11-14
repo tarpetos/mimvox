@@ -389,11 +389,21 @@ fn start_audio(s: &mut AppState) {
 /// Start the engine this long after launch, so the first frames stay still.
 const ENGINE_START_DELAY: f64 = 0.25;
 
+/// The window has no saved place: its first frame centres it on the main display (`winplace`).
+static CENTER_ON_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn center_on_open() {
+    CENTER_ON_OPEN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The frame hook (`AppSpec::poll`). Rune runs it at the start of a frame, which only happens for input, a running
 /// animation, an event (`AppHandle::update`) or a timer that came due (`Tx::wake_at`, armed by [`settle`]); an idle
 /// window never runs it. It only settles the state: the engine, the audio and the dialogs report through events.
 pub fn on_frame(s: &mut AppState, clock: f64, tx: &mut Tx) -> bool {
     super::stats::count(&super::stats::HOOKS);
+    if CENTER_ON_OPEN.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        tx.center_window();
+    }
     if let Some(t) = super::stats::quit_at() {
         if clock >= t {
             super::stats::write();
@@ -689,7 +699,10 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
     overlays.extend(super::formats::output_overlay(s, p));
-    overlays.extend(super::lang::overlay(s, &p));
+    overlays.extend(super::redub::fold_overlay(s, p));
+    overlays.extend(super::refclip::more_overlay(s, &p));
+    overlays.extend(super::lang::overlay(s, &p)); // after the panels: a language chip inside one opens above it
+    overlays.extend(super::record::files_overlay(s, &p));
     let dock = super::playbar::view(s, p, cx.layout_with(super::playbar::RAIL, |r| r), cx.env().scale, !overlays.is_empty());
     let toasts_at = if dock.is_some() { super::playbar::DOCK_H + 14.0 } else { 26.0 };
     let mut root = el().key("root").w_full().h_full().fill(p.bg_top).child(background(p)).child(
@@ -980,7 +993,10 @@ fn voice_menu(s: &AppState, p: Palette) -> El {
         list = list.child(text("No voices yet").font(ty::CAPTION).color(p.text_faint).px(12.0).py(10.0));
     }
     let manage = Button::new("Manage voices").ghost().small().key("menu-manage").on_press(|s| set_screen(s, Screen::Voices)).build(p);
-    let create = Button::new("New voice").primary().small().icon(&icons::PLUS).key("menu-new").on_press(|s| set_screen(s, Screen::Record)).build(p);
+    let create = Button::new("New voice").primary().small().icon(&icons::PLUS).key("menu-new").on_press(|s| {
+        s.shell.voice_menu_open = false;
+        super::record::start_new_voice(s);
+    }).build(p);
     let panel = col().key("voice-menu").w(290.0).padding(8.0).gap(6.0).radius(radius::PANEL + 4.0)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.88))
         .gradient(p.glass_top, p.glass_bottom)

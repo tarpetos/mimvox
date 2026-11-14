@@ -525,11 +525,16 @@ fn on_window_drop(s: &mut AppState, files: &[PathBuf]) {
     match s.screen {
         Screen::Onboarding => {}
         Screen::Voices => super::refmedia::drop_files(s, files),
-        // Speak has no input file, and Redub takes one: files dropped there (or several anywhere) build the voice's
-        // reference from media, shown on the Voices screen.
-        Screen::Speak | Screen::Redub | Screen::Train if files.len() > 1 || s.screen == Screen::Speak => {
-            shell::set_screen(s, Screen::Voices);
-            super::refmedia::drop_files(s, files);
+        // Speak and Train take no input file, and Redub takes one: recordings dropped there (or several on Redub) are
+        // somebody's voice. They go to the Record start page, which asks whose: a new voice or more of the active one
+        // (they used to replace the active voice's reference without a word).
+        Screen::Speak | Screen::Train => {
+            shell::set_screen(s, Screen::Record);
+            super::record::import_dropped(s, files.to_vec());
+        }
+        Screen::Redub if files.len() > 1 => {
+            shell::set_screen(s, Screen::Record);
+            super::record::import_dropped(s, files.to_vec());
         }
         Screen::Record => super::record::import_dropped(s, files.to_vec()),
         _ => {

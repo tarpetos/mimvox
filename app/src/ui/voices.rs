@@ -132,6 +132,10 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                         let id = info.id.clone();
                         s.shell.voices.push(info);
                         select(s, &id);
+                        // An empty voice is no use yet: straight on to giving it recordings (files or reading).
+                        s.record.back_to_pick();
+                        s.record.for_new = false;
+                        shell::set_screen(s, Screen::Record);
                     }
                     shell::refresh_voices(s);
                 }

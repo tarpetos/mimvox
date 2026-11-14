@@ -168,6 +168,7 @@ fn start(s: &mut AppState, paths: Vec<PathBuf>) {
         return;
     }
     super::refclip::stop_preview(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media); // the panel that shows the progress and the result
     let mut params = json!({ "id": id, "paths": paths, "remove_music": remove_music(s) });
     if let Some(code) = m(s).lang.clone() {
         params["language"] = json!(code);
@@ -449,8 +450,7 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
     let chip_label = if st.lang.is_none() { format!("{} (voice)", lang::label(&code)) } else { lang::label(&code) };
     let head = row().w_full().gap(10.0).center_y()
         .child(col().gap(1.0).min_w(0.0).grow(1.0)
-            .child(text("Reference from media").font(ty::LABEL).color(p.text))
-            .child(text("Combine many files of the same speaker; the cleanest 8-12 s become the reference.").font(ty::CAPTION).color(p.text_faint).wrap()))
+            .child(text("Many files of the same speaker are combined; the cleanest 8-12 s become the reference clip.").font(ty::CAPTION).color(p.text_faint).wrap()))
         .child(lang::chip(p, "refmedia-lang", &chip_label, lang::Target::MediaRef, !busy));
     let mut c = col().key("refmedia").w_full().gap(10.0).child(head);
 
@@ -530,16 +530,19 @@ pub fn block(s: &AppState, p: &Palette, info: &VoiceInfo, has_pool: bool) -> El 
 /// The default on a CUDA machine: "Remove background music" ticked (no saved choice).
 fn scene_idle(s: &mut AppState) {
     super::refclip::scene_demo(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     s.shell.gpu = true;
 }
 
 fn scene_drop(s: &mut AppState) {
     super::refclip::scene_demo(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     s.formats.over = true;
 }
 
 fn scene_running(s: &mut AppState) {
     super::refclip::scene_demo(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     s.voices.refclip.media = MediaState {
         voice: Some("my-voice".into()), phase: Phase::Running, job: Some("job-4".into()), files: 12, file: 5,
         name: "Interview with the author (full).mp4".into(), stage: "decode".into(), pct: 35.4, ..Default::default()
@@ -549,6 +552,7 @@ fn scene_running(s: &mut AppState) {
 /// Removing the music of file 2 of 6.
 fn scene_separating(s: &mut AppState) {
     super::refclip::scene_demo(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     s.voices.refclip.media = MediaState {
         voice: Some("my-voice".into()), phase: Phase::Running, job: Some("job-4".into()), files: 6, file: 2,
         name: "Channel trailer with music.mp4".into(), stage: "separate".into(), pct: 21.8, remove_music: Some(true), ..Default::default()
@@ -558,11 +562,13 @@ fn scene_separating(s: &mut AppState) {
 /// The checkbox off (the user's saved choice).
 fn scene_music_off(s: &mut AppState) {
     super::refclip::scene_demo(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     s.voices.refclip.media.remove_music = Some(false);
 }
 
 fn scene_done(s: &mut AppState) {
     super::refclip::scene_demo_media(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     s.voices.refclip.media = MediaState {
         voice: Some("my-voice".into()),
         outcome: Some(Outcome {
@@ -583,6 +589,7 @@ fn scene_done(s: &mut AppState) {
 fn scene_choose(s: &mut AppState) {
     scene_done(s);
     s.voices.refclip.open = true;
+    s.voices.refclip.more = None;
 }
 
 fn scene_done_lang(s: &mut AppState) {
@@ -633,6 +640,7 @@ fn scene_done_nomodel(s: &mut AppState) {
 
 fn scene_error(s: &mut AppState) {
     super::refclip::scene_demo(s);
+    s.voices.refclip.more = Some(super::refclip::More::Media);
     let st = &mut s.voices.refclip.media;
     st.voice = Some("my-voice".into());
     st.error = Some("None of the files has usable speech.".into());

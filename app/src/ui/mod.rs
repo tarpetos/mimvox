@@ -31,6 +31,7 @@ pub mod train;
 pub mod trash;
 pub mod update;
 pub mod voices;
+pub mod winplace;
 
 use crate::state::AppState;
 use rune::{Cx, El, KeyEvent, Tx};
@@ -44,6 +45,11 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
 /// Named states for headless snapshots (`--snap out.png --scene <name>`).
 pub const SCENES: &[(&str, fn(&mut AppState))] = &[
     ("record_picker", record::scene_picker),
+    ("record_new_voice", record::scene_new_voice),
+    ("record_files_hover", record::scene_files_hover),
+    ("record_files_ask", record::scene_files_ask),
+    ("record_files_working", record::scene_files_working),
+    ("record_files_done", record::scene_files_done),
     ("record_own_text", record::scene_own_text),
     ("record_language_uk", record::scene_language_uk),
     ("record_session_uk", record::scene_session_uk),
