@@ -2,8 +2,10 @@
 //! of the main display at its default size, not maximized.
 //!
 //! Saved when the window closes: the outer position in desktop pixels, the content size in points, and whether it
-//! was maximized (then the size from before stays, so un-maximizing returns to it; a maximized window is not moved
-//! when it opens, because moving it would un-maximize it). A place that is no
+//! was maximized. A maximized window saves the place it returns to when un-maximized (on Windows, its restore
+//! rectangle), which is on the display it was maximized on: the next start creates the window there and maximizes
+//! it, so it comes back on the same display and not on the one the app was started from. It is placed when it is
+//! created, never afterwards: moving a maximized window un-maximizes it. A place that is no
 //! longer on any display (a monitor unplugged since) is not used: the window opens centred. Wayland hides window
 //! positions, so there only the size is kept.
 
@@ -69,6 +71,9 @@ pub fn save() {
     if place.minimized || place.full_screen {
         return; // keep what was saved before: neither is a place to reopen in
     }
+    let scale = if place.scale > 0.0 { place.scale } else { 1.0 };
+    // The place a maximized window returns to; it also says which display it is maximized on.
+    let restore = if place.maximized { WINDOW.with_borrow(|w| w.as_ref().and_then(restore_rect)) } else { None };
     super::onboarding::update_settings(|v| {
         if place.maximized {
             // The maximized frame is not the size to return to: keep the last normal one.
@@ -76,15 +81,65 @@ pub fn save() {
                 v["window"] = json!({ "w": DEFAULT_SIZE.0, "h": DEFAULT_SIZE.1 });
             }
             v["window"]["maximized"] = json!(true);
+            if let Some((x, y, w, h)) = restore {
+                let saved = (v["window"]["w"].as_f64().unwrap_or(0.0), v["window"]["h"].as_f64().unwrap_or(0.0));
+                merge_restore(&mut v["window"], (x, y), (f64::from(w) / scale, f64::from(h) / scale), saved, scale);
+            }
             return;
         }
-        let scale = if place.scale > 0.0 { place.scale } else { 1.0 };
         v["window"] = json!({
             "x": place.position.0, "y": place.position.1,
             "w": (f64::from(place.content_size.0) / scale).round(), "h": (f64::from(place.content_size.1) / scale).round(),
             "scale": scale, "maximized": false,
         });
     });
+}
+
+/// Puts a maximized window's restore place into the saved `window`: always where, and the size only when it differs
+/// clearly from the saved one (the restore rectangle is the outer frame, the saved size the content: taking a
+/// near-equal one each time would let the window creep).
+fn merge_restore(window: &mut Value, at: (i32, i32), size: (f64, f64), saved: (f64, f64), scale: f64) {
+    window["x"] = json!(at.0);
+    window["y"] = json!(at.1);
+    window["scale"] = json!(scale);
+    let sane = size.0 >= f64::from(MIN_SIZE.0) && size.1 >= f64::from(MIN_SIZE.1);
+    if sane && ((size.0 - saved.0).abs() > 16.0 || (size.1 - saved.1).abs() > 16.0) {
+        window["w"] = json!(size.0.round());
+        window["h"] = json!(size.1.round());
+    }
+}
+
+/// Where a maximized window goes back to when it is un-maximized: (x, y, width, height) in desktop pixels.
+#[cfg(windows)]
+fn restore_rect(window: &rune::WindowHandle) -> Option<(i32, i32, i32, i32)> {
+    use rune::raw_window_handle::RawWindowHandle;
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowPlacement, SPI_GETWORKAREA, SystemParametersInfoW, WINDOWPLACEMENT};
+    let hwnd = window.with_raw_handle(|h| match h.as_raw() {
+        RawWindowHandle::Win32(w) => Some(w.hwnd.get() as windows_sys::Win32::Foundation::HWND),
+        _ => None,
+    }).ok()??;
+    // SAFETY: plain reads into structures of the size given; `hwnd` is the live window `with_raw_handle` lent.
+    unsafe {
+        let mut wp: WINDOWPLACEMENT = std::mem::zeroed();
+        wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        if GetWindowPlacement(hwnd, &mut wp) == 0 {
+            return None;
+        }
+        // The restore rectangle is in workspace coordinates: desktop pixels counted from the main display's work
+        // area (they differ only with a taskbar at the top or the left).
+        let mut work: RECT = std::mem::zeroed();
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut work as *mut RECT).cast(), 0) == 0 {
+            work = std::mem::zeroed();
+        }
+        let r = wp.rcNormalPosition;
+        Some((r.left + work.left, r.top + work.top, r.right - r.left, r.bottom - r.top))
+    }
+}
+
+#[cfg(not(windows))]
+fn restore_rect(_window: &rune::WindowHandle) -> Option<(i32, i32, i32, i32)> {
+    None
 }
 
 /// Whether a window of `w` x `h` pixels at (`x`, `y`) would have its title area on a display.
@@ -110,6 +165,20 @@ fn on_a_display(x: i32, y: i32, _w: f32, _h: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_maximized_window_saves_where_it_returns_to() {
+        // On the second display, with a frame a few pixels off the saved content size: the place moves, the size stays.
+        let mut w = json!({ "x": 200, "y": 120, "w": 1300, "h": 800, "scale": 2.0, "maximized": true });
+        merge_restore(&mut w, (4040, 300), (1301.0, 800.5), (1300.0, 800.0), 1.0);
+        assert_eq!(w, json!({ "x": 4040, "y": 300, "w": 1300, "h": 800, "scale": 1.0, "maximized": true }));
+        // Resized before it was maximized: the new size is taken too.
+        merge_restore(&mut w, (4040, 300), (1500.0, 900.0), (1300.0, 800.0), 1.0);
+        assert_eq!((w["w"].as_f64(), w["h"].as_f64()), (Some(1500.0), Some(900.0)));
+        // A nonsense rectangle keeps the saved size.
+        merge_restore(&mut w, (4040, 300), (10.0, 10.0), (1500.0, 900.0), 1.0);
+        assert_eq!((w["w"].as_f64(), w["h"].as_f64()), (Some(1500.0), Some(900.0)));
+    }
 
     #[test]
     fn nothing_saved_opens_centred_at_the_default_size() {

@@ -93,7 +93,15 @@ fn main() {
         .custom_caption(ui::caption::CELL);
     // Rune cannot veto a close, so the window only hides (`keep_running`) and `train::on_close` quits, or, while a
     // training runs, brings the window back with the "Training is running" dialog.
+    // A window that opens maximized is created at its saved place, on the display it was maximized on, and maximizes
+    // there. It is not moved afterwards: moving or centring a maximized window puts it back to its normal size (on
+    // Windows, setting the position un-maximizes it).
+    let mut options = rune::WindowOptions::default();
+    if opening.maximized {
+        options.position = opening.position;
+    }
     let app = App::new(spec)
+        .window_options(options)
         .titlebar(titlebar)
         .keep_running()
         .maximized(opening.maximized)
@@ -103,8 +111,6 @@ fn main() {
         .on_frame_drawn(|_| ui::stats::count(&ui::stats::FRAMES));
     // Background threads (engine, audio, dialogs) reach the UI through this handle (`ui::events`).
     ui::events::init(app.handle());
-    // A window that opens maximized is left where it is: moving or centring a maximized window puts it back to its
-    // normal size (on Windows, setting the position un-maximizes it), so it opened maximized and then shrank.
     match opening.position {
         _ if opening.maximized => {}
         Some(position) => app.handle().set_position(position),

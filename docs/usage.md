@@ -186,8 +186,9 @@ the same data folder, which installs only what changed, and the engine restarts 
   one** (see [Use recordings you already have](#use-recordings-you-already-have)). While a reading is open on Record
   they become the current part's take, on Voices they build a reference from media for the active voice, and on Redub
   a single file is the file to redub.
-- **The window** opens where and as large as you closed it; the first time it opens in the middle of the main display,
-  not maximized.
+- **The window** opens where and as large as you closed it, and on the tab you closed it on; the first time it opens
+  in the middle of the main display, not maximized, on Speak. Closed maximized, it opens maximized on the same
+  display.
 - **The player bar** appears at the bottom of the window whenever something plays (see below).
 
 ### The player bar

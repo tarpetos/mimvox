@@ -258,6 +258,9 @@ pub fn clock_origin(s: &AppState) -> Option<f64> {
 /// engine is stopped and the app quits. A quit that is not the user's close (system shutdown) goes straight through.
 pub fn on_close(s: &mut AppState, tx: &mut Tx) {
     super::winplace::save(); // where the window was, for the next start
+    if let Some(tab) = s.screen.key() {
+        super::onboarding::save_setting("screen", serde_json::json!(tab)); // and the tab that was open
+    }
     if is_training(s) && !rune::quitting() {
         if s.train.close == CloseDialog::Hidden {
             s.train.close = CloseDialog::Ask;

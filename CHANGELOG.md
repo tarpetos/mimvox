@@ -12,7 +12,9 @@
   reading. The voice menu's **New voice** opens Record set to a new voice (it did nothing when Record was already
   open), and creating an empty voice on the Voices screen goes on to Record for it.
 * **The window remembers its size and place,** and opens in the middle of the main display, not maximized, the
-  first time. A window closed maximized opens maximized.
+  first time. A window closed maximized opens maximized, on the display it was closed on (not on the one the app
+  was started from).
+* **The app opens on the tab it was closed on** (Speak the first time).
 * **Less on screen at once.** Settings that are set once and rarely touched are one line that says what is chosen
   and unfolds on a press, one at a time. Voices: **Use other recordings** and **Other languages** under the
   reference clip (they filled the card). Redub: the mode's options appear once a file is chosen; **Accent** and
