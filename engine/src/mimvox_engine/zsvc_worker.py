@@ -54,7 +54,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--seed-vc", required=True)
 ap.add_argument("--models", required=True)
 ap.add_argument("--device", default="cuda")
-ap.add_argument("--unload-after", type=float, default=float(os.environ.get("MIMVOX_ZSVC_UNLOAD_S", "600")))
+ap.add_argument("--unload-after", type=float, default=float(os.environ.get("MIMVOX_ZSVC_UNLOAD_S", "0")))  # 0: exit instead
 args = ap.parse_args()
 
 SEED_VC = os.path.abspath(args.seed_vc)
@@ -348,6 +348,8 @@ def _idle_unload():
 
 
 idle = [(args.unload_after, _idle_unload)] if args.unload_after > 0 else []
+if kit.IDLE_EXIT_S > 0:
+    idle.append((kit.IDLE_EXIT_S, "exit"))
 worker = kit.Worker("zsvc", INP, OUT, {"load": op_load, "convert": op_convert, "warm": op_warm, "release": op_release,
                                        "status": op_status, "ping": lambda _req: {}}, idle=idle)
 try:

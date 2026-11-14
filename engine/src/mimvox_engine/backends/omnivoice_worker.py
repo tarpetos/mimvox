@@ -418,8 +418,8 @@ def op_status(_req=None):
 idle = []
 if args.unload_after > 0:
     idle.append((args.unload_after, _idle_unload))
-if args.exit_after > 0:
-    idle.append((args.exit_after, "exit"))
+if args.exit_after > 0 or kit.IDLE_EXIT_S > 0:
+    idle.append((args.exit_after or kit.IDLE_EXIT_S, "exit"))
 kit_worker = kit.Worker("omnivoice", INP, OUT,
                         {"load": op_load, "synth": op_synth, "warm": op_warm, "inspect": op_inspect, "release": op_release,
                          "status": op_status, "ping": lambda _r: {}},

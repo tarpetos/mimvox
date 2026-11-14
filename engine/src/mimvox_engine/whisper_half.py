@@ -14,8 +14,11 @@ def load(whisper, name, root, device):
     import torch
 
     path = whisper._download(whisper._MODELS[name], root or default_root(), False)
-    with open(path, "rb") as fh:
-        ckpt = torch.load(fh, map_location="cpu", weights_only=True)
+    try:  # mapped from the file: the 1.6 GB of weights never become process memory on their way to the GPU
+        ckpt = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+    except Exception:  # noqa: BLE001 - an old-format checkpoint cannot be mapped
+        with open(path, "rb") as fh:
+            ckpt = torch.load(fh, map_location="cpu", weights_only=True)
     dims = whisper.model.ModelDimensions(**ckpt["dims"])
     prev = torch.get_default_dtype()
     torch.set_default_dtype(torch.float16)

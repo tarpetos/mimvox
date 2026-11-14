@@ -47,6 +47,10 @@ class OpError(Exception):
 # fails with code "no_vram", and the engine frees GPU memory elsewhere and retries (workerproc.py).
 
 VRAM_RESERVE_GB = float(os.environ.get("MIMVOX_VRAM_RESERVE_GB", "1.5"))
+# A model worker that nobody has used for this long exits: its VRAM, its RAM and the 1.5 GB a PyTorch process costs by
+# itself all go back to the system (an idle Mimvox held 19 GB of commit and 6.6 GB of RAM before). The next request
+# starts it again (workerproc.py). 0 keeps workers for the engine's life.
+IDLE_EXIT_S = float(os.environ.get("MIMVOX_IDLE_EXIT_S", "600"))
 NO_VRAM = "not enough free GPU memory: close programs that use the graphics card (games, video, browsers) and try again"
 NO_RAM = "not enough free memory (RAM): close other programs and try again"
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* **Much lighter on memory:** an idle Mimvox held 19 GB of memory and 4 GB of the graphics card; now the models leave
+  after 10 idle minutes (`MIMVOX_IDLE_EXIT_S`) and the engine keeps 0.3 GB and nothing on the card; the next
+  generation loads them again (about 10 s). Voice match starts only for a trained voice, not with the app. Each
+  process no longer reserves a math buffer per CPU thread that nothing used. Measured on an RTX 4070 PC: a zero-shot
+  voice in use 19 GB -> 5.4 GB, a trained voice 19 GB -> 9.3 GB, the peak while a new reference is read 18.9 GB ->
+  12.4 GB; the models are ready 10 s after the start instead of 42 s.
 * **Memory safety:** Mimvox no longer runs the computer out of memory. Recording a new reference while the app was
   busy could fill the graphics card; the NVIDIA driver then moved the overflow into system RAM until Windows ran out
   of memory, other programs crashed and the desktop lost its wallpaper and screenshots. Now every engine process caps

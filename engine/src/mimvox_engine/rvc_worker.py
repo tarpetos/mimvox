@@ -99,7 +99,8 @@ def op_release(_req):
     return {}
 
 
-worker = kit.Worker("rvc", INP, OUT, {"convert": op_convert, "release": op_release, "ping": lambda _req: {}})
+worker = kit.Worker("rvc", INP, OUT, {"convert": op_convert, "release": op_release, "ping": lambda _req: {}},
+                    idle=[(kit.IDLE_EXIT_S, "exit")] if kit.IDLE_EXIT_S > 0 else [])
 try:
     worker.run()
 except BaseException as exc:  # noqa: BLE001

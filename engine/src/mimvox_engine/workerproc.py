@@ -88,7 +88,7 @@ async def make_room(asking: WorkerClient) -> list[str]:
 class WorkerClient:
     def __init__(self, name: str, argv: list[str], env: dict[str, str], start_timeout: float = 240.0) -> None:
         _CLIENTS.append(self)
-        self.on_release: list[Callable[[], None]] = []   # run after make_room made this worker drop its models
+        self.on_release: list[Callable[[], None]] = []   # run when the worker dropped its models (make_room, exit)
         self.name = name
         self.argv = argv
         self.env = env
@@ -229,6 +229,8 @@ class WorkerClient:
             code = await proc.wait()
             if self._proc is proc:
                 self._proc = None
+            for hook in self.on_release:  # the models went with the process
+                hook()
             err = WorkerDied(f"the {self.name} worker exited (code {code})")
             for req in list(self._pending.values()):
                 if not req.done.done():
