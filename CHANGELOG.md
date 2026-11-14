@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 * **Romanian:** Speak, Book and Redub now offer Romanian. The speech model had under 100 hours of it in training
   (the cut the other languages passed), so it was tested first: the same six sentences in three languages, from the
