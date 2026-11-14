@@ -17,6 +17,7 @@
 //! one that already has recordings in another language is left alone: a new voice "<name> (<Language>)" is made. Requests are queued on `RecordState` and sent from `settle` through
 //! `shell::request`, so the screen state never needs the engine handle.
 
+mod files;
 mod fixtures;
 mod mic;
 mod pick;
@@ -39,6 +40,7 @@ use widgets::Tone;
 pub use fixtures::{
     scene_language_uk, scene_own_text_uk, scene_session_uk, scene_mic_open, scene_mic_picker, scene_mic_warning, scene_notice_saved, scene_own_text, scene_picker, scene_quick_ready, scene_recording, scene_recording_loud, scene_rejected,
     scene_saved_with_issues, scene_summary_ready, scene_import_drop, scene_import_checking, scene_import_saved,
+    scene_new_voice, scene_files_hover, scene_files_ask, scene_files_working, scene_files_done,
 };
 
 #[allow(dead_code)]
@@ -214,7 +216,36 @@ pub enum Phase {
     Summary,
 }
 
+/// "Use recordings you already have" on the start page: files of one person become a voice (or join the active
+/// one) without any reading. The files are cleaned and joined (`media.combine`) and stored as one recording of the
+/// voice (`dataset.add`), so the voice can speak at once and be trained when there is enough of it.
+#[derive(Default)]
+pub struct FilesFlow {
+    pub stage: FilesStage,
+    /// The new voice's name in the "whose voice" dialog.
+    pub name: TextEdit,
+    /// The dialog's choice: the files are more recordings of the active voice (else a new voice).
+    pub into_current: bool,
+    /// The file dialog is open; its answer arrives as an event.
+    picking: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum FilesStage {
+    #[default]
+    Idle,
+    /// The dialog: whose voice is in these files?
+    Asking { paths: Vec<PathBuf> },
+    Working { voice: String, note: String },
+    Done { voice: String, minutes: f32, level: Level, notes: Vec<String> },
+    Failed { message: String },
+}
+
 enum Pending {
+    /// The files flow: the new voice, the joined recording, the recording stored in the voice.
+    FilesCreate { paths: Vec<PathBuf>, name: String },
+    FilesCombine { voice_id: String, name: String },
+    FilesAdd { name: String, notes: Vec<String> },
     Presets,
     Analyze,
     CreateVoice,
@@ -275,6 +306,10 @@ pub struct RecordState {
     pub creating_voice: bool,
     /// The name for the voice `ensure_voice` creates next (default "My voice").
     new_voice_name: Option<String>,
+    /// The start page's "This is for": a new voice (else the active one), and the name typed for it.
+    pub for_new: bool,
+    pub new_name: TextEdit,
+    pub files: FilesFlow,
     /// A file drag is over the window (highlights the recorder card as a drop target).
     pub import_over: bool,
     /// The "Import file..." dialog is open; its answer arrives as an event.
@@ -386,7 +421,59 @@ impl RecordState {
                 self.importing = false;
                 self.notice = Some(("The engine is not running".into(), Tone::Danger));
             }
+            Pending::FilesCreate { .. } | Pending::FilesCombine { .. } | Pending::FilesAdd { .. } => {
+                self.creating_voice = false;
+                self.files.stage = FilesStage::Failed { message: "The engine is not running".into() };
+            }
             Pending::Summary => {}
+        }
+    }
+
+    /// Files were dropped or chosen: ask whose voice it is. `fresh_active`: the active voice has no recordings yet
+    /// (it was just made for this), so the files are most likely meant for it.
+    pub fn files_offer(&mut self, paths: Vec<PathBuf>, fresh_active: bool) {
+        if paths.is_empty() || matches!(self.files.stage, FilesStage::Working { .. }) {
+            return;
+        }
+        let stem = paths[0].file_stem().map(|n| n.to_string_lossy().replace(['_', '-'], " ")).unwrap_or_default();
+        let name: String = stem.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
+        self.files.name = TextEdit::new(name);
+        self.files.into_current = fresh_active;
+        self.files.stage = FilesStage::Asking { paths };
+    }
+
+    pub fn files_cancel(&mut self) {
+        if matches!(self.files.stage, FilesStage::Asking { .. } | FilesStage::Done { .. } | FilesStage::Failed { .. }) {
+            self.files.stage = FilesStage::Idle;
+        }
+    }
+
+    /// The dialog's answer. `current`: the active voice (id, name), when there is one.
+    pub fn files_confirm(&mut self, current: Option<(String, String)>) {
+        let FilesStage::Asking { paths } = std::mem::take(&mut self.files.stage) else { return };
+        if self.files.into_current {
+            if let Some((id, name)) = current {
+                self.files_combine(id, name, &paths);
+                return;
+            }
+        }
+        let typed = self.files.name.text.trim();
+        let name = if typed.is_empty() { "My voice".to_owned() } else { typed.to_owned() };
+        let language = self.lang().to_owned();
+        if self.request("voices.create", json!({ "name": name, "language": language }), Pending::FilesCreate { paths, name: name.clone() }) {
+            self.creating_voice = true;
+            self.files.stage = FilesStage::Working { voice: name, note: "Creating the voice…".into() };
+        }
+    }
+
+    fn files_combine(&mut self, voice_id: String, name: String, paths: &[PathBuf]) {
+        let mut params = json!({ "paths": paths });
+        if let Some(on) = super::refmedia::saved_remove_music() {
+            params["remove_music"] = json!(on);
+        }
+        let note = if paths.len() == 1 { "Checking and cleaning the recording…".to_owned() } else { format!("Checking and cleaning {} files…", paths.len()) };
+        if self.request("media.combine", params, Pending::FilesCombine { voice_id, name: name.clone() }) {
+            self.files.stage = FilesStage::Working { voice: name, note };
         }
     }
 
@@ -662,6 +749,56 @@ impl RecordState {
                 self.presets = Load::Ready(list);
             }
             (Pending::Presets, Err(e)) => self.presets = Load::Failed(e.message.clone()),
+            (Pending::FilesCreate { paths, name }, r) => {
+                self.creating_voice = false;
+                match r.as_ref().ok().and_then(|v| v.pointer("/voice/id")).and_then(Value::as_str) {
+                    Some(id) => {
+                        created = Some(id.to_owned());
+                        self.voice_id = created.clone();
+                        self.voices_dirty = true;
+                        self.for_new = false;
+                        self.files_combine(id.to_owned(), name, &paths);
+                    }
+                    None => {
+                        let why = r.as_ref().err().map_or_else(|| "no voice came back".to_owned(), |e| e.message.clone());
+                        self.files.stage = FilesStage::Failed { message: format!("Could not create the voice: {why}") };
+                    }
+                }
+            }
+            (Pending::FilesCombine { voice_id, name }, Ok(v)) => {
+                let mut notes = Vec::new();
+                let skipped: Vec<String> = v.get("skipped").and_then(Value::as_array).map(|a| {
+                    a.iter().map(|x| format!("{} ({})", st(x, "name"), st(x, "reason"))).collect()
+                }).unwrap_or_default();
+                if !skipped.is_empty() {
+                    notes.push(format!("Left out: {}.", skipped.join(", ")));
+                }
+                let music = v.get("music_files").and_then(Value::as_u64).unwrap_or(0);
+                if music > 0 {
+                    notes.push(format!("Background music removed from {music} file{}.", if music == 1 { "" } else { "s" }));
+                }
+                // A part number of its own, away from the reading parts (1, 2, ...), so neither replaces the other.
+                let part = 1000 + std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() % 1_000_000);
+                let params = json!({ "voice_id": voice_id, "part_index": part, "path": st(v, "path") });
+                if self.request("dataset.add", params, Pending::FilesAdd { name: name.clone(), notes }) {
+                    self.files.stage = FilesStage::Working { voice: name, note: "Saving the recording in the voice…".into() };
+                }
+            }
+            (Pending::FilesCombine { .. }, Err(e)) => {
+                self.files.stage = FilesStage::Failed { message: format!("These files could not be used: {}", e.message) };
+            }
+            (Pending::FilesAdd { name, mut notes }, Ok(v)) => {
+                let sum = parse_summary(v.get("summary").unwrap_or(v));
+                notes.extend(str_list(v.get("part").unwrap_or(&Value::Null), "issues"));
+                self.files.stage = FilesStage::Done { voice: name, minutes: sum.usable_minutes.max(0.0), level: sum.level, notes };
+                self.voices_dirty = true;
+                if self.plan.is_some() {
+                    self.apply_summary(sum);
+                }
+            }
+            (Pending::FilesAdd { .. }, Err(e)) => {
+                self.files.stage = FilesStage::Failed { message: format!("The recording could not be saved: {}", e.message) };
+            }
             (Pending::Analyze, Ok(v)) => {
                 self.analyzing = false;
                 self.analysis = Some(Analysis {
@@ -814,7 +951,7 @@ fn on_capture(s: &mut AppState, seq: u64, ev: CaptureEvent) -> bool {
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     let body = match s.record.phase {
-        Phase::Pick => pick::presets(&s.record, p),
+        Phase::Pick => pick::presets(s, p),
         Phase::Own => pick::own_text(&s.record, p),
         Phase::Session | Phase::Summary => session::view(&s.record, p),
     };
@@ -851,15 +988,58 @@ pub fn import_file(s: &mut AppState) {
     });
 }
 
-/// Files dropped on the window while recording: they become the current part's take (several are joined into one).
+/// Files dropped on the Record screen. While a reading is open they become the current part's take (several are
+/// joined into one); on the start page they are recordings somebody already has, and a dialog asks whose voice.
 pub fn import_dropped(s: &mut AppState, files: Vec<PathBuf>) {
     s.record.import_over = false;
-    if s.record.plan.is_none() {
-        shell::toast(s, Tone::Warning, "Pick a reading first, then drop the recording on a part.");
+    if matches!(s.record.phase, Phase::Session | Phase::Summary) && s.record.plan.is_some() {
+        shell::stop_audio(s);
+        import_paths(s, files);
         return;
     }
-    shell::stop_audio(s);
-    import_paths(s, files);
+    offer_files(s, files);
+}
+
+fn offer_files(s: &mut AppState, files: Vec<PathBuf>) {
+    let fresh_active = shell::active_voice(s).is_some_and(|v| v.parts == 0 && !v.trained);
+    s.record.phase = Phase::Pick;
+    s.record.files_offer(files, fresh_active);
+}
+
+/// "Choose files…" on the start page (native dialog on its own thread).
+pub fn choose_files(s: &mut AppState) {
+    if s.record.files.picking || s.shell.scripted() {
+        return;
+    }
+    s.record.files.picking = true;
+    let exts = super::formats::import_extensions(s);
+    std::thread::spawn(move || {
+        let dialog = rfd::FileDialog::new().set_title("Choose recordings of one voice").add_filter("Audio and video", &exts);
+        let choice = dialog.pick_files().unwrap_or_default();
+        events::post(move |s| {
+            s.record.files.picking = false;
+            offer_files(s, choice);
+        });
+    });
+}
+
+/// The "whose voice" dialog's main button.
+pub fn confirm_files(s: &mut AppState) {
+    let current = shell::active_voice(s).map(|v| (v.id.clone(), v.name.clone()));
+    s.record.files_confirm(current);
+}
+
+/// The "whose voice" dialog, for the shell's overlays.
+pub fn files_overlay(s: &AppState, p: &theme::Palette) -> Option<El> {
+    (s.screen == Screen::Record).then(|| files::overlay(s, p)).flatten()
+}
+
+/// The voice menu's "New voice": the start page, set to make a new voice.
+pub fn start_new_voice(s: &mut AppState) {
+    s.record.back_to_pick();
+    s.record.for_new = true;
+    s.record.files_cancel();
+    shell::set_screen(s, Screen::Record);
 }
 
 fn import_paths(s: &mut AppState, mut paths: Vec<PathBuf>) {
@@ -949,6 +1129,23 @@ pub fn set_language(s: &mut AppState, code: &str) {
 fn begin_in_language(s: &mut AppState, plan: Plan) {
     let lang = plan.language.clone();
     let active = shell::active_voice(s).cloned();
+    // "This is for: a new voice" on the start page.
+    if s.record.for_new || active.is_none() {
+        let typed = s.record.new_name.text.trim().to_owned();
+        let name = if !typed.is_empty() {
+            typed
+        } else if s.shell.voices.is_empty() {
+            "My voice".to_owned()
+        } else {
+            format!("Voice {}", s.shell.voices.len() + 1)
+        };
+        s.record.voice_id = None;
+        s.record.new_voice_name = Some(name);
+        s.record.for_new = false;
+        s.record.new_name = TextEdit::default();
+        s.record.begin(plan);
+        return;
+    }
     match active {
         Some(v) if v.lang() != lang && v.parts == 0 => {
             shell::request(s, "voices.rename", json!({ "id": v.id, "language": lang }));

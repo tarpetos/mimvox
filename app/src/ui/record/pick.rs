@@ -15,11 +15,6 @@ fn heading(p: Pal, title: &str, sub: &str) -> El {
         .child(txt(sub, 15.0, 400.0, p.text_dim).wrap())
 }
 
-fn page(p: Pal, content: El) -> El {
-    let _ = p;
-    col().w_full().h_full().min_h(0.0).items_center().justify_center().py(28.0).px(28.0).child(content)
-}
-
 fn page_scroll(content: El) -> El {
     col().w_full().h_full().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).items_center().py(24.0).px(28.0).child(content)
 }
@@ -67,7 +62,26 @@ fn own_language_strip(r: &RecordState, p: Pal) -> El {
         }))
 }
 
-pub fn presets(r: &RecordState, p: Pal) -> El {
+/// The start page's "This is for": the active voice or a new one (with its name).
+fn target_strip(s: &AppState, p: Pal) -> El {
+    let r = &s.record;
+    let active = crate::ui::shell::active_voice(s);
+    let new = r.for_new || active.is_none();
+    let mut line = row().key("record-for").w_full().gap(12.0).center_y().flex_wrap().child(txt("This is for", 13.0, 600.0, p.text_dim));
+    if let Some(v) = active {
+        let labels = [v.name.as_str(), "A new voice"];
+        line = line.child(segmented(p, "record-for-pick", &labels, usize::from(new), |s: &mut AppState, i| s.record.for_new = i == 1));
+    } else {
+        line = line.child(txt("a new voice", 13.0, 600.0, p.text));
+    }
+    if new {
+        line = line.child(el().w(260.0).child(crate::ui::voices::kit::field(&p, &r.new_name, "Its name, for example \"My voice\"", |s: &mut AppState| &mut s.record.new_name)));
+    }
+    line
+}
+
+pub fn presets(s: &AppState, p: Pal) -> El {
+    let r = &s.record;
     let mut cards = row().w_full().gap(16.0).items_stretch();
     match &r.presets {
         Load::Ready(list) => {
@@ -85,14 +99,21 @@ pub fn presets(r: &RecordState, p: Pal) -> El {
     let head = row().w_full().gap(16.0).items_start().justify_between().child(
         col().grow(1.0).min_w(0.0).child(heading(
             p,
-            "What would you like to read?",
-            "Pick a preset. You read short parts aloud, we save each one and tell you when it is enough.",
+            "Give Mimvox a voice",
+            "Use recordings you already have, or read a short text aloud now. Either way the voice can speak right after.",
         )),
     ).child(super::mic::chip(r, p));
-    let mut c = col().w_full().max_w(900.0).gap(22.0).child(head).child(language_strip(r, p));
+    let mut c = col().w_full().max_w(900.0).gap(18.0).child(head).child(super::files::card(r, p));
+    c = c.child(
+        col().w_full().gap(4.0).pt(6.0)
+            .child(txt("Or read it aloud", 19.0, 700.0, p.text))
+            .child(txt("Pick a text. You read short parts, each one is checked and saved, and you are told when it is enough.", 13.0, 400.0, p.text_dim).wrap()),
+    );
+    c = c.child(target_strip(s, p)).child(language_strip(r, p));
     if let Some(plan) = &r.plan {
         let done = r.saved_count();
-        let label = format!("Continue: {} ({}/{} parts)", plan.title, done, plan.parts.len());
+        let whose = crate::ui::shell::active_voice(s).map_or(String::new(), |v| format!(" of “{}”", v.name));
+        let label = format!("Continue: {}{whose} ({}/{} parts)", plan.title, done, plan.parts.len());
         c = c.child(
             glass(p).w_full().px(20.0).py(14.0).child(
                 row().w_full().center_y().justify_between().child(txt(label, 15.0, 600.0, p.text)).child(button(
@@ -121,7 +142,7 @@ pub fn presets(r: &RecordState, p: Pal) -> El {
                 .child(button(p, "own", "Paste text", BtnKind::Secondary, true, |s: &mut AppState| s.record.phase = Phase::Own)),
         ),
     );
-    page(p, c)
+    page_scroll(c)
 }
 
 fn info_card(p: Pal, title: &str, body: &str, tone: Tone) -> El {

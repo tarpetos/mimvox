@@ -179,9 +179,15 @@ the same data folder, which installs only what changed, and the engine restarts 
 - **Engine pill** on the right: *Ready*, *Loading models…*, *Training · speech paused*, *Models missing* or
   *Engine stopped*. When the engine has stopped, press it to restart.
 - **Voice pill** at the far right: the active voice. Open it to switch voices, see whether each one is *Trained* or
-  *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice**.
-- **Dropping files** anywhere on the window works on every screen: on Record they become the current part's take, on
-  Voices they build a reference from media, and elsewhere a single file opens in Redub (see the sections below).
+  *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice** (the Record start page, set to make a
+  new voice).
+- **Dropping files** anywhere on the window works on every screen. Recordings dropped on Record's start page, on Speak
+  or on Train are somebody's voice: a dialog asks whether they are **a new voice** or **more recordings of the active
+  one** (see [Use recordings you already have](#use-recordings-you-already-have)). While a reading is open on Record
+  they become the current part's take, on Voices they build a reference from media for the active voice, and on Redub
+  a single file is the file to redub.
+- **The window** opens where and as large as you closed it; the first time it opens in the middle of the main display,
+  not maximized.
 - **The player bar** appears at the bottom of the window whenever something plays (see below).
 
 ### The player bar
@@ -194,7 +200,7 @@ buttons, and messages pop up just above it.
 
 ![The player bar under Speak](screenshots/usage-player.png)
 
-- **Play / Pause**, and **Stop**, which halts the track and rewinds it to the start (the bar stays; Play starts it again). The **×** at the right end ends playback and hides the bar.
+- **Play / Pause**. The **×** at the right end ends playback and hides the bar.
 - The **title** of what plays (the start of the text, the file name, the clip) and where it comes from
   (*Speak · result*, *Redub · original*, *Voices · My voice*, *Record*).
 - The **time** played and the total, with a **seek bar**: click or drag anywhere on it to jump. With the seek bar
@@ -218,11 +224,29 @@ bar shows the finished result and seeking works.
 
 ## 3. Record
 
-Recording goes into the **active voice**. If you have none yet, the app creates one named "My voice" and selects it.
+Record is where a voice comes from. Its start page offers two ways, and either one gives a voice that can speak at
+once:
+
+![The Record start page: recordings you already have, or a reading](screenshots/usage-record-picker.png)
+
+### Use recordings you already have
+
+No reading and no preset: drop audio or video files of one person on the card at the top (a voice memo, a podcast, a
+video), or press **Choose files…**. A dialog asks **whose voice is in these files**:
+
+- **A new voice** (the default): type its name; the files become a voice of their own.
+- **More recordings of "<the active voice>"**: only when it is the same person; the files join that voice's
+  recordings. (This is the default when the active voice is still empty.)
+
+The files are cleaned and joined (silence trimmed, loudness evened out, background music removed when that is turned
+on, at most 20 minutes) and stored in the voice. The card then says how much clean speech the voice has: one clean
+minute is enough to **Speak with it**; with three minutes or more **Train a closer copy** is offered too. Files with
+no clear speech are left out and listed.
 
 ### Pick a preset and a reading language
 
-![Choosing a preset and the reading language](screenshots/usage-record-picker.png)
+Reading aloud goes into the voice chosen under **This is for**: the active voice, or **A new voice** (type its name;
+left empty it is "My voice", then "Voice 2", ...). If you have no voice yet, a new one is made.
 
 At the top, choose the **Reading language**: English, Ukrainian, German, French, Spanish or Polish. Each language has
 its own texts, written for that language, in `presets/<lang>/` (`quick.md`, `standard.md`, `pro.md`). Then pick a
@@ -334,7 +358,8 @@ Open the Voices screen from the voice pill at the top right (**Manage voices**).
 ### Create, rename, delete and switch voices
 
 - **Create:** type a name under **New voice** (for example "My voice") and press **Create voice**. A new voice has no
-  recordings yet: go to Record next. (Record also creates "My voice" by itself when there is none.)
+  recordings yet, so the app goes straight on to Record's start page for it. (Record also makes a new voice by
+  itself: from files, or with **This is for: A new voice**.)
 - **Active voice:** the voice with the *Active* badge is the one Record, Train, Speak and Redub use. Press **Use this
   voice** on another card, or pick it from the voice pill at the top, to switch.
 - **Rename:** press **Rename**, edit the name, press **Save**. Only the shown name changes; the voice's folder keeps its

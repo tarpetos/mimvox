@@ -534,7 +534,7 @@ fn render_blocker(s: &AppState) -> Option<(String, bool)> {
         return Some((b, !calm));
     }
     let Some(v) = shell::active_voice(s) else {
-        return Some(("Record your voice first, or pick one at the top right.".into(), true));
+        return Some(("Add a voice first (from files or by reading aloud), or pick one at the top right.".into(), true));
     };
     match s.redub.mode {
         RedubMode::Dub if s.redub.reviewing && s.redub.kept_segments().next().is_none() => Some(("Every line is empty. Add some text.".into(), false)),
@@ -1264,8 +1264,8 @@ fn convert_block(s: &AppState, p: Palette) -> El {
         .child(text("Keeps the original timing and delivery, and swaps in your trained voice.").font(ty::CAPTION).color(p.text_dim).wrap());
     match shell::active_voice(s) {
         None => {
-            c = c.child(kit::notice(&p, Tone::Warning, "No voice selected. Record your voice first, or pick one at the top right."))
-                .child(row().child(Button::new("Record").small().key("convert-record").on_press(|s| shell::set_screen(s, Screen::Record)).build(p)));
+            c = c.child(kit::notice(&p, Tone::Warning, "No voice selected. Add a voice first (from files or by reading aloud), or pick one at the top right."))
+                .child(row().child(Button::new("Add a voice").small().key("convert-record").on_press(super::record::start_new_voice).build(p)));
         }
         Some(v) if !v.trained => {
             c = c.child(kit::notice(&p, Tone::Warning, &format!("“{}” is not trained yet. Convert voice needs a trained voice: train it first, or use Translate & dub, which works with any voice.", v.name)))
@@ -1357,8 +1357,8 @@ fn dub_block(s: &AppState, p: Palette) -> El {
         c = c.child(text(format!("{from_name} → {to_name}, in your voice.")).font(ty::CAPTION).color(p.text_dim).wrap()).child(options);
     }
     if shell::active_voice(s).is_none() {
-        c = c.child(kit::notice(&p, Tone::Warning, "No voice selected. Record your voice first, or pick one at the top right."))
-            .child(row().child(Button::new("Record").small().key("dub-record").on_press(|s| shell::set_screen(s, Screen::Record)).build(p)));
+        c = c.child(kit::notice(&p, Tone::Warning, "No voice selected. Add a voice first (from files or by reading aloud), or pick one at the top right."))
+            .child(row().child(Button::new("Add a voice").small().key("dub-record").on_press(super::record::start_new_voice).build(p)));
     }
     if r.reviewing {
         c = c.child(review_table(s, p));
@@ -1673,7 +1673,7 @@ fn action_bar(s: &AppState, p: Palette) -> El {
             }.wrap()),
         None => col().gap(2.0)
             .child(text("No voice selected").font(ty::LABEL).color(p.text))
-            .child(text("Record your voice first, or pick one at the top right.").font(ty::CAPTION).color(p.warn)),
+            .child(text("Add a voice first (from files or by reading aloud), or pick one at the top right.").font(ty::CAPTION).color(p.warn)),
     };
     let label = match (s.redub.mode, s.redub.reviewing) {
         (RedubMode::Dub, false) => "Translate & dub",

@@ -71,6 +71,8 @@ fn main() {
     }
     // Before `run`: every window opened afterwards shows it. A failure only costs the icon.
     let _ = rune::set_app_icon(ICON_PNG);
+    // Where and how large the window was closed; the first time, the default size in the middle of the main display.
+    let opening = if rune::is_headless() { ui::winplace::Opening::default() } else { ui::winplace::opening() };
     let spec = AppSpec::<AppState> {
         min_size: Some((1040.0, 620.0)),
         scenes: ui::all_scenes(),
@@ -80,7 +82,7 @@ fn main() {
         // The frame hook: settles state and fires due timers; it never polls the engine or audio (see `ui::events`).
         poll: Some(ui::shell::on_frame),
         on_key: Some(ui::on_key),
-        ..AppSpec::new("Mimvox", (1040.0, 700.0), AppState::default, ui::view)
+        ..AppSpec::new("Mimvox", opening.size, AppState::default, ui::view)
     };
     // The glass header is the title bar: Windows loses its native title bar (resize edges, Aero Snap and the snap
     // layouts keep working) and the app draws the caption buttons itself (`ui::caption`, over cells Rune
@@ -94,11 +96,18 @@ fn main() {
     let app = App::new(spec)
         .titlebar(titlebar)
         .keep_running()
+        .maximized(opening.maximized)
+        .on_window(ui::winplace::keep)
         .on_close(ui::train::on_close)
         .on_focus(ui::on_focus)
         .on_frame_drawn(|_| ui::stats::count(&ui::stats::FRAMES));
     // Background threads (engine, audio, dialogs) reach the UI through this handle (`ui::events`).
     ui::events::init(app.handle());
+    match opening.position {
+        Some(position) => app.handle().set_position(position),
+        None if !rune::is_headless() => ui::shell::center_on_open(),
+        None => {}
+    }
     app.run();
     // A setup still running stops with the app (it resumes on the next run).
     ui::setuprun::stop_on_exit();

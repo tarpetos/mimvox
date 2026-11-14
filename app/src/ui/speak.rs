@@ -331,7 +331,7 @@ fn blocker(s: &AppState) -> Option<&'static str> {
         EngineStatus::Ready { .. } => {}
     }
     if shell::active_voice(s).is_none() {
-        return Some("Record your voice first, or pick one at the top right.");
+        return Some("Add a voice first (from files or by reading aloud), or pick one at the top right.");
     }
     if s.book.running() {
         return Some("A book is being read. Pause it in Book mode to speak other text.");
@@ -750,7 +750,7 @@ fn action_bar(s: &AppState, p: Palette) -> El {
                 Some(v) => col().gap(2.0)
                     .child(row().gap(8.0).center_y().child(text(format!("Speaking as {}", v.name)).font(ty::LABEL).color(p.text))
                         .child(badge(p, if v.trained { "Trained" } else { "Zero-shot" }, if v.trained { Tone::Success } else { Tone::Accent }))
-                        .child(Button::new("Reference from media…").ghost().small().icon(&icons::PLUS).key("speak-ref-media").on_press(|s| {
+                        .child(Button::new("More recordings of this voice…").ghost().small().icon(&icons::PLUS).key("speak-ref-media").on_press(|s| {
                             shell::set_screen(s, Screen::Voices);
                             super::refmedia::pick_files(s);
                         }).build(p)))
@@ -762,7 +762,7 @@ fn action_bar(s: &AppState, p: Palette) -> El {
             let go = Button::new("Generate").primary().large().icon(&icons::SPARKLE).key("generate").disabled(empty || block.is_some()).on_press(generate).build(p);
             let mut r = row().key("bar-idle").w_full().gap(20.0).center_y().child(el().grow(1.0).min_w(0.0).child(voice_line));
             if block.is_some() && shell::active_voice(s).is_none() && matches!(s.shell.engine, EngineStatus::Ready { .. }) {
-                r = r.child(Button::new("Record").key("go-record").on_press(|s| shell::set_screen(s, Screen::Record)).build(p));
+                r = r.child(Button::new("Add a voice").key("go-record").on_press(super::record::start_new_voice).build(p));
             }
             r.child(go)
         }

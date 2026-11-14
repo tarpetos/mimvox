@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+* **A voice from recordings you already have:** Record's start page now begins with a card for audio or video
+  files of one person (drop them or press **Choose files…**): no reading and no preset. A dialog asks whose voice it
+  is, **a new voice** (named after the first file, the default) or **more recordings of the active one**, and the
+  card then says how much clean speech the voice has, with **Speak with it** and **Train a closer copy**. Files
+  dropped on Speak or Train go the same way; they used to replace the active voice's reference without asking, so
+  the selected voice suddenly spoke as somebody else.
+* **Record says what it is for:** **This is for** chooses the active voice or **A new voice** (with its name) for a
+  reading. The voice menu's **New voice** opens Record set to a new voice (it did nothing when Record was already
+  open), and creating an empty voice on the Voices screen goes on to Record for it.
+* **The window remembers its size and place,** and opens in the middle of the main display, not maximized, the
+  first time.
+* **Clearer empty states:** Train and Speak without a voice offer **Add a voice**; Speak's "Reference from media…"
+  is **More recordings of this voice…**.
 * **Much lighter on memory:** an idle Mimvox held 19 GB of memory and 4 GB of the graphics card; now the models leave
   after 10 idle minutes (`MIMVOX_IDLE_EXIT_S`) and the engine keeps 0.3 GB and nothing on the card; the next
   generation loads them again (about 10 s). Voice match starts only for a trained voice, not with the app. Each
