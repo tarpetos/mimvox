@@ -380,7 +380,7 @@ pub fn version_button(s: &AppState, p: Palette) -> El {
         Some(f) if waiting => format!("Mimvox {} is available: updates and what's new", f.version),
         _ => "Updates and what's new".to_owned(),
     };
-    let pill = row().key("version-button").role("button").label("Updates").h(28.0).pl(11.0).pr(if waiting { 8.0 } else { 11.0 }).center()
+    let pill = row().key("version-button").role("button").label("Updates").h(28.0).px(11.0).center()
         .radius(14.0)
         .fill(if s.update.dialog { p.glass_hover } else { p.glass }).gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, if waiting { p.accent.alpha(0.45) } else { p.rim_bottom })
@@ -390,18 +390,13 @@ pub fn version_button(s: &AppState, p: Palette) -> El {
     super::components::glass_edge(p, pill)
         .hover(p.glass_hover).focusable(true).cursor(rune::Cursor::Pointer).motion(super::theme::motion::UI).help(help)
         .on_press(|s: &mut AppState| open_dialog(s, None))
-        .child(row().items_start().gap(1.0).child(version).children(waiting.then(|| glint(p))))
+        .child(row().items_start().gap(2.0).child(version).children(waiting.then(|| glint(p))))
 }
 
-/// The "new version" mark: a small filled glint at the version's top right, in a faint glow of the accent.
+/// The "new version" mark: a small filled glint at the version's top right. No glow: in the pill's corner it would
+/// light up the pill's rim.
 fn glint(p: Palette) -> El {
-    const SIZE: f32 = 9.0;
-    const GLOW: f32 = 2.0 * SIZE;
-    let offset = (SIZE - GLOW) / 2.0;
-    el().size(SIZE, SIZE).mt(-4.0)
-        .child(el().pin(Some(offset), Some(offset), None, None).size(GLOW, GLOW).inert()
-            .radial_gradient([0.5, 0.5], [GLOW / 2.0, GLOW / 2.0], [(0.0, p.accent.alpha(0.28)), (1.0, p.accent.alpha(0.0))]))
-        .child(icon_el(&icons::GLINT, SIZE, p.accent))
+    el().mt(-2.0).child(icon_el(&icons::GLINT, 9.0, p.accent))
 }
 
 pub fn banner(s: &AppState, p: Palette) -> Option<El> {
