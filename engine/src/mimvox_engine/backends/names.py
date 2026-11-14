@@ -26,6 +26,7 @@ NAMES: dict[str, tuple[str, str]] = {
     "ka": ("Georgian", "ქართული"), "mr": ("Marathi", "मराठी"), "pa": ("Punjabi", "ਪੰਜਾਬੀ"),
     "cy": ("Welsh", "Cymraeg"), "kn": ("Kannada", "ಕನ್ನಡ"), "tr": ("Turkish", "Türkçe"),
     "hi": ("Hindi", "हिन्दी"), "uz": ("Uzbek", "Oʻzbek"), "ne": ("Nepali", "नेपाली"),
+    "ro": ("Romanian", "Română"),
 }
 
 # Listed first by the app ("Common"), in this order.

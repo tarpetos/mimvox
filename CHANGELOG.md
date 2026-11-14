@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Romanian:** Speak, Book and Redub now offer Romanian. The speech model had under 100 hours of it in training
+  (the cut the other languages passed), so it was tested first: the same six sentences in three languages, from the
+  two shipped reference clips, written down again by Whisper. Romanian came out with 13 % of the words wrong, Polish
+  with 22 % and Hungarian with 39 % (both already in the list).
 * **Much lighter on memory:** an idle Mimvox held 19 GB of memory and 4 GB of the graphics card; now the models leave
   after 10 idle minutes (`MIMVOX_IDLE_EXIT_S`) and the engine keeps 0.3 GB and nothing on the card; the next
   generation loads them again (about 10 s). Voice match starts only for a trained voice, not with the app. Each
