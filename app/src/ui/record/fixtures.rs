@@ -140,7 +140,7 @@ fn uk_presets() -> Vec<Preset> {
 }
 
 fn uk_languages(s: &mut AppState) {
-    s.record.languages = [("en", "English", "English"), ("uk", "Ukrainian", "Українська"), ("de", "German", "Deutsch"), ("fr", "French", "Français"), ("es", "Spanish", "Español"), ("pl", "Polish", "Polski")]
+    s.record.languages = [("en", "English", "English"), ("uk", "Ukrainian", "Українська"), ("de", "German", "Deutsch"), ("fr", "French", "Français"), ("es", "Spanish", "Español"), ("pl", "Polish", "Polski"), ("ro", "Romanian", "Română")]
         .iter()
         .map(|(c, n, nat)| RecLang { code: (*c).into(), name: (*n).into(), native: (*nat).into() })
         .collect();

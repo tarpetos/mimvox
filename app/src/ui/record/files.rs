@@ -102,7 +102,7 @@ pub fn overlay(s: &AppState, p: &Pal) -> Option<El> {
         listed.push_str(&format!(" and {} more", paths.len() - names.len()));
     }
     let mut card = col().key("files-dialog").w(540.0).padding(24.0).gap(14.0).radius(radius::PANEL)
-        .fill(rune::oklcha(0.2, 0.03, 255.0, 0.97)).border_gradient(1.0, p.rim_top, p.rim_bottom).shadow(18.0, 50.0, p.shadow)
+        .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0)).border_gradient(1.0, p.rim_top, p.rim_bottom).shadow(18.0, 50.0, p.shadow)
         .child(text("Whose voice is in these files?").font(ty::TITLE).color(p.text))
         .child(txt(listed, 12.5, 400.0, p.text_dim).wrap())
         .child(choice(p, "files-new", !into, "A new voice".into(), "The files become a voice of their own.", |s: &mut AppState| s.record.files.into_current = false));

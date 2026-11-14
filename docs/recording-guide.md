@@ -30,8 +30,12 @@ about halfway and never touch the top.
 
 ## Presets and how much data you need
 
-The presets exist in English, Ukrainian, German, French, Spanish, Polish and Romanian. Each language has its own texts, written
-for that language (not translated), with the same parts and reading times.
+The presets exist in English, Ukrainian, German, French, Spanish, Polish and Romanian. Each language has its own
+texts, written for that language (not translated), with the same parts and reading times.
+
+Reading is not the only way: recordings you already have of the same person (voice memos, a podcast, a video) can be
+dropped on **Record** instead, and the amounts below apply to them too (see
+[Use recordings you already have](usage.md#use-recordings-you-already-have)).
 
 | Preset | Recording time | What happens | Result |
 | --- | --- | --- | --- |

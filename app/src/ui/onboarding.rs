@@ -427,9 +427,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
 
     let intro = text(
         "Clone your own voice on this computer, then type any text and hear it spoken the way you would say it. \
-         You read a short guided text for about 6 minutes, the app trains your voice for roughly an hour on an \
-         RTX-class GPU, and from then on you can speak anything, instantly: it speaks English, Ukrainian and 60+ other \
-         languages in your voice. Everything stays on your machine.",
+         Drop in recordings you already have, or read a short guided text for about 6 minutes: the voice speaks at \
+         once, and about an hour of training on an RTX-class GPU makes it closer to you. It speaks English, Ukrainian \
+         and 60+ other languages. Everything stays on your machine.",
     )
     .font(ty::BODY)
     .color(p.text_dim)
@@ -438,8 +438,8 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let steps = row()
         .w_full()
         .gap(12.0)
-        .child(step(&p, 1, "Record", "About 6 minutes of guided reading"))
-        .child(step(&p, 2, "Train", "About 1 hour on an RTX-class GPU"))
+        .child(step(&p, 1, "Record", "Your recordings, or 6 minutes of guided reading"))
+        .child(step(&p, 2, "Train", "Optional: about 1 hour on an RTX-class GPU"))
         .child(step(&p, 3, "Speak", "Any text in 60+ languages, in your voice"));
 
     let mut page = col().w_full().gap(18.0).child(
