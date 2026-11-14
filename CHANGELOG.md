@@ -11,8 +11,10 @@
   speech process instead of one of its own (native accent in use: 10.7 GB -> 8.4 GB), and every model process gives
   the RAM it only needed while loading back to Windows (with a trained voice and the native accent loaded: 6.5 GB of
   RAM -> 0.6 GB).
-* **Playing no longer loads the graphics card:** the player bar redrew the whole window 20 times a second while
-  anything played (40-80 % of the GPU); it now redraws when the picture changes, a few times a second at most.
+* **Playing is light on the graphics card:** every move of the player bar redrew the whole window, 20 times a
+  second (40-80 % of the GPU in Task Manager while anything played). Now everything but the bar is drawn once into a
+  texture and reused until it changes, so a playing frame is that texture plus the bar; the bar is redrawn when its
+  knob moves a pixel or its clock a second. The big panels no longer blur the (already soft) light fields behind them.
 * **Memory safety:** Mimvox no longer runs the computer out of memory. Recording a new reference while the app was
   busy could fill the graphics card; the NVIDIA driver then moved the overflow into system RAM until Windows ran out
   of memory, other programs crashed and the desktop lost its wallpaper and screenshots. Now every engine process caps

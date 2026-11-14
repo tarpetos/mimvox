@@ -132,8 +132,9 @@ pub fn accent_glass(p: Palette, e: El) -> El {
     glass_edge(p, e)
 }
 
-/// A frosted liquid-glass panel: real backdrop blur over the drifting light fields behind it, a translucent
-/// gradient fill, a bright specular rim (lit top edge fading down), an inner edge glow, a top sheen and layered
+/// A liquid-glass panel: a translucent gradient fill over the light fields behind it (they are soft already: a
+/// backdrop blur changed almost nothing there, cost a blur pyramid per panel on every frame, and cannot be drawn
+/// into a cached layer, see `shell::view`), a bright specular rim (lit top edge fading down), an inner edge glow, a top sheen and layered
 /// soft shadows. Returns an empty column: add `.padding(..)`, size and children.
 ///
 /// A frame blurs at most `rune::MAX_BACKDROP_BLURS` (4) elements, so keep real panels to the
@@ -147,8 +148,7 @@ pub fn glass_panel(p: Palette) -> El {
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(20.0, 56.0, p.shadow)
-        .shadow(3.0, 10.0, p.shadow_soft)
-        .backdrop_blur(24.0);
+        .shadow(3.0, 10.0, p.shadow_soft);
     glass_edge(p, e).child(sheen(p, r))
 }
 
