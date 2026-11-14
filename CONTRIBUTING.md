@@ -30,6 +30,22 @@ Opening a pull request means you agree to these terms.
 - The app must stay usable for its purpose only: cloning your own voice, or a voice you have explicit permission for
   (see [DISCLAIMER.md](DISCLAIMER.md)).
 
+## Comments
+
+Code explains itself through names, types and structure. A comment is the exception, written only when it is
+fully justified: when a reader would otherwise get something wrong and the code cannot say it.
+
+- **Write one** for a reason the code cannot show: a workaround for a bug or a platform quirk, a constraint from
+  outside (the protocol, a thread, `unsafe`, a file format), or where a number comes from when it was measured or
+  tuned (one line, with the number).
+- **Do not write one** that repeats what the code or a name already says, describes a field or a function whose
+  signature is clear, narrates history ("used to", "now", "since 0.3"), or explains the feature to a user.
+  Architecture and behaviour belong in `docs/` and `contract/`, not in module headers.
+- Keep it short: one or two lines. No essays, no lists of measurements, no cross-references to other files unless the
+  link is the point.
+- Doc comments (`///`, `//!`, Python docstrings) only on items whose contract is not obvious from the signature.
+- When in doubt, leave it out.
+
 ## Commit messages
 
 Pull requests are squash-merged: the pull request's title becomes the one commit on `master` (the pull request number
