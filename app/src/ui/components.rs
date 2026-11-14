@@ -70,6 +70,9 @@ pub mod icons {
     stroke_icon!(USER, "user", r#"<circle cx="8" cy="5.6" r="2.6"/><path d="M3 13.4C3.4 10.9 5.4 9.6 8 9.6S12.6 10.9 13 13.4"/>"#);
     stroke_icon!(ALERT, "alert", r#"<path d="M8 2.4L14 12.8H2Z"/><path d="M8 6.6V9.4M8 11.2V11.3"/>"#);
     stroke_icon!(SPARKLE, "sparkle", r#"<path d="M7.2 2.6L8.5 6L11.9 7.3L8.5 8.6L7.2 12L5.9 8.6L2.5 7.3L5.9 6Z"/><path d="M12.4 1.8V4.2M11.2 3H13.6"/>"#);
+    // SPARKLE's star alone, centred in its box: beside a line of text it sits level with the letters (SPARKLE's star
+    // is above and left of the middle, under its small cross).
+    stroke_icon!(STAR, "star", r#"<path d="M8 2.6L9.4 6.6L13.4 8L9.4 9.4L8 13.4L6.6 9.4L2.6 8L6.6 6.6Z"/>"#);
     stroke_icon!(TRASH, "trash", r#"<path d="M3 4.4H13M6.4 4.4V3A.8.8 0 0 1 7.2 2.2H8.8A.8.8 0 0 1 9.6 3V4.4M4.2 4.4L4.8 12.8A1 1 0 0 0 5.8 13.8H10.2A1 1 0 0 0 11.2 12.8L11.8 4.4"/>"#);
     stroke_icon!(VOLUME, "volume", r#"<path d="M2.6 6.2H5L8.2 3.4V12.6L5 9.8H2.6Z" stroke-width="1.3"/><path d="M10.4 5.8A3.2 3.2 0 0 1 10.4 10.2M12.2 4A5.6 5.6 0 0 1 12.2 12"/>"#);
 }

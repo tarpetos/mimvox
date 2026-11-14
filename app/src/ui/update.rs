@@ -373,7 +373,7 @@ fn notes_view(p: Palette, notes: &str) -> El {
 // ---- views -------------------------------------------------------------------------------------------------------
 
 /// The version in the header, a glass pill like the header's others: opens the Updates dialog. A newer version waiting
-/// adds a sparkle (the update banner's icon) and turns the version accent.
+/// adds a star (the update banner's sparkle, centred to sit level with the version) and turns the version accent.
 pub fn version_button(s: &AppState, p: Palette) -> El {
     let waiting = s.update.found.as_ref().is_some_and(|f| update::compare(&f.version) == Ordering::Greater);
     let help = match &s.update.found {
@@ -387,7 +387,7 @@ pub fn version_button(s: &AppState, p: Palette) -> El {
     super::components::glass_edge(p, pill)
         .hover(p.glass_hover).focusable(true).cursor(rune::Cursor::Pointer).motion(super::theme::motion::UI).help(help)
         .on_press(|s: &mut AppState| open_dialog(s, None))
-        .children(waiting.then(|| icon_el(&icons::SPARKLE, 12.0, p.accent)))
+        .children(waiting.then(|| icon_el(&icons::STAR, 13.0, p.accent)))
         .child(text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(rune::TextStyle::new(11.5, 600.0).lh(15.0))
             .color(if waiting { p.accent } else { p.text_dim }).a11y_hidden())
 }
