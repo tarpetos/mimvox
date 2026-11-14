@@ -100,17 +100,25 @@ def is_vram_error(exc):
     return "CUDA out of memory" in text or "CUBLAS_STATUS_ALLOC_FAILED" in text or "cudaErrorMemoryAllocation" in text
 
 
-def gpu_cleanup():
-    """Give cached GPU blocks back after a failed op."""
-    import gc
-
-    gc.collect()
+def gpu_release_cache():
+    """Hand the PyTorch allocator's cached GPU blocks back to the driver. Runs after every op: on Windows (WDDM) every
+    GPU block also counts against the system's commit limit, cached ones included, so a worker that keeps its cache
+    holds RAM commit for memory it is not using (measured: a 2 GB block freed but cached still commits 2 GB; the RVC
+    worker sat at 6.6 GB of commit with 1.1 GB on the card). The next op allocates again in milliseconds."""
     torch = _cuda_torch()
     if torch is not None:
         try:
             torch.cuda.empty_cache()
-        except Exception:  # noqa: BLE001, S110 - best effort after a failed op
+        except Exception:  # noqa: BLE001, S110 - best effort
             pass
+
+
+def gpu_cleanup():
+    """Collect garbage and give cached GPU blocks back after a failed op."""
+    import gc
+
+    gc.collect()
+    gpu_release_cache()
 
 
 def open_channels():
@@ -274,6 +282,7 @@ class Worker:
             self.log(f"op {req.get('op')} failed: {traceback.format_exc()}")
             self.send({"id": rid, "ok": False, "code": "internal", "error": f"{type(exc).__name__}: {exc}"})
         finally:
+            gpu_release_cache()
             self.current = None
             self._cancelled.discard(rid)
 

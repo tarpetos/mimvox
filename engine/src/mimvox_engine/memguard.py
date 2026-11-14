@@ -2,8 +2,8 @@
 
 Windows: the engine puts itself in a Job Object at start-up; every worker it starts (and their children: training,
 ffmpeg) lands in the same job. The job caps the memory all of them may commit together (``JOB_OBJECT_LIMIT_JOB_MEMORY``):
-the system's commit limit (RAM + page file) minus what every other program has committed, minus a reserve (10 % of the
-limit, at least 4 GB). It is set at start-up and recomputed before every worker op (``refresh``), so it shrinks when
+the system's commit limit (RAM + page file, counting how far a page file Windows may still grow can grow on its disk)
+minus what every other program has committed, minus a reserve (3 % of the limit, at least 1.5 GB). It is set at start-up and recomputed before every worker op (``refresh``), so it shrinks when
 other programs grow and grows when they shrink; ``MIMVOX_RAM_LIMIT_GB`` fixes it instead. Not a share of the RAM: under WDDM every GPU
 allocation is charged to the process's commit too (so it can be paged out), so a worker with 6 GB on the card commits
 6 GB plus its own RAM (measured: a PyTorch process holding 2 GB of VRAM commits 3.6 GB; the engine with OmniVoice, RVC
@@ -26,8 +26,8 @@ import sys
 
 log = logging.getLogger("mimvox.memory")
 
-RESERVE_SHARE = 0.10          # of the system commit limit, left to everything else
-RESERVE_MIN_GB = 4.0
+RESERVE_SHARE = 0.03          # of the system commit limit, always left to everything else
+RESERVE_MIN_GB = 1.5
 LOW_CAP_GB = 12.0             # below this, warn: generation with voice match may not fit
 LINUX_OOM_SCORE_ADJ = 500     # 0..1000 added to the OOM killer's score (raising it needs no privileges)
 
@@ -133,7 +133,8 @@ def _k32():  # type: ignore[no-untyped-def]
 
 
 def _system_commit() -> tuple[int, int]:
-    """(commit limit, committed now) of the whole system, in bytes."""
+    """(commit limit, committed now) of the whole system, in bytes. The limit includes what the page files may still
+    grow by (``page_file_growth``): Windows enlarges them when commit nears the limit."""
     ctypes, wintypes, _, PerfInfo = _structs()
     psapi = ctypes.WinDLL("psapi", use_last_error=True)
     psapi.GetPerformanceInfo.argtypes = [ctypes.c_void_p, wintypes.DWORD]
@@ -141,7 +142,57 @@ def _system_commit() -> tuple[int, int]:
     pi.cb = ctypes.sizeof(pi)
     if not psapi.GetPerformanceInfo(ctypes.byref(pi), pi.cb):
         raise OSError(ctypes.get_last_error(), "GetPerformanceInfo failed")
-    return pi.CommitLimit * pi.PageSize, pi.CommitTotal * pi.PageSize
+    growth = 0
+    try:
+        growth = page_file_growth(_paging_files(), pi.PhysicalTotal * pi.PageSize, _file_size, _disk_free)
+    except Exception:  # count no growth
+        log.debug("could not read the page file settings", exc_info=True)
+    return pi.CommitLimit * pi.PageSize + growth, pi.CommitTotal * pi.PageSize
+
+
+def page_file_growth(entries: list[str], phys_total: int, file_size, disk_free) -> int:  # type: ignore[no-untyped-def]
+    """Bytes the page files may still grow by. ``entries`` are the ``PagingFiles`` registry lines (``"d:\\pagefile.sys
+    16384 16384"``: initial and maximum MB, ``0 0`` or none: managed by the system, ``"?:\\pagefile.sys"``: all of it
+    managed by the system, on the system drive). A system-managed file may reach three times the RAM; growth stops at
+    the disk's free space."""
+    total = 0
+    for entry in entries:
+        parts = entry.split()
+        if not parts:
+            continue
+        path = parts[0]
+        if path.startswith("?"):
+            path = os.environ.get("SystemDrive", "C:") + path[2:]
+        nums = [int(n) for n in parts[1:3] if n.isdigit()]
+        maximum = nums[1] * 2**20 if len(nums) == 2 and nums[1] > 0 else 3 * phys_total
+        current = file_size(path)
+        total += max(0, min(maximum, current + disk_free(path)) - current)
+    return total
+
+
+def _paging_files() -> list[str]:
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                        r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management") as key:
+        value, _ = winreg.QueryValueEx(key, "PagingFiles")
+    return [v for v in (value if isinstance(value, list) else [value]) if v.strip()]
+
+
+def _file_size(path: str) -> int:
+    try:
+        return os.stat(path).st_size
+    except OSError:
+        return 0
+
+
+def _disk_free(path: str) -> int:
+    import shutil
+
+    try:
+        return shutil.disk_usage(os.path.splitdrive(path)[0] + "\\").free
+    except OSError:
+        return 0
 
 
 def _job_commit() -> int:
