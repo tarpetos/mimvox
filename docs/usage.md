@@ -28,8 +28,8 @@ see [architecture.md](architecture.md) and [performance.md](performance.md); for
 
 ### What you need
 
-- An **NVIDIA GPU with 8 GB of video memory or more** is recommended (Windows or Linux). Apple Silicon works on a
-  best-effort basis through MPS. Without a supported GPU the app still runs on the CPU, but training a voice takes many
+- An **NVIDIA GPU with 8 GB of video memory or more** is recommended (Windows or Linux). On a Mac, Apple Silicon works
+  through MPS (validated on a MacBook Pro with M5 Pro). Without a supported GPU the app still runs on the CPU, but training a voice takes many
   hours and speech is generated several times slower than real time. Intel Macs are not supported.
 - About **32 GB of free disk space** on the drive you install to (the runtime itself is about 30 GB).
 - A microphone, and an internet connection for the one-time setup. After setup the app works offline.

@@ -27,7 +27,7 @@ one; without one they run on the processor, which works but is several times slo
 | --- | --- | --- | --- | --- | --- |
 | **Windows** x64 | **Yes** (CUDA; developed on an RTX 4070) | Processor only | n/a | Processor only | Yes, slow |
 | **Linux** x64 | **Yes** (CUDA) | **Yes** (ROCm, new; tested on an RX 9070 XT) | n/a | Processor only | Yes, slow |
-| **macOS** Apple Silicon (M1 and later) | n/a | n/a | Best effort (MPS), not validated | n/a | n/a |
+| **macOS** Apple Silicon (M1 and later) | n/a | n/a | **Yes** (MPS; validated on a MacBook Pro with M5 Pro) | n/a | n/a |
 
 Intel Macs are not supported: the official PyTorch builds for them stopped at 2.2, and the speech engine needs 2.8 or
 newer. ARM64 Windows and Linux (Snapdragon laptops, ARM boards) are not built: their GPUs are not supported by
@@ -36,8 +36,8 @@ PyTorch, so everything would run on the processor, and nobody has tried them.
 - **Installers:** Windows `setup.exe`, Linux `.AppImage` and `.deb` (all x64), and a macOS `.dmg` for Apple Silicon;
   every [release](https://github.com/tarpetos/mimvox/releases/latest) has them all.
 - **Video memory:** 8 GB or more is recommended (the speech model needs about 4-5 GB, voice training more).
-- **What was tried:** Windows 11 with an NVIDIA RTX 4070 (daily), Arch Linux with an AMD RX 9070 XT. Everything else
-  is built for, but less tested: reports are welcome.
+- **What was tried:** Windows 11 with an NVIDIA RTX 4070 (daily), Arch Linux with an AMD RX 9070 XT, macOS on a
+  MacBook Pro with M5 Pro. Everything else is built for, but less tested: reports are welcome.
 
 ## Consent and legal: read this first
 
@@ -145,7 +145,7 @@ More: [docs/architecture.md](docs/architecture.md).
 | --- | --- |
 | **GPU** | **NVIDIA GPU with 8 GB of VRAM or more recommended** (Windows and Linux). It was developed and measured on an RTX 4070 with 12 GB. OmniVoice needs about 4-5 GB of VRAM, and the RVC worker is loaded beside it. |
 | **AMD GPU** | **Linux only, new and less tested.** A Radeon card that the ROCm builds of PyTorch support (RDNA2 or newer is the safe choice), with 8 GB of VRAM or more. Setup finds it and installs the ROCm builds of PyTorch; a separate ROCm install is not needed. Your user needs access to `/dev/kfd` (the `render` and `video` groups). Tested on an RX 9070 XT. Windows with an AMD GPU uses the CPU. |
-| **macOS** | Best effort: Apple Silicon through MPS. It has not been validated; expect it to be slower. |
+| **macOS** | Apple Silicon through MPS, validated on a MacBook Pro with M5 Pro. Intel Macs are not supported. |
 | **Disk space** | About **30 GB** for the runtime (engine with OmniVoice ~11 GB, Applio/RVC ~12 GB: two Python environments with their own PyTorch, plus Whisper and the translation model for Redub ~4.5 GB, the music-removal model ~0.3 GB and the zero-shot voice converter for the native accent of untrained voices ~2 GB, `--no-zero-shot-vc` leaves it out), plus ~0.1 GB per voice. With an NVIDIA or AMD GPU setup also adds the better translation model for Redub (NLLB-200 1.3B, a 5.5 GB download kept as 2.7 GB; `--better-translation no` leaves it out), about **33 GB** in all. Setup asks where to install (default: the local app data folder), shows the free space and refuses below 34 GB (40 GB with the better translation model, which needs room for the download while it is converted) unless `--force`; `setup --move-to <dir>` moves an existing install. An older install's `runtime/index-tts` (IndexTTS, ~19 GB) is no longer used: setup offers to delete it (`--remove-indextts`). |
 | **Microphone** | Any decent microphone; a headset or a desk microphone 15-20 cm from your mouth works. See the [recording guide](docs/recording-guide.md). |
 | **Network** | Needed once, during setup, to download the toolchains, the runtime and the models (several GB from Hugging Face). |
