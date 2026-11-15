@@ -198,7 +198,7 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
         Target::Reference => "Add a reference for",
         Target::MediaRef => "Media reference for",
     };
-    let search = kit::field(p, &s.langpick.search, "Search languages", |s: &mut AppState| &mut s.langpick.search).on_submit(move |s: &mut AppState, _| {
+    let search = kit::submit_field(p, &s.langpick.search, "Search languages", |s: &mut AppState| &mut s.langpick.search, move |s: &mut AppState| {
         let q = s.langpick.search.text.trim().to_lowercase();
         if let Some(l) = options(s, target).into_iter().find(|l| matches(l, &q)) {
             pick(s, target, &l.code);

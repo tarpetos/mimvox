@@ -920,15 +920,7 @@ fn check_box(p: Palette, key: String, on: bool, on_press: impl Fn(&mut AppState)
 fn draft_row(s: &AppState, p: Palette, i: usize, c: &DraftChapter, last: bool) -> El {
     let renaming = s.book.renaming.as_ref().filter(|(k, _)| *k == i);
     let title: El = match renaming {
-        Some((_, edit)) => kit::field(&p, edit, "Chapter title", |s: &mut AppState| &mut s.book.renaming.as_mut().expect("renaming").1)
-            .on_submit(|s: &mut AppState, _| commit_rename(s))
-            .on_key(|s: &mut AppState, ev: &rune::KeyEvent, _: &mut rune::Tx| {
-                let escape = ev.key == rune::Key::Escape;
-                if escape {
-                    s.book.renaming = None;
-                }
-                escape
-            }),
+        Some((_, edit)) => kit::submit_field(&p, edit, "Chapter title", |s: &mut AppState| &mut s.book.renaming.as_mut().expect("renaming").1, commit_rename),
         None => text(c.title.clone()).key(format!("book-title{i}")).font(ty::LABEL).color(if c.include { p.text } else { p.text_faint }).truncate().grow(1.0).min_w(0.0)
             .role("button").label(format!("Rename {}", c.title)).help("Click to rename").on_press(move |s: &mut AppState| start_rename(s, i)),
     };

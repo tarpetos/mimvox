@@ -103,8 +103,8 @@ pub fn overlay(s: &AppState, p: &Pal) -> Option<El> {
         .child(choice(p, "files-new", !into, "A new voice".into(), "The files become a voice of their own.", |s: &mut AppState| s.record.files.into_current = false));
     if !into {
         card = card.child(row().w_full().gap(10.0).center_y().pl(44.0)
-            .child(kit::field(&p, &s.record.files.name, "Name of the voice", |s: &mut AppState| &mut s.record.files.name)
-                .on_submit(|s: &mut AppState, _| super::confirm_files(s))));
+            .child(kit::submit_field(&p, &s.record.files.name, "Name of the voice", |s: &mut AppState| &mut s.record.files.name,
+                super::confirm_files)));
     }
     if let Some(v) = active {
         card = card.child(choice(p, "files-current", into, format!("More recordings of “{}”", v.name),

@@ -190,10 +190,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
                 .gap(10.0)
                 .center_y()
                 .child(
-                    kit::field(&p, &v.new_name, "Name your voice, for example \"My voice\"", |s: &mut AppState| {
+                    kit::submit_field(&p, &v.new_name, "Name your voice, for example \"My voice\"", |s: &mut AppState| {
                         &mut s.voices.new_name
-                    })
-                    .on_submit(|s: &mut AppState, _| create(s)),
+                    }, create),
                 )
                 .child(kit::button(&p, "Create voice", BtnKind::Primary, !v.new_name.text.trim().is_empty(), create)),
         );
@@ -255,10 +254,9 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
         Some(r) => {
             let rid = id.clone();
             let _ = rid;
-            kit::field(p, &r.edit, "Voice name", |s: &mut AppState| {
+            kit::submit_field(p, &r.edit, "Voice name", |s: &mut AppState| {
                 &mut s.voices.renaming.as_mut().expect("renaming").edit
-            })
-            .on_submit(|s: &mut AppState, _| commit_rename(s))
+            }, commit_rename)
         }
         None => text(info.name.clone()).font(ty::TITLE).color(p.text).truncate(),
     };
@@ -470,6 +468,27 @@ pub(crate) mod kit {
         placeholder: &str,
         access: impl for<'a> Fn(&'a mut AppState) -> &'a mut TextEdit + 'static,
     ) -> El {
+        field_with(p, edit, placeholder, access, |input| input)
+    }
+
+    /// Return calls `on_submit`: it has to sit on the input itself, not on the well around it.
+    pub fn submit_field(
+        p: &Palette,
+        edit: &TextEdit,
+        placeholder: &str,
+        access: impl for<'a> Fn(&'a mut AppState) -> &'a mut TextEdit + 'static,
+        on_submit: impl Fn(&mut AppState) + 'static,
+    ) -> El {
+        field_with(p, edit, placeholder, access, move |input| input.on_submit(move |s: &mut AppState, _| on_submit(s)))
+    }
+
+    fn field_with(
+        p: &Palette,
+        edit: &TextEdit,
+        placeholder: &str,
+        access: impl for<'a> Fn(&'a mut AppState) -> &'a mut TextEdit + 'static,
+        input: impl FnOnce(El) -> El,
+    ) -> El {
         row()
             .key("field-well")
             .radius(radius::CONTROL)
@@ -480,7 +499,7 @@ pub(crate) mod kit {
             .h(42.0)
             .px(14.0)
             .center_y()
-            .child(
+            .child(input(
                 text_input(edit, ty::BODY)
                     .key("field")
                     .single_line()
@@ -489,7 +508,7 @@ pub(crate) mod kit {
                     .placeholder(placeholder.to_string(), p.text_faint)
                     .caret(p.accent, p.accent.alpha(0.35))
                     .on_edit(access),
-            )
+            ))
     }
 
     pub fn progress(p: &Palette, frac: f32) -> El {
