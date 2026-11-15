@@ -135,12 +135,25 @@ def _segs_path(data: config.DataDir, book_id: str, k: int) -> str:
     return os.path.join(_work(data, book_id), f"{k + 1:03d}.segments.json")
 
 
-# Cyrillic letters that books type in place of Latin ones in Roman numerals ("РОЗДІЛ І" for "РОЗДІЛ I").
-_LOOKALIKE = str.maketrans("\u0430\u0435\u0441\u0456\u043e\u0440\u0445\u043c", "aeciopxm")
+# Cyrillic and Greek letters typed in place of Latin ones in Roman numerals ("РОЗДІЛ І" for "РОЗДІЛ I").
+_ROMAN_LOOKALIKE = str.maketrans("\u0456\u0445\u0441\u043c\u03b9\u03c7\u03bc", "ixcmixm")
+_ROMAN = re.compile(r"m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})")
+_ROMAN_VALUES = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
+
+
+def _heading_token(token: str) -> str:
+    if token.isdigit():
+        return str(int(token))
+    r = token.translate(_ROMAN_LOOKALIKE)
+    if _ROMAN.fullmatch(r):
+        v = [_ROMAN_VALUES[ch] for ch in r]
+        return str(sum(-a if a < b else a for a, b in zip(v, v[1:] + [0])))
+    return token
 
 
 def _heading_key(s: str) -> str:
-    return re.sub(r"\W+", "", unicodedata.normalize("NFKC", s).casefold().translate(_LOOKALIKE))
+    """Case, punctuation, compatibility forms (Ⅻ, ｉ) and how a number is written (1, I, Ⅰ) do not count."""
+    return " ".join(_heading_token(t) for t in re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", s).casefold()))
 
 
 def heading_in_text(title: str, text: str) -> bool:
