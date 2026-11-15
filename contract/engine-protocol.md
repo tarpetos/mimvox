@@ -1095,11 +1095,12 @@ only shows it.
 
 ### Events
 - `book.progress {"id","chapter","chapters","title","segment","segments","chapter_audio_s","percent","audio_s",
-  "elapsed_s","rtf","eta_s","est_audio_s","chars","chars_done","segment_rtf"?,"stage"?}`: when a chapter starts and after
+  "elapsed_s","rtf","eta_s","est_audio_s","chars","chars_done","segment_rtf"?,"stage"?,"retry_in_s"?}`: when a chapter starts and after
   every segment (`segment` = segments of that chapter done). `percent` is by characters, `audio_s` the audio made so
   far, `elapsed_s` the generation time over all sessions, `rtf = elapsed_s / audio_s`, `eta_s` the time left at the
   measured pace (null until the first segment), `est_audio_s` the whole book's length extrapolated. `stage: "m4b"` while
-  the M4B is made.
+  the M4B is made; `stage: "memory"` when the computer ran short of RAM or VRAM: reading goes on from the same sentence
+  after `retry_in_s` (20 s, 60 s, 180 s, 300 s; the count starts again once a segment is made), and only then fails.
 - `book.chapter {"id","index","title","path","duration_s","audio_s","elapsed_s","rtf","level":{"lufs_in","gain_db",
   "peak_dbfs"}, ...totals}`: a chapter file is finished (`rtf` of that chapter alone).
 - `book.done {"id","folder","m4b","m4b_requested","chapters","retries","session_elapsed_s","session_audio_s", ...totals,

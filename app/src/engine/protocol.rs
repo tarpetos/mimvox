@@ -1170,9 +1170,11 @@ pub struct BookProgress {
     pub segments: u32,
     #[serde(default, deserialize_with = "de::f32_or_zero")]
     pub chapter_audio_s: f32,
-    /// `m4b` while the whole-book file is made.
+    /// `m4b` while the whole-book file is made, `memory` while waiting for free memory.
     #[serde(default)]
     pub stage: Option<String>,
+    #[serde(default)]
+    pub retry_in_s: Option<f32>,
     #[serde(flatten)]
     pub totals: BookTotals,
 }

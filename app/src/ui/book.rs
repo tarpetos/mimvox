@@ -85,6 +85,7 @@ pub struct BookState {
     pub(crate) settings_dirty: bool,
     renaming: Option<(usize, TextEdit)>,
     m4b_making: bool,
+    memory_wait: Option<f32>,
 }
 
 /// Must match the engine's `narration.EXPRESSIVENESS`.
@@ -116,6 +117,7 @@ impl Default for BookState {
             settings_dirty: false,
             renaming: None,
             m4b_making: false,
+            memory_wait: None,
         }
     }
 }
@@ -627,6 +629,7 @@ fn on_event(s: &mut AppState, name: &str, data: &Value) {
                 }
             }
             s.book.m4b_stage(pr.stage.as_deref() == Some("m4b"));
+            s.book.memory_wait = if pr.stage.as_deref() == Some("memory") { pr.retry_in_s } else { None };
         }
         "book.chapter" if shown => {
             let Ok(ch) = serde_json::from_value::<BookChapterDone>(data.clone()) else { return };
@@ -1060,6 +1063,10 @@ fn project_row(s: &AppState, p: Palette, b: &BookSummary, c: &BookChapterRow) ->
 fn project_bar(s: &AppState, p: Palette, b: &BookSummary) -> El {
     let voice = b.voice_id.as_ref().and_then(|id| s.shell.voices.iter().find(|v| &v.id == id)).map(|v| v.name.clone());
     let (title, hint) = match b.status.as_str() {
+        "running" if s.book.stopping.is_none() && s.book.memory_wait.is_some() => (
+            "Waiting for free memory…".to_owned(),
+            format!("The computer ran short of memory. Reading goes on from the same sentence in {}; closing other programs helps.", fmt_len(s.book.memory_wait.unwrap_or(0.0))),
+        ),
         "running" => (s.book.stopping.unwrap_or("Reading…").to_owned(), "Pause any time: it continues from the same sentence. Speak, Redub and training wait until the book is paused or done.".to_owned()),
         "done" => ("Finished".to_owned(), match &b.m4b {
             Some(m) => format!("Chapter files and {} are in the book's folder.", m.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
@@ -1283,6 +1290,11 @@ pub fn scene_generating(s: &mut AppState) {
     scene_project(s, "running", 3, (37, 112));
 }
 
+pub fn scene_memory_wait(s: &mut AppState) {
+    scene_project(s, "running", 3, (37, 112));
+    s.book.memory_wait = Some(60.0);
+}
+
 pub fn scene_paused(s: &mut AppState) {
     scene_project(s, "paused", 3, (37, 112));
 }
@@ -1310,6 +1322,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("book_empty", scene_empty),
         ("book_imported", scene_imported),
         ("book_generating", scene_generating),
+        ("book_memory_wait", scene_memory_wait),
         ("book_paused", scene_paused),
         ("book_interrupted", scene_interrupted),
         ("book_finished", scene_finished),

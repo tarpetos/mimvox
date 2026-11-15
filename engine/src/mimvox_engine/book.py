@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ from . import accent, aio, backends, config, media, narration, reflang, rvc, spe
 from . import audio_util as au
 from .backends import SynthParams
 from .registry import Context, EngineError, method
+from .workerproc import WorkerDied
 
 log = logging.getLogger("mimvox.book")
 
@@ -31,6 +33,7 @@ M4B_BITRATE = "96k"
 MAX_CHARS = 20_000_000
 WAV_LIMIT = 0xFFFFFFFF - 1024  # a RIFF WAV cannot pass 4 GB: RF64 above that
 HOLDER = "a book is being read; pause it (Speak, Book) to use speech, Redub or training"
+MEMORY_RETRY_WAIT_S = (20.0, 60.0, 180.0, 300.0)
 
 _RUNNING: dict[str, str] = {}   # loop thread only
 _STOP: dict[str, str] = {}
@@ -829,7 +832,30 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
                                               "level": cs.get("level"), **_totals(book, state)}, job=job)
                     last_at[0] = time.time()
 
-        await aio.gather_or_cancel(produce(), consume())
+        attempt, audio_at_failure = 0, 0.0
+        while True:
+            try:
+                await aio.gather_or_cancel(produce(), consume())
+                break
+            except Exception as exc:
+                if not _short_of_memory(exc):
+                    raise
+                if session["audio_s"] > audio_at_failure:
+                    attempt = 0
+                if attempt >= len(MEMORY_RETRY_WAIT_S):
+                    raise
+                wait, audio_at_failure = MEMORY_RETRY_WAIT_S[attempt], session["audio_s"]
+                attempt += 1
+                log.warning("book %s: short of memory (%s: %s); trying again in %.0fs (%d of %d)", bid,
+                            type(exc).__name__, exc, wait, attempt, len(MEMORY_RETRY_WAIT_S))
+                k = next((k for k, cs in enumerate(state["chapters"]) if cs.get("status") != "done"), 0)
+                ctx.emit("book.progress", {**_progress(book, state, k), "stage": "memory", "retry_in_s": wait},
+                         job=job)
+                gc.collect()
+                await asyncio.sleep(wait)
+                todo_ch = [k for k, cs in enumerate(state["chapters"]) if cs.get("status") != "done"]
+                todo = asyncio.Queue(maxsize=2)
+                last_at[0] = time.time()
         m4b = None
         if book["settings"].get("m4b"):
             ctx.emit("book.progress", {**_progress(book, state, len(book["chapters"]) - 1), "stage": "m4b"}, job=job)
@@ -870,6 +896,14 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
         _STOP.pop(bid, None)
         tts.release_job(job)
         await aio.run_io(shutil.rmtree, jobdir, ignore_errors=True)
+
+
+def _short_of_memory(exc: BaseException | None) -> bool:
+    while exc is not None:
+        if isinstance(exc, (MemoryError, WorkerDied)) or getattr(exc, "code", None) in ("no_memory", "no_vram"):
+            return True
+        exc = exc.__cause__
+    return False
 
 
 async def _failed(data: config.DataDir, bid: str, state: dict[str, Any] | None, code: str, message: str) -> None:
