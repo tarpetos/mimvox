@@ -63,6 +63,7 @@ def normalize(text, lang):
     code = _n2w_lang(lang)
     if code is None:
         return text
+    text = _roman_numerals(text, lang)
     text = _ungroup(text)
     text = re.sub(r"(\d+)[.,](\d+)", lambda m: _words(float(f"{m.group(1)}.{m.group(2)}"), code), text)
     return re.sub(r"\d+(?!\.\s+[A-ZÀ-ÞĀ-ſА-Я])", lambda m: _words(int(m.group()), code), text)
@@ -72,6 +73,7 @@ _EN_UNITS = {"%": ("percent", "percent"), "$": ("dollar", "dollars"), "€": ("e
 
 
 def _en(text):
+    text = _roman_numerals(text, "en")
     text = _ungroup(re.sub(r"(?<=\d),(?=\d{3}\b)", "", text))
     text = re.sub(r"([$€£])\s?(\d+)\.(\d\d)\b", lambda m: f"{m.group(2)} {_EN_UNITS[m.group(1)][1]} and "
                   f"{int(m.group(3))} {'cent' if int(m.group(3)) == 1 else 'cents'}", text)
@@ -187,6 +189,7 @@ _UK_NUM = r"(\d+)(?:[,.](\d+))?"
 
 
 def _uk(text):
+    text = _roman_numerals(text, "uk")
     text = _ungroup(text)
     # abbreviations: plain words, or a \0 marker for units that agree with a number
     for pat, rep in _UK_ABBR:
@@ -207,6 +210,7 @@ def _uk(text):
                   text)
     text = re.sub(r"(\d{4})\s+(рік)\b", lambda m: f"{_uk_ord(m.group(1), 'nom_m')} рік", text)
     text = re.sub(r"(\d{1,4})-(?:х|их)\b", lambda m: _uk_ord(m.group(1), "nom_m")[:-2] + "их", text)
+    text = re.sub(r"\b([IVXL]{1,6})\s*столітті\b", lambda m: f"{_uk_ord(_roman(m.group(1)), 'loc_m')} столітті", text)
     text = re.sub(r"\b([IVXL]{1,6})\s*(ст\.|столітт[яі])", lambda m: f"{_roman(m.group(1))} \0ст", text)
     text = re.sub(r"(\d+)\s*\0ст(?![\w])", lambda m: f"{_uk_ord(m.group(1), 'nom_n')} століття", text)
     # dates: "5 травня" -> п'ятого травня, "1-го" -> першого
@@ -260,6 +264,81 @@ def _uk(text):
     text = re.sub(r"\bодна тисяча\b", "тисяча", text)
     text = re.sub(r"\+(?=\w)|(?<=\w)\+", "", text)  # a "+" left over (after the vowel, or next to a digit)
     return _SPACES.sub(" ", text).strip()
+
+
+_ROMAN_KEYWORDS = {
+    "uk": {"розділ": "nom_m", "том": "nom_m", "акт": "nom_m", "параграф": "nom_m", "випуск": "nom_m",
+           "глава": "nom_f", "частина": "nom_f", "книга": "nom_f", "дія": "nom_f", "сцена": "nom_f", "пісня": "nom_f"},
+    "en": dict.fromkeys(("chapter", "part", "book", "volume", "vol.", "act", "scene", "section", "canto", "letter"), ""),
+    "ru": dict.fromkeys(("глава", "часть", "книга", "том", "действие"), ""),
+    "be": dict.fromkeys(("раздзел", "частка", "кніга", "том"), ""),
+    "pl": dict.fromkeys(("rozdział", "część", "księga", "tom", "akt"), ""),
+    "de": dict.fromkeys(("kapitel", "teil", "buch", "band", "akt"), ""),
+    "fr": dict.fromkeys(("chapitre", "partie", "livre", "tome", "acte"), ""),
+    "es": dict.fromkeys(("capítulo", "parte", "libro", "tomo", "acto"), ""),
+    "it": dict.fromkeys(("capitolo", "parte", "libro", "volume", "atto"), ""),
+    "pt": dict.fromkeys(("capítulo", "parte", "livro", "volume", "ato"), ""),
+}
+_EN_NUMBERED = {"war", "phase", "type", "class", "grade", "level", "stage", "episode", "round", "figure", "table",
+                "appendix", "article", "item", "series", "season", "mark", "model", "unit", "lesson", "exercise"}
+# Cyrillic І, Х, С stand in for I, X, C in many Ukrainian and Russian books.
+_ROMAN_LOOKALIKE = str.maketrans("ІХС", "IXC")
+_ROMAN = r"[IVXLCDMІХС]+"
+_ROMAN_VALID = re.compile(r"M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})")
+
+
+def _roman_value(token):
+    r = token.translate(_ROMAN_LOOKALIKE)
+    if not r or not _ROMAN_VALID.fullmatch(r):
+        return None
+    vals = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+    return sum(-vals[a] if vals[b] > vals[a] else vals[a] for a, b in zip(r, r[1:] + "I")) if len(r) > 1 else vals[r]
+
+
+def _roman_numerals(text, lang):
+    keywords = _ROMAN_KEYWORDS.get(lang, {})
+
+    def spoken(n, form):
+        if lang == "uk":
+            return _uk_ord(n, form or "nom_m")
+        if lang == "en":
+            return _words(n, "en", to="ordinal") if form == "ordinal" else _words(n, "en")
+        return str(n)
+
+    def after_keyword(m):
+        n = _roman_value(m.group(2))
+        return m.group(0) if n is None else f"{m.group(1)} {spoken(n, keywords[m.group(1).lower()])}"
+
+    if keywords:
+        names = "|".join(re.escape(k) for k in sorted(keywords, key=len, reverse=True))
+        text = re.sub(r"(?<![\w])(" + names + r")\s+(" + _ROMAN + r")(?![\w])", after_keyword, text,
+                      flags=re.IGNORECASE)
+
+    def alone(m):
+        n = _roman_value(m.group(2))
+        return m.group(0) if n is None else f"{m.group(1)}{spoken(n, '')}{m.group(3)}"
+
+    text = re.sub(r"(?m)^(\s*)(" + _ROMAN + r")(\.?\s*)$", alone, text)
+
+    def regnal(m):
+        n = _roman_value(m.group(2))
+        if n is None:
+            return m.group(0)
+        if lang == "en":
+            if m.group(1).lower() in _EN_NUMBERED:
+                return f"{m.group(1)} {_words(n, 'en').capitalize()}"
+            return f"{m.group(1)} the {_words(n, 'en', to='ordinal').capitalize()}"
+        return f"{m.group(1)} {_uk_ord(n, 'nom_m')}"
+
+    if lang in ("uk", "en"):
+        upper = r"[A-Z][a-z]+" if lang == "en" else r"[А-ЯІЇЄҐ][а-яіїєґʼ'’]+"
+        text = re.sub(r"(?<![\w])(" + upper + r")\s+([IVXLC]{2,}|V|X)(?![\w])(?!\s*(?:ст\.|століт|cent))", regnal, text)
+    if lang == "uk":
+        def lone(m):
+            n = _roman_value(m.group(1))
+            return m.group(0) if n is None else _uk_ord(n, "nom_m")
+        text = re.sub(r"(?<![\w])([IVXLC]{2,}|V|X)(?![\w])(?!\s*(?:ст\.|столітт))", lone, text)
+    return text
 
 
 def _roman(r):

@@ -176,8 +176,9 @@ about four times faster and needs less than half the memory ([performance.md](pe
 - The voice comes from `reference.wav` (used whole up to 12 s, else cut to 7-12 s of whole sentences; Whisper finds them
   once and `reference.omnivoice.json` caches the cut and its transcript) or from `reference_<lang>.wav` when the voice
   has one for that language (OmniVoice carries the accent of the reference into the target language).
-- Its text front-end (`omnivoice_text.py`) spells out numbers, units and abbreviations (Ukrainian with cases and
-  agreement), and passes the user's stress marks (`+` or an acute, in Ukrainian, Russian and Belarusian) as an
+- Its text front-end (`omnivoice_text.py`, also used by HolosTTS) spells out numbers, units and abbreviations
+  (Ukrainian with cases and agreement) and Roman numerals after a chapter word, after a name (*Henry VIII*), alone on a
+  line and, in Ukrainian, anywhere (Cyrillic І, Х, С count as I, X, C there), and passes the user's stress marks (`+` or an acute, in Ukrainian, Russian and Belarusian) as an
   upper-case vowel (`omnivoice_stress.py`; dictionary stress for unmarked Ukrainian words is there but off by default).
 - The RVC index rate is capped at 0.3 for languages other than the one the voice was recorded in (`rvc.index_rate_for`):
   the index holds only sounds of the recorded language and garbles others at full rate.

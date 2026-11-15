@@ -552,7 +552,8 @@ stress" in the Style panel when the language is Ukrainian), Ukrainian is not gue
 every word and the model speaks exactly that: it reads phonemes in which the stress is written, not letters (HolosTTS).
 The stress comes from a Ukrainian stress dictionary; when a word has two readings (*ру́ки* / *руки́*), the grammar of the
 sentence chooses (part of speech, case, number); a word the dictionary does not know gets its stress from a small
-model trained for that. Numbers, dates and abbreviations are spelled out first, with their cases. It works with every
+model trained for that. Numbers, dates, abbreviations and Roman numerals are spelled out first, with their cases
+(*Розділ XII* is read as "розділ дванадцятий", *Людовік XIV* as "Людовік чотирнадцятий"). It works with every
 voice, also one recorded in another language: only the timbre comes from the reference clip, never the accent.
 
 - If Mimvox stresses a word wrongly anyway (a rare word, a name, a heteronym whose grammar does not decide it, such
@@ -633,8 +634,8 @@ for the lossy formats (for example MP3 at 320, 192 or 128 kbps). Your last choic
    > Сьогодні вранці я вийшов на прогулянку вздовж річки. Повітря було свіже, а небо ясне, і я подумав, що це
    > слушний момент записати свій голос.
 
-4. Press **Generate**. Numbers, dates and abbreviations are spelled out in Ukrainian before speaking (for example
-   `у 2026 році` is read as "у дві тисячі двадцять шостому році").
+4. Press **Generate**. Numbers, dates, abbreviations and Roman numerals are spelled out in Ukrainian before speaking
+   (for example `у 2026 році` is read as "у дві тисячі двадцять шостому році", `Частина II` as "частина друга").
 5. The result keeps your timbre but has a slight English accent. To remove it, press **Record a Ukrainian reference**
    in the hint. It opens the Voices screen with the per-language panel ready: read the sample text for about 10
    seconds, press **Use for Ukrainian**, come back and generate again.
