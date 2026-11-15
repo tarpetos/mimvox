@@ -522,10 +522,10 @@ in the order quick, standard, pro.
 `{"text","language"?}` -> `{"language":"uk","language_detected":true,"phonemes_total":38,"words","est_minutes",
 "phoneme_coverage":0.0-1.0,"missing_phonemes":["dzʲ",...],"level":"too_short|zero_shot|trainable|great","message",
 "parts":[{"index","title","text","est_seconds"}]}`
-- `language`: the language the text is read in. Omitted, `null` or `"auto"`: detected from the text (Cyrillic script ->
-  `uk`; Latin script -> the language with the most common short words plus language-specific letters such as ä ö ü ß,
-  ą ę ł ś ż, ñ ¿ ¡, è ç œ; `en` when nothing points elsewhere, also for an empty text); `language_detected` tells
-  whether it was detected. Unsupported code: `bad_request`.
+- `language`: the language the text is read in. Omitted, `null` or `"auto"`: detected from the text among the
+  recording languages (the language of the text's script with the most common short words plus language-specific
+  letters such as ї є ґ, ä ö ü ß, ą ę ł ś ż, ñ ¿ ¡, è ç œ; `en` when nothing points elsewhere, also for an empty text);
+  `language_detected` tells whether it was detected. Unsupported code: `bad_request`.
 - Words of another script than the language's (e.g. Latin words in a Ukrainian text) count as words but add no
   phonemes; digits are read one by one in the text's language.
 - Parts are split at paragraph/sentence boundaries to about 60-90 s each. Reading time is estimated from the word count
@@ -1027,6 +1027,9 @@ only shows it.
   `Chapter 1`, `CHAPTER IV`, `Розділ 1`, `Глава 3`, `Part Two`, `Prologue` (at least two of them). Text before the first
   heading becomes its own chapter when it has at least 150 words; a title page is dropped. One chapter when nothing is
   found.
+- `language` with `"auto"`: detected the same way among a wider set: Ukrainian, Russian, Belarusian and Bulgarian
+  for Cyrillic (ї є ґ, ы э ё, ў and ъ tell them apart), and English, German, French, Spanish, Italian, Portuguese,
+  Polish, Czech, Dutch and Romanian for Latin script.
 - `parts` (`autoparts.py`): a suggested split when a chapter is longer than 4,000 words (about 28 minutes), else `null`.
   The app shows it as **Split automatically** and applies it in the draft only (with **Undo split**). Language-independent,
   by the first rule that applies to each long chapter: `headings` (short paragraphs that look like unmarked chapter

@@ -1894,7 +1894,7 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     book = extract(path)
     chapters = book["chapters"]
     if detected:
-        code = lang.detect(_sample(chapters))
+        code = lang.detect(_sample(chapters), among=lang.DETECTABLE)
     language = lang.LANGUAGES.get(code or "")
     wpm = language.wpm if language else WPM
     out_chapters = []

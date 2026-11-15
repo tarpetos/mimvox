@@ -94,33 +94,52 @@ def coverage(text: str, code: str) -> tuple[float, list[str], dict[str, int]]:
 _CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 _LATIN = re.compile(r"[a-zà-ɏ]")
 _TOKEN = re.compile(r"[^\W\d_]+")
-# Letters only one supported Latin-script language uses (é, ó, â and î are shared).
-_MARKS = {"pl": "ąęłśźżćń", "de": "äöüß", "fr": "èêàçœùôûëï", "es": "ñáíú¿¡", "ro": "ășțşţ"}
+CYRILLIC_LANGUAGES = frozenset({"uk", "ru", "be", "bg"})
+# Letters that set a language apart from the others of its script.
+_MARKS = {
+    "uk": "їєґ", "ru": "ыэё", "be": "ў", "bg": "ъ",
+    "pl": "ąęłśźżćń", "de": "äöüß", "fr": "èêàçœùôûëï", "es": "ñáíú¿¡", "ro": "ășțşţ",
+    "it": "ìò", "pt": "ãõ", "cs": "ěřůčšž", "nl": "",
+}
 _STOPWORDS = {
+    "uk": "і й та що не на в у з це як він вона вони ми ви був була було його її але так ще вже чи до від",
+    "ru": "и в не на что я с он как это она они мы вы был была было его её но так ещё уже ли до от",
+    "be": "і ў не на што я з ён як гэта яна яны мы вы быў была было яго але так яшчэ ўжо ці да ад",
+    "bg": "и в не на че аз с той как това тя те ние вие беше бе да от за се ще са съм",
     "en": "the and is are was of to in that it you he she we they this with for not have be on at but what",
     "de": "der die das und ist nicht ich du er sie wir ein eine mit sich auf den dem zu es auch noch wie aber",
     "fr": "le la les et est un une des que qui je tu il elle nous vous pas ce dans pour sur avec au du mais",
     "es": "el la los las y es un una que en por con para no lo se del al como pero muy yo tú está son",
     "pl": "i w nie się na że to jest z do jak ale co tak czy już mi go jego ja ty my wy był być",
     "ro": "și în să nu că este mai din care sunt dar pentru cu pe am ai ce de la o un eu tu îmi sau iar",
+    "it": "il lo la gli le e è un una che di non per con del della sono ma come io tu lui lei noi questo",
+    "pt": "o os as e é um uma que de não para com do da em mas como eu você ele ela nós isso muito",
+    "cs": "a je se na že to v z do jak ale co tak jsem jsi není byl byla být ten ta já ty my",
+    "nl": "de het een en van ik je dat niet is zijn met op te maar wat hij zij wij voor er",
 }
 _STOP = {code: set(words.split()) for code, words in _STOPWORDS.items()}
+# Every language ``detect`` can tell apart; ``LANGUAGES`` (the recording languages) is a subset.
+DETECTABLE = frozenset(_STOP)
 
 
-def detect(text: str) -> str:
-    """Cyrillic -> ``uk``; Latin -> most stopwords plus language-specific letters (3 points each); else ``en``."""
+def detect(text: str, among: frozenset[str] | set[str] | None = None) -> str:
+    """The language among ``among`` (default: the recording languages) that the text's script, common words and
+    language-specific letters (3 points each) fit best; ``en`` when nothing fits."""
+    pool = set(LANGUAGES) if among is None else set(among) & DETECTABLE
     t = normalize(text)
     cyr, lat = len(_CYRILLIC.findall(t)), len(_LATIN.findall(t))
     if cyr == 0 and lat == 0:
         return DEFAULT
-    if cyr > lat:
-        return "uk"
-    scores = {code: 0.0 for code in _STOP}
+    script = CYRILLIC_LANGUAGES if cyr > lat else DETECTABLE - CYRILLIC_LANGUAGES
+    candidates = pool & script
+    if not candidates:
+        return DEFAULT
+    scores = {code: 0.0 for code in candidates}
     for tok in _TOKEN.findall(t):
-        for code, stop in _STOP.items():
-            if tok in stop:
+        for code in candidates:
+            if tok in _STOP[code]:
                 scores[code] += 1.0
-    for code, marks in _MARKS.items():
-        scores[code] += 3.0 * sum(t.count(ch) for ch in marks)
-    best = max(scores, key=lambda c: (scores[c], c == DEFAULT))
-    return best if scores[best] > 0 else DEFAULT
+    for code in candidates:
+        scores[code] += 3.0 * sum(t.count(ch) for ch in _MARKS.get(code, ""))
+    best = max(scores, key=lambda c: (scores[c], c == DEFAULT, c == "uk"))
+    return best if scores[best] > 0 else (DEFAULT if DEFAULT in candidates else best)
