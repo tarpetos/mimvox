@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+* **macOS: the microphone works.** The app never told macOS it uses the microphone, so macOS did not ask for access,
+  left Mimvox out of Privacy & Security > Microphone and handed it silence: recordings came out empty and the input
+  level never moved, whichever microphone was picked. The app now asks for access the first time it listens, and the
+  build signs it (ad hoc when no Apple identity is set) so macOS honours the request. Signed builds also carry the
+  microphone entitlement the hardened runtime needs.
+* **Book languages:** a Russian, Belarusian or Bulgarian book is no longer taken for a Ukrainian one when its
+  language is detected; ї є ґ, ы э ё, ў and ъ tell them apart.
+
 ## 0.4.0
 
 * **Change a book's voice:** a book started with the wrong voice no longer has to be imported again. **Change voice**

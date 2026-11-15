@@ -605,6 +605,7 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
 const NOTES_030: &str = "\n* **Romanian:** Speak, Book and Redub now offer Romanian. Record has Romanian reading texts too (Quick,\n  Standard and Pro), so a voice can be recorded and trained in Romanian from start to finish.\n* **A voice from recordings you already have:** Record's start page now begins with a card for audio or video\n  files of one person: no reading and no preset.\n* **Player:** no Stop button any more (pause, the knob and Close cover it).\n";
 const NOTES_020: &str = "\n* **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage and .deb) and macOS on Apple\n  Silicon (.dmg), built by GitHub Actions for every release.\n* **Updates from inside the app:** a new version shows a banner under the header.\n* **Install only what you need:** the welcome screen lists the parts of the runtime with their sizes.\n";
 
+const NOTES_041: &str = "\n* **macOS: the microphone works.** macOS now asks for microphone access, so recordings are no longer\n  silent.\n* **Book languages:** Russian, Belarusian and Bulgarian books are no longer taken for Ukrainian ones.\n";
 const NOTES_040: &str = "\n* **Change a book's voice:** read every chapter again with another voice, or only the rest; any finished\n  chapter can be read again.\n* **Exact Ukrainian stress:** a new optional part reads every Ukrainian word with dictionary stress.\n* **Faster speech,** Roman numerals read as words, and a book that keeps going when memory runs short.\n";
 const NOTES_031: &str = "\n* **Updates window:** the version next to the app's name in the header opens it. It lists every version from\n  0.2.0 on with its notes. **Check for updates** asks for the newest version at any time.\n* **The update check runs on the welcome screen too.**\n";
 
@@ -615,8 +616,8 @@ fn demo(s: &mut AppState, newer: bool) {
     if newer {
         list.push(Release { version: "0.5.0".into(), date: "2026-12-01".into(), notes: "\n* **Updates window:** every version with its notes; install any of them, older ones too.\n* **Check for updates** whenever you like, from the version in the header.\n".into() });
     }
-    list.push(Release { version: current.into(), date: "2026-11-15".into(), notes: NOTES_040.into() });
-    for (version, date, notes) in [("0.3.1", "2026-11-14", NOTES_031), ("0.3.0", "2026-11-14", NOTES_030), ("0.2.0", "2026-11-13", NOTES_020)] {
+    list.push(Release { version: current.into(), date: "2026-11-15".into(), notes: NOTES_041.into() });
+    for (version, date, notes) in [("0.4.0", "2026-11-15", NOTES_040), ("0.3.1", "2026-11-14", NOTES_031), ("0.3.0", "2026-11-14", NOTES_030), ("0.2.0", "2026-11-13", NOTES_020)] {
         if version != current {
             list.push(Release { version: version.into(), date: date.into(), notes: notes.into() });
         }
