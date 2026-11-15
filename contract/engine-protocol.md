@@ -1078,7 +1078,7 @@ only shows it.
   `cancelled`, and drops the unfinished chapter's progress. Finished chapter files stay; a resume starts that chapter
   again.
 
-### `book.list` / `book.get` / `book.delete` / `book.play`
+### `book.list` / `book.get` / `book.delete` / `book.reread` / `book.play`
 - `book.list {}` -> `{"books":[summary, ...]}`, the most recently changed first. A summary: `{"id","title","source",
   "format","language","voice_id","status":"new|running|paused|done|error|cancelled","interrupted","job","chapters",
   "chapters_done","current","folder","m4b","output_format","words","created","updated","error":{"code","message"}|null,
@@ -1089,6 +1089,11 @@ only shows it.
   chapter's text).
 - `book.delete {"id"}` -> `{}`: forgets the project (its texts and progress); the files in `outputs/books` stay. `busy`
   while it is being read.
+- `book.reread {"id","voice_id"?,"chapters"?:[index, ...]}` -> like `book.get`: reads the listed chapters again (all of
+  them when `chapters` is left out; `[]` for none), with `voice_id` from now on when given (`not_found` for a voice
+  without a reference). Each listed chapter's file, progress and audio are dropped, and so is the M4B. The book is
+  then `paused` (`new` when nothing is made), or stays `done` when every chapter is still made; `book.resume` reads
+  on. `busy` while it is being read.
 - `book.play {"id","index"}` -> `{"path","path_play"}`: a WAV to play a finished chapter with (the chapter file itself
   for WAV, else a decoded copy in `<data>/tmp/play/book-<id>-<NNN>.wav`, gone at the next engine start). `not_found`
   for a chapter that is not finished.

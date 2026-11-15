@@ -744,6 +744,10 @@ after closing the app.
 5. **Pause** stops at once and frees the GPU (Speak, Redub and training wait while a book is read); **Resume**
    continues from the sentence where it stopped. **Cancel** stops and drops the unfinished chapter (finished chapters
    stay; Resume starts that chapter again). **Open folder** shows the files.
+6. While the book is paused or finished, **Change voice** reads it on with another voice: when chapters are already
+   made, choose **Read all chapters again** or keep them and read only the rest with the new voice (an unfinished
+   chapter always starts again, so no chapter mixes two voices). The circular arrow on a finished chapter reads that
+   chapter again. Either way the book goes on reading at once, and the old chapter files are replaced.
 
 If the app closes while a book is being read, the book is shown again the next time, marked *Interrupted*: press
 **Resume**. The **Your books** list on the right keeps every book; click one to open it, or the trash button to remove

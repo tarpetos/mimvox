@@ -70,6 +70,9 @@ pub struct BookState {
     start_req: Option<u64>,
     resume_req: Option<u64>,
     get_req: Option<u64>,
+    reread_req: Option<u64>,
+    /// The "Change voice" menu: `Some(None)` lists the voices, `Some(Some(id))` asks what to read again with it.
+    pub voice_menu: Option<Option<String>>,
     list_req: Option<u64>,
     play_req: Option<(u64, u32)>,
     /// (book id, chapter index) last put in the player.
@@ -105,6 +108,8 @@ impl Default for BookState {
             start_req: None,
             resume_req: None,
             get_req: None,
+            reread_req: None,
+            voice_menu: None,
             list_req: None,
             play_req: None,
             played: None,
@@ -379,6 +384,33 @@ fn resume(s: &mut AppState) {
     }
 }
 
+/// `voice`: read on with another voice; `chapters`: the chapters to read again (all of them when `None`).
+fn reread(s: &mut AppState, voice: Option<String>, chapters: Option<Vec<u32>>) {
+    s.book.voice_menu = None;
+    let Some(id) = s.book.project.as_ref().map(|p| p.id.clone()) else { return };
+    let (m, p) = protocol::book_reread(&id, voice.as_deref(), chapters.as_deref());
+    match shell::request(s, m, p) {
+        Some(r) => s.book.reread_req = Some(r),
+        None => shell::toast(s, Tone::Danger, "Could not reach the engine."),
+    }
+}
+
+fn pick_book_voice(s: &mut AppState, voice: String) {
+    let Some(p) = s.book.project.as_ref() else { return };
+    let started = p.chapter_list.iter().any(|c| c.status == "done");
+    if !started {
+        let partial: Vec<u32> = p.chapter_list.iter().filter(|c| c.status == "partial").map(|c| c.index).collect();
+        reread(s, Some(voice), Some(partial));
+    } else {
+        s.book.voice_menu = Some(Some(voice));
+    }
+}
+
+fn keep_made_chapters(s: &mut AppState, voice: String) {
+    let partial: Vec<u32> = s.book.project.as_ref().map(|p| p.chapter_list.iter().filter(|c| c.status == "partial").map(|c| c.index).collect()).unwrap_or_default();
+    reread(s, Some(voice), Some(partial));
+}
+
 fn stop(s: &mut AppState, how: &'static str) {
     let Some(id) = s.book.project.as_ref().map(|p| p.id.clone()) else { return };
     let method = if how == "pause" { "book.pause" } else { "book.cancel" };
@@ -570,6 +602,16 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
                     p.interrupted = false;
                 }
                 super::speak::job_notes(s, st.accent_note.as_deref(), st.reference_note.as_deref());
+            }
+            Err(e) => shell::toast(s, Tone::Danger, friendly(&e)),
+        }
+    } else if b.reread_req == Some(id) {
+        b.reread_req = None;
+        match result.clone().and_then(protocol::parse_result::<BookSummary>) {
+            Ok(p) => {
+                b.project = Some(p);
+                request_list(s);
+                resume(s);
             }
             Err(e) => shell::toast(s, Tone::Danger, friendly(&e)),
         }
@@ -1060,6 +1102,9 @@ fn project_row(s: &AppState, p: Palette, b: &BookSummary, c: &BookChapterRow) ->
         .child(text(format!("{}", idx + 1)).font(ty::NUM).color(p.text_faint).w(26.0))
         .child(text(c.title.clone()).font(ty::LABEL).color(if c.status == "waiting" { p.text_dim } else { p.text }).truncate().grow(1.0).min_w(0.0))
         .child(text(meta).font(ty::CAPTION).color(p.text_faint));
+    if c.status == "done" && !running && s.book.reread_req.is_none() {
+        r = r.child(small_icon(p, format!("book-redo{idx}"), &icons::REFRESH, "Read this chapter again", move |s| reread(s, None, Some(vec![idx]))));
+    }
     if c.status == "done" {
         let playing = chapter_playing(s, idx);
         let btn = el().key(format!("book-play{idx}")).role("button").label(if playing { "Pause" } else { "Play" }).size(28.0, 28.0).radius(14.0).center()
@@ -1102,10 +1147,14 @@ fn project_bar(s: &AppState, p: Palette, b: &BookSummary) -> El {
                 .child(Button::new("Pause").large().icon(&icons::PAUSE).key("book-pause").disabled(waiting).on_press(|s| stop(s, "pause")).build(p));
         }
         "done" => {
-            r = r.child(Button::new("New book").ghost().key("book-new").on_press(|s| choose_file(s, true)).build(p))
+            r = r.child(Button::new("Change voice").ghost().icon(&icons::USER).key("book-voice").disabled(s.book.reread_req.is_some())
+                .on_press(|s| s.book.voice_menu = Some(None)).build(p))
+                .child(Button::new("New book").ghost().key("book-new").on_press(|s| choose_file(s, true)).build(p))
                 .child(Button::new("Open folder").primary().large().icon(&icons::FOLDER).key("book-open-folder").on_press(open_folder).build(p));
         }
         _ => {
+            r = r.child(Button::new("Change voice").ghost().icon(&icons::USER).key("book-voice").disabled(waiting || s.book.reread_req.is_some())
+                .on_press(|s| s.book.voice_menu = Some(None)).build(p));
             if b.status == "paused" || b.status == "error" {
                 r = r.child(Button::new("Cancel").ghost().key("book-cancel").help("Drop the unfinished chapter; finished chapters are kept").on_press(|s| stop(s, "cancel")).build(p));
             }
@@ -1115,6 +1164,55 @@ fn project_bar(s: &AppState, p: Palette, b: &BookSummary) -> El {
         }
     }
     r
+}
+
+pub fn voice_overlay(s: &AppState, p: Palette) -> Option<El> {
+    let pick = s.book.voice_menu.as_ref()?;
+    let b = s.book.project.as_ref()?;
+    let name = |id: &str| super::voices::voice_name(s, id).unwrap_or(id).to_owned();
+    let body = match pick {
+        None => {
+            let mut list = col().w_full().gap(2.0);
+            for v in &s.shell.voices {
+                let current = b.voice_id.as_deref() == Some(v.id.as_str());
+                let id = v.id.clone();
+                let mut r = row().key(format!("book-voice-{}", v.id)).w_full().h(38.0).px(12.0).gap(10.0).center_y().radius(19.0)
+                    .child(text(v.name.clone()).font(ty::LABEL).color(if current { p.text_dim } else { p.text }).grow(1.0).truncate())
+                    .child(el().w(16.0).children(current.then(|| icon_el(&icons::CHECK, 14.0, p.accent))));
+                if !current {
+                    r = r.role("button").label(format!("Read with {}", v.name)).hover(p.glass_hover).focusable(true)
+                        .on_press(move |s: &mut AppState| pick_book_voice(s, id.clone()));
+                }
+                list = list.child(r);
+            }
+            col().w_full().gap(6.0)
+                .child(text("Read this book with").font(ty::LABEL).color(p.text).px(12.0).pt(4.0))
+                .child(list)
+        }
+        Some(id) => {
+            let (new, old) = (name(id), b.voice_id.as_deref().map(name).unwrap_or_else(|| "another voice".to_owned()));
+            let (all, keep) = (id.clone(), id.clone());
+            col().w_full().gap(10.0).padding(6.0)
+                .child(text(format!("Read with {new}")).font(ty::LABEL).color(p.text))
+                .child(text(format!("{} of {} chapters are made with {old}.", b.chapters_done, b.chapters)).font(ty::CAPTION).color(p.text_dim).wrap())
+                .child(Button::new(format!("Read all {} chapters again", b.chapters)).primary().key("book-voice-all")
+                    .on_press(move |s| reread(s, Some(all.clone()), None)).build(p))
+                .child(Button::new(format!("Keep them, read the rest with {new}")).ghost().key("book-voice-keep")
+                    .on_press(move |s| keep_made_chapters(s, keep.clone())).build(p))
+                .child(Button::new("Back").ghost().small().key("book-voice-back").on_press(|s| s.book.voice_menu = Some(None)).build(p))
+        }
+    };
+    let scrim = el().key("book-voice-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.book.voice_menu = None);
+    let panel = col().key("book-voice-menu").w(300.0).padding(8.0).radius(radius::PANEL + 4.0)
+        .fill(rune::oklcha(0.2, 0.03, 255.0, 0.88))
+        .gradient(p.glass_top, p.glass_bottom)
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
+        .shadow(18.0, 50.0, p.shadow)
+        .backdrop_blur(28.0)
+        .anchored("book-voice", rune::Side::Top, rune::Align::Start, 8.0)
+        .transition(rune::Transition::scale(0.98))
+        .child(body);
+    Some(el().key("book-voice-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(panel))
 }
 
 pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {

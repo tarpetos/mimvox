@@ -497,6 +497,62 @@ async def book_delete(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+@method("book.reread")
+async def book_reread(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
+    data = config.data_dir(ctx)
+    bid = str(params.get("id") or "")
+    if bid in _RUNNING:
+        raise EngineError("busy", "this book is being read; pause it first")
+    book, state = await aio.run_io(_load, data, bid)
+    n = len(book["chapters"])
+    raw = params.get("chapters")
+    if raw is None:
+        chapters = list(range(n))
+    elif isinstance(raw, list) and all(isinstance(k, int) and not isinstance(k, bool) and 0 <= k < n for k in raw):
+        chapters = sorted(set(raw))
+    else:
+        raise EngineError("bad_request", f"'chapters' must be chapter indexes from 0 to {n - 1}")
+    voice_id = params.get("voice_id")
+    if voice_id is not None:
+        if not isinstance(voice_id, str) or not voice_id:
+            raise EngineError("bad_request", "'voice_id' must be a voice id")
+        await aio.run_io(voices.read_meta, data, voice_id)
+        if not await aio.run_io(os.path.isfile, data.reference(voice_id)):
+            raise EngineError("not_found", "this voice has no recording yet (reference.wav is missing)")
+    await aio.run_io(_reread, data, bid, book, state, voice_id, chapters)
+    return {**summary(data, book, state), "settings": book.get("settings"), "chapter_list": _chapter_rows(book, state)}
+
+
+def _reread(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[str, Any], voice_id: str | None,
+            chapters: list[int]) -> None:
+    with _LOCK:
+        if voice_id is not None and voice_id != book["settings"].get("voice_id"):
+            book["settings"]["voice_id"] = voice_id
+            _write_json(os.path.join(book_dir(data, bid), "book.json"), book)
+        for k in chapters:
+            cs = state["chapters"][k]
+            state["audio_s"] = max(0.0, float(state.get("audio_s") or 0.0) - float(cs.get("audio_s") or 0.0))
+            state["elapsed_s"] = max(0.0, float(state.get("elapsed_s") or 0.0) - float(cs.get("elapsed_s") or 0.0))
+            old = [cs.get("path"), _pcm_path(data, bid, k), _segs_path(data, bid, k),
+                   os.path.join(book_dir(data, bid), "stats", f"{k + 1:03d}.json")]
+            for path in filter(None, old):
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+            cs.clear()
+            cs.update(_new_chapter_state())
+        if chapters and state.get("m4b"):
+            with contextlib.suppress(OSError):
+                os.remove(state["m4b"])
+            state["m4b"] = None
+        chs = state["chapters"]
+        if not all(cs.get("status") == "done" for cs in chs):
+            started = any(cs.get("status") in ("done", "partial") for cs in chs)
+            state["status"] = "paused" if started else "new"
+            state["error"] = None
+        state["current"] = next((k for k, cs in enumerate(chs) if cs.get("status") != "done"), 0)
+        _save_state(data, bid, state)
+
+
 @method("book.play")
 async def book_play(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     """The app plays WAV only: another format is decoded to ``<data>/tmp/play``."""

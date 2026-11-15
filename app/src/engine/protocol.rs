@@ -1252,6 +1252,17 @@ pub fn book_id_request(method: &'static str, id: &str) -> Request {
     (method, json!({ "id": id }))
 }
 
+pub fn book_reread(id: &str, voice_id: Option<&str>, chapters: Option<&[u32]>) -> Request {
+    let mut params = json!({ "id": id });
+    if let Some(v) = voice_id {
+        params["voice_id"] = json!(v);
+    }
+    if let Some(c) = chapters {
+        params["chapters"] = json!(c);
+    }
+    ("book.reread", params)
+}
+
 pub fn book_play(id: &str, index: u32) -> Request {
     ("book.play", json!({ "id": id, "index": index }))
 }

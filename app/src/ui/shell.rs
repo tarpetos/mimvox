@@ -595,6 +595,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     overlays.extend(super::update::overlay(s, &p));
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
+    overlays.extend(super::book::voice_overlay(s, p));
     overlays.extend(super::formats::output_overlay(s, p));
     overlays.extend(super::redub::fold_overlay(s, p));
     overlays.extend(super::refclip::more_overlay(s, &p));
