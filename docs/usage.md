@@ -738,7 +738,8 @@ after closing the app.
 4. Press **Read the book**. The panel shows *Chapter k of n*, the percentage, how much audio is made out of the
    expected total, when the whole book will be ready, and the speed (for example *20× faster than real time*: an hour
    of audio takes three minutes). Finished chapters show their length, how long they took to make and a play button
-   (the [player bar](#the-player-bar)); the one being read shows *part i of n*.
+   (the [player bar](#the-player-bar)); when a chapter ends, the next one plays if it is made (not with loop on). The
+   one being read shows *part i of n*.
 5. **Pause** stops at once and frees the GPU (Speak, Redub and training wait while a book is read); **Resume**
    continues from the sentence where it stopped. **Cancel** stops and drops the unfinished chapter (finished chapters
    stay; Resume starts that chapter again). **Open folder** shows the files.

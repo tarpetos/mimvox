@@ -462,6 +462,7 @@ fn on_ended(s: &mut AppState, track: u64) -> bool {
     let Some(n) = s.playbar.now.as_mut().filter(|n| n.track == track) else { return false };
     n.status = Status::Ended;
     n.pos_s = n.len_s;
+    super::book::on_track_ended(s);
     true
 }
 

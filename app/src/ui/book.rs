@@ -72,6 +72,8 @@ pub struct BookState {
     get_req: Option<u64>,
     list_req: Option<u64>,
     play_req: Option<(u64, u32)>,
+    /// (book id, chapter index) last put in the player.
+    played: Option<(String, u32)>,
     listed: bool,
     /// The first list after the engine started may bring back an unfinished book.
     first_list: bool,
@@ -105,6 +107,7 @@ impl Default for BookState {
             get_req: None,
             list_req: None,
             play_req: None,
+            played: None,
             listed: false,
             first_list: false,
             recent: Vec::new(),
@@ -464,7 +467,25 @@ fn chapter_caption(index: u32) -> String {
 fn toggle_play(s: &mut AppState, path: &Path, title: String, index: u32) {
     if let Err(e) = playbar::toggle(s, path, title, chapter_caption(index), playbar::Source::Speak) {
         shell::toast(s, Tone::Danger, e);
+        return;
     }
+    s.book.played = s.book.project.as_ref().map(|p| (p.id.clone(), index));
+}
+
+/// The player finished a track: a book chapter goes on to the next one when it is made.
+pub fn on_track_ended(s: &mut AppState) {
+    if let Some(next) = next_chapter_to_play(s) {
+        play_chapter(s, next);
+    }
+}
+
+fn next_chapter_to_play(s: &AppState) -> Option<u32> {
+    let (id, index) = s.book.played.as_ref()?;
+    if s.playbar.looped || !s.playbar.now.as_ref().is_some_and(|n| n.what == chapter_caption(*index)) {
+        return None;
+    }
+    let p = s.book.project.as_ref().filter(|p| &p.id == id)?;
+    p.chapter_list.iter().any(|c| c.index == index + 1 && c.status == "done").then_some(index + 1)
 }
 
 fn chapter_playing(s: &AppState, index: u32) -> bool {
@@ -1364,6 +1385,40 @@ mod draft_tests {
         for other in [renamed, unticked, joined] {
             assert_ne!(fingerprint(&other), fingerprint(&d));
         }
+    }
+}
+
+#[cfg(test)]
+mod play_next_tests {
+    use super::*;
+
+    fn ended(index: u32) -> AppState {
+        let mut s = AppState::default();
+        scene_project(&mut s, "running", 3, (37, 112));
+        let id = s.book.project.as_ref().unwrap().id.clone();
+        s.book.played = Some((id, index));
+        playbar::scene_now(&mut s, "/tmp/c.wav", "Chapter", &chapter_caption(index), playbar::Source::Speak, playbar::Status::Ended, 60.0, 60.0);
+        s
+    }
+
+    #[test]
+    fn goes_on_to_a_made_chapter() {
+        assert_eq!(next_chapter_to_play(&ended(1)), Some(2));
+    }
+
+    #[test]
+    fn stops_before_a_chapter_not_made_yet() {
+        assert_eq!(next_chapter_to_play(&ended(2)), None);
+    }
+
+    #[test]
+    fn stops_when_looping_or_another_track_plays() {
+        let mut s = ended(0);
+        s.playbar.looped = true;
+        assert_eq!(next_chapter_to_play(&s), None);
+        let mut s = ended(0);
+        s.book.played = Some(("other-book".into(), 0));
+        assert_eq!(next_chapter_to_play(&s), None);
     }
 }
 
