@@ -734,7 +734,8 @@ after closing the app.
 3. Set the voice, language and Style as for Speak. **Expressiveness** has its own value in Book mode, **0.60** by
    default: a steadier narrator for long listening. In the **Output** panel pick the format ("Save as"), and tick
    **Also make one M4B audiobook with chapter marks** if you want a single file for an audiobook player. **Read each
-   chapter's title first** reads the title, then pauses, before the text.
+   chapter's title first** reads the title, then pauses, before the text; a chapter whose text already opens with its
+   title (within its first few short lines) is read as it is, so the heading is not heard twice.
 4. Press **Read the book**. The panel shows *Chapter k of n*, the percentage, how much audio is made out of the
    expected total, when the whole book will be ready, and the speed (for example *20× faster than real time*: an hour
    of audio takes three minutes). Finished chapters show their length, how long they took to make and a play button
