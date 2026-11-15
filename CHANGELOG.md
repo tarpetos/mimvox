@@ -1,30 +1,55 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
-* **Each book shows its voice:** the book list names the voice each book was read with (or *voice deleted*), the
-  active voice's books first; on start the active voice's unfinished book opens.
-* **A book draft survives a restart:** an opened file with its chapters as you left them (split, joined, renamed,
-  ticked) comes back when you open the app again, until you read it or close it.
-* **Refresh from disk:** a round ↻ button on Speak's and Redub's Results and on the voices list (the Voices screen
-  and the voice menu) reads the folder again, so what you copied in, renamed or deleted outside the app shows or
-  leaves at once. Audio and video files you put in the outputs folder yourself are listed too, by file name: audio
-  with Speak's results, a video on its own with Redub's.
+* **Change a book's voice:** a book started with the wrong voice no longer has to be imported again. **Change voice**
+  in the bar of a paused or finished book picks another one: read every chapter again with it, or keep the chapters
+  made so far and read only the rest with it (a chapter half read starts again, so no chapter mixes two voices). The
+  circular arrow on a finished chapter reads just that one again. Either way the book goes on at once, and the old
+  files are replaced.
 * **Exact Ukrainian stress (new optional part, "Ukrainian speech", 1.5 GB):** Ukrainian in Speak, Book and Redub is
   read from phonemes in which the stress is written, so every word is spoken with the stress Mimvox chose, not a guess
   of the speech model. The stress comes from a Ukrainian stress dictionary, with the grammar of the sentence choosing
   between the readings of a word (ру́ки / руки́), and a small model for words the dictionary lacks; numbers, dates and
   abbreviations are spelled out with their cases first. A **+** before a vowel still overrides one word. It works with
-  every voice (only the timbre comes from the reference clip) and is about ten times faster than the speech model, but
+  every voice (only the timbre comes from the reference clip) and is about twenty times faster than real time, but
   reads evenly, like a narrator: Expressiveness and Quality do not apply to it. Install it in setup or with **Install**
   in Speak's Style panel when the language is Ukrainian; without it, Ukrainian is spoken as before. Built on HolosTTS
   (MIT) and patriotyk's ukrainian-word-stress with Stanza.
+* **Faster speech:** the speech model's decoding loop was rewritten (same model, steps and sampling): a long text is
+  made about 1.4 times faster, and Speak's first sound comes about a third sooner. Measured on an RTX 4070; the
+  numbers are in docs/performance.md.
+* **Roman numerals are read as words,** in every language and with every speech model: *Розділ XII* is "розділ
+  дванадцятий", *Частина II* "частина друга", *Chapter IV* "Chapter four", *Людовік XIV* "Людовік чотирнадцятий",
+  *Henry VIII* "Henry the Eighth". Cyrillic letters typed in place of Latin ones (*РОЗДІЛ І*) count too.
 * **Split a book automatically:** a file without chapter marks (a whole novella in one two-hour chapter) or with very
   long chapters gets **Split automatically** above its chapter list, and **Undo split** puts the file's chapters back.
   It works in every language: chapter titles that were not marked as headings (*Chapter 4*, *XII*, a line in capitals)
   become chapters; scene breaks (`* * *`) are grouped into parts of about 12 minutes; otherwise even parts of about 12
   minutes are cut between paragraphs where the story moves on, never inside a sentence. Parts are named *Частина 1*,
   *Part 1*... in the book's language.
+* **A book draft survives a restart:** an opened file with its chapters as you left them (split, joined, renamed,
+  ticked) comes back when you open the app again, until you read it or close it.
+* **Each book shows its voice:** the book list names the voice each book was read with (or *voice deleted*), the
+  active voice's books first; on start the active voice's unfinished book opens.
+* **Listening to a book:** when a chapter ends in the player, the next one plays if it is made (not with loop on).
+* **A book keeps going when memory runs short:** a part that fails for lack of RAM or video memory no longer stops the
+  book. It waits (20 s, then 1, 3 and 5 minutes), frees what it can and reads on from the same sentence, showing
+  *Waiting for free memory…* meanwhile; only a shortage that lasts stops it.
+* **Clearer book progress:** the line under the book tells the audio's length from the time left to make it ("2 min of
+  about 13 h of audio · ready in about 43 min · 20× faster than real time"), and a finished chapter shows how long it
+  took to make. The M4B at the end shows its own percentage and time left (joining a 14-hour book takes a few
+  minutes), and the book list shows the open book's live state.
+* **A chapter's heading is not read twice:** with **Read each chapter's title first** on, a chapter whose text already
+  opens with its heading (often after the book's title and author) is read as written.
+* **Refresh from disk:** a round ↻ button on Speak's and Redub's Results and on the voices list (the Voices screen
+  and the voice menu) reads the folder again, so what you copied in, renamed or deleted outside the app shows or
+  leaves at once. Audio and video files you put in the outputs folder yourself are listed too, by file name: audio
+  with Speak's results, a video on its own with Redub's.
+* **Fixes:** the voice picked in the header is remembered after a restart (it used to fall back to the first trained
+  voice). Enter confirms one-line fields: a chapter's new title, a voice's name, the language search (it did nothing).
+  The chapter title field also closes on a click elsewhere. The header's pills no longer run into the window buttons
+  when the window is narrow or shrinks.
 
 ## 0.3.1
 
