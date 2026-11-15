@@ -90,6 +90,7 @@ pub struct BookState {
     pub(crate) settings_dirty: bool,
     renaming: Option<(usize, TextEdit)>,
     m4b_making: bool,
+    m4b_progress: (f32, Option<f32>),
     memory_wait: Option<f32>,
 }
 
@@ -125,6 +126,7 @@ impl Default for BookState {
             settings_dirty: false,
             renaming: None,
             m4b_making: false,
+            m4b_progress: (0.0, None),
             memory_wait: None,
         }
     }
@@ -692,6 +694,7 @@ fn on_event(s: &mut AppState, name: &str, data: &Value) {
                 }
             }
             s.book.m4b_stage(pr.stage.as_deref() == Some("m4b"));
+            s.book.m4b_progress = (pr.stage_pct.unwrap_or(0.0), pr.stage_eta_s);
             s.book.memory_wait = if pr.stage.as_deref() == Some("memory") { pr.retry_in_s } else { None };
         }
         "book.chapter" if shown => {
@@ -1044,19 +1047,25 @@ fn project_view(s: &AppState, p: Palette, b: &BookSummary) -> El {
     let t = &b.totals;
     let k = (b.current + 1).min(b.chapters.max(1));
     let label = match b.status.as_str() {
-        "running" if s.book.m4b_making => "Making the M4B…".to_owned(),
+        "running" if s.book.m4b_making => format!("Making the M4B… {:.0}%", s.book.m4b_progress.0),
         "running" => format!("Chapter {k} of {} · {:.0}%", b.chapters, t.percent),
         "done" => format!("All {} chapters read", b.chapters),
         _ => format!("{} of {} chapters done · {:.0}%", b.chapters_done, b.chapters, t.percent),
     };
-    let mut facts = vec![match t.est_audio_s.filter(|_| b.status != "done") {
+    let making = running && s.book.m4b_making;
+    let mut facts = vec![match t.est_audio_s.filter(|_| b.status != "done" && !making) {
         Some(est) => format!("{} of about {} of audio", fmt_len(t.audio_s), fmt_len(est)),
         None => format!("{} of audio", fmt_len(t.audio_s)),
     }];
-    if let Some(eta) = t.eta_s.filter(|_| b.status != "done") {
+    if making {
+        facts.push(match s.book.m4b_progress.1 {
+            Some(eta) => format!("about {} left", fmt_len(eta)),
+            None => "starting…".to_owned(),
+        });
+    } else if let Some(eta) = t.eta_s.filter(|_| b.status != "done") {
         facts.push(format!("ready in about {}", fmt_len(eta)));
     }
-    if let Some(r) = t.rtf.filter(|r| *r > 0.0) {
+    if let Some(r) = t.rtf.filter(|r| *r > 0.0 && !making) {
         facts.push(if r < 1.0 { format!("{:.0}× faster than real time", 1.0 / r) } else { format!("{r:.1}× slower than real time") });
     }
     if b.status == "done" && t.elapsed_s > 0.0 {
@@ -1066,7 +1075,7 @@ fn project_view(s: &AppState, p: Palette, b: &BookSummary) -> El {
         .child(row().w_full().center_y().justify_between().gap(10.0)
             .child(text(label).font(ty::LABEL).color(p.text))
             .child(text(facts.join(" · ")).font(ty::NUM).color(p.text_dim)))
-        .child(progress_bar(p, Some((t.percent / 100.0).max(if running { 0.01 } else { 0.0 }))));
+        .child(progress_bar(p, Some(if making { s.book.m4b_progress.0 / 100.0 } else { (t.percent / 100.0).max(if running { 0.01 } else { 0.0 }) })));
     let list = col().w_full().gap(2.0).children(b.chapter_list.iter().map(|c| project_row(s, p, b, c)));
     let mut c = col().key("book-project").w_full().grow(1.0).min_h(0.0).gap(12.0)
         .child(file_card(p, &b.title, sub.join(" · "), right))
@@ -1124,6 +1133,10 @@ fn project_bar(s: &AppState, p: Palette, b: &BookSummary) -> El {
         "running" if s.book.stopping.is_none() && s.book.memory_wait.is_some() => (
             "Waiting for free memory…".to_owned(),
             format!("The computer ran short of memory. Reading goes on from the same sentence in {}; closing other programs helps.", fmt_len(s.book.memory_wait.unwrap_or(0.0))),
+        ),
+        "running" if s.book.stopping.is_none() && s.book.m4b_making => (
+            "Making the M4B…".to_owned(),
+            "Every chapter is read and its file is in the book's folder. Now all of them are joined into one audiobook file with chapter marks.".to_owned(),
         ),
         "running" => (s.book.stopping.unwrap_or("Reading…").to_owned(), "Pause any time: it continues from the same sentence. Speak, Redub and training wait until the book is paused or done.".to_owned()),
         "done" => ("Finished".to_owned(), match &b.m4b {
@@ -1232,7 +1245,7 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         .child(el().key("book-opt-titles").w_full().child(titles));
     let mut list = col().w_full().gap(6.0);
     let shown = s.book.project.as_ref().map(|b| b.id.as_str());
-    let mut books: Vec<&BookSummary> = s.book.recent.iter().collect();
+    let mut books: Vec<&BookSummary> = s.book.recent.iter().map(|b| s.book.project.as_ref().filter(|p| p.id == b.id).unwrap_or(b)).collect();
     books.sort_by_key(|b| !of_active_voice(s, b));
     for b in books.iter().copied().take(12) {
         let id = b.id.clone();
@@ -1401,6 +1414,15 @@ pub fn scene_generating(s: &mut AppState) {
     scene_project(s, "running", 3, (37, 112));
 }
 
+pub fn scene_m4b(s: &mut AppState) {
+    scene_project(s, "running", 9, (0, 0));
+    s.book.m4b_making = true;
+    s.book.m4b_progress = (37.0, Some(130.0));
+    if let Some(r) = s.book.recent.first_mut() {
+        r.status = "paused".into();
+    }
+}
+
 pub fn scene_memory_wait(s: &mut AppState) {
     scene_project(s, "running", 3, (37, 112));
     s.book.memory_wait = Some(60.0);
@@ -1434,6 +1456,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("book_imported", scene_imported),
         ("book_generating", scene_generating),
         ("book_memory_wait", scene_memory_wait),
+        ("book_m4b", scene_m4b),
         ("book_paused", scene_paused),
         ("book_interrupted", scene_interrupted),
         ("book_finished", scene_finished),

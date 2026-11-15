@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 import unicodedata
@@ -737,7 +738,8 @@ def _ffmeta(s: str) -> str:
     return re.sub(r"([=;#\\\n])", r"\\\1", s)
 
 
-def _make_m4b(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[str, Any]) -> str | None:
+def _make_m4b(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[str, Any],
+              on_progress: Any = None, stop: threading.Event | None = None) -> str | None:
     exe = media.ffmpeg_path()
     if not exe:
         log.info("book %s: no ffmpeg, no M4B", bid)
@@ -768,12 +770,13 @@ def _make_m4b(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[
     part = f"{dest}.part.m4b"
     cmd = [exe, "-nostdin", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-i", meta,
            "-map", "0:a", "-map_metadata", "1", "-map_chapters", "1", "-c:a", "aac", "-b:a", M4B_BITRATE, "-ac", "1",
-           "-movflags", "+faststart", "-f", "mp4", part]
-    res = media._run(cmd, timeout=6 * 3600.0)
-    if res.returncode != 0 or not os.path.isfile(part):
+           "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", "-f", "mp4", part]
+    code, err = _ffmpeg_with_progress(cmd, t / 1000.0, on_progress, stop)
+    if code != 0 or not os.path.isfile(part):
         with contextlib.suppress(OSError):
             os.remove(part)
-        log.warning("book %s: the M4B failed: %s", bid, media._tail(res.stderr))
+        if not (stop and stop.is_set()):
+            log.warning("book %s: the M4B failed: %s", bid, media._tail(err))
         return None
     os.replace(part, dest)
     for p in (lst, meta):
@@ -782,6 +785,35 @@ def _make_m4b(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[
     state["m4b"] = dest
     _save_state(data, bid, state)
     return dest
+
+
+def _ffmpeg_with_progress(cmd: list[str], total_s: float, on_progress: Any,
+                          stop: threading.Event | None) -> tuple[int, bytes]:
+    """Runs ffmpeg with ``-progress pipe:1``: ``on_progress(pct, eta_s)`` about once a second; ``stop`` kills it."""
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=media._FLAGS)
+    except OSError as exc:
+        return -1, str(exc).encode()
+    err: list[bytes] = []
+    reader = threading.Thread(target=lambda: err.append(proc.stderr.read()), daemon=True)  # type: ignore[union-attr]
+    reader.start()
+    t0, last = time.time(), 0.0
+    for line in proc.stdout:  # type: ignore[union-attr]
+        if stop is not None and stop.is_set():
+            proc.kill()
+            break
+        key, _, value = line.decode("ascii", errors="replace").strip().partition("=")
+        if key != "out_time_us" or not value.isdigit() or on_progress is None or total_s <= 0:
+            continue
+        done = int(value) / 1e6
+        now = time.time()
+        if done > 0 and now - last >= 1.0:
+            last = now
+            on_progress(min(100.0, 100.0 * done / total_s), (now - t0) * max(0.0, total_s - done) / done)
+    proc.wait()
+    reader.join(timeout=5)
+    return proc.returncode, b"".join(err)
 
 
 def _progress(book: dict[str, Any], state: dict[str, Any], k: int) -> dict[str, Any]:
@@ -952,8 +984,19 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
                 last_at[0] = time.time()
         m4b = None
         if book["settings"].get("m4b"):
-            ctx.emit("book.progress", {**_progress(book, state, len(book["chapters"]) - 1), "stage": "m4b"}, job=job)
-            m4b = await aio.run_io(_make_m4b, data, bid, book, state)
+            last_k = len(book["chapters"]) - 1
+            ctx.emit("book.progress", {**_progress(book, state, last_k), "stage": "m4b", "stage_pct": 0.0}, job=job)
+
+            def m4b_progress(pct: float, eta_s: float) -> None:
+                ctx.emit("book.progress", {**_progress(book, state, last_k), "stage": "m4b", "stage_pct": round(pct, 1),
+                                           "stage_eta_s": round(eta_s)}, job=job)
+
+            stop_m4b = threading.Event()
+            try:
+                m4b = await aio.run_io(_make_m4b, data, bid, book, state, m4b_progress, stop_m4b)
+            except asyncio.CancelledError:
+                stop_m4b.set()
+                raise
         state["status"] = "done"
         await aio.run_io(_save_state, data, bid, state)
         await aio.run_io(shutil.rmtree, _work(data, bid), ignore_errors=True)

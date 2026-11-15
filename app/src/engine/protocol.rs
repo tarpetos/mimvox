@@ -1175,6 +1175,11 @@ pub struct BookProgress {
     pub stage: Option<String>,
     #[serde(default)]
     pub retry_in_s: Option<f32>,
+    /// Progress of the M4B: percent and seconds left.
+    #[serde(default)]
+    pub stage_pct: Option<f32>,
+    #[serde(default)]
+    pub stage_eta_s: Option<f32>,
     #[serde(flatten)]
     pub totals: BookTotals,
 }
