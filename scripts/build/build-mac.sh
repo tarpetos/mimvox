@@ -124,16 +124,18 @@ fi
 
 # Optional signing: cargo-packager takes the identity from the config only, so write a throw-away copy of
 # Packager.toml (it must sit in app/ because paths in it are relative to its folder).
-CONFIG="Packager.toml"
+# Without an identity the app is signed ad hoc ("-"): an unsigned (linker-signed) app does not bind its Info.plist or
+# entitlements, and macOS then never offers it microphone access, so recordings come out silent.
+CONFIG="Packager.signed.tmp.toml"
+trap 'rm -f "$APP_DIR/Packager.signed.tmp.toml"' EXIT
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
-    CONFIG="Packager.signed.tmp.toml"
-    trap 'rm -f "$APP_DIR/Packager.signed.tmp.toml"' EXIT
     escaped="${APPLE_SIGNING_IDENTITY//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
     awk -v id="$escaped" '{print} /^\[macos\]/ {print "signing-identity = \"" id "\""}' Packager.toml > "$CONFIG"
     echo "[build-mac] Signing with the identity from APPLE_SIGNING_IDENTITY." >&2
 else
-    echo "[build-mac] APPLE_SIGNING_IDENTITY not set: building an unsigned app (fine for personal use)." >&2
+    awk '{print} /^\[macos\]/ {print "signing-identity = \"-\""}' Packager.toml > "$CONFIG"
+    echo "[build-mac] APPLE_SIGNING_IDENTITY not set: signing ad hoc (fine for personal use)." >&2
 fi
 
 mkdir -p "$DIST_DIR"

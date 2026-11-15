@@ -90,6 +90,10 @@ depends = [
 
 [macos]
 minimum-system-version = "13.0"
+# Merged into the generated Info.plist: NSMicrophoneUsageDescription, without which macOS gives the app silent input.
+info-plist-path = "Info.plist"
+# Hardened-runtime entitlements for signed builds (microphone access).
+entitlements = "entitlements.plist"
 # Signing is opt-in: scripts/build/build-mac.sh injects `signing-identity` from APPLE_SIGNING_IDENTITY when set.
 
 [nsis]

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by cargo-packager into the generated Info.plist (Packager.toml [macos] info-plist-path). -->
+<plist version="1.0">
+<dict>
+    <!-- Without this key macOS never asks for microphone access and hands the app silent buffers. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Mimvox records your voice from the microphone you pick to build your voice model.</string>
+</dict>
+</plist>
