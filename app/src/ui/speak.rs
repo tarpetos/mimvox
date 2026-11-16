@@ -661,7 +661,7 @@ fn text_panel(s: &AppState, p: Palette) -> El {
             s.speak.text.focused = true;
         })
     });
-    let head = row().key("speak-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y()
+    let head = row().key("speak-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y().instant_changes()
         .children((!meta.is_empty()).then(|| text(meta).font(ty::CAPTION).color(p.text_faint)))
         .children(clear)
         .child(open)
