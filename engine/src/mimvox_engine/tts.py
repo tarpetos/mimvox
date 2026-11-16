@@ -419,7 +419,10 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     # native-us: RVC for a trained voice, else the zero-shot converter; without either the voice's own reference
     choice = accent.choose(requested, native_voice, lang, has_pth, index_rate, zs_worker is not None)
     zs = zero_shot(ctx, choice, zs_worker, ref, quality)
-    if zs is None and not use_rvc:
+    keep_voice = params.get("keep_voice", True)
+    if not isinstance(keep_voice, bool):
+        raise EngineError("bad_request", "'keep_voice' must be true or false")
+    if zs is None and not use_rvc and keep_voice:
         zs = await holos_timbre(ctx, backend, data, ref, quality)
     # The clip that will speak and its real language (a foreign one carries its accent into `lang`).
     ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")

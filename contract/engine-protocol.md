@@ -802,7 +802,9 @@ for OmniVoice. Measured on an RTX 4070: about 0.1 s per second of speech (10x Om
   0.76, against 0.94 for OmniVoice from the same clip. A trained voice goes through RVC as always; for a voice that is
   not trained, every HolosTTS segment goes through the zero-shot converter (Seed-VC, the `native_accent` component)
   toward the reference clip, which brings it to 0.88. `quality` sets the converter's steps (12 Best, 8 Fast). Without
-  the converter the segment is used as HolosTTS made it. The conversion costs about as much time as OmniVoice itself.
+  the converter the segment is used as HolosTTS made it. The conversion costs about as much time as OmniVoice itself
+  (about 4-5x real time instead of about 20x), so it depends on `keep_voice`: default `true` in `tts.generate`,
+  `false` in `book.start` (a book stores it with its settings).
 - **`exact_stress`** (`tts.generate`, `book.start`; default `true`): `false` speaks Ukrainian with OmniVoice even when
   HolosTTS is installed. A book keeps the value it started with.
 

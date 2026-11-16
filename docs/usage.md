@@ -563,8 +563,9 @@ model trained for that. Numbers, dates, abbreviations and Roman numerals are spe
 voice, also one recorded in another language: only the timbre comes from the reference clip, never the accent.
 
 HolosTTS on its own keeps less of a voice than the main speech model, so a voice that is not trained is run through the
-native-accent converter afterwards to bring its timbre back (a trained voice uses its own model, as always). That makes
-it about as fast as the main speech model. **Exact stress (HolosTTS)** in the Style panel turns it off for what you
+native-accent converter afterwards in Speak to bring its timbre back (a trained voice uses its own model, as always).
+That makes it about as fast as the main speech model. A book skips it by default and reads Ukrainian at about 20× real
+time; **Closer voice with exact stress** under Output turns the converter on for a book (about four times slower). **Exact stress (HolosTTS)** in the Style panel turns it off for what you
 make next: Ukrainian is then read by the main speech model, which sounds closer to the voice but guesses the stress (a
 **+** fixes a word). A book keeps the setting it started with.
 

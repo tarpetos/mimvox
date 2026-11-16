@@ -269,14 +269,16 @@ def _settings(params: dict[str, Any]) -> dict[str, Any]:
     lang, _ = tts.speech_language(params)
     m4b = params.get("m4b", False)
     titles = params.get("read_titles", True)
-    if not isinstance(m4b, bool) or not isinstance(titles, bool):
-        raise EngineError("bad_request", "'m4b' and 'read_titles' must be true or false")
+    keep_voice = params.get("keep_voice", False)
+    if not isinstance(m4b, bool) or not isinstance(titles, bool) or not isinstance(keep_voice, bool):
+        raise EngineError("bad_request", "'m4b', 'read_titles' and 'keep_voice' must be true or false")
     return {"voice_id": voice_id, "language": lang, "exact_stress": params.get("exact_stress", True),
             "expressiveness": tts._num(params, "expressiveness", narration.EXPRESSIVENESS, 0.1, 1.5),
             "voice_match": tts._num(params, "voice_match", 1.0, 0.0, 1.0),
             "speed": tts._num(params, "speed", 1.0, tts.SPEED_MIN, tts.SPEED_MAX), "quality": quality,
             "accent": accent.parse(params), "native_voice": accent.parse_voice(params),
-            "output_format": params.get("output_format") or "wav", "m4b": m4b, "read_titles": titles}
+            "output_format": params.get("output_format") or "wav", "m4b": m4b, "read_titles": titles,
+            "keep_voice": keep_voice}
 
 
 async def _voice(ctx: Context, data: config.DataDir, st: dict[str, Any]) -> _Voice:
@@ -301,7 +303,7 @@ async def _voice(ctx: Context, data: config.DataDir, st: dict[str, Any]) -> _Voi
     choice = accent.choose(requested, st.get("native_voice") or "auto", lang, has_pth, voice_match,
                            zs_worker is not None)
     zs = tts.zero_shot(ctx, choice, zs_worker, ref, st["quality"])
-    if zs is None and not use_rvc:
+    if zs is None and not use_rvc and st.get("keep_voice", False):
         zs = await tts.holos_timbre(ctx, backend, data, ref, st["quality"])
     ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")
     return _Voice(backend, lang, ref, pth, idx, rvc_rate, worker, choice, zs, voice_match,

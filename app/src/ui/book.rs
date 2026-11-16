@@ -83,6 +83,8 @@ pub struct BookState {
     pub recent: Vec<BookSummary>,
     pub m4b: bool,
     pub read_titles: bool,
+    /// Ukrainian with exact stress through the voice converter: closer to the voice, about four times slower.
+    pub keep_voice: bool,
     pub expressiveness: f32,
     settings_loaded: bool,
     draft_restored: bool,
@@ -119,6 +121,7 @@ impl Default for BookState {
             recent: Vec::new(),
             m4b: false,
             read_titles: true,
+            keep_voice: false,
             expressiveness: EXPRESSIVENESS,
             settings_loaded: false,
             draft_restored: false,
@@ -366,6 +369,7 @@ fn start(s: &mut AppState) {
         m4b: s.book.m4b,
         read_titles: s.book.read_titles,
         exact_stress: s.speak.exact_stress,
+        keep_voice: s.book.keep_voice,
     });
     shell::stop_audio(s);
     match shell::request(s, req.0, req.1) {
@@ -842,12 +846,14 @@ pub fn settle(s: &mut AppState) -> bool {
             s.book.settings_loaded = true;
             s.book.m4b = super::onboarding::setting("book_m4b").and_then(|v| v.as_bool()).unwrap_or(false);
             s.book.read_titles = super::onboarding::setting("book_read_titles").and_then(|v| v.as_bool()).unwrap_or(true);
+            s.book.keep_voice = super::onboarding::setting("book_keep_voice").and_then(|v| v.as_bool()).unwrap_or(false);
             s.book.expressiveness = super::onboarding::setting("book_expressiveness").and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(EXPRESSIVENESS);
             changed = true;
         } else if s.book.settings_dirty {
             s.book.settings_dirty = false;
             super::onboarding::save_setting("book_m4b", json!(s.book.m4b));
             super::onboarding::save_setting("book_read_titles", json!(s.book.read_titles));
+            super::onboarding::save_setting("book_keep_voice", json!(s.book.keep_voice));
             super::onboarding::save_setting("book_expressiveness", json!((s.book.expressiveness * 100.0).round() / 100.0));
         }
         if !s.book.listed && shell::engine_ready(s) {
@@ -1241,9 +1247,21 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         s.book.settings_dirty = true;
     });
     // Keyed slots: both checkboxes have the same own key. The inset keeps the scroll area's clip off their border.
-    let opts = col().key("book-opts").w_full().pl(2.0).gap(10.0)
+    let mut opts = col().key("book-opts").w_full().pl(2.0).gap(10.0)
         .child(el().key("book-opt-m4b").w_full().child(m4b))
         .child(el().key("book-opt-titles").w_full().child(titles));
+    if super::speak::language(s) == "uk" && super::setuprun::has(s, "ukrainian") && s.speak.exact_stress {
+        let keep = kit::checkbox(&p, s.book.keep_voice, "Closer voice with exact stress (about 4× slower)", |s| {
+            s.book.keep_voice = !s.book.keep_voice;
+            s.book.settings_dirty = true;
+        });
+        opts = opts.child(col().key("book-opt-keep-voice").w_full().gap(4.0).child(keep)
+            .child(text(if s.book.keep_voice {
+                "Each part is passed through the voice converter, so it sounds more like the voice."
+            } else {
+                "Recommended for books: Ukrainian with exact stress at about 20× real time; the voice sounds less like the original."
+            }).font(ty::CAPTION).color(p.text_faint).wrap().pl(34.0)));
+    }
     let mut list = col().w_full().gap(6.0);
     let shown = s.book.project.as_ref().map(|b| b.id.as_str());
     let mut books: Vec<&BookSummary> = s.book.recent.iter().map(|b| s.book.project.as_ref().filter(|p| p.id == b.id).unwrap_or(b)).collect();
@@ -1394,6 +1412,13 @@ pub fn scene_imported(s: &mut AppState) {
     s.book.recent = vec![BookSummary { id: "kobzar-20261101-090000".into(), title: "Кобзар".into(), status: "done".into(), chapters: 24, chapters_done: 24, totals: protocol::BookTotals { audio_s: 31_200.0, ..Default::default() }, ..Default::default() }];
 }
 
+pub fn scene_imported_uk(s: &mut AppState) {
+    scene_imported(s);
+    if let Some(v) = shell::active_voice(s).map(|v| v.id.clone()) {
+        s.speak.languages.insert(v, "uk".into());
+    }
+}
+
 pub fn scene_autosplit_offer(s: &mut AppState) {
     scene_base(s);
     let one = |title: &str, words: u32| DraftChapter { title: title.into(), text: String::new(), words, est_s: words as f32 / 145.0 * 60.0, include: true };
@@ -1455,6 +1480,7 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("book_autosplit_done", scene_autosplit_done),
         ("book_empty", scene_empty),
         ("book_imported", scene_imported),
+        ("book_imported_uk", scene_imported_uk),
         ("book_generating", scene_generating),
         ("book_memory_wait", scene_memory_wait),
         ("book_m4b", scene_m4b),

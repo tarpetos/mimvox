@@ -1238,11 +1238,13 @@ pub struct BookParams<'a> {
     pub m4b: bool,
     pub read_titles: bool,
     pub exact_stress: bool,
+    pub keep_voice: bool,
 }
 
 pub fn book_start(p: &BookParams<'_>) -> Request {
     let params = json!({
         "exact_stress": p.exact_stress,
+        "keep_voice": p.keep_voice,
         "title": p.title,
         "source": p.source,
         "format": p.format,
