@@ -655,8 +655,15 @@ fn text_panel(s: &AppState, p: Palette) -> El {
     let open = Button::new("Open text file…").ghost().small().icon(&icons::FILE).key("speak-open-file")
         .help("TXT, Markdown, HTML, EPUB, DOCX, ODT, RTF, FB2, PDF or subtitles. A long text opens in Book mode.")
         .on_press(|s| super::book::choose_file(s, false)).build(p);
+    let clear = (!s.speak.text.text.is_empty()).then(|| {
+        super::components::icon_button(p, "speak-clear", &icons::TRASH, "Clear the text", |s: &mut AppState| {
+            s.speak.text = TextEdit::new("");
+            s.speak.text.focused = true;
+        })
+    });
     let head = row().key("speak-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y()
         .children((!meta.is_empty()).then(|| text(meta).font(ty::CAPTION).color(p.text_faint)))
+        .children(clear)
         .child(open)
         .child(super::book::mode_switch(s, p));
     let editor = TextArea::new("speak-text", &s.speak.text, |s| &mut s.speak.text)

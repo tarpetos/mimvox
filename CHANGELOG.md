@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-* **Speak keeps your text:** what you typed is still there after a restart.
+* **Speak keeps your text:** what you typed is still there after a restart, and a trash button next to **Open text
+  file…** clears it.
 * **A clearer message when Windows runs out of memory:** CUDA reports an allocation that Windows cannot back with RAM
   as "out of GPU memory" while the card still has room; the message now says it is the RAM that has to be freed.
 

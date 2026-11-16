@@ -42,6 +42,7 @@ pub mod icons {
     stroke_icon!(ALERT, "alert", r#"<path d="M8 2.4L14 12.8H2Z"/><path d="M8 6.6V9.4M8 11.2V11.3"/>"#);
     stroke_icon!(SPARKLE, "sparkle", r#"<path d="M7.2 2.6L8.5 6L11.9 7.3L8.5 8.6L7.2 12L5.9 8.6L2.5 7.3L5.9 6Z"/><path d="M12.4 1.8V4.2M11.2 3H13.6"/>"#);
     stroke_icon!(TRASH, "trash", r#"<path d="M3 4.4H13M6.4 4.4V3A.8.8 0 0 1 7.2 2.2H8.8A.8.8 0 0 1 9.6 3V4.4M4.2 4.4L4.8 12.8A1 1 0 0 0 5.8 13.8H10.2A1 1 0 0 0 11.2 12.8L11.8 4.4"/>"#);
+    stroke_icon!(POWER, "power", r#"<path d="M8 2.2V7.4M4.7 4.3A5 5 0 1 0 11.3 4.3"/>"#);
     stroke_icon!(VOLUME, "volume", r#"<path d="M2.6 6.2H5L8.2 3.4V12.6L5 9.8H2.6Z" stroke-width="1.3"/><path d="M10.4 5.8A3.2 3.2 0 0 1 10.4 10.2M12.2 4A5.6 5.6 0 0 1 12.2 12"/>"#);
 }
 

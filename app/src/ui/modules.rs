@@ -148,20 +148,20 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
     if s.modules.confirm_remove == Some(id) {
         actions = actions
             .child(text(format!("Delete {:.1} GB?", c.gb)).font(ty::CAPTION).color(p.text_dim))
-            .child(Button::new("Keep").ghost().small().key(format!("module-keep-{id}")).on_press(|s| s.modules.confirm_remove = None).build(p))
-            .child(Button::new("Remove").danger().small().key(format!("module-remove-yes-{id}")).on_press(move |s| remove(s, id)).build(p));
+            .child(Button::new("Keep").key(format!("module-keep-{id}")).on_press(|s| s.modules.confirm_remove = None).build(p))
+            .child(Button::new("Remove").danger().icon(&icons::TRASH).key(format!("module-remove-yes-{id}")).on_press(move |s| remove(s, id)).build(p));
     } else {
         match state {
             Status::Missing => {
-                actions = actions.child(Button::new("Install").primary().small().icon(&super::formats::DOWNLOAD).key(format!("module-install-{id}"))
+                actions = actions.child(Button::new("Install").primary().icon(&super::formats::DOWNLOAD).key(format!("module-install-{id}"))
                     .disabled(blocked).on_press(move |s| setuprun::install(s, id)).build(p));
             }
             Status::On | Status::Off => {
                 let on = state == Status::Off;
                 actions = actions
-                    .child(Button::new(if on { "Turn on" } else { "Turn off" }).ghost().small().key(format!("module-toggle-{id}"))
+                    .child(Button::new(if on { "Turn on" } else { "Turn off" }).icon(&icons::POWER).key(format!("module-toggle-{id}"))
                         .disabled(blocked).on_press(move |s| set_on(s, id, on)).build(p))
-                    .child(Button::new("Remove").ghost().small().key(format!("module-remove-{id}"))
+                    .child(Button::new("Remove").icon(&icons::TRASH).key(format!("module-remove-{id}"))
                         .disabled(blocked).on_press(move |s| s.modules.confirm_remove = Some(id)).build(p));
             }
         }
