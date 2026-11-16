@@ -102,7 +102,7 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
             .child(text("Optional parts of the speech engine. Turning one off keeps its files; removing it frees the disk. Speech itself is always installed.")
                 .font(ty::CAPTION).color(p.text_dim).wrap()))
         .child(icon_button(p, "modules-close", &icons::CLOSE, "Close", close));
-    let mut card = col().key("modules-dialog").w(720.0).h(640.0).padding(22.0).gap(12.0).radius(radius::PANEL)
+    let mut card = col().key("modules-dialog").w(720.0).padding(22.0).gap(12.0).radius(radius::PANEL)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0)).border_gradient(1.0, p.rim_top, p.rim_bottom).shadow(18.0, 50.0, p.shadow)
         .on_press(|_: &mut AppState| {})
         .child(head);
@@ -110,14 +110,20 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
     if let Some(why) = busy_reason(s).filter(|_| !setuprun::running(s)) {
         body = body.child(super::voices::kit::notice(&p, Tone::Neutral, why));
     }
-    if setuprun::running(s) || matches!(s.setup.phase, setuprun::Phase::Error(_) | setuprun::Phase::Finished(false)) {
+    let setup_shown = setuprun::running(s) || matches!(s.setup.phase, setuprun::Phase::Error(_) | setuprun::Phase::Finished(false));
+    if setup_shown {
         body = body.child(setuprun::panel(s, p));
     }
     for c in COMPONENTS.iter().filter(|c| c.id != "speech") {
         body = body.child(module_row(s, p, c));
     }
-    card = card.child(col().key("modules-list").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false })
-        .scroll_edge_fade(12.0).child(body));
+    // A scroll area has no height of its own: the dialog takes a fixed one only when setup's steps make it long.
+    if setup_shown {
+        card = card.h(640.0).child(col().key("modules-list").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false })
+            .scroll_edge_fade(12.0).child(body));
+    } else {
+        card = card.child(body.key("modules-list"));
+    }
     let scrim = el().key("modules-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close);
     Some(el().key("modules-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center().fill(Color::BLACK.alpha(0.55))
         .child(scrim).child(card))
