@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Speak keeps your text:** what you typed is still there after a restart.
+* **A clearer message when Windows runs out of memory:** CUDA reports an allocation that Windows cannot back with RAM
+  as "out of GPU memory" while the card still has room; the message now says it is the RAM that has to be freed.
+
 * **Modules:** the status pill at the top (*Ready*) opens a window with every optional part, its size and state.
   **Install** adds one, **Turn off** keeps its files but stops using it, **Turn on** brings it back, and **Remove**
   deletes it to free the disk. `setup --remove` does the same from a terminal.

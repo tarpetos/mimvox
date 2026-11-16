@@ -150,6 +150,8 @@ pub struct SpeakState {
     /// Ukrainian through HolosTTS when it is installed; off reads Ukrainian with OmniVoice like other languages.
     pub exact_stress: bool,
     speed_loaded: bool,
+    /// What `speak-text.txt` holds, so the text is written only when it changed.
+    text_saved: Option<String>,
     speed_dirty: bool,
     /// Per voice id, only when it is not the voice's own language.
     pub languages: HashMap<String, String>,
@@ -176,6 +178,7 @@ impl Default for SpeakState {
             speed: 1.0,
             exact_stress: super::onboarding::setting("exact_stress").and_then(|v| v.as_bool()).unwrap_or(true),
             speed_loaded: false,
+            text_saved: None,
             speed_dirty: false,
             languages: HashMap::new(),
             languages_dirty: false,
@@ -491,9 +494,45 @@ fn flush_held(s: &mut AppState, a: &mut Active) {
     }
 }
 
+fn text_path() -> std::path::PathBuf {
+    super::onboarding::data_dir().join("speak-text.txt")
+}
+
+/// The text survives a restart: read once at start, written in the background when it changes.
+fn keep_text(s: &mut AppState) -> bool {
+    let Some(saved) = s.speak.text_saved.as_ref() else {
+        let text = std::fs::read_to_string(text_path()).unwrap_or_default();
+        let restore = s.speak.text.text.is_empty() && !text.is_empty();
+        if restore {
+            s.speak.text = TextEdit::new(&text);
+            s.speak.text.focused = true;
+        }
+        s.speak.text_saved = Some(if restore { text } else { s.speak.text.text.clone() });
+        return restore;
+    };
+    if *saved == s.speak.text.text {
+        return false;
+    }
+    let text = s.speak.text.text.clone();
+    s.speak.text_saved = Some(text.clone());
+    std::thread::spawn(move || {
+        let path = text_path();
+        if text.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        let tmp = path.with_extension("txt.tmp");
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    });
+    false
+}
+
 pub fn settle(s: &mut AppState) -> bool {
     let mut changed = false;
     if !s.shell.scripted() {
+        changed |= keep_text(s);
         if !s.speak.speed_loaded {
             s.speak.speed_loaded = true;
             s.speak.speed = super::onboarding::saved_speed();
@@ -1192,4 +1231,31 @@ pub fn scene_engine_stopped(s: &mut AppState) {
     s.screen = Screen::Speak;
     s.speak.text = TextEdit::new("Hello there.");
     s.shell.set_engine(EngineStatus::Stopped { code: Some(1), detail: "CUDA out of memory while loading the speech model.".into() });
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+
+    #[test]
+    fn text_comes_back_after_a_restart() {
+        let dir = std::env::temp_dir().join(format!("mimvox-speak-text-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: the only test in this binary that reads MIMVOX_DATA.
+        unsafe { std::env::set_var("MIMVOX_DATA", &dir) };
+        std::fs::write(dir.join("speak-text.txt"), "Доброго ранку!").unwrap();
+        let mut s = AppState::default();
+        assert!(keep_text(&mut s));
+        assert_eq!(s.speak.text.text, "Доброго ранку!");
+        s.speak.text = TextEdit::new("Нічого");
+        assert!(!keep_text(&mut s));
+        for _ in 0..50 {
+            if std::fs::read_to_string(dir.join("speak-text.txt")).ok().as_deref() == Some("Нічого") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(std::fs::read_to_string(dir.join("speak-text.txt")).unwrap(), "Нічого");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -5,6 +5,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import re
 import sys
 import threading
 import traceback
@@ -28,6 +29,8 @@ VRAM_RESERVE_GB = float(os.environ.get("MIMVOX_VRAM_RESERVE_GB", "1.5"))
 IDLE_EXIT_S = float(os.environ.get("MIMVOX_IDLE_EXIT_S", "600"))
 NO_VRAM = "not enough free GPU memory: close programs that use the graphics card (games, video, browsers) and try again"
 NO_RAM = "not enough free memory (RAM): close other programs and try again"
+NO_COMMIT = ("not enough free memory: the graphics card has room, but Windows has no memory left to back it; close "
+             "other programs and try again")
 
 
 def _cuda_torch(start=False):
@@ -66,6 +69,13 @@ def gpu_fence(start=False):
         return allow / 2**30
     except Exception:  # noqa: BLE001 - the guard must never break an op by itself
         return None
+
+
+def vram_message(exc):
+    """On Windows a GPU allocation is charged to the system commit too: CUDA reports it as out of memory while the card
+    still has room, and then the RAM is what has to be freed."""
+    m = re.search(r"of which ([\d.]+) GiB is free", str(exc))
+    return NO_COMMIT if m and float(m.group(1)) >= 1.0 else NO_VRAM
 
 
 def is_vram_error(exc):
@@ -312,7 +322,7 @@ class Worker:
             if is_vram_error(exc):
                 gpu_cleanup()
                 self.log(f"op {req.get('op')} ran out of GPU memory: {exc}")
-                self.send({"id": rid, "ok": False, "code": "no_vram", "error": NO_VRAM})
+                self.send({"id": rid, "ok": False, "code": "no_vram", "error": vram_message(exc)})
                 return
             self.log(f"op {req.get('op')} failed: {traceback.format_exc()}")
             self.send({"id": rid, "ok": False, "code": "internal", "error": f"{type(exc).__name__}: {exc}"})
