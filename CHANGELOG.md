@@ -5,6 +5,9 @@
 * **Modules:** the status pill at the top (*Ready*) opens a window with every optional part, its size and state.
   **Install** adds one, **Turn off** keeps its files but stops using it, **Turn on** brings it back, and **Remove**
   deletes it to free the disk. `setup --remove` does the same from a terminal.
+* **Setup from inside the app stops the engine first:** on Windows a running engine keeps its files open, so a setup
+  that had to update the engine's environment (for example after **Install** of a part) failed halfway and could
+  leave it broken (*Models missing*). The engine starts again when setup is done.
 * **Ukrainian with exact stress keeps the voice:** HolosTTS on its own kept little of a voice's timbre (speaker
   similarity 0.76 to the reference, against 0.94 for the main speech model). In Speak a voice that is not trained now
   goes through the native-accent converter after it, which brings it to 0.88; it is about as fast as the main model

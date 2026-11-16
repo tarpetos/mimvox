@@ -195,15 +195,10 @@ pub fn install(s: &mut AppState, id: &str) {
     start_with(s, args, Some(id.to_owned()), &dir);
 }
 
-/// The engine is stopped first: its workers hold the files open, which Windows refuses to delete.
 pub fn remove(s: &mut AppState, id: &str) {
     if running(s) || s.shell.scripted() {
         return;
     }
-    if let Some(mut old) = s.engine.take() {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| old.shutdown()));
-    }
-    s.shell.engine = super::shell::EngineStatus::Stopped { code: None, detail: "Stopped while a module is removed.".into() };
     let dir = super::onboarding::data_dir().display().to_string();
     let mut args = base_args(&dir);
     args.push("--remove".into());
@@ -227,6 +222,11 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, dat
         return;
     }
     *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    // Setup may update the engine's environment, and Windows refuses to replace files a running engine holds open.
+    if let Some(mut old) = s.engine.take() {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| old.shutdown()));
+        s.shell.engine = super::shell::EngineStatus::Stopped { code: None, detail: "Stopped while setup runs.".into() };
+    }
     let left_out = std::mem::take(&mut s.setup.left_out);
     s.setup = SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, adding, left_out, ..Default::default() };
     let cache = PathBuf::from(data_dir.trim()).join("cache").join("uv");

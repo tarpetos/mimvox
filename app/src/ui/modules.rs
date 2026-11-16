@@ -4,7 +4,7 @@ use super::shell::{self, EngineStatus};
 use super::theme::{Palette, radius, ty};
 use crate::engine::EngineMsg;
 use crate::state::AppState;
-use rune::{Color, El, col, el, row, text};
+use rune::{Color, El, ScrollSpec, col, el, row, text};
 use serde_json::json;
 
 #[derive(Default)]
@@ -102,21 +102,22 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
             .child(text("Optional parts of the speech engine. Turning one off keeps its files; removing it frees the disk. Speech itself is always installed.")
                 .font(ty::CAPTION).color(p.text_dim).wrap()))
         .child(icon_button(p, "modules-close", &icons::CLOSE, "Close", close));
-    let mut card = col().key("modules-dialog").w(720.0).max_h(620.0).padding(22.0).gap(12.0).radius(radius::PANEL)
+    let mut card = col().key("modules-dialog").w(720.0).h(640.0).padding(22.0).gap(12.0).radius(radius::PANEL)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0)).border_gradient(1.0, p.rim_top, p.rim_bottom).shadow(18.0, 50.0, p.shadow)
         .on_press(|_: &mut AppState| {})
         .child(head);
+    let mut body = col().w_full().gap(12.0);
     if let Some(why) = busy_reason(s).filter(|_| !setuprun::running(s)) {
-        card = card.child(super::voices::kit::notice(&p, Tone::Neutral, why));
+        body = body.child(super::voices::kit::notice(&p, Tone::Neutral, why));
     }
-    if setuprun::running(s) || matches!(s.setup.phase, setuprun::Phase::Error(_)) {
-        card = card.child(setuprun::panel(s, p));
+    if setuprun::running(s) || matches!(s.setup.phase, setuprun::Phase::Error(_) | setuprun::Phase::Finished(false)) {
+        body = body.child(setuprun::panel(s, p));
     }
-    let mut list = col().key("modules-list").w_full().gap(8.0);
     for c in COMPONENTS.iter().filter(|c| c.id != "speech") {
-        list = list.child(module_row(s, p, c));
+        body = body.child(module_row(s, p, c));
     }
-    card = card.child(list);
+    card = card.child(col().key("modules-list").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false })
+        .scroll_edge_fade(12.0).child(body));
     let scrim = el().key("modules-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close);
     Some(el().key("modules-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center().fill(Color::BLACK.alpha(0.55))
         .child(scrim).child(card))
@@ -181,6 +182,12 @@ fn scene_confirm(s: &mut AppState) {
     s.modules.confirm_remove = Some("ukrainian");
 }
 
+fn scene_installing(s: &mut AppState) {
+    demo(s);
+    setuprun::scene_running(s);
+    s.setup.adding = Some("ukrainian".into());
+}
+
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
-    &[("modules", scene_open), ("modules_confirm_remove", scene_confirm)]
+    &[("modules", scene_open), ("modules_confirm_remove", scene_confirm), ("modules_installing", scene_installing)]
 }
