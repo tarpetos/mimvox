@@ -58,6 +58,7 @@ pub struct AppState {
     pub history: crate::ui::history::HistoryState,
     pub update: crate::ui::update::UpdateState,
     pub setup: crate::ui::setuprun::SetupRunState,
+    pub modules: crate::ui::modules::ModulesState,
 }
 
 impl Default for AppState {
@@ -91,6 +92,7 @@ impl Default for AppState {
             history: Default::default(),
             update: Default::default(),
             setup: Default::default(),
+            modules: Default::default(),
         }
     }
 }

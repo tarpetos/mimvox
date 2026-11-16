@@ -239,41 +239,44 @@ def speech_languages() -> list[dict[str, Any]]:
     return names.describe(backends.languages())
 
 
-def _translators(ctx: Server) -> list[str]:
+def _translators(ctx: Server, honour_off: bool = True) -> list[str]:
     """Best first; [] without the redub module."""
     try:
         from .redub import langs  # noqa: PLC0415
     except ImportError:
         return []
-    return langs.installed_translators(os.path.join(ctx.data_dir, "runtime", "models"))
+    return langs.installed_translators(os.path.join(ctx.data_dir, "runtime", "models"), honour_off=honour_off)
 
 
 def _zero_shot_vc(ctx: Server) -> bool:
     from . import zsvc  # noqa: PLC0415
-    return zsvc.installed(ctx.runtime, ctx.data_dir)
+    return zsvc.installed(ctx.runtime, ctx.data_dir, honour_off=False)
 
 
 def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list[str]:
-    """Setup's COMPONENTS found on disk."""
+    """Setup's COMPONENTS found on disk, turned off or not."""
     from . import rvc, speech  # noqa: PLC0415
     from .backends import holos, omnivoice  # noqa: PLC0415
     found = {
         "speech": omnivoice.installed(ctx.runtime),
-        "training": rvc.available(ctx.runtime),
+        "training": rvc.available(ctx.runtime, honour_off=False),
         "translation": "nllb-600m" in translators,
         "better_translation": "nllb-1.3b" in translators,
         "native_accent": zero_shot_vc,
         "music_removal": os.path.isfile(speech.separator_path(ctx.data_dir)),
-        "ukrainian": holos.installed(ctx.runtime),
+        "ukrainian": holos.installed(ctx.runtime, honour_off=False),
     }
     return [name for name, ok in found.items() if ok]
 
 
 def hello_info(ctx: Server) -> dict[str, Any]:
-    translators, zero_shot_vc = _translators(ctx), _zero_shot_vc(ctx)
+    from . import components  # noqa: PLC0415
+    zero_shot_vc = _zero_shot_vc(ctx)
+    found = _components(ctx, _translators(ctx, honour_off=False), zero_shot_vc)
+    off = [c for c in found if components.off(c)]
     return {"version": __version__, "device": ctx.device, "models": _models(), "languages": speech_languages(),
-            "translators": translators, "zero_shot_vc": zero_shot_vc,
-            "components": _components(ctx, translators, zero_shot_vc)}
+            "translators": _translators(ctx), "zero_shot_vc": zero_shot_vc and not components.off("native_accent"),
+            "components": [c for c in found if c not in off], "components_off": off}
 
 
 @method("hello")
@@ -287,7 +290,7 @@ async def tts_languages(ctx: Server, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_handlers() -> None:
-    from . import book, media, results, textimport, tts, voices  # noqa: F401 - register their methods
+    from . import book, components, media, results, textimport, tts, voices  # noqa: F401 - register their methods
     for pkg in ("dataset", "training", "redub"):  # written by other modules; may not exist in every checkout
         try:
             importlib.import_module(f"{__package__}.{pkg}")
@@ -306,6 +309,8 @@ async def serve(runtime_path: str, data_dir: str, out: BinaryIO, inp: BinaryIO) 
     data = config.DataDir(os.path.abspath(data_dir))
     server = Server(out, runtime, data.root)
     await aio.run_io(_prepare_data_dir, data)
+    from . import components  # noqa: PLC0415
+    await aio.run_io(components.load, data.root)
     server.device = await aio.run_io(_device_info, runtime)
     media.configure(runtime)
     media.add_to_path()

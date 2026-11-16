@@ -241,7 +241,8 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 "models":{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"},
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
 "native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"],"zero_shot_vc":true,
-"components":["speech","training","translation","better_translation","native_accent","music_removal","ukrainian"]}`
+"components":["speech","training","translation","better_translation","native_accent","music_removal","ukrainian"],
+"components_off":[]}`
 - `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl ro it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
@@ -264,6 +265,15 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
   stress, see [Ukrainian with exact stress](#ukrainian-with-exact-stress-holostts)). The app offers to install a missing one where it is
   needed (setup `--add <component>`). Without `training` runtime.toml has no `[python] rvc` / `[paths] applio` and
   `models.rvc` is `missing`. Read at engine start.
+- `components_off`: installed parts the user turned off (`<data>/components.json`, `{"off":[...]}`). They are left
+  out of `components`, `translators` and `zero_shot_vc`, and the engine does not use them: no HolosTTS, no Seed-VC,
+  no RVC worker, no translator, no music removal. Read at engine start.
+
+### `components.set`
+`{"id":"<optional component>","on":true|false}` -> `{"off":[...],"restart":true}`: turns an installed part on or off
+in `components.json`. It takes effect when the engine starts again, so the app restarts it. `speech` cannot be turned
+off (`bad_request`). Removing a part is setup's job: `setup --remove <component>` deletes its folders and rewrites
+runtime.toml; the app stops the engine first, since running workers keep the files open.
 
 ### `voices.list`
 `{}` -> `{"voices":[{"id","name","created","preset","language":"en","dataset_minutes":6.4,"parts":5,"trained":true,

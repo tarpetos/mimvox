@@ -91,6 +91,7 @@ pub struct ShellState {
     pub zero_shot_vc: bool,
     /// `None` until the engine says.
     pub components: Option<Vec<String>>,
+    pub components_off: Vec<String>,
     pub active_voice: Option<String>,
     pub voice_menu_open: bool,
     /// Headless previews only (`caption::scenes`); `None` in the real app.
@@ -162,6 +163,7 @@ impl Default for ShellState {
             translators: Vec::new(),
             zero_shot_vc: false,
             components: None,
+            components_off: Vec::new(),
             active_voice: None,
             voice_menu_open: false,
             caption_preview: None,
@@ -418,6 +420,7 @@ fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     super::train::on_engine(s, &m);
     super::speak::on_engine(s, &m);
     super::book::on_engine(s, &m);
+    super::modules::on_engine(s, &m);
     super::redub::on_engine(s, &m);
     super::formats::on_engine(s, &m);
     super::trash::on_engine(s, &m);
@@ -436,6 +439,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             s.shell.translators = hello.translators.clone();
             s.shell.zero_shot_vc = hello.zero_shot_vc;
             s.shell.components = Some(hello.components.clone());
+            s.shell.components_off = hello.components_off.clone();
             s.redub.can_separate = hello.components.iter().any(|c| c == "music_removal");
             reset_warm(s);
             refresh_voices(s);
@@ -593,6 +597,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     }
     overlays.extend(super::relocate::overlay(s, &p));
     overlays.extend(super::update::overlay(s, &p));
+    overlays.extend(super::modules::overlay(s, &p));
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
     overlays.extend(super::book::voice_overlay(s, p));
@@ -786,6 +791,8 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
         pill = pill.hover(p.glass_hover).focusable(true)
             .on_press(|s: &mut AppState| restart_engine(s))
             .child(icon_el(&icons::REFRESH, 14.0, p.text_dim));
+    } else if matches!(s.shell.engine, EngineStatus::Ready { .. } | EngineStatus::Starting { .. }) {
+        pill = pill.role("button").hover(p.glass_hover).focusable(true).on_press(super::modules::open);
     }
     pill
 }

@@ -169,6 +169,9 @@ pub struct Hello {
     pub zero_shot_vc: bool,
     #[serde(default)]
     pub components: Vec<String>,
+    /// Installed but turned off.
+    #[serde(default)]
+    pub components_off: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

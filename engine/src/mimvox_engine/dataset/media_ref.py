@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from .. import aio, config, media, speech
+from .. import aio, components, config, media, speech
 from ..registry import Context, EngineError, method
 from . import pace, quality, store
 from ._audio import HOP_S, write_wav
@@ -201,7 +201,7 @@ class _Separator:
 
     async def run(self, y: np.ndarray, on_progress: speech.Progress | None) -> np.ndarray | None:
         if self.installed is None:
-            self.installed = await aio.run_io(os.path.isfile, self.model)
+            self.installed = not components.off("music_removal") and await aio.run_io(os.path.isfile, self.model)
         if not self.installed:
             self.reason = self.NOT_INSTALLED
             return None

@@ -90,6 +90,11 @@ the app itself on the first start, in its window; there is no script to run and 
    Voice match, "Keep background music", "Remove background music" and, on Speak with Ukrainian, "Exact Ukrainian
    stress". It installs in the background with its
    progress on that screen, and the engine restarts by itself when it is done.
+
+   **Modules:** press the status pill at the top right (*Ready*) to see every optional part with its size and state.
+   **Install** adds a missing one, **Turn off** keeps its files but stops using it (for example to compare Ukrainian
+   with and without exact stress), **Turn on** brings it back, and **Remove** deletes it to free the disk. Turning a
+   part on or off restarts the engine, so it waits while a book is read, a voice trains or speech is made.
 3. **Install location** is where everything goes (the data folder). The default:
 
    | System | Default data folder |
@@ -137,6 +142,7 @@ options (all of them: `./setup.sh --help`):
 | `--better-translation no` | Leave out the better translation model (NLLB-200 1.3B); `yes` adds it also without a GPU. |
 | `--components LIST` | Install exactly these parts (`speech,training,translation,better_translation,native_accent,music_removal`); later runs keep the same set. |
 | `--add LIST` | Add parts to an existing install. |
+| `--remove LIST` | Delete these optional parts from an existing install (speech cannot be removed). |
 | `--skip-toolchain` | Install no toolchains or system packages (the app's own setup runs this way, with `--gui`). |
 
 ### Moving the data folder later

@@ -5,6 +5,7 @@ pub mod events;
 pub mod formats;
 pub mod history;
 pub mod lang;
+pub mod modules;
 pub mod onboarding;
 pub mod playbar;
 pub mod record;
@@ -103,6 +104,7 @@ pub fn all_scenes() -> &'static [Scene] {
         all.extend_from_slice(redub::scenes());
         all.extend_from_slice(playbar::scenes());
         all.extend_from_slice(book::scenes());
+        all.extend_from_slice(modules::scenes());
         all.extend_from_slice(update::scenes());
         all
     })

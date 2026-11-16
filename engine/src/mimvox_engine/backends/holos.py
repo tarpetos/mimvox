@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from .. import config
+from .. import components, config
 from ..registry import EngineError
 from ..workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 from . import SynthParams, TtsBackend
@@ -37,7 +37,9 @@ def holos_model_dir(runtime: dict[str, Any]) -> str | None:
     return os.path.join(root, "models", "holos") if root else None
 
 
-def installed(runtime: dict[str, Any]) -> bool:
+def installed(runtime: dict[str, Any], honour_off: bool = True) -> bool:
+    if honour_off and components.off("ukrainian"):
+        return False
     py, model = holos_python(runtime), holos_model_dir(runtime)
     return bool(py and model and os.path.isfile(py) and os.path.isfile(os.path.join(model, STAMP))
                 and all(os.path.isfile(os.path.join(model, f)) for f in REQUIRED))

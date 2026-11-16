@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Any
 
-from . import config
+from . import components, config
 from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 
 log = logging.getLogger("mimvox.rvc")
@@ -81,13 +81,17 @@ def model_sig(pth: str) -> tuple | None:
 _WORKER: RvcWorker | None = None
 
 
-def available(runtime: dict[str, Any]) -> bool:
+def available(runtime: dict[str, Any], honour_off: bool = True) -> bool:
+    if honour_off and components.off("training"):
+        return False
     py, applio = config.rvc_python(runtime), config.applio_dir(runtime)
     return bool(py and applio and os.path.isfile(py) and os.path.isdir(applio))
 
 
 def get(runtime: dict[str, Any]) -> RvcWorker | None:
     global _WORKER
+    if components.off("training"):
+        return None
     py, applio = config.rvc_python(runtime), config.applio_dir(runtime)
     if not py or not applio or not os.path.isfile(py) or not os.path.isdir(applio):
         return None

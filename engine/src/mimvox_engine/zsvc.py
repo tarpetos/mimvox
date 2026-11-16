@@ -7,7 +7,7 @@ import logging
 import os
 from typing import Any
 
-from . import config
+from . import components, config
 from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError
 
 log = logging.getLogger("mimvox.zsvc")
@@ -36,7 +36,9 @@ def paths(runtime: dict[str, Any], data_root: str) -> tuple[str, str]:
             config.runtime_path(runtime, "paths", "seed_vc_models") or os.path.join(base, MODELS_DIR))
 
 
-def installed(runtime: dict[str, Any], data_root: str) -> bool:
+def installed(runtime: dict[str, Any], data_root: str, honour_off: bool = True) -> bool:
+    if honour_off and components.off("native_accent"):
+        return False
     code, models = paths(runtime, data_root)
     return (os.path.isfile(os.path.join(code, "modules", "commons.py"))
             and os.path.isfile(os.path.join(code, "campplus_cn_common.bin"))

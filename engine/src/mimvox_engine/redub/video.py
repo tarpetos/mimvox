@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .. import aio, config, media, speech
+from .. import aio, components, config, media, speech
 from ..registry import Context, EngineError
 from . import langs
 
@@ -136,7 +136,7 @@ _DONE: dict[str, Stems] = {}
 
 
 def installed(data: config.DataDir) -> bool:
-    return os.path.isfile(speech.separator_path(data.root))
+    return not components.off("music_removal") and os.path.isfile(speech.separator_path(data.root))
 
 
 def _decode(path: str, folder: str) -> tuple[str, int, int]:

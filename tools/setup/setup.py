@@ -1052,6 +1052,17 @@ class Setup:
     def models_dir(self) -> Path:
         return self.runtime / "models"
 
+    def component_paths(self, component: str) -> list[Path]:
+        """What ``--remove`` deletes for an optional component."""
+        return {
+            "training": [self.applio],
+            "translation": [self.models_dir / NLLB_DIR],
+            "better_translation": [self.models_dir / NLLB_BIG_DIR],
+            "native_accent": [self.seed_vc, self.seed_vc_models],
+            "music_removal": [self.models_dir / DEMUCS_DIR],
+            "ukrainian": [self.holos_venv.parent, self.holos_models],
+        }[component]
+
     def whisper_model(self) -> None:
         py = self.engine_python()
         if not py.exists():
@@ -1624,6 +1635,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                              "Default: what an earlier run installed, else everything (better_translation only with a "
                              "GPU)")
     parser.add_argument("--add", metavar="LIST", help="install these components in addition to the installed ones")
+    parser.add_argument("--remove", metavar="LIST",
+                        help="delete these optional components from the runtime and leave the rest as it is "
+                             "(speech cannot be removed)")
     parser.add_argument("--gui", action="store_true",
                         help="run by the app: no questions and no system packages (no sudo; implies --yes and "
                              "--skip-toolchain), plus '@@mimvox {json}' progress lines for its setup screen")
@@ -1672,7 +1686,7 @@ def choose_data_dir(args: argparse.Namespace, plat: str) -> Path:
     default = (read_location(plat) or default_data_dir(plat)).expanduser().resolve()
     if explicit:
         chosen = Path(explicit).expanduser().resolve()
-    elif args.quick_check or args.runtime_toml_only:
+    elif args.quick_check or args.runtime_toml_only or args.remove:
         chosen = default
     elif not args.yes and sys.stdin.isatty():
         chosen = ask_data_dir(plat, default)
@@ -1699,6 +1713,61 @@ def ask_data_dir(plat: str, default: Path) -> Path:
             say("Please give a full path (for example D:\\Voice or /data/voice).")
             continue
         return chosen.resolve()
+
+
+def _rmtree(path: Path) -> None:
+    def writable(func, target, _exc) -> None:  # noqa: ANN001 - shutil's callback
+        # Windows refuses to delete read-only files (git objects, some wheels).
+        os.chmod(target, 0o700)
+        func(target)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=writable)
+    else:
+        shutil.rmtree(path, onerror=writable)
+
+
+def remove_components(setup: Setup, value: str) -> int:
+    """``--remove``: deletes the components' folders and rewrites runtime.toml without them."""
+    items = [x.strip() for x in value.split(",") if x.strip()]
+    unknown = [x for x in items if x not in COMPONENTS]
+    if unknown or "speech" in items:
+        say(f"Failed: cannot remove {', '.join(unknown or ['speech'])} (optional components: "
+            f"{', '.join(c for c in COMPONENTS if c != 'speech')}).")
+        return 1
+    labels = {"training": "Voice training", "translation": "Translation", "better_translation": "Better translation",
+              "native_accent": "Native accent", "music_removal": "Music removal", "ukrainian": "Ukrainian speech"}
+    plan = [(f"remove_{c}", f"Removing {labels[c].lower()}") for c in items] + [("runtime_toml", "Finishing")]
+    event(event="plan", steps=[{"id": i, "label": label} for i, label in plan])
+    failed: list[str] = []
+    for component in items:
+        step = f"remove_{component}"
+        event(event="step", id=step, state="run")
+        try:
+            for path in setup.component_paths(component):
+                if path.exists():
+                    say(f"Deleting {path}")
+                    if path.is_dir():
+                        _rmtree(path)
+                    else:
+                        path.unlink()
+        except OSError as error:
+            message = f"{labels[component]}: {error}"
+            say(f"Failed: {message}")
+            failed.append(message)
+            event(event="step", id=step, state="fail", message=message)
+            continue
+        setup.components.discard(component)
+        event(event="step", id=step, state="ok")
+    event(event="step", id="runtime_toml", state="run")
+    try:
+        setup.write_runtime_toml()
+        event(event="step", id="runtime_toml", state="ok")
+    except SetupError as error:
+        failed.append(str(error))
+        event(event="step", id="runtime_toml", state="fail", message=str(error))
+    event(event="done", ok=not failed, **({"failed": failed} if failed else {}))
+    return 1 if failed else 0
 
 
 def build_setup(args: argparse.Namespace) -> Setup:
@@ -1790,6 +1859,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         say("Quick check passed.")
         return 0
+
+    if args.remove:
+        return remove_components(setup, args.remove)
 
     if args.runtime_toml_only:
         try:

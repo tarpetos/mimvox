@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 
+from .. import components
+
 NLLB_DIR_NAME = "nllb-200-distilled-600M"
 NLLB_REPO = "facebook/nllb-200-distilled-600M"
 
@@ -9,9 +11,14 @@ NLLB_REPO = "facebook/nllb-200-distilled-600M"
 TRANSLATORS = {"nllb-1.3b": "nllb-200-distilled-1.3B", "nllb-600m": NLLB_DIR_NAME}
 
 
-def installed_translators(models_root: str) -> list[str]:
+_COMPONENT = {"nllb-1.3b": "better_translation", "nllb-600m": "translation"}
+
+
+def installed_translators(models_root: str, honour_off: bool = True) -> list[str]:
     out = []
     for name, folder in TRANSLATORS.items():
+        if honour_off and components.off(_COMPONENT[name]):
+            continue
         d = os.path.join(models_root, folder)
         if (all(os.path.isfile(os.path.join(d, f)) for f in ("config.json", "sentencepiece.bpe.model"))
                 and any(os.path.isfile(os.path.join(d, f)) for f in ("model.safetensors", "pytorch_model.bin"))):

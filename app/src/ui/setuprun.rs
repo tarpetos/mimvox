@@ -50,6 +50,7 @@ pub struct SetupRunState {
     pub show_log: bool,
     /// `None`: a full setup or a runtime update.
     pub adding: Option<String>,
+    pub removing: Option<String>,
     pub left_out: Vec<String>,
 }
 
@@ -192,6 +193,23 @@ pub fn install(s: &mut AppState, id: &str) {
     args.push("--add".into());
     args.push(id.into());
     start_with(s, args, Some(id.to_owned()), &dir);
+}
+
+/// The engine is stopped first: its workers hold the files open, which Windows refuses to delete.
+pub fn remove(s: &mut AppState, id: &str) {
+    if running(s) || s.shell.scripted() {
+        return;
+    }
+    if let Some(mut old) = s.engine.take() {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| old.shutdown()));
+    }
+    s.shell.engine = super::shell::EngineStatus::Stopped { code: None, detail: "Stopped while a module is removed.".into() };
+    let dir = super::onboarding::data_dir().display().to_string();
+    let mut args = base_args(&dir);
+    args.push("--remove".into());
+    args.push(id.into());
+    start_with(s, args, None, &dir);
+    s.setup.removing = Some(id.to_owned());
 }
 
 fn base_args(data_dir: &str) -> Vec<OsString> {
@@ -376,6 +394,9 @@ fn on_exit(s: &mut AppState, code: Option<i32>, signal: Option<i32>) {
     if ok {
         if let Some(c) = s.setup.adding.as_deref().and_then(component) {
             super::shell::toast(s, Tone::Success, format!("{} is installed.", c.label));
+        }
+        if let Some(c) = s.setup.removing.as_deref().and_then(component) {
+            super::shell::toast(s, Tone::Success, format!("{} is removed.", c.label));
         }
     }
 }
@@ -562,9 +583,22 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
         .child(text("Anything left out can be installed later in one click, on the screen that needs it.").font(ty::CAPTION).color(p.text_dim).wrap())
 }
 
+fn turned_off(s: &AppState, id: &str) -> bool {
+    s.shell.components_off.iter().any(|c| c == id)
+}
+
 pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El {
     use super::components::{Button, glass_card};
     let Some(c) = component(id) else { return el() };
+    if turned_off(s, id) {
+        let row_ = row().key(format!("install-card-{id}")).w_full().px(14.0).py(12.0).gap(12.0).center_y()
+            .child(icon_el(&icons::SPARKLE, 16.0, p.accent))
+            .child(col().grow(1.0).min_w(0.0).gap(4.0)
+                .child(text(format!("{} is turned off", c.label)).font(ty::LABEL).color(p.text))
+                .child(text("Its files are still installed. Turn it on in Modules (the status pill at the top).").font(ty::CAPTION).color(p.text_dim).wrap()))
+            .child(Button::new("Modules").ghost().small().key(format!("install-{id}-modules")).on_press(super::modules::open).build(p));
+        return glass_card(p).w_full().child(row_);
+    }
     let this = s.setup.adding.as_deref() == Some(id);
     let mut info = col().grow(1.0).min_w(0.0).gap(4.0);
     let button: Option<El> = if running(s) && this {
@@ -618,6 +652,11 @@ pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
     let Some(c) = component(id) else { return el() };
     let this = s.setup.adding.as_deref() == Some(id) && running(s);
     let id_owned = id.to_owned();
+    if turned_off(s, id) {
+        return row().key(format!("install-line-{id}")).w_full().gap(8.0).center_y()
+            .child(text(format!("{what}: {} is turned off.", mid_sentence(c.label))).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).wrap())
+            .child(Button::new("Modules").ghost().small().key(format!("install-line-{id}-modules")).on_press(super::modules::open).build(p));
+    }
     let line = if this {
         format!("Installing {}… {:.0}%", c.label, progress(s) * 100.0)
     } else {
