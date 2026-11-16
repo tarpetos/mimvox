@@ -1,24 +1,25 @@
 # Changelog
 
-## Unreleased
-
-* **Speak keeps your text:** what you typed is still there after a restart, and a trash button next to **Open text
-  file…** clears it.
-* **A clearer message when Windows runs out of memory:** CUDA reports an allocation that Windows cannot back with RAM
-  as "out of GPU memory" while the card still has room; the message now says it is the RAM that has to be freed.
+## 0.4.2
 
 * **Modules:** the status pill at the top (*Ready*) opens a window with every optional part, its size and state.
   **Install** adds one, **Turn off** keeps its files but stops using it, **Turn on** brings it back, and **Remove**
   deletes it to free the disk. `setup --remove` does the same from a terminal.
-* **Setup from inside the app stops the engine first:** on Windows a running engine keeps its files open, so a setup
-  that had to update the engine's environment (for example after **Install** of a part) failed halfway and could
-  leave it broken (*Models missing*). The engine starts again when setup is done.
 * **Ukrainian with exact stress keeps the voice:** HolosTTS on its own kept little of a voice's timbre (speaker
   similarity 0.76 to the reference, against 0.94 for the main speech model). In Speak a voice that is not trained now
-  goes through the native-accent converter after it, which brings it to 0.88; it is about as fast as the main model
-  then. Books keep the fast way by default (about 20× real time), with **Closer voice with exact stress** to choose the
-  converter for a book.
-  **Exact stress (HolosTTS)** in Style turns it off to compare, or to keep the main model's voice and guess the stress.
+  goes through the native-accent converter after it, which brings it to 0.88; it is then about as fast as the main
+  model. **Exact stress (HolosTTS)** in Style turns it off, to compare or to keep the main model's voice and guess the
+  stress.
+* **Books stay fast:** a Ukrainian book keeps HolosTTS at about 20× real time by default; **Closer voice with exact
+  stress** under Output chooses the converter for a book, about four times slower.
+* **Speak keeps your text:** what you typed is still there after a restart, and a trash button next to **Open text
+  file…** clears it.
+* **Fixes:**
+  * Setup started from the app stops the engine first. On Windows a running engine keeps its files open, so a setup
+    that had to update the engine's environment (for example **Install** of a part) failed halfway and could leave it
+    broken (*Models missing*). The engine starts again when setup is done.
+  * When Windows runs out of memory, CUDA reports "out of GPU memory" although the card has room; the message now says
+    it is the RAM that has to be freed.
 
 ## 0.4.1
 
