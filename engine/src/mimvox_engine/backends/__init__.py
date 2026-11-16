@@ -65,10 +65,10 @@ def all_backends() -> list[TtsBackend]:
     return list(_BACKENDS)
 
 
-def for_language(lang: str) -> TtsBackend | None:
+def for_language(lang: str, skip: tuple[str, ...] = ()) -> TtsBackend | None:
     lang = (lang or "").lower()
     for b in all_backends():
-        if lang in b.languages and b.available():
+        if b.name not in skip and lang in b.languages and b.available():
             return b
     return None
 

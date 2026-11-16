@@ -365,6 +365,7 @@ fn start(s: &mut AppState) {
         output_format: &out,
         m4b: s.book.m4b,
         read_titles: s.book.read_titles,
+        exact_stress: s.speak.exact_stress,
     });
     shell::stop_audio(s);
     match shell::request(s, req.0, req.1) {

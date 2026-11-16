@@ -147,6 +147,8 @@ pub struct SpeakState {
     pub quality: Quality,
     /// 0.8..=1.3; the engine's `duration_factor = 1 / speed`.
     pub speed: f32,
+    /// Ukrainian through HolosTTS when it is installed; off reads Ukrainian with OmniVoice like other languages.
+    pub exact_stress: bool,
     speed_loaded: bool,
     speed_dirty: bool,
     /// Per voice id, only when it is not the voice's own language.
@@ -172,6 +174,7 @@ impl Default for SpeakState {
             voice_match: 1.0,
             quality: Quality::Best,
             speed: 1.0,
+            exact_stress: super::onboarding::setting("exact_stress").and_then(|v| v.as_bool()).unwrap_or(true),
             speed_loaded: false,
             speed_dirty: false,
             languages: HashMap::new(),
@@ -297,7 +300,7 @@ pub fn generate(s: &mut AppState) {
     let out = super::formats::output_format(s);
     let accent = accent_param(s, &lang);
     let (method, params) =
-        protocol::tts_generate(&voice.id, &text, s.speak.expressiveness, s.speak.voice_match, s.speak.quality, s.speak.speed, &lang, &out, accent);
+        protocol::tts_generate(&voice.id, &text, s.speak.expressiveness, s.speak.voice_match, s.speak.quality, s.speak.speed, &lang, &out, accent, s.speak.exact_stress);
     shell::stop_audio(s);
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -694,7 +697,12 @@ fn hint_line(s: &AppState, p: Palette, block: Option<&'static str>) -> El {
 }
 
 fn exact_ukrainian(s: &AppState) -> bool {
-    language(s) == "uk" && super::setuprun::has(s, "ukrainian")
+    language(s) == "uk" && super::setuprun::has(s, "ukrainian") && s.speak.exact_stress
+}
+
+fn toggle_exact_stress(s: &mut AppState) {
+    s.speak.exact_stress = !s.speak.exact_stress;
+    super::onboarding::save_setting("exact_stress", serde_json::json!(s.speak.exact_stress));
 }
 
 pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
@@ -768,12 +776,18 @@ fn language_row(s: &AppState, p: Palette) -> El {
     let mut c = col().w_full().gap(8.0).child(head);
     // With HolosTTS the engine reads Ukrainian with dictionary stress; without it OmniVoice guesses, and a "+"
     // before a vowel is a hint it often follows.
+    if code == "uk" && super::setuprun::has(s, "ukrainian") {
+        c = c.child(el().key("speak-exact-stress").w_full().child(super::voices::kit::checkbox(&p, s.speak.exact_stress,
+            "Exact stress (HolosTTS)", toggle_exact_stress)));
+    }
     if exact_ukrainian(s) {
-        c = c.child(text("Exact stress: every word as the dictionary and the sentence say. A + before a vowel changes one: співак+ом.")
+        c = c.child(text("Every word as the dictionary and the sentence say. A + before a vowel changes one: співак+ом. The voice can sound less like the original: turn it off to compare.")
             .font(ty::CAPTION).color(p.text_faint).wrap());
     } else if code == "uk" {
-        c = c.child(text("Wrong stress? Type + before the stressed vowel: співак+ом.").font(ty::CAPTION).color(p.text_faint).wrap())
-            .child(super::setuprun::install_line(s, p, "ukrainian", "Exact Ukrainian stress"));
+        c = c.child(text("Wrong stress? Type + before the stressed vowel: співак+ом.").font(ty::CAPTION).color(p.text_faint).wrap());
+        if !super::setuprun::has(s, "ukrainian") {
+            c = c.child(super::setuprun::install_line(s, p, "ukrainian", "Exact Ukrainian stress"));
+        }
     }
     // HolosTTS takes only the timbre from the reference clip, never its accent: a clip in another language is fine.
     if let Some(v) = voice.filter(|v| v.lang() != code && !exact_ukrainian(s)) {

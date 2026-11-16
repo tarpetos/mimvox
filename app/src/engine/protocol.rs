@@ -862,10 +862,12 @@ pub fn tts_generate(
     language: &str,
     output_format: &str,
     accent: Option<NativeVoice>,
+    exact_stress: bool,
 ) -> Request {
     (
         "tts.generate",
         with_accent(json!({
+            "exact_stress": exact_stress,
             "voice_id": voice_id,
             "text": text,
             "expressiveness": expressiveness,
@@ -1235,10 +1237,12 @@ pub struct BookParams<'a> {
     pub output_format: &'a str,
     pub m4b: bool,
     pub read_titles: bool,
+    pub exact_stress: bool,
 }
 
 pub fn book_start(p: &BookParams<'_>) -> Request {
     let params = json!({
+        "exact_stress": p.exact_stress,
         "title": p.title,
         "source": p.source,
         "format": p.format,

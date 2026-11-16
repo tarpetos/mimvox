@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+* **Modules:** the status pill at the top (*Ready*) opens a window with every optional part, its size and state.
+  **Install** adds one, **Turn off** keeps its files but stops using it, **Turn on** brings it back, and **Remove**
+  deletes it to free the disk. `setup --remove` does the same from a terminal.
+* **Ukrainian with exact stress keeps the voice:** HolosTTS on its own kept little of a voice's timbre (speaker
+  similarity 0.76 to the reference, against 0.94 for the main speech model). A voice that is not trained now goes
+  through the native-accent converter after it, which brings it to 0.88; it is about as fast as the main model then.
+  **Exact stress (HolosTTS)** in Style turns it off to compare, or to keep the main model's voice and guess the stress.
+
 ## 0.4.1
 
 * **macOS: the microphone works.** The app never told macOS it uses the microphone, so macOS did not ask for access,

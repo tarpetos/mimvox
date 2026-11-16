@@ -354,7 +354,10 @@ def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str,
     if not isinstance(lang, str):
         raise EngineError("bad_request", f"'{key}' must be a language code such as \"en\"")
     lang = lang.lower()
-    backend = backends.for_language(lang)
+    exact = params.get("exact_stress", True)
+    if not isinstance(exact, bool):
+        raise EngineError("bad_request", "'exact_stress' must be true or false")
+    backend = backends.for_language(lang, skip=() if exact else ("holos",))
     if backend is None:
         raise EngineError("bad_request", f"no voice model speaks {lang!r} (available: "
                                          f"{', '.join(sorted(backends.languages()))})")
@@ -416,6 +419,8 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     # native-us: RVC for a trained voice, else the zero-shot converter; without either the voice's own reference
     choice = accent.choose(requested, native_voice, lang, has_pth, index_rate, zs_worker is not None)
     zs = zero_shot(ctx, choice, zs_worker, ref, quality)
+    if zs is None and not use_rvc:
+        zs = await holos_timbre(ctx, backend, data, ref, quality)
     # The clip that will speak and its real language (a foreign one carries its accent into `lang`).
     ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")
     segs = segment_text(text, backend.count_tokens)
@@ -430,6 +435,19 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                           "another generation is running")
     return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], **choice.fields(),
             **ref_fields}
+
+
+async def holos_timbre(ctx: Context, backend: backends.TtsBackend, data: config.DataDir, ref: str,
+                       quality: str) -> zsvc.Bound | None:
+    """HolosTTS keeps little of an untrained voice's timbre (ECAPA 0.76 to the reference, against 0.94 for OmniVoice);
+    the zero-shot converter brings it back to 0.88. None for another backend or without the converter."""
+    if backend.name != "holos":
+        return None
+    worker = await aio.run_io(zsvc.get, ctx.runtime, data.root)
+    if worker is None:
+        return None
+    vram = float((getattr(ctx, "device", None) or {}).get("vram_gb") or 0.0)
+    return zsvc.Bound(worker, ref, zsvc.turn_lock(vram), quality)
 
 
 def zero_shot(ctx: Context, choice: accent.Choice, worker: zsvc.ZsvcWorker | None, ref: str,
@@ -484,7 +502,7 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         native = await aio.run_io(accent.prepare, choice, ref, voice_match) if choice.accent == "native-us" else None
         if choice.accent == "native-us" and native is None:
             choice = accent.Choice("own", choice.native_voice, "unavailable")
-        if native is None:
+        if native is None and choice.converter == "zero-shot":
             zs = None
         synth_ref, ref_text, pitch = (native.ref.path, native.ref.text, native.pitch) if native else (ref, None, 0)
         if native is not None:

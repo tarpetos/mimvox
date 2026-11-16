@@ -271,7 +271,7 @@ def _settings(params: dict[str, Any]) -> dict[str, Any]:
     titles = params.get("read_titles", True)
     if not isinstance(m4b, bool) or not isinstance(titles, bool):
         raise EngineError("bad_request", "'m4b' and 'read_titles' must be true or false")
-    return {"voice_id": voice_id, "language": lang,
+    return {"voice_id": voice_id, "language": lang, "exact_stress": params.get("exact_stress", True),
             "expressiveness": tts._num(params, "expressiveness", narration.EXPRESSIVENESS, 0.1, 1.5),
             "voice_match": tts._num(params, "voice_match", 1.0, 0.0, 1.0),
             "speed": tts._num(params, "speed", 1.0, tts.SPEED_MIN, tts.SPEED_MAX), "quality": quality,
@@ -301,6 +301,8 @@ async def _voice(ctx: Context, data: config.DataDir, st: dict[str, Any]) -> _Voi
     choice = accent.choose(requested, st.get("native_voice") or "auto", lang, has_pth, voice_match,
                            zs_worker is not None)
     zs = tts.zero_shot(ctx, choice, zs_worker, ref, st["quality"])
+    if zs is None and not use_rvc:
+        zs = await tts.holos_timbre(ctx, backend, data, ref, st["quality"])
     ref_fields = await aio.run_io(reflang.fields, ref, lang, choice.accent == "native-us")
     return _Voice(backend, lang, ref, pth, idx, rvc_rate, worker, choice, zs, voice_match,
                   float(st["expressiveness"]), st["quality"], tts.duration_factor_for(st["speed"]), out_fmt, ref_fields)
@@ -848,7 +850,7 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
         native = await aio.run_io(accent.prepare, choice, v.ref, v.voice_match) if choice.accent == "native-us" else None
         if choice.accent == "native-us" and native is None:
             choice = accent.Choice("own", choice.native_voice, "unavailable")
-        if native is None:
+        if native is None and choice.converter == "zero-shot":
             zs = None
         synth_ref, ref_text, pitch = (native.ref.path, native.ref.text, native.pitch) if native else (v.ref, None, 0)
         if native is not None:

@@ -795,8 +795,16 @@ that is spoken:
 
 The voice comes from the voice's reference clip (`reference_uk.wav` when it exists) through HolosTTS's voice encoder;
 the clip's language does not matter (only timbre and manner are taken, never the accent). `expressiveness` and
-`quality` do not apply (it has no sampling and no decoding steps); `speed` does. RVC, pauses and slot fitting are as
+`quality` do not apply to it (no sampling, no decoding steps); `speed` does. RVC, pauses and slot fitting are as
 for OmniVoice. Measured on an RTX 4070: about 0.1 s per second of speech (10x OmniVoice), 2.3 GB of VRAM.
+
+- **Timbre.** HolosTTS's voice encoder keeps little of a voice: speaker similarity to the reference clip (ECAPA) was
+  0.76, against 0.94 for OmniVoice from the same clip. A trained voice goes through RVC as always; for a voice that is
+  not trained, every HolosTTS segment goes through the zero-shot converter (Seed-VC, the `native_accent` component)
+  toward the reference clip, which brings it to 0.88. `quality` sets the converter's steps (12 Best, 8 Fast). Without
+  the converter the segment is used as HolosTTS made it. The conversion costs about as much time as OmniVoice itself.
+- **`exact_stress`** (`tts.generate`, `book.start`; default `true`): `false` speaks Ukrainian with OmniVoice even when
+  HolosTTS is installed. A book keeps the value it started with.
 
 When the component is not installed, failed to load or is paused for a training, Ukrainian goes to OmniVoice as before
 (`backends.for_language` skips a backend that is not `available()`). The `tts` entry of `models` stays OmniVoice's.
