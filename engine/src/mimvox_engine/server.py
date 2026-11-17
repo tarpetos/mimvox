@@ -326,10 +326,12 @@ async def serve(runtime_path: str, data_dir: str, out: BinaryIO, inp: BinaryIO) 
     aio.spawn(tts.load_models(server), name="model-loader")
 
     async def read_requests() -> None:
-        async for raw in aio.read_lines(inp):
-            server.on_line(raw)
-        log.info("stdin closed: shutting down")
-        server.request_shutdown()
+        try:
+            async for raw in aio.read_lines(inp):
+                server.on_line(raw)
+            log.info("stdin closed: shutting down")
+        finally:
+            server.request_shutdown()
 
     reader = aio.spawn(read_requests(), name="stdin")
     await server.stopped

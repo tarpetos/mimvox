@@ -39,6 +39,13 @@ def _words(n, lang, **kw):
         return str(n)
 
 
+def _int(s):
+    s = str(s)
+    if len(s) > 4300:  # int() raises above Python's 4300-digit conversion limit; leave the run unexpanded
+        return None
+    return int(s)
+
+
 def _n2w_lang(lang):
     """None when num2words does not know the language."""
     if _n2w is None:
@@ -66,7 +73,12 @@ def normalize(text, lang):
     text = _roman_numerals(text, lang)
     text = _ungroup(text)
     text = re.sub(r"(\d+)[.,](\d+)", lambda m: _words(float(f"{m.group(1)}.{m.group(2)}"), code), text)
-    return re.sub(r"\d+(?!\.\s+[A-ZÀ-ÞĀ-ſА-Я])", lambda m: _words(int(m.group()), code), text)
+
+    def num(m):
+        n = _int(m.group())
+        return m.group() if n is None else _words(n, code)
+
+    return re.sub(r"\d+(?!\.\s+[A-ZÀ-ÞĀ-ſА-Я])", num, text)
 
 
 _EN_UNITS = {"%": ("percent", "percent"), "$": ("dollar", "dollars"), "€": ("euro", "euros"), "£": ("pound", "pounds")}
@@ -81,14 +93,27 @@ def _en(text):
     text = re.sub(r"\b(\d{1,2}):(\d{2})\b", lambda m: _words(int(m.group(1)), "en") + " " + (
         "o'clock" if m.group(2) == "00" else ("oh " if m.group(2)[0] == "0" else "") + _words(int(m.group(2)), "en")),
         text)
-    text = re.sub(r"\b(\d+)(st|nd|rd|th)\b", lambda m: _words(int(m.group(1)), "en", to="ordinal"), text)
-    text = re.sub(r"(\d+)\.(\d+)", lambda m: _words(int(m.group(1)), "en") + " point " +
-                  " ".join(_words(int(d), "en") for d in m.group(2)), text)
+
+    def ordinal(m):
+        n = _int(m.group(1))
+        return m.group(0) if n is None else _words(n, "en", to="ordinal")
+
+    text = re.sub(r"\b(\d+)(st|nd|rd|th)\b", ordinal, text)
+
+    def decimal(m):
+        n = _int(m.group(1))
+        if n is None:
+            return m.group(0)
+        return _words(n, "en") + " point " + " ".join(_words(int(d), "en") for d in m.group(2))
+
+    text = re.sub(r"(\d+)\.(\d+)", decimal, text)
     text = re.sub(r"(\d+(?:\s\w+)*?)\s?%", lambda m: m.group(1) + " percent", text)
 
     def num(m):
         s = m.group()
-        n = int(s)
+        n = _int(s)
+        if n is None:
+            return s
         if len(s) == 4 and 1100 <= n <= 2099:
             return _words(n, "en", to="year")
         return _words(n, "en")
@@ -157,7 +182,10 @@ def _uk_card(n, case="nominative", feminine=False):
 
 def _uk_ord(n, form):
     """Ordinal of ``n``: form is one of nom_m, gen_m, loc_m, nom_f, gen_f, loc_f, nom_n."""
-    words = _words(int(n), "uk", to="ordinal")
+    n = _int(n)
+    if n is None:
+        return None
+    words = _words(n, "uk", to="ordinal")
     if form == "nom_m" or not isinstance(words, str):
         return words
     head, _, last = words.rpartition(" ")
@@ -171,10 +199,12 @@ def _uk_ord(n, form):
 
 def _uk_decimal(whole, frac, case="nominative"):
     """3,5 -> три цілих п'ять десятих (1 ціла, 2-4/5+ цілих)."""
-    w = int(whole)
+    w = _int(whole)
+    f = _int(frac)
+    if w is None or f is None:
+        return None
     whole_words = _uk_card(w, case, feminine=True)
     cil = "ціла" if w % 10 == 1 and w % 100 != 11 else "цілих"
-    f = int(frac)
     denom = {1: ("десята", "десятих"), 2: ("сота", "сотих"), 3: ("тисячна", "тисячних")}.get(len(frac))
     if denom is None:
         return f"{whole_words} кома {' '.join(_uk_card(int(d)) for d in frac)}"
@@ -212,15 +242,24 @@ def _uk(text):
     text = re.sub(r"(\d{1,4})-(?:х|их)\b", lambda m: _uk_ord(m.group(1), "nom_m")[:-2] + "их", text)
     text = re.sub(r"\b([IVXL]{1,6})\s*столітті\b", lambda m: f"{_uk_ord(_roman(m.group(1)), 'loc_m')} столітті", text)
     text = re.sub(r"\b([IVXL]{1,6})\s*(ст\.|столітт[яі])", lambda m: f"{_roman(m.group(1))} \0ст", text)
-    text = re.sub(r"(\d+)\s*\0ст(?![\w])", lambda m: f"{_uk_ord(m.group(1), 'nom_n')} століття", text)
+
+    def century(m):
+        words = _uk_ord(m.group(1), "nom_n")
+        return m.group(0) if words is None else f"{words} століття"
+
+    text = re.sub(r"(\d+)\s*\0ст(?![\w])", century, text)
     # dates: "5 травня" -> п'ятого травня, "1-го" -> першого
     text = re.sub(r"(\d{1,2})(?:-?(?:го|ого))?\s+(" + "|".join(_UK_MONTHS_GEN) + r")\b",
                   lambda m: f"{_uk_ord(m.group(1), 'gen_m')} {m.group(2)}", text, flags=re.IGNORECASE)
     # ordinal suffixes: 5-й, 3-я, 2-га, 10-те, 1-го, 7-му
     suffix = {"й": "nom_m", "ий": "nom_m", "я": "nom_f", "а": "nom_f", "га": "nom_f", "та": "nom_f", "е": "nom_n",
               "те": "nom_n", "го": "gen_m", "ого": "gen_m", "му": "loc_m", "ому": "loc_m", "ої": "gen_f", "ій": "loc_f"}
-    text = re.sub(r"(\d+)-(" + "|".join(sorted(suffix, key=len, reverse=True)) + r")\b",
-                  lambda m: _uk_ord(m.group(1), suffix[m.group(2)]), text)
+
+    def suffixed(m):
+        words = _uk_ord(m.group(1), suffix[m.group(2)])
+        return m.group(0) if words is None else words
+
+    text = re.sub(r"(\d+)-(" + "|".join(sorted(suffix, key=len, reverse=True)) + r")\b", suffixed, text)
     # currency symbols before the number: $100 -> 100 $
     text = re.sub(r"([$€₴])\s?" + _UK_NUM, lambda m: f"{m.group(2)}{',' + m.group(3) if m.group(3) else ''} {m.group(1)}",
                   text)
@@ -234,10 +273,14 @@ def _uk(text):
         case = "genitive" if prep and prep.strip().lower() in _UK_GEN else "nominative"
         forms = _UK_UNITS[unit]
         fem = unit in _UK_FEM_UNITS
+        n = _int(whole)
+        if n is None:
+            return m.group(0).replace("\0", "")
         if frac:
             words = _uk_decimal(whole, frac, case)
+            if words is None:
+                return m.group(0).replace("\0", "")
             return f"{prep or ''}{words} {forms[3]}"
-        n = int(whole)
         words = _uk_card(n, case, feminine=fem)
         if case == "genitive":
             noun = forms[3] if n % 10 == 1 and n % 100 != 11 else forms[2]
@@ -256,11 +299,21 @@ def _uk(text):
     def plain(m):
         prep, whole, frac = m.group(1), m.group(2), m.group(3)
         case = "genitive" if prep and prep.strip().lower() in _UK_GEN else "nominative"
-        words = _uk_decimal(whole, frac, case) if frac else _uk_card(int(whole), case)
+        n = _int(whole)
+        if n is None:
+            return m.group(0)
+        words = _uk_decimal(whole, frac, case) if frac else _uk_card(n, case)
+        if words is None:
+            return m.group(0)
         return f"{prep or ''}{words}"
 
     text = re.sub(r"(\b\w+\s+)?" + r"(\d+)(?:,(\d+))?", plain, text)
-    text = re.sub(r"(\d+)\.(\d+)", lambda m: _uk_decimal(m.group(1), m.group(2)), text)
+
+    def dotted(m):
+        words = _uk_decimal(m.group(1), m.group(2))
+        return m.group(0) if words is None else words
+
+    text = re.sub(r"(\d+)\.(\d+)", dotted, text)
     text = re.sub(r"\bодна тисяча\b", "тисяча", text)
     text = re.sub(r"\+(?=\w)|(?<=\w)\+", "", text)  # a "+" left over (after the vowel, or next to a digit)
     return _SPACES.sub(" ", text).strip()

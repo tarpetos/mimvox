@@ -120,9 +120,13 @@ async def read_lines(stream: BinaryIO) -> AsyncIterator[bytes]:
         except (OSError, ValueError):
             reader = None  # type: ignore[assignment]  # a regular file: fall back to the thread below
         if reader is not None:
-            async for line in reader:
-                yield line
-            return
+            try:
+                async for line in reader:
+                    yield line
+                return
+            except ValueError:  # readline() raises for a single line longer than the 64 MiB reader limit
+                log.warning("oversized stdin line: treating the rest of the stream as EOF")
+                return
     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
     def pump() -> None:
