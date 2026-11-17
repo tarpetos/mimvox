@@ -283,7 +283,7 @@ Where your data lives (voices, datasets, trained models, generated audio) is des
 
 Copyright 2026 [tarpetos](https://github.com/tarpetos). All rights reserved except as granted by the license.
 
-The source code is available under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change and share it
+The source code is available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md): you may use, change and share it
 for any **non-commercial** purpose (personal use, study, research, hobby projects, and use by charities, schools and
 public institutions). **Commercial use needs a separate license** from the author: open an issue to ask. Contributions
 are accepted under the terms in [CONTRIBUTING.md](CONTRIBUTING.md).

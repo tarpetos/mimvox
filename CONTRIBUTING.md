@@ -5,7 +5,7 @@ change can be discussed before you spend time on it.
 
 ## Terms for contributions
 
-The project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE), and its author keeps the right to
+The project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md), and its author keeps the right to
 offer it under other terms, including commercial ones. To keep that possible, every contribution is accepted on these
 terms:
 

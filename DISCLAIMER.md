@@ -89,7 +89,7 @@ decency expects it.
 ## 7. Who provides the app
 
 - Mimvox is made by [tarpetos](https://github.com/tarpetos), who holds all rights to it (see
-  [LICENSE](LICENSE)). Questions about this document: open an issue on the project's GitHub page.
+  [LICENSE](LICENSE.md)). Questions about this document: open an issue on the project's GitHub page.
 - The app is provided free of charge, as is, without warranty of any kind, and is not sold.
 - You must be 18 or older, or the age of majority where you live, to use the app.
 
