@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rune::{Cx, El, TextEdit, col, el, row, text};
@@ -28,13 +28,15 @@ pub(crate) fn read_settings() -> Value {
     std::fs::read_to_string(settings_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}))
 }
 
-fn write_settings(v: &Value) {
-    let path = settings_path();
+fn write_settings(path: &Path, v: &Value) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(t) = serde_json::to_string_pretty(v) {
-        let _ = std::fs::write(path, t);
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, t).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
     }
 }
 
@@ -44,7 +46,7 @@ pub(crate) fn update_settings(f: impl FnOnce(&mut Value)) {
         v = json!({});
     }
     f(&mut v);
-    write_settings(&v);
+    write_settings(&settings_path(), &v);
 }
 
 pub fn setting(key: &str) -> Option<Value> {
@@ -644,4 +646,23 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("onboarding-cpu", scene_cpu_warning),
         ("onboarding-stopped", scene_engine_stopped),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writing_settings_leaves_no_tmp_behind_and_the_file_parses() {
+        let dir = std::env::temp_dir().join(format!("mimvox-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // a stale tmp the atomic writer leaves by crashing between write and rename
+        std::fs::write(path.with_extension("json.tmp"), "{\"spe").unwrap();
+        write_settings(&path, &json!({"speed": 1.25}));
+        let got: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(got, json!({"speed": 1.25}));
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -150,7 +150,8 @@ fn listed(list: Vec<ApiRelease>) -> Vec<Release> {
 pub fn fetch(version: &str) -> Result<Found, String> {
     let current = current()?;
     let builder = UpdaterBuilder::new(current, config_at(&manifest(version), false))
-        .timeout(Duration::from_secs(30))
+        // reqwest counts this against the whole download body: 215 MB needs ~30 min on a 1 Mbit/s link
+        .timeout(Duration::from_secs(30 * 60))
         .version_comparator(|current, release| release.version != current);
     let update = builder.build().map_err(|e| e.to_string())?.check().map_err(|e| e.to_string())?;
     let update = update.ok_or_else(|| format!("Mimvox {version} is the version you have."))?;

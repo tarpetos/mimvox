@@ -206,7 +206,10 @@ fn write_settings(format: &str, quality: ExportQuality) {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(t) = serde_json::to_string_pretty(&v) {
-        let _ = std::fs::write(path, t);
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, t).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
     }
 }
 
