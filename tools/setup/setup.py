@@ -1443,15 +1443,16 @@ class Setup:
 
     def _check_media(self) -> list[str]:
         problems: list[str] = []
+        exe = ".exe" if self.plat == "windows" else ""
+        portable = all((self.ffmpeg_dir() / f"{name}{exe}").is_file() for name in ("ffmpeg", "ffprobe"))
         if self.plat == "windows":
-            folder = self.applio
-            found = all((folder / exe).is_file() for exe in APPLIO_WINDOWS_REQUIRED)
+            found = portable or all((self.applio / name).is_file() for name in APPLIO_WINDOWS_REQUIRED)
         else:
-            found = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+            found = portable or bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
         if found:
             say("ffmpeg and ffprobe: present.")
         else:
-            where = "the Applio folder" if self.plat == "windows" else "PATH"
+            where = ("the Applio folder" if self.plat == "windows" else "PATH") + f" or {self.ffmpeg_dir()}"
             problems.append(f"ffmpeg / ffprobe not found in {where}: audio and video files cannot be read or exported.")
         py = self.engine_python()
         if py.exists():
@@ -1810,7 +1811,8 @@ def run_move(args: argparse.Namespace) -> int:
             pass
         gpu = Gpu(str(device.get("backend", "cuda")), str(device.get("name", "")), float(device.get("vram_gb", 0.0)),
                   str(device.get("vendor", "")))
-        setup = Setup(root=Path(__file__).resolve().parents[2], plat=plat, arch=host_arch(), data_dir=new, gpu=gpu)
+        setup = Setup(root=Path(__file__).resolve().parents[2], plat=plat, arch=host_arch(), data_dir=new, gpu=gpu,
+                      components=previous_components(new) or set(COMPONENTS))
         setup.write_runtime_toml()  # also writes (or removes) location.toml
         mv.out("Rewrote runtime.toml and the location pointer")
         if not args.no_check:
