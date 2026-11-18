@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.3
+
+* **Updates download on a slow connection:** the download of a new version was cut off after 30 seconds, so below
+  about 7 Mbit/s an update could never finish. It now has up to 30 minutes.
+* **Settings survive a crash:** settings are written to a temporary file and then swapped in, so a crash while saving
+  no longer resets every setting.
+* **Setup:**
+  * Moving the runtime with `--move-to` no longer fails its check when only some parts are installed.
+  * The check accepts the ffmpeg setup puts in the runtime folder, so an install without training no longer reports
+    *ffmpeg / ffprobe not found*.
+* **Engine:** a request line over 64 MiB no longer hangs the engine (it shuts down and is started again), and a number
+  of more than 4300 digits in a text is left as digits instead of failing the speech.
+
+Thanks to @shiwng for all of these (#53, #54, #55).
+
 ## 0.4.2
 
 * **Modules:** the status pill at the top (*Ready*) opens a window with every optional part, its size and state.
