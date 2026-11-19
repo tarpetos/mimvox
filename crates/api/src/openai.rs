@@ -100,13 +100,13 @@ fn openai_pcm(wav: &[u8]) -> Option<Vec<u8>> {
     if tag != 1 || bits != 16 || channels == 0 || rate == 0 {
         return None;
     }
-    let mono: Vec<f32> = wav_chunk(wav, b"data")?
-        .chunks_exact(2 * channels)
-        .map(|frame| {
-            frame.chunks_exact(2).map(|s| f32::from(i16::from_le_bytes([s[0], s[1]]))).sum::<f32>()
-                / (32768.0 * channels as f32)
-        })
+    let samples: Vec<f32> = wav_chunk(wav, b"data")?
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|s| f32::from(i16::from_le_bytes(*s)) / 32768.0)
         .collect();
+    let mono: Vec<f32> = samples.chunks_exact(channels).map(|f| f.iter().sum::<f32>() / channels as f32).collect();
     let samples = if rate == PCM_RATE || mono.is_empty() {
         mono
     } else {
@@ -320,7 +320,7 @@ mod tests {
             .collect();
         let pcm = openai_pcm(&wav_16bit(44_100, 1, &tone)).unwrap();
         assert_eq!(pcm.len(), 2 * 24_000);
-        let out: Vec<i16> = pcm.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]])).collect();
+        let out: Vec<i16> = pcm.as_chunks::<2>().0.iter().map(|s| i16::from_le_bytes(*s)).collect();
         let crossings = out.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count();
         assert!((1990..=2010).contains(&crossings), "{crossings}");
         let peak = out[1000..23_000].iter().map(|s| s.unsigned_abs()).max().unwrap();
