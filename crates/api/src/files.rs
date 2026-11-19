@@ -25,6 +25,24 @@ fn served_roots(data_dir: &Path) -> [PathBuf; 3] {
     [data_dir.join("outputs"), data_dir.join("tmp"), uploads_dir(data_dir)]
 }
 
+/// `<books>/<book id>/segments/<NNN>.json`, a finished chapter's segment timing; nothing else under `books`.
+fn is_segment_timing(path: &Path, books: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(books) else {
+        return false;
+    };
+    let parts: Vec<Component> = rest.components().collect();
+    let [Component::Normal(id), Component::Normal(dir), Component::Normal(name)] = parts[..] else {
+        return false;
+    };
+    let (Some(id), Some(name)) = (id.to_str(), name.to_str()) else {
+        return false;
+    };
+    let id_char = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let id_ok = id.starts_with(id_char) && id.chars().all(|c| id_char(c) || matches!(c, '_' | '-'));
+    let number = name.strip_suffix(".json").unwrap_or("");
+    id_ok && dir == "segments" && number.len() >= 3 && number.bytes().all(|b| b.is_ascii_digit())
+}
+
 pub fn prune_uploads(data_dir: &Path) {
     let Ok(entries) = std::fs::read_dir(uploads_dir(data_dir)) else {
         return;
@@ -172,10 +190,11 @@ pub async fn download(State(st): State<AppState>, Query(q): Query<DownloadQuery>
         ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
-            "only files under the data folder's outputs, tmp and api/uploads are served",
+            "only files under the data folder's outputs, tmp, api/uploads and books/<id>/segments are served",
         )
     };
     let roots = served_roots(&st.cfg.data_dir);
+    let books = st.cfg.data_dir.join("books");
     // Checked before any filesystem access: on Windows even resolving a UNC path connects to (and authenticates with)
     // that host.
     let path = lexical(requested).ok_or_else(forbidden)?;
@@ -185,12 +204,17 @@ pub async fn download(State(st): State<AppState>, Query(q): Query<DownloadQuery>
             real_roots.push(real);
         }
     }
+    let real_books = tokio::fs::canonicalize(&books).await.ok();
     let lexical_roots: Vec<PathBuf> = roots.iter().filter_map(|r| lexical(r)).collect();
-    if !lexical_roots.iter().chain(&real_roots).any(|r| path.starts_with(r)) {
+    if !lexical_roots.iter().chain(&real_roots).any(|r| path.starts_with(r))
+        && !lexical(&books).iter().chain(&real_books).any(|b| is_segment_timing(&path, b))
+    {
         return Err(forbidden());
     }
     let real = tokio::fs::canonicalize(&path).await.map_err(|_| not_found())?;
-    if !real_roots.iter().any(|r| real.starts_with(r)) {
+    if !real_roots.iter().any(|r| real.starts_with(r))
+        && !real_books.as_deref().is_some_and(|b| is_segment_timing(&real, b))
+    {
         return Err(forbidden());
     }
     // Before opening: Windows cannot open a folder as a file.
@@ -225,6 +249,31 @@ mod tests {
         assert!(cjk.len() <= NAME_MAX_BYTES && cjk.ends_with(".mp3"), "{cjk}");
         let no_ext = safe_name(&"ж".repeat(300));
         assert!(no_ext.len() <= NAME_MAX_BYTES && no_ext.chars().all(|c| c == 'ж'));
+    }
+
+    #[test]
+    fn only_segment_timing_files_under_books() {
+        let books = Path::new("/data/books");
+        let ok = |s: &str| is_segment_timing(&books.join(s), books);
+        assert!(ok("my-book_2/segments/001.json"));
+        assert!(ok("b/segments/1234.json"));
+        for bad in [
+            "b/book.json",
+            "b/state.json",
+            "b/work/001.pcm",
+            "b/work/001.segments.json",
+            "b/stats/001.json",
+            "b/segments/01.json",
+            "b/segments/abc.json",
+            "b/segments/001.json/x",
+            "b/segments",
+            "Book/segments/001.json",
+            "-b/segments/001.json",
+            "b/x/segments/001.json",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
+        assert!(!is_segment_timing(Path::new("/data/outputs/b/segments/001.json"), books));
     }
 
     #[test]
