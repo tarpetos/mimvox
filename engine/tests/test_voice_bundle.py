@@ -76,6 +76,20 @@ def rewrite(src, dst, change):
     return str(dst)
 
 
+def rebuild(src, dst, members):
+    """Copies the zip with `members` (name -> bytes) replaced or added, and a manifest that matches them."""
+    with zipfile.ZipFile(src) as zin:
+        manifest = json.loads(zin.read("manifest.json"))
+        body = {i.filename: zin.read(i) for i in zin.infolist() if i.filename != "manifest.json"}
+    body.update(members)
+    manifest["files"] = [{"path": n, "bytes": len(b), "sha256": hashlib.sha256(b).hexdigest()}
+                         for n, b in sorted(body.items())]
+    with zipfile.ZipFile(dst, "w") as zout:
+        for n, b in [*sorted(body.items()), ("manifest.json", json.dumps(manifest).encode())]:
+            zout.writestr(n, b)
+    return str(dst)
+
+
 def test_export_holds_what_speaks_and_nothing_else(tmp_path):
     data = make_voice(tmp_path / "a")
     res = export(data)
@@ -210,8 +224,62 @@ def test_not_a_zip_and_mixed_params(tmp_path):
     assert err.value.code == "bad_request"
 
 
+def test_stale_sidecar_is_left_out(tmp_path):
+    data = make_voice(tmp_path / "a")
+    ref = data.reference("anna")
+    with open(ref, "r+b") as fh:
+        fh.seek(-2, os.SEEK_END)
+        fh.write(b"\x01\x02")
+    res = export(data)
+    names = [f["path"] for f in res["files"]]
+    assert "reference.wav" in names and "reference.omnivoice.json" not in names
+    assert "reference_uk.omnivoice.json" in names
+    dst = config.DataDir(str(tmp_path / "b"))
+    import_bundle(dst, res["path"])
+    assert not os.path.exists(os.path.join(dst.voice("anna"), "reference.omnivoice.json"))
+
+
+def test_deeply_nested_voice_json_is_rejected(tmp_path):
+    res = export(make_voice(tmp_path / "a"))
+    path = rebuild(res["path"], tmp_path / "bad.mimvoice", {"voice.json": b"[" * 100_000 + b"]" * 100_000})
+    assert "voice.json" in assert_rejected(tmp_path, path)
+    path = rebuild(res["path"], tmp_path / "bad2.mimvoice", {})
+    with zipfile.ZipFile(path) as zf:
+        members = {i.filename: zf.read(i) for i in zf.infolist() if i.filename != "manifest.json"}
+    with zipfile.ZipFile(path, "w") as zf:
+        for n, b in members.items():
+            zf.writestr(n, b)
+        zf.writestr("manifest.json", b"[" * 100_000 + b"]" * 100_000)
+    assert "manifest.json" in assert_rejected(tmp_path, path)
+
+
+def test_impossible_sidecar_time_is_rejected(tmp_path):
+    data = make_voice(tmp_path / "a")
+    res = export(data)
+    side = {"version": 1, "sig": [10**30, os.path.getsize(data.reference("anna"))], "text": "hi"}
+    path = rebuild(res["path"], tmp_path / "bad.mimvoice", {"reference.omnivoice.json": json.dumps(side).encode()})
+    assert "reference.wav" in assert_rejected(tmp_path, path)
+
+
+def test_export_refuses_what_import_would(tmp_path, monkeypatch):
+    data = make_voice(tmp_path / "a")
+    monkeypatch.setattr(voicebundle, "MAX_MEMBER", 2000)
+    with pytest.raises(EngineError) as err:
+        export(data)
+    assert err.value.code == "bad_request" and "reference.wav is too large" in err.value.message
+    monkeypatch.setattr(voicebundle, "MAX_MEMBER", 2 << 30)
+    monkeypatch.setattr(voicebundle, "MAX_TOTAL", 40_000)
+    with pytest.raises(EngineError) as err:
+        export(data)
+    assert err.value.code == "bad_request" and "too large" in err.value.message
+    assert not os.path.isdir(os.path.join(data.tmp, "export")) or os.listdir(os.path.join(data.tmp, "export")) == []
+
+
 def test_export_errors(tmp_path):
     data = make_voice(tmp_path / "a")
+    with pytest.raises(EngineError) as err:
+        voices.voices_export(Ctx(data.root), {})
+    assert err.value.code == "bad_request" and err.value.message == "'id' is required"
     with pytest.raises(EngineError) as err:
         export(data, dest="relative.mimvoice")
     assert err.value.code == "bad_request"

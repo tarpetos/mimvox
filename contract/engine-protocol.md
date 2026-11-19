@@ -327,12 +327,12 @@ A voice bundle is one archive with what a voice needs to speak on another machin
 `<data>/tmp/export/<id>-<sha256[:12]>.mimvoice` (so `GET /files` serves it; `<data>/tmp` is wiped at the next engine
 start). `sha256` and `bytes` are those of the archive file, `files` its voice files, `engine` the engine version (not
 in the archive). Errors: `not_found` (voice),
-`bad_request` (no `reference.wav` yet, `dest` relative or a folder).
+`bad_request` (no `id`, no `reference.wav` yet, `dest` relative or a folder, a file over the import limits below).
 
 - **Contents** (paths inside the voice folder): `voice.json`, `reference.wav` and `reference.omnivoice.json`, every
   `reference_<lang>.wav` and `reference_<lang>.omnivoice.json`, `rvc/model.pth` and `rvc/model.index`; each only when
-  present except `voice.json` and `reference.wav`. Never the dataset (`dataset/`), the media pool
-  (`reference_media.wav`) or training checkpoints. `voice.json` is stored without `training_run` / `training_paused`.
+  present except `voice.json` and `reference.wav`, a sidecar only while it is valid for its clip. Never the dataset
+  (`dataset/`), the media pool (`reference_media.wav`) or training checkpoints. `voice.json` is stored without `training_run` / `training_paused`.
 - **Format**: a zip, every member stored (no compression), dated 1980-01-01 00:00:00, mode 0644, Unix; the files in
   sorted order, then `manifest.json`: `{"format":"mimvox-voice","version":1,"id","name",
   "files":[{"path","bytes","sha256"}]}` (`files` as in the answer). `voice.json` and `manifest.json` are UTF-8 JSON
@@ -345,10 +345,12 @@ in the archive). Errors: `not_found` (voice),
 upload's `<data>/api/uploads/...` path too). The archive is refused (`bad_request`, nothing created) when a member
 name is absolute, has `..`, `.`, `\`, `:` or an empty part, is not one of the contents above, is there twice, is
 larger than 1 MiB (`.json`) or 2 GiB (others, 4 GiB together); when `manifest.json` is missing, of another format or a
-newer `version`, lists other files than the archive holds, or lacks `voice.json` / `reference.wav`; or when a
-member's size or SHA-256 differs from the manifest. The voice keeps the bundle's `id` when no voice has it, else gets
-a new one made from the name as in `voices.create`; `name` renames it. Sidecars stay valid (each clip gets the
-modification time its sidecar names). The voice has no dataset; it is `trained` when the bundle has `rvc/model.pth`.
+newer `version`, lists other files than the archive holds, or lacks `voice.json` / `reference.wav`; when a member's
+size or SHA-256 differs from the manifest; or when `voice.json` is unusable or a sidecar names an impossible time. The
+voice keeps the bundle's `id` when no voice has it, else gets a new one made from the name as in `voices.create`;
+`name` renames it. Sidecars are kept and each clip gets the modification time its sidecar names, so they usually stay
+valid; on a filesystem with coarser times (NTFS: 100 ns) the clip's transcript and language may be worked out again on
+first use. The voice has no dataset; it is `trained` when the bundle has `rvc/model.pth`.
 Errors: `bad_request`, `not_found` (no such file).
 
 ### `voices.warm`

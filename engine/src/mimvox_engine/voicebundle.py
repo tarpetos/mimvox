@@ -24,11 +24,20 @@ _MEMBER = re.compile(r"voice\.json|reference(?:_[a-z]{2,3})?\.(?:wav|omnivoice\.
 _CHUNK = 1 << 20
 
 
-def _voice_files(vdir: str) -> list[str]:
-    names = ["reference.wav", "reference.omnivoice.json", "rvc/model.pth", "rvc/model.index"]
-    for code in voices._language_references(vdir):
-        names += [f"reference_{code}.wav", f"reference_{code}.omnivoice.json"]
-    return sorted(n for n in names if os.path.isfile(os.path.join(vdir, *n.split("/"))))
+def _voice_files(vdir: str, voice_json: bytes) -> list[str]:
+    clips = ["reference.wav", *(f"reference_{code}.wav" for code in voices._language_references(vdir))]
+    names = [n for n in [*clips, "rvc/model.pth", "rvc/model.index"] if os.path.isfile(os.path.join(vdir, *n.split("/")))]
+    names += [os.path.basename(reflang.sidecar_path(c)) for c in clips
+              if c in names and reflang.read_sidecar(os.path.join(vdir, c)) is not None]
+    total = len(voice_json)
+    for name in names:
+        size = os.path.getsize(os.path.join(vdir, *name.split("/")))
+        total += size
+        if size > (MAX_JSON if name.endswith(".json") else MAX_MEMBER) or total > MAX_TOTAL:
+            raise EngineError("bad_request", f"{name} is too large for a voice bundle ({size} bytes)")
+    if len(voice_json) > MAX_JSON:
+        raise EngineError("bad_request", "voice.json is too large for a voice bundle")
+    return sorted(names)
 
 
 def _canonical(obj: Any) -> bytes:
@@ -57,19 +66,18 @@ def export_voice(data: config.DataDir, voice_id: str, dest: Any) -> dict[str, An
         raise EngineError("bad_request", "'dest' must be an absolute file path")
     if dest and os.path.isdir(dest):
         raise EngineError("bad_request", f"'dest' is a folder: {dest}")
-    meta = voices.read_meta(data, voice_id)
+    meta = {k: v for k, v in voices.read_meta(data, voice_id).items() if k not in _VOLATILE}
+    voice_json = _canonical(meta)
     vdir = data.voice(voice_id)
-    names = _voice_files(vdir)
+    names = _voice_files(vdir, voice_json)
     if "reference.wav" not in names:
         raise EngineError("bad_request", f"voice {voice_id!r} has no reference clip yet")
-    meta = {k: v for k, v in meta.items() if k not in _VOLATILE}
     out_dir = os.path.dirname(dest) if dest else os.path.join(data.tmp, "export")
     os.makedirs(out_dir, exist_ok=True)
     part = os.path.join(out_dir, f".{uuid.uuid4().hex}.part")
     files: list[dict[str, Any]] = []
     try:
         with zipfile.ZipFile(part, "w") as zf:
-            voice_json = _canonical(meta)
             for name in sorted([*names, "voice.json"]):
                 h = hashlib.sha256()
                 if name == "voice.json":
@@ -131,7 +139,7 @@ def _read_manifest(zf: zipfile.ZipFile, members: dict[str, zipfile.ZipInfo]) -> 
         raise _bad("no manifest.json")
     try:
         manifest = json.loads(zf.read(members[MANIFEST]).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise _bad(f"manifest.json is not valid JSON ({exc})") from None
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
         raise _bad("manifest.json is not a Mimvox voice manifest")
@@ -177,7 +185,9 @@ def _keep_sidecars(vdir: str) -> None:
                 sig = json.load(fh).get("sig")
             if isinstance(sig, list) and len(sig) == 2 and sig[1] == os.path.getsize(wav):
                 os.utime(wav, ns=(int(sig[0]), int(sig[0])))
-        except (OSError, ValueError, AttributeError, TypeError):
+        except OverflowError:
+            raise _bad(f"the sidecar of {name!r} names an impossible time") from None
+        except (OSError, ValueError, AttributeError, TypeError, RecursionError):
             continue
 
 
@@ -186,7 +196,7 @@ def _clean_meta(raw: bytes) -> dict[str, Any]:
 
     try:
         meta = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         meta = None
     if not isinstance(meta, dict) or not isinstance(meta.get("name"), str) or not meta["name"].strip():
         raise _bad("voice.json has no voice name")

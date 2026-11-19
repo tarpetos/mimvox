@@ -361,4 +361,7 @@ def voices_import(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 def voices_export(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     from . import voicebundle  # noqa: PLC0415 - lazy: it imports this module
 
-    return voicebundle.export_voice(config.data_dir(ctx), str(params.get("id")), params.get("dest"))
+    vid = params.get("id")
+    if not isinstance(vid, str) or not vid:
+        raise EngineError("bad_request", "'id' is required")
+    return voicebundle.export_voice(config.data_dir(ctx), vid, params.get("dest"))
