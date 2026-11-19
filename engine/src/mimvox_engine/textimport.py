@@ -13,17 +13,17 @@ import re
 import tempfile
 import unicodedata
 import zipfile
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from html.entities import html5 as _HTML5
 from html.parser import HTMLParser
 from typing import Any
-from collections.abc import Callable, Iterable, Iterator
 from urllib.parse import unquote
 from xml.etree import ElementTree as ET
 
+from . import autoparts, config
 from .dataset import lang
 from .dataset.text import WPM, count_words, est_seconds
-from . import autoparts, config
 from .registry import EngineError, method
 
 log = logging.getLogger("mimvox.textimport")

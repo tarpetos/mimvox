@@ -682,7 +682,7 @@ class Setup:
                 self.announce()
             except SetupError as error:
                 if not interactive:
-                    raise SystemExit(f"[setup] {error}")
+                    raise SystemExit(f"[setup] {error}") from None
                 say(f"{error}")
                 answer = "n"
             else:

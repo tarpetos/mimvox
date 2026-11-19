@@ -652,6 +652,7 @@ def _separate(slot, mix, vocals_out, rest_out=None):
     """Writes into zero-filled memory-mapped arrays, so a long file need not fit in RAM. The model takes stereo: a mono
     signal is fed on both channels and the two outputs are averaged."""
     import math
+
     import numpy as np
     torch = _torch()
     model, dev = slot.obj, slot.device
@@ -722,6 +723,7 @@ def _release_outs(outs):
 
 def op_separate_vocals(req):
     import traceback
+
     import numpy as np
     torch = _torch()
     audio = np.load(req["audio"], mmap_mode="r")

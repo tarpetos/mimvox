@@ -33,7 +33,7 @@ def _is_roman(s: str) -> bool:
 
 
 def _heading_kind(p: str) -> str | None:
-    from .textimport import _heading_match   # noqa: PLC0415 - textimport imports this module lazily too
+    from .textimport import _heading_match  # noqa: PLC0415 - textimport imports this module lazily too
 
     s = p.strip()
     if not s or count_words(s) > HEADING_MAX_WORDS or len(s) > 80:
