@@ -55,6 +55,39 @@ pub fn check_bind(addr: SocketAddr, token: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolves when the console process should stop: Ctrl+C, SIGTERM or SIGHUP on Unix; Ctrl+C, Ctrl+Break, closing
+/// the console or the system shutting down on Windows.
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut hup)) = (signal(SignalKind::terminate()), signal(SignalKind::hangup())) else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+            _ = hup.recv() => {}
+        }
+    }
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_break, ctrl_close, ctrl_shutdown};
+        // Not ctrl_logoff: it does not say whose logoff it is, so a server run as a service would stop on anyone's.
+        let (Ok(mut brk), Ok(mut close), Ok(mut shutdown)) = (ctrl_break(), ctrl_close(), ctrl_shutdown()) else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = brk.recv() => {}
+            _ = close.recv() => {}
+            _ = shutdown.recv() => {}
+        }
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     hub: Hub,

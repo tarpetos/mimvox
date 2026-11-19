@@ -192,6 +192,8 @@ the quick check, and only then delete the old directory.
                                              #  and "media": the media pool (files, best windows), see Reference from media
 <data>/voices/<voice_id>/reference_media.wav # optional media pool (voices.reference_from_media): many media files of the speaker,
                                              #  cleaned and joined (mono 16-bit 44.1 kHz, at most 20 min); not a dataset part, never trained on
+<data>/tmp/export/<voice_id>-<sha256[:12]>.mimvoice  # voices.export's default archive (a voice bundle)
+<data>/tmp/import/<random>/                  # a voice bundle being unpacked by voices.import (moved to voices/ when verified)
 <data>/tmp/refcand/<voice_id>/               # preview WAVs of voices.reference_candidates (rewritten on every call)
 <data>/voices/<voice_id>/rvc/model.pth       # trained or imported RVC model
 <data>/voices/<voice_id>/rvc/model.index
@@ -314,6 +316,42 @@ language, e.g. when the first texts read into a still empty voice are in another
   `..._<N>e_...` file name when present and `"imported":true` in `voice.json`.
 - Needs at least a `reference_path` or a `dataset_dir`; `rvc_index` needs `rvc_model`. Errors: `bad_request`,
   `not_found` (a path is missing). On any failure the half-made voice is removed again.
+- `{"bundle","name"?}` imports a voice bundle instead (see [Voice bundles](#voice-bundles-voicesexport--voicesimport-bundle)); `bundle`
+  cannot be combined with the four paths above.
+
+### Voice bundles (`voices.export` / `voices.import` `bundle`)
+A voice bundle is one archive with what a voice needs to speak on another machine.
+
+`voices.export {"id","dest"?}` -> `{"path","sha256","bytes","files":[{"path","bytes","sha256"}],"engine"}`: writes the bundle to
+`dest` (an absolute file path, replaced when it exists) or, by default, to
+`<data>/tmp/export/<id>-<sha256[:12]>.mimvoice` (so `GET /files` serves it; `<data>/tmp` is wiped at the next engine
+start). `sha256` and `bytes` are those of the archive file, `files` its voice files, `engine` the engine version (not
+in the archive). Errors: `not_found` (voice),
+`bad_request` (no `id`, no `reference.wav` yet, `dest` relative or a folder, a file over the import limits below).
+
+- **Contents** (paths inside the voice folder): `voice.json`, `reference.wav` and `reference.omnivoice.json`, every
+  `reference_<lang>.wav` and `reference_<lang>.omnivoice.json`, `rvc/model.pth` and `rvc/model.index`; each only when
+  present except `voice.json` and `reference.wav`, a sidecar only while it is valid for its clip. Never the dataset
+  (`dataset/`), the media pool (`reference_media.wav`) or training checkpoints. `voice.json` is stored without `training_run` / `training_paused`.
+- **Format**: a zip, every member stored (no compression), dated 1980-01-01 00:00:00, mode 0644, Unix; the files in
+  sorted order, then `manifest.json`: `{"format":"mimvox-voice","version":1,"id","name",
+  "files":[{"path","bytes","sha256"}]}` (`files` as in the answer). `voice.json` and `manifest.json` are UTF-8 JSON
+  with sorted keys, 2-space indent and a final newline.
+- **Hash rule**: the bundle's hash is the SHA-256 of the archive file. It depends only on the voice's content: the
+  same voice files (same bytes) and voice id give the same archive, whatever the files' times or the engine version;
+  exporting a bundle imported under the same id gives it again. A new bundle `version` would change it.
+
+`voices.import {"bundle","name"?}` -> `{"voice":{...as in list...}}`: `bundle` is a path on the engine's machine (an
+upload's `<data>/api/uploads/...` path too). The archive is refused (`bad_request`, nothing created) when a member
+name is absolute, has `..`, `.`, `\`, `:` or an empty part, is not one of the contents above, is there twice, is
+larger than 1 MiB (`.json`) or 2 GiB (others, 4 GiB together); when `manifest.json` is missing, of another format or a
+newer `version`, lists other files than the archive holds, or lacks `voice.json` / `reference.wav`; when a member's
+size or SHA-256 differs from the manifest; or when `voice.json` is unusable or a sidecar names an impossible time. The
+voice keeps the bundle's `id` when no voice has it, else gets a new one made from the name as in `voices.create`;
+`name` renames it. Sidecars are kept and each clip gets the modification time its sidecar names, so they usually stay
+valid; on a filesystem with coarser times (NTFS: 100 ns) the clip's transcript and language may be worked out again on
+first use. The voice has no dataset; it is `trained` when the bundle has `rvc/model.pth`.
+Errors: `bad_request`, `not_found` (no such file).
 
 ### `voices.warm`
 `{"id"}` -> `{"warming":true}` | `{"warming":false,"reason":"already_warm|busy"}`. Call it when the user selects a voice.
@@ -1115,9 +1153,10 @@ fields as tts.generate}`
 - `ref` (a non-empty string; `null` or left out for none): the client's own name for the project, stored in
   `book.json` and shown in summaries. When a project with this `ref` exists (the oldest, found by scanning every
   `book.json`), nothing is created and the request's other fields are not used or checked: a running project answers
-  with its current `job`; a finished one with `job: null` and `status: "done"` (nothing starts, no accent or reference
-  fields); any other (`paused`, interrupted, `new`, `error`, `cancelled`) is resumed as by `book.resume`. `existing`
-  is then `true` (`false` for a new project); `status` is `running` or `done`. A second `book.start` with the same
+  with its current `job` (no accent or reference fields; its `book.done` has them); a finished one with `job: null`
+  and `status: "done"` (nothing starts, no accent or reference fields); any other (`paused`, interrupted, `new`,
+  `error`, `cancelled`) is resumed as by `book.resume`, with the accent and reference fields. `existing` is then
+  `true` (`false` for a new project); `status` is `running` or `done`. A second `book.start` with the same
   `ref` while the first is still answering gets `busy`.
 - `busy` while any generation runs (only one at a time). **While a book is read it holds the generation slot**:
   `tts.generate`, Redub, `voices.warm` and reference changes answer `busy` with the message "a book is being read;
@@ -1151,7 +1190,8 @@ fields as tts.generate}`
   them when `chapters` is left out; `[]` for none), with `voice_id` from now on when given (`not_found` for a voice
   without a reference). Each listed chapter's file, segment timing, progress and audio are dropped, and so is the M4B.
   The book is then `paused` (`new` when nothing is made), or stays `done` when every chapter is still made;
-  `book.resume` reads on. `busy` while it is being read.
+  `book.resume` reads on. `busy` while it is being read or reread; while it is reread, `book.resume` and `book.start`
+  of it answer `busy`.
 - `book.play {"id","index"}` -> `{"path","path_play"}`: a WAV to play a finished chapter with (the chapter file itself
   for WAV, else a decoded copy in `<data>/tmp/play/book-<id>-<NNN>.wav`, gone at the next engine start). `not_found`
   for a chapter that is not finished.
@@ -1582,8 +1622,16 @@ mimvox serve [the same arguments]
 - **Engine.** The data dir and runtime are found as the app finds them (`MIMVOX_DATA`, `location.toml`, default;
   `MIMVOX_RUNTIME`, `MIMVOX_ENGINE_SRC`, `MIMVOX_RESOURCES`), `--data-dir` overrides the first. The server starts
   the engine at once and starts it again 1 s after it exits (an exit right after `shutdown` included); three crashes
-  in a row, each within 30 s of its start, stop the server. Ctrl+C, SIGTERM, SIGHUP (Windows: Ctrl+C, closing the console) send
-  `shutdown` and exit. On Unix the engine runs in its own process group, so a terminal's Ctrl+C reaches only the server.
+  in a row, each within 30 s of its start, stop the server. Ctrl+C, SIGTERM, SIGHUP (Windows: Ctrl+C, Ctrl+Break,
+  closing the console, the system shutting down) send `shutdown` and exit. On Unix the engine runs in its own process
+  group and on Windows without the server's console, so a terminal's Ctrl+C reaches only the server.
+- **Stopping it from another program.** Send what a terminal would, so the engine gets `shutdown` and `engine.lock`
+  is freed before the server exits with code 0 (within about 8 s): on Unix SIGTERM to its pid; on Windows start it
+  with `CREATE_NEW_PROCESS_GROUP` and send `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, <its pid>)` (Ctrl+C cannot
+  be sent to another process group). That event reaches only processes on the sender's console, so the server must
+  inherit it (not `CREATE_NEW_CONSOLE`, `CREATE_NO_WINDOW` or `DETACHED_PROCESS`); a sender without a console
+  calls `AllocConsole` first. Never `shutdown` through `/rpc`: the server starts a fresh engine. Killing it
+  (SIGKILL, `TerminateProcess`) ends the engine too, but without its shutdown.
 - **One engine per data dir.** Whoever starts an engine (the app or the server) holds an OS lock on
   `<data>/engine.lock` while it runs; a second one fails with "another Mimvox engine ... is already running". The app
   shows that as the engine's stop reason. A client that dies first (killed) does not free it early: on Unix the engine
@@ -1637,7 +1685,8 @@ mimvox mcp [the same arguments]
 - **Transports.** stdio by default (one JSON-RPC message per line; logs go to stderr). `--http ADDR` serves streamable
   HTTP on `http://ADDR/mcp` instead (`ADDR` is `host:port`, or a port alone for `127.0.0.1:port`); an address other than
   loopback is refused without `--http-allow-remote`, since that endpoint has no authentication of its own and uses the
-  API's token. Without `--http-allow-remote` only loopback `Host` headers are served.
+  API's token. Without `--http-allow-remote` only loopback `Host` headers are served. With `--http` it stops on the
+  same signals as `mimvox-server`.
 - **`mimvox mcp`** runs the `mimvox-mcp` next to the app binary as `mimvox serve` runs the server (on Unix in its
   place): `./Mimvox.AppImage mcp`. Windows: run `mimvox-mcp.exe` from the install folder.
 - **API address**: `--url`, else `MIMVOX_URL`, else `http://127.0.0.1:8765` (plain HTTP; a path prefix is kept).
