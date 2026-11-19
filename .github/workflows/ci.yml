@@ -1,0 +1,72 @@
+name: CI
+
+# Entry point for every pull request check: lint.yml and test.yml run from here. A title edit re-runs only the title check.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event.action == 'edited' && 'title' || 'code' }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: Conventional title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          types='feat|fix|perf|refactor|docs|build|ci|chore|revert'
+          scopes='app|engine|setup|build|ci|docs|release|deps'
+          pattern="^(${types})(\((${scopes})\))?!?: [a-z0-9\`].*[^.]$"
+          echo "Title: $TITLE"
+          if ! [[ "$TITLE" =~ $pattern ]]; then
+            echo "::error::The title must look like 'type(scope): summary', for example 'fix(app): keep the player bar on Stop'."
+            echo "Types: ${types//|/, }. Scopes (optional): ${scopes//|/, }."
+            echo "The summary starts in lower case and has no full stop at the end. See CONTRIBUTING.md, 'Commit messages'."
+            exit 1
+          fi
+
+  changes:
+    name: Changes
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.diff.outputs.python }}
+      engine: ${{ steps.diff.outputs.engine }}
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Changed files
+        id: diff
+        run: |
+          files=$(git diff --name-only HEAD^1 HEAD)
+          echo "$files"
+          check() { if grep -qE "$2" <<< "$files"; then echo "$1=true" >> "$GITHUB_OUTPUT"; fi; }
+          check python '\.py$|(^|/)(ruff\.toml|pyproject\.toml)$|^\.github/workflows/(ci|lint)\.yml$'
+          check engine '^engine/.*\.py$|^engine/(pyproject\.toml|uv\.lock)$|^\.github/workflows/(ci|test)\.yml$'
+          check rust '^app/|^crates/|(^|/)(Cargo\.toml|Cargo\.lock|rustfmt\.toml)$|^\.github/workflows/(ci|lint|test)\.yml$'
+
+  lint:
+    name: Lint
+    needs: changes
+    uses: ./.github/workflows/lint.yml
+    with:
+      python: ${{ needs.changes.outputs.python == 'true' }}
+      rust: ${{ needs.changes.outputs.rust == 'true' }}
+
+  test:
+    name: Tests
+    needs: changes
+    uses: ./.github/workflows/test.yml
+    with:
+      rust: ${{ needs.changes.outputs.rust == 'true' }}
+      engine: ${{ needs.changes.outputs.engine == 'true' }}

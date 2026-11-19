@@ -1,107 +1,32 @@
 name: Tests
 
 on:
-  pull_request:
+  workflow_call:
+    inputs:
+      rust:
+        type: boolean
+        default: false
+      engine:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-
-concurrency:
-  group: test-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   rust:
-    name: Rust tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2
-
-      - name: Changes
-        id: changes
-        env:
-          PATTERN: '^app/|^crates/|(^|/)(Cargo\.toml|Cargo\.lock)$|^\.github/workflows/test\.yml$'
-        run: |
-          if git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No Rust changes."
-          fi
-
-      - name: Rust
-        if: steps.changes.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        if: steps.changes.outputs.run == 'true'
-        uses: Swatinem/rust-cache@v2
-
-      - name: Linux build dependencies
-        if: steps.changes.outputs.run == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
-            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev
-
-      - name: cargo test
-        if: steps.changes.outputs.run == 'true'
-        run: cargo test --workspace
-
-  python:
-    name: Python tests (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest, name: Linux }
-          - { os: windows-latest, name: Windows }
-          - { os: macos-latest, name: macOS }
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2
-
-      - name: Changes
-        id: changes
-        env:
-          PATTERN: '^engine/.*\.py$|^engine/(pyproject\.toml|uv\.lock)$|^\.github/workflows/test\.yml$'
-        run: |
-          if git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No engine changes."
-          fi
-
-      - name: uv
-        if: steps.changes.outputs.run == 'true'
-        uses: astral-sh/setup-uv@v10.3.3
-
-      - name: pytest
-        if: steps.changes.outputs.run == 'true'
-        working-directory: engine
-        env:
-          UV_PYTHON: "3.11"
-        run: uv run --group test pytest
-
-  rust-other:
-    name: Rust tests (${{ matrix.name }})
+    name: Rust (${{ matrix.name }})
+    if: inputs.rust
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
+          - { name: Linux, os: ubuntu-latest }
           - { name: Windows, os: windows-latest }
           - { name: macOS, os: macos-latest }
     defaults:
@@ -109,34 +34,47 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2
-
-      - name: Changes
-        id: changes
-        env:
-          PATTERN: '^app/|^crates/|(^|/)(Cargo\.toml|Cargo\.lock)$|^\.github/workflows/test\.yml$'
-        run: |
-          if git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No Rust changes."
-          fi
 
       # The integration tests run app/examples/fake_engine.py with the first Python 3 on PATH.
       - name: Python
-        if: steps.changes.outputs.run == 'true'
+        run: python3 --version || python --version
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
         run: |
-          python3 --version || python --version
-
-      - name: Rust
-        if: steps.changes.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        if: steps.changes.outputs.run == 'true'
-        uses: Swatinem/rust-cache@v2
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev
 
       - name: cargo test
-        if: steps.changes.outputs.run == 'true'
         run: cargo test --workspace
+
+  python:
+    name: Python (${{ matrix.name }})
+    if: inputs.engine
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+
+      - name: pytest
+        working-directory: engine
+        env:
+          UV_PYTHON: "3.11"
+        run: uv run --group test pytest
