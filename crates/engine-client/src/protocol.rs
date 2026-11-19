@@ -67,6 +67,8 @@ pub enum ModelState {
     /// Unloaded while a voice trains; back to `Ready` after it.
     Paused,
     Missing,
+    /// Too little RAM for speech on the processor; [`Models::tts_message`] says why.
+    NoMemory,
     #[default]
     #[serde(other)]
     Unknown,
@@ -79,6 +81,7 @@ impl ModelState {
             Self::Loading => "loading",
             Self::Paused => "paused",
             Self::Missing => "missing",
+            Self::NoMemory => "no_memory",
             Self::Unknown => "unknown",
         }
     }
@@ -138,6 +141,8 @@ pub struct Models {
     pub tts: ModelState,
     #[serde(default)]
     pub rvc: ModelState,
+    #[serde(default)]
+    pub tts_message: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

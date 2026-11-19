@@ -292,6 +292,11 @@ fn blocker(s: &AppState) -> Option<&'static str> {
         EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => {
             return Some("The engine is not running. Press Retry above.");
         }
+        EngineStatus::Ready { tts, .. } if tts.as_deref() == Some("no_memory") => {
+            return Some(
+                "This computer has too little memory (RAM) for speech. The engine status at the top says more.",
+            );
+        }
         EngineStatus::Ready { .. } => {}
     }
     if shell::active_voice(s).is_none() {
@@ -1553,6 +1558,22 @@ pub fn scene_engine_stopped(s: &mut AppState) {
         code: Some(1),
         detail: "CUDA out of memory while loading the speech model.".into(),
     });
+}
+
+pub fn scene_engine_no_memory(s: &mut AppState) {
+    demo_voice(s, true);
+    s.speak.text = TextEdit::new("Hello there.");
+    s.shell.set_engine(EngineStatus::Ready {
+        device: Some("CPU".into()),
+        tts: Some("no_memory".into()),
+        rvc: Some("ready".into()),
+    });
+    s.shell.tts_message = Some(
+        "not enough memory (RAM) for speech on the processor: it needs a computer with at least 11 GB of RAM and this \
+         one has 7.4 GB, so the speech model would be swapped out to the disk and take minutes per sentence; use a \
+         graphics card or a computer with more RAM"
+            .into(),
+    );
 }
 
 #[cfg(test)]
