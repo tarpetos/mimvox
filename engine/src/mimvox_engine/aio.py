@@ -149,7 +149,7 @@ async def read_lines(stream: BinaryIO) -> AsyncIterator[bytes]:
 
 
 async def gather_or_cancel(*aws: Awaitable[Any]) -> list[Any]:
-    """``asyncio.TaskGroup`` on Python 3.10: the first failure cancels the others, waits for them, is raised."""
+    """Like ``asyncio.TaskGroup``, but the first failure is raised as itself, not in an ``ExceptionGroup``."""
     tasks = [asyncio.ensure_future(a) for a in aws]
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)

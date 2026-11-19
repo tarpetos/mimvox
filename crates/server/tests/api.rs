@@ -409,13 +409,21 @@ async fn openai_speech() {
     let wav = res.bytes().await.unwrap();
     assert_eq!(&wav[..4], b"RIFF");
 
+    let res = speech(json!({ "model": "tts-1", "input": "Hi.", "voice": "fake-voice", "response_format": "wav" }))
+        .await
+        .unwrap();
+    let wav = res.bytes().await.unwrap();
+    let rate = u32::from_le_bytes(wav[24..28].try_into().unwrap()) as usize;
+    let frames = u32::from_le_bytes(wav[40..44].try_into().unwrap()) as usize / 2;
+    assert_eq!(rate, 44_100);
     let res = speech(json!({ "model": "tts-1", "input": "Hi.", "voice": "fake-voice", "response_format": "pcm" }))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(res.headers()["content-type"], "audio/pcm");
     let pcm = res.bytes().await.unwrap();
-    assert!(pcm.len() > 1000 && &pcm[..4] != b"RIFF");
+    assert_eq!(pcm.len(), 2 * (frames * 24_000).div_ceil(rate));
+    assert_ne!(&pcm[..4], b"RIFF");
 
     let res = speech(json!({ "model": "tts-1", "input": "Hi.", "voice": "nobody" })).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
@@ -432,6 +440,20 @@ async fn openai_speech() {
     assert_eq!(models["data"][0]["id"], "mimvox");
     let voices: Value = client.get(server.url("/v1/audio/voices")).send().await.unwrap().json().await.unwrap();
     assert_eq!(voices["voices"][0]["name"], "Fake voice");
+}
+
+#[tokio::test]
+async fn aac_needs_ffmpeg() {
+    let setup = Setup::new();
+    let empty = tempfile::tempdir().unwrap();
+    let path = empty.path().display().to_string();
+    let server = setup.start(&[], &[("PATH", &path), ("MIMVOX_FFMPEG", "")]).await;
+    let body = json!({ "model": "tts-1", "input": "Hi.", "voice": "fake-voice", "response_format": "aac" });
+    let res = reqwest::Client::new().post(server.url("/v1/audio/speech")).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let err: Value = res.json().await.unwrap();
+    assert_eq!(err["error"]["code"], "not_ready");
+    assert!(err["error"]["message"].as_str().unwrap().contains("ffmpeg"));
 }
 
 #[tokio::test]
