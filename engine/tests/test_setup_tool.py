@@ -119,13 +119,20 @@ class FakeUv:
     def __init__(self, s):
         self.s, self.calls, self.fail = s, [], lambda argv: False
         self.freeze = {}
+        self.python = True  # Python 3.11 is in <runtime>/python
 
     def run(self, command, cwd=None, extra_env=None):
         argv = [str(part) for part in command]
         self.calls.append(argv)
         if self.fail(argv):
             return 1
+        if argv[1:3] == ["python", "find"]:
+            return 0 if self.python else 2
+        if argv[1:3] == ["python", "install"]:
+            self.python = True
         if argv[1:2] == ["venv"]:
+            if not self.python and "--offline" in argv:
+                return 2  # "No interpreter found for Python 3.11 in managed installations"
             venv = Path(argv[-1])
             venv_python = setup.venv_python(venv, self.s.plat)
             venv_python.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +153,7 @@ def fake_uv(tmp_path, monkeypatch):
     s = make(tmp_path / "data")
     uv = FakeUv(s)
     monkeypatch.setattr(setup.Setup, "run", lambda self, command, cwd=None, extra_env=None: uv.run(command))
+    monkeypatch.setattr(setup.Setup, "quiet", lambda self, command, cwd=None: uv.run(command))
     monkeypatch.setattr(setup.Setup, "read", lambda self, command, cwd=None: uv.read(command))
     s.engine_env()
     uv.calls.clear()
@@ -197,15 +205,47 @@ def test_a_venv_from_outside_the_runtime_is_made_again_with_its_packages(tmp_pat
     assert uv.venv_calls() == []
 
 
-def test_a_rebuild_downloads_what_the_cache_lacks(tmp_path, fake_uv):
+def test_a_rebuild_downloads_what_the_cache_lacks(tmp_path, fake_uv, capsys):
     s, uv = fake_uv
     old_python(s, tmp_path)
     uv.fail = lambda argv: "--offline" in argv and argv[1:3] == ["pip", "install"]
     s.engine_env()
-    first, second = uv.venv_calls()
-    assert "--offline" in first
-    assert "--offline" not in second
+    assert all("--offline" in argv for argv in uv.venv_calls())
+    offline = ["--offline" in argv for argv in uv.calls if argv[1:3] == ["pip", "install"]]
+    assert offline[0] and not offline[-1]
     assert s.on_runtime_python(s.engine_venv)
+    out = capsys.readouterr().out
+    assert "not every package is in the cache" in out and "downloading the missing ones" in out
+    assert "downloading Python" not in out
+
+
+def test_a_rebuild_fetches_the_python_first_and_the_packages_from_the_cache(tmp_path, fake_uv, capsys):
+    s, uv = fake_uv
+    old_python(s, tmp_path)
+    uv.python = False
+    s.engine_env()
+    python_install = [i for i, argv in enumerate(uv.calls) if argv[1:3] == ["python", "install"]]
+    assert len(python_install) == 1
+    install = uv.calls[python_install[0]]
+    assert install[-1] == setup.ENGINE_PYTHON and {"--no-bin", "--no-registry"} <= set(install)
+    later = uv.calls[python_install[0] + 1:]
+    assert all("--offline" in argv for argv in later if argv[1:2] == ["venv"] or argv[1:3] == ["pip", "install"])
+    assert len(uv.venv_calls()) == 1
+    assert s.on_runtime_python(s.engine_venv)
+    out = capsys.readouterr().out
+    assert f"Engine environment: downloading Python {setup.ENGINE_PYTHON} into {s.python_dir}..." in out
+    assert "not every package is in the cache" not in out
+
+
+def test_without_the_python_the_old_venv_is_kept(tmp_path, fake_uv, capsys):
+    s, uv = fake_uv
+    home = old_python(s, tmp_path)
+    uv.python = False
+    uv.fail = lambda argv: argv[1:3] == ["python", "install"]
+    s.engine_env()
+    assert uv.venv_calls() == [] and setup.venv_home(s.engine_venv) == home
+    out = capsys.readouterr().out
+    assert "could not be downloaded" in out and "the old environment is kept" in out
 
 
 def test_a_failed_rebuild_keeps_the_old_venv(tmp_path, fake_uv, capsys):
