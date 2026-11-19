@@ -32,11 +32,11 @@ Opening a pull request means you agree to these terms.
 
 ## Checks
 
-Pull requests run these (`.github/workflows/lint.yml`); run them locally before pushing:
+Pull requests run the linters (`.github/workflows/lint.yml`) and the tests (`.github/workflows/test.yml`); run them locally before pushing:
 
 ```
 uvx ruff@0.17.5 check .
-cd app && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+cd app && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 `uvx ruff@0.17.5 check --fix .` and `cargo fmt` fix most findings. Ruff's rules are in `ruff.toml`, rustfmt's in
