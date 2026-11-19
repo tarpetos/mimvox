@@ -424,11 +424,11 @@ impl RecordState {
     /// `current`: the active voice (id, name), when there is one.
     pub fn files_confirm(&mut self, current: Option<(String, String)>) {
         let FilesStage::Asking { paths } = std::mem::take(&mut self.files.stage) else { return };
-        if self.files.into_current {
-            if let Some((id, name)) = current {
-                self.files_combine(id, name, &paths);
-                return;
-            }
+        if self.files.into_current
+            && let Some((id, name)) = current
+        {
+            self.files_combine(id, name, &paths);
+            return;
         }
         let typed = self.files.name.text.trim();
         let name = if typed.is_empty() { "My voice".to_owned() } else { typed.to_owned() };
@@ -520,11 +520,11 @@ impl RecordState {
     }
 
     pub fn cancel_recording(&mut self) {
-        if let Some(mut a) = self.active.take() {
-            if let Some(r) = a.recorder.take() {
-                let path = self.tmp_path(a.part);
-                let _ = guard(|| r.stop(&path));
-            }
+        if let Some(mut a) = self.active.take()
+            && let Some(r) = a.recorder.take()
+        {
+            let path = self.tmp_path(a.part);
+            let _ = guard(|| r.stop(&path));
         }
     }
 
@@ -663,10 +663,8 @@ impl RecordState {
         }
         let part = self.current;
         let had_saved = self.takes.get(part).is_some_and(|t| t.status == TakeStatus::Saved);
-        if had_saved {
-            if let Some(v) = self.voice_id.clone() {
-                self.request("dataset.remove", json!({"voice_id": v, "part_index": part + 1}), Pending::Summary);
-            }
+        if had_saved && let Some(v) = self.voice_id.clone() {
+            self.request("dataset.remove", json!({"voice_id": v, "part_index": part + 1}), Pending::Summary);
         }
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         if let Some(t) = self.takes.get_mut(part) {
@@ -693,10 +691,8 @@ impl RecordState {
         if let Some(t) = self.takes.get_mut(part) {
             *t = Take::default();
         }
-        if had_saved {
-            if let Some(v) = self.voice_id.clone() {
-                self.request("dataset.remove", json!({"voice_id": v, "part_index": part + 1}), Pending::Summary);
-            }
+        if had_saved && let Some(v) = self.voice_id.clone() {
+            self.request("dataset.remove", json!({"voice_id": v, "part_index": part + 1}), Pending::Summary);
         }
         self.start_recording();
     }
@@ -731,14 +727,14 @@ impl RecordState {
         };
         for p in &sum.parts {
             let path = stored(self, p.index);
-            if let Some(t) = (p.index as usize).checked_sub(1).and_then(|i| self.takes.get_mut(i)) {
-                if t.status == TakeStatus::Empty || t.status == TakeStatus::Failed {
-                    t.status = if p.verdict == Verdict::Bad { TakeStatus::Rejected } else { TakeStatus::Saved };
-                    t.duration_s = p.duration_s;
-                    t.verdict = Some(p.verdict);
-                    t.issues = p.issues.clone();
-                    t.path = path;
-                }
+            if let Some(t) = (p.index as usize).checked_sub(1).and_then(|i| self.takes.get_mut(i))
+                && (t.status == TakeStatus::Empty || t.status == TakeStatus::Failed)
+            {
+                t.status = if p.verdict == Verdict::Bad { TakeStatus::Rejected } else { TakeStatus::Saved };
+                t.duration_s = p.duration_s;
+                t.verdict = Some(p.verdict);
+                t.issues = p.issues.clone();
+                t.path = path;
             }
         }
         let have: Vec<usize> = sum.parts.iter().map(|p| p.index as usize).collect();

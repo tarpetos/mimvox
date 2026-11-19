@@ -139,6 +139,7 @@ fn should_start(a: &Active) -> bool {
     can_start(a.audio_s, a.rtf, &remaining)
 }
 
+#[allow(clippy::large_enum_variant)] // one value in the app state: boxing it saves nothing
 #[derive(Clone, Debug, Default)]
 enum Gen {
     #[default]
@@ -454,10 +455,10 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 s.speak.gen_ = Gen::Idle;
                 // A clip transcribed for the first time by this job: its language is known only now.
                 note_reference(s, &a.voice_id, &a.lang, &done.reference);
-                if !a.warned {
-                    if let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty()) {
-                        shell::toast(s, Tone::Warning, n);
-                    }
+                if !a.warned
+                    && let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty())
+                {
+                    shell::toast(s, Tone::Warning, n);
                 }
             }
             EngineEvent::TtsError { error, .. } => {
@@ -1003,7 +1004,7 @@ fn language_row(s: &AppState, p: Palette) -> El {
     // HolosTTS takes only the timbre from the reference clip, never its accent: a clip in another language is fine.
     if let Some(v) = voice.filter(|v| v.lang() != code && !exact_ukrainian(s)) {
         let (rec, target) = (lang::name(v.lang()), lang::name(&code));
-        let has_ref = v.references.iter().any(|r| *r == code);
+        let has_ref = v.references.contains(&code);
         if accent_applies(s, &code) {
             // The Accent choice below says what happens and offers the English clip.
             return c;

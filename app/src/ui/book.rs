@@ -277,10 +277,10 @@ fn start_rename(s: &mut AppState, i: usize) {
 fn commit_rename(s: &mut AppState) {
     let Some((i, edit)) = s.book.renaming.take() else { return };
     let title = edit.text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if let Some(c) = s.book.draft.as_mut().and_then(|d| d.chapters.get_mut(i)) {
-        if !title.is_empty() {
-            c.title = title;
-        }
+    if let Some(c) = s.book.draft.as_mut().and_then(|d| d.chapters.get_mut(i))
+        && !title.is_empty()
+    {
+        c.title = title;
     }
 }
 
@@ -295,10 +295,10 @@ fn auto_split(s: &mut AppState) {
 
 fn undo_split(s: &mut AppState) {
     s.book.renaming = None;
-    if let Some(d) = s.book.draft.as_mut() {
-        if let Some(before) = d.before_split.take() {
-            d.chapters = before;
-        }
+    if let Some(d) = s.book.draft.as_mut()
+        && let Some(before) = d.before_split.take()
+    {
+        d.chapters = before;
     }
 }
 
@@ -800,13 +800,13 @@ fn on_event(s: &mut AppState, name: &str, data: &Value) {
             p.totals = pr.totals;
             p.current = pr.chapter;
             p.status = "running".into();
-            if let Some(c) = p.chapter_list.iter_mut().find(|c| c.index == pr.chapter) {
-                if c.status != "done" {
-                    c.status = "partial".into();
-                    c.segment = pr.segment;
-                    c.segments = pr.segments;
-                    c.audio_s = pr.chapter_audio_s;
-                }
+            if let Some(c) = p.chapter_list.iter_mut().find(|c| c.index == pr.chapter)
+                && c.status != "done"
+            {
+                c.status = "partial".into();
+                c.segment = pr.segment;
+                c.segments = pr.segments;
+                c.audio_s = pr.chapter_audio_s;
             }
             s.book.m4b_stage(pr.stage.as_deref() == Some("m4b"));
             s.book.m4b_progress = (pr.stage_pct.unwrap_or(0.0), pr.stage_eta_s);
@@ -847,13 +847,11 @@ fn on_event(s: &mut AppState, name: &str, data: &Value) {
             request_list(s);
         }
         "book.paused" => {
-            if shown {
-                if let Ok(sum) = serde_json::from_value::<BookSummary>(data.clone()) {
-                    let p = s.book.project.as_mut().expect("shown");
-                    p.status = "paused".into();
-                    p.job = None;
-                    p.totals = sum.totals;
-                }
+            if shown && let Ok(sum) = serde_json::from_value::<BookSummary>(data.clone()) {
+                let p = s.book.project.as_mut().expect("shown");
+                p.status = "paused".into();
+                p.job = None;
+                p.totals = sum.totals;
             }
             s.book.stopping = None;
             request_list(s);
@@ -1002,7 +1000,7 @@ fn group(n: u32) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);
@@ -1866,7 +1864,6 @@ fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
                 },
                 rtf: (st == "done").then_some(0.30 + 0.01 * i as f32),
                 path: (st == "done").then(|| PathBuf::from(format!("/tmp/books/{:02} - {t}.mp3", i + 1))),
-                ..Default::default()
             }
         })
         .collect::<Vec<_>>();
@@ -2022,7 +2019,7 @@ pub fn scene_empty(s: &mut AppState) {
     scene_base(s);
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("book_autosplit_offer", scene_autosplit_offer),
         ("book_autosplit_done", scene_autosplit_done),

@@ -165,12 +165,12 @@ fn median_f0(x: &[f32], rate: u32) -> f32 {
                 xy / (energy * yy).sqrt().max(1e-9)
             };
             let cs: Vec<f32> = (lo..=hi + 1).map(corr).collect();
-            if let Some((k, &c)) = cs.iter().enumerate().take(cs.len() - 1).skip(1).max_by(|p, q| p.1.total_cmp(q.1)) {
-                if c > 0.6 {
-                    let (y0, y2) = (cs[k - 1], cs[k + 1]);
-                    let d = 0.5 * (y0 - y2) / (y0 - 2.0 * c + y2).min(-1e-9);
-                    f0s.push(rate as f32 / ((lo + k) as f32 + d));
-                }
+            if let Some((k, &c)) = cs.iter().enumerate().take(cs.len() - 1).skip(1).max_by(|p, q| p.1.total_cmp(q.1))
+                && c > 0.6
+            {
+                let (y0, y2) = (cs[k - 1], cs[k + 1]);
+                let d = 0.5 * (y0 - y2) / (y0 - 2.0 * c + y2).min(-1e-9);
+                f0s.push(rate as f32 / ((lo + k) as f32 + d));
             }
         }
         i += hop;

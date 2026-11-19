@@ -36,7 +36,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
 }
 
 /// Named states for headless snapshots (`--snap out.png --scene <name>`).
-pub const SCENES: &[(&str, fn(&mut AppState))] = &[
+pub const SCENES: &[Scene] = &[
     ("record_picker", record::scene_picker),
     ("record_new_voice", record::scene_new_voice),
     ("record_files_hover", record::scene_files_hover),

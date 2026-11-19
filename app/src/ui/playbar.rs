@@ -654,9 +654,11 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
     Some(row().key("playbar-dock").w_full().px(16.0).pb(12.0).child(glass_edge(p, bar)))
 }
 
+type StripView<'a> = ([f32; 4], f32, Palette, &'a Now, f32, f32);
+
 /// Windows only. True when the strip shows the fill and the knob, so the bar must not.
 #[allow(unused_variables)]
-fn strip(over: Option<([f32; 4], f32, Palette, &Now, f32, f32)>) -> bool {
+fn strip(over: Option<StripView>) -> bool {
     #[cfg(windows)]
     let shown = match over {
         Some((rail, scale, p, n, speed, frac)) => {
@@ -823,6 +825,7 @@ static LOOP: rune::Icon = rune::Icon {
     body: r#"<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 7.4V6.6A2.4 2.4 0 0 1 5.2 4.2H12.4M10.6 2.4L12.4 4.2L10.6 6"/><path d="M13.2 8.6V9.4A2.4 2.4 0 0 1 10.8 11.8H3.6M5.4 10L3.6 11.8L5.4 13.6"/></g>"#,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn scene_now(
     s: &mut AppState,
     path: &str,
@@ -917,7 +920,7 @@ fn scene_record(s: &mut AppState) {
     scene_now(s, "/tmp/part1.wav", "Part 1 take", "Record", Source::Record, Status::Playing, 2.0, 21.0);
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("player_playing", scene_playing),
         ("player_paused", scene_paused),

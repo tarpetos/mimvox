@@ -925,7 +925,7 @@ pub fn scene_loading(s: &mut AppState) {
     s.update.list = List::Loading;
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("updates_newer", scene_newer),
         ("updates_older", scene_older),

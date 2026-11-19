@@ -525,10 +525,10 @@ pub fn panel(s: &AppState, p: Palette) -> El {
         c = c.child(progress_bar(p, None));
     }
     c = c.child(list);
-    if running(s) {
-        if let Some(line) = last_line(s) {
-            c = c.child(text(line.to_owned()).font(ty::CAPTION).color(p.text_dim).truncate());
-        }
+    if running(s)
+        && let Some(line) = last_line(s)
+    {
+        c = c.child(text(line.to_owned()).font(ty::CAPTION).color(p.text_dim).truncate());
     }
     if s.setup.show_log && !s.setup.log.is_empty() {
         // One line each, cut with an ellipsis: a long path or a progress bar never widens the card.

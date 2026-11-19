@@ -320,18 +320,18 @@ pub fn start_language(s: &mut AppState, code: &str) {
     let voice = s.shell.active_voice.clone().unwrap_or_default();
     s.voices.refclip.adding = Some(LangRef { voice, lang: code.clone(), sample, ..Default::default() });
     s.voices.refclip.error = None;
-    if PRESET_LANGS.contains(&code.as_str()) {
-        if let Some(req) = shell::request(s, "presets.list", json!({ "language": code })) {
-            s.voices.refclip.pending.insert(req, Kind::Sample(code));
-        }
+    if PRESET_LANGS.contains(&code.as_str())
+        && let Some(req) = shell::request(s, "presets.list", json!({ "language": code }))
+    {
+        s.voices.refclip.pending.insert(req, Kind::Sample(code));
     }
 }
 
 fn cancel_adding(s: &mut AppState) {
-    if let Some(mut a) = s.voices.refclip.adding.take() {
-        if let Some(r) = a.recorder.take() {
-            let _ = shell::guard(|| drop(r));
-        }
+    if let Some(mut a) = s.voices.refclip.adding.take()
+        && let Some(r) = a.recorder.take()
+    {
+        let _ = shell::guard(|| drop(r));
     }
 }
 
@@ -1062,7 +1062,7 @@ fn set_voice_language(s: &mut AppState, id: &str, code: &str) {
     }
     if shell::request(s, "voices.rename", json!({ "id": id, "language": code })).is_some() {
         shell::refresh_voices(s);
-        shell::toast(s, Tone::Success, &format!("The voice is now set to {}.", lang::name(code)));
+        shell::toast(s, Tone::Success, format!("The voice is now set to {}.", lang::name(code)));
     } else {
         shell::toast(s, Tone::Danger, "The engine is not running: try again once it is ready.");
     }
@@ -1410,7 +1410,7 @@ fn scene_spoken_unknown(s: &mut AppState) {
     s.shell.voices[0].reference_language = None;
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("voices_reference_spoken_mismatch", scene_spoken_mismatch),
         ("voices_reference_spoken_match", scene_spoken_match),

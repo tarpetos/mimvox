@@ -171,10 +171,10 @@ fn run() -> anyhow::Result<()> {
                 EngineMsg::Event(ev) => match ev.parse() {
                     EngineEvent::TtsChunk { chunk, .. } => {
                         println!("chunk {} {:.2}s {}", chunk.index, chunk.duration_s, chunk.path.display());
-                        if let Some(p) = &player {
-                            if let Err(e) = p.enqueue(&chunk.path) {
-                                eprintln!("cannot play chunk: {e:#}");
-                            }
+                        if let Some(p) = &player
+                            && let Err(e) = p.enqueue(&chunk.path)
+                        {
+                            eprintln!("cannot play chunk: {e:#}");
                         }
                     }
                     EngineEvent::TtsDone { done, .. } => {
@@ -194,7 +194,7 @@ fn run() -> anyhow::Result<()> {
                 }
             }
         }
-        if finished && player.as_ref().map_or(true, |p| !p.is_playing()) {
+        if finished && player.as_ref().is_none_or(|p| !p.is_playing()) {
             break;
         }
         std::thread::sleep(Duration::from_millis(30));

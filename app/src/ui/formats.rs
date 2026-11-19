@@ -193,18 +193,18 @@ fn read_settings(s: &mut AppState) {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_else(|| json!({}));
-    if let Some(f) = v.get("export_format").and_then(Value::as_str) {
-        if EXPORT_ALL.iter().any(|(e, _)| *e == f) {
-            s.formats.format = f.to_owned();
-        }
+    if let Some(f) = v.get("export_format").and_then(Value::as_str)
+        && EXPORT_ALL.iter().any(|(e, _)| *e == f)
+    {
+        s.formats.format = f.to_owned();
     }
     if let Some(q) = v.get("export_quality").and_then(Value::as_str).and_then(ExportQuality::parse) {
         s.formats.quality = q;
     }
-    if let Some(f) = v.get("output_format").and_then(Value::as_str) {
-        if EXPORT_ALL.iter().any(|(e, _)| *e == f) {
-            s.formats.output = f.to_owned();
-        }
+    if let Some(f) = v.get("output_format").and_then(Value::as_str)
+        && EXPORT_ALL.iter().any(|(e, _)| *e == f)
+    {
+        s.formats.output = f.to_owned();
     }
 }
 
@@ -254,7 +254,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 }
                 if !exp.is_empty() {
                     s.formats.export = exp;
-                    if !s.formats.export.iter().any(|e| *e == s.formats.format) {
+                    if !s.formats.export.contains(&s.formats.format) {
                         s.formats.format = s.formats.export.first().cloned().unwrap_or_else(|| "wav".into());
                     }
                 }
@@ -306,10 +306,10 @@ pub fn settle(s: &mut AppState) -> bool {
 }
 
 fn on_picked(s: &mut AppState, choice: Option<PathBuf>) {
-    if let Phase::Picking(job) = std::mem::take(&mut s.formats.phase) {
-        if let Some(dest) = choice {
-            finish_pick(s, job, dest);
-        }
+    if let Phase::Picking(job) = std::mem::take(&mut s.formats.phase)
+        && let Some(dest) = choice
+    {
+        finish_pick(s, job, dest);
     }
 }
 

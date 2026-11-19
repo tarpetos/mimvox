@@ -717,12 +717,11 @@ fn epochs_card(s: &AppState, p: &Palette) -> El {
             .hover(p.glass_hover)
             .on_press(move |s: &mut AppState| {
                 s.train.manual = manual;
-                if !manual {
-                    if let Some((_, x)) = &s.train.summary {
-                        if x.recommended_epochs > 0 {
-                            s.train.epochs = x.recommended_epochs.clamp(EPOCH_MIN, EPOCH_MAX);
-                        }
-                    }
+                if !manual
+                    && let Some((_, x)) = &s.train.summary
+                    && x.recommended_epochs > 0
+                {
+                    s.train.epochs = x.recommended_epochs.clamp(EPOCH_MIN, EPOCH_MAX);
                 }
             })
             .child(text(label).font(ty::LABEL).color(if on { p.on_accent } else { p.text_dim }))
@@ -851,7 +850,7 @@ fn progress_view(t: &TrainState, p: &Palette, name: &str) -> El {
     } else {
         String::new()
     };
-    let eta = t.eta_s.map_or("calculating...".to_string(), |e| fmt_dur(e));
+    let eta = t.eta_s.map_or("calculating...".to_string(), fmt_dur);
 
     let metrics = row()
         .w_full()
@@ -1275,7 +1274,7 @@ fn scene_close_pausing(s: &mut AppState) {
     s.train.close = CloseDialog::Pausing;
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("train-pausing", scene_pausing),
         ("train-paused", scene_paused),

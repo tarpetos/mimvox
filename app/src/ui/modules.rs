@@ -271,6 +271,6 @@ fn scene_installing(s: &mut AppState) {
     s.setup.adding = Some("ukrainian".into());
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[("modules", scene_open), ("modules_confirm_remove", scene_confirm), ("modules_installing", scene_installing)]
 }

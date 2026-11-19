@@ -94,10 +94,10 @@ fn begin_confirm(s: &mut AppState, chosen: PathBuf) {
         let size = dir_size(&from);
         let free = super::onboarding::free_bytes(&probe);
         events::post(move |s| {
-            if let Phase::Confirm { target, facts } = &mut s.relocate.phase {
-                if *target == for_target {
-                    *facts = Facts { size: Some(size), free, done: true };
-                }
+            if let Phase::Confirm { target, facts } = &mut s.relocate.phase
+                && *target == for_target
+            {
+                *facts = Facts { size: Some(size), free, done: true };
             }
         });
     });

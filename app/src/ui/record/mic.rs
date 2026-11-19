@@ -87,14 +87,14 @@ impl RecordState {
                     self.mic_start_test();
                 }
             }
-        } else if let Some(m) = self.mic.missing.clone() {
-            if known(&self.mic.devices, &m) {
-                self.input_device = Some(m);
-                self.mic.missing = None;
-                self.mic.warning = None;
-                if self.mic.open {
-                    self.mic_start_test();
-                }
+        } else if let Some(m) = self.mic.missing.clone()
+            && known(&self.mic.devices, &m)
+        {
+            self.input_device = Some(m);
+            self.mic.missing = None;
+            self.mic.warning = None;
+            if self.mic.open {
+                self.mic_start_test();
             }
         }
     }

@@ -39,8 +39,10 @@ pub fn post_if(f: impl FnOnce(&mut AppState) -> bool + Send + 'static) {
 /// previous one has been taken, so a fast producer (an audio callback) never queues up work.
 pub struct Latest<T> {
     slot: Arc<Mutex<Option<T>>>,
-    apply: Arc<dyn Fn(&mut AppState, T) -> bool + Send + Sync>,
+    apply: Apply<T>,
 }
+
+type Apply<T> = Arc<dyn Fn(&mut AppState, T) -> bool + Send + Sync>;
 
 impl<T> Clone for Latest<T> {
     fn clone(&self) -> Self {

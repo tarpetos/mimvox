@@ -789,7 +789,7 @@ fn scene_error(s: &mut AppState) {
     ];
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("voices-media", scene_idle),
         ("voices-media-drop", scene_drop),

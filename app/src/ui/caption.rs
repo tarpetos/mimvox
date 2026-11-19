@@ -94,7 +94,7 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
         .child(cell(CaptionButton::Close))
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut crate::state::AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("caption_idle", |s| preview(s, CaptionView::default())),
         ("caption_crowded", crowded),

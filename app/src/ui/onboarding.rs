@@ -38,7 +38,7 @@ fn write_settings(path: &Path, v: &Value) {
     if let Ok(t) = serde_json::to_string_pretty(v) {
         let tmp = path.with_extension("json.tmp");
         if std::fs::write(&tmp, t).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+            let _ = std::fs::rename(&tmp, path);
         }
     }
 }
@@ -366,7 +366,7 @@ fn pick_location(s: &mut AppState) {
     let start = PathBuf::from(s.onboarding.location.text.trim());
     std::thread::spawn(move || {
         let mut dialog = rfd::FileDialog::new().set_title("Choose where to install the speech engine and models");
-        if let Some(dir) = Some(start).filter(|d| d.is_dir()).or_else(|| dirs::home_dir()) {
+        if let Some(dir) = Some(start).filter(|d| d.is_dir()).or_else(dirs::home_dir) {
             dialog = dialog.set_directory(dir);
         }
         let choice = dialog.pick_folder();
@@ -688,7 +688,7 @@ fn scene_engine_stopped(s: &mut AppState) {
     });
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("onboarding-welcome", scene_welcome),
         ("onboarding-setup", scene_setup_missing),

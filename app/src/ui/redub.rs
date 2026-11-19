@@ -50,10 +50,10 @@ struct Source {
 
 impl Source {
     fn preview(&self) -> Option<PathBuf> {
-        if let Probe::Ready(p) = &self.probe {
-            if let Some(pv) = &p.preview_path {
-                return Some(pv.clone());
-            }
+        if let Probe::Ready(p) = &self.probe
+            && let Some(pv) = &p.preview_path
+        {
+            return Some(pv.clone());
         }
         is_wav(&self.path).then(|| self.path.clone())
     }
@@ -971,10 +971,10 @@ fn fail(s: &mut AppState, text: String) {
 }
 
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
-    if matches!(msg, EngineMsg::Exited { .. }) {
-        if let Some(f) = s.redub.file.as_mut() {
-            f.prepared = false;
-        }
+    if matches!(msg, EngineMsg::Exited { .. })
+        && let Some(f) = s.redub.file.as_mut()
+    {
+        f.prepared = false;
     }
     on_probe(s, msg);
     let run = match &s.redub.job {
@@ -1144,10 +1144,10 @@ fn on_done(s: &mut AppState, done: RedubDone) {
     if let Some(spoken) = to.clone().or_else(|| done.language.clone()).filter(|l| !l.is_empty()) {
         speak::note_reference(s, &run.voice_id, &spoken, &done.reference);
     }
-    if !run.warned {
-        if let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty()) {
-            shell::toast(s, Tone::Warning, n);
-        }
+    if !run.warned
+        && let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty())
+    {
+        shell::toast(s, Tone::Warning, n);
     }
     if mode == RedubMode::Dub {
         s.redub.clear_text();
@@ -1255,10 +1255,10 @@ pub fn settle(s: &mut AppState) -> bool {
     {
         let path = s.redub.file.as_ref().map(|f| f.path.clone()).unwrap_or_default();
         let (method, params) = protocol::redub_prepare(&path, wants_separation(&s.redub));
-        if shell::request(s, method, params).is_some() {
-            if let Some(f) = s.redub.file.as_mut() {
-                f.prepared = true;
-            }
+        if shell::request(s, method, params).is_some()
+            && let Some(f) = s.redub.file.as_mut()
+        {
+            f.prepared = true;
         }
     }
 
@@ -1320,10 +1320,10 @@ fn main_panel(s: &AppState, p: Palette) -> El {
         }
     };
     let mut bottom = col().key("redub-bottom").w_full().gap(12.0);
-    if let Some(r) = s.redub.result.and_then(|id| s.redub.history.iter().find(|h| h.id == id)) {
-        if !s.redub.busy() {
-            bottom = bottom.child(result_card(s, p, r));
-        }
+    if let Some(r) = s.redub.result.and_then(|id| s.redub.history.iter().find(|h| h.id == id))
+        && !s.redub.busy()
+    {
+        bottom = bottom.child(result_card(s, p, r));
     }
     bottom = bottom.child(action_bar(s, p));
     section_panel(p, "Redub").key("redub-panel").grow(1.0).min_w(0.0).h_full().gap(14.0).child(body).child(bottom)
@@ -2867,7 +2867,7 @@ fn scene_trash_confirm(s: &mut AppState) {
     );
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("redub_trash_confirm", scene_trash_confirm),
         ("redub_dub_accent_foreign_ref", scene_dub_accent_foreign_ref),

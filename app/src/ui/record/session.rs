@@ -236,10 +236,10 @@ fn verdict_word(v: Option<Verdict>) -> &'static str {
 }
 
 fn take_banner(r: &RecordState, p: Pal, t: &Take) -> El {
-    if let Some((msg, tone)) = &r.notice {
-        if r.recording() || t.status == TakeStatus::Empty || *tone == Tone::Danger {
-            return txt(msg.clone(), 14.0, 600.0, tone.color(p)).wrap();
-        }
+    if let Some((msg, tone)) = &r.notice
+        && (r.recording() || t.status == TakeStatus::Empty || *tone == Tone::Danger)
+    {
+        return txt(msg.clone(), 14.0, 600.0, tone.color(p)).wrap();
     }
     let mut c = col().w_full().gap(6.0);
     match t.status {

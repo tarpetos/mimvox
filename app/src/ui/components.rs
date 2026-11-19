@@ -288,6 +288,7 @@ pub enum ButtonSize {
 }
 
 type Handler = Rc<dyn Fn(&mut AppState)>;
+type ValueHandler = Rc<dyn Fn(&mut AppState, f32)>;
 
 pub struct Button {
     label: String,
@@ -502,7 +503,7 @@ pub struct Slider {
     decimals: usize,
     unit: &'static str,
     ends: Option<(String, String)>,
-    on_change: Option<Rc<dyn Fn(&mut AppState, f32)>>,
+    on_change: Option<ValueHandler>,
 }
 
 impl Slider {
@@ -612,10 +613,10 @@ impl Slider {
                 if matches!(d.phase, Phase::Move) {
                     tx.instant();
                 }
-                if !d.cancelled() {
-                    if let Some(f) = &on_change {
-                        f(s, to_value(d.x, d.w));
-                    }
+                if !d.cancelled()
+                    && let Some(f) = &on_change
+                {
+                    f(s, to_value(d.x, d.w));
                 }
             })
             .child(track);

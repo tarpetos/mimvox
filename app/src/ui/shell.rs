@@ -754,7 +754,7 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
         .window_drag()
         .child(engine_pill(s, p, fit.tight))
         .child(voice_pill(s, p));
-    let bar = col()
+    col()
         .key("header")
         .w_full()
         .h(HEADER_HEIGHT)
@@ -793,11 +793,10 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
                 .h(1.0)
                 .inert()
                 .fill(p.sheen.alpha(0.12)),
-        );
-    bar
+        )
 }
 
-const STEPS: [(Screen, &str, &'static rune::Icon); 4] = [
+const STEPS: [(Screen, &str, &rune::Icon); 4] = [
     (Screen::Record, "Record", &icons::MIC),
     (Screen::Train, "Train", &icons::CHIP),
     (Screen::Speak, "Speak", &icons::VOLUME),
@@ -842,10 +841,10 @@ fn tabs(s: &AppState, p: Palette, compact: bool) -> El {
         if compact {
             tab = tab.help(*name);
         }
-        if screen == Screen::Train {
-            if let Some(line) = super::train::status_line(s) {
-                tab = tab.gap(5.0).child(train_badge(p, &line, on, compact));
-            }
+        if screen == Screen::Train
+            && let Some(line) = super::train::status_line(s)
+        {
+            tab = tab.gap(5.0).child(train_badge(p, &line, on, compact));
         }
         strip = strip.child(tab);
     }
@@ -1160,12 +1159,7 @@ fn engine_banner(s: &AppState, p: Palette) -> Option<El> {
                 .child(text(detail).font(ty::CAPTION).color(p.text_dim).wrap().max_lines(2)),
         )
         .child(
-            Button::new("Retry")
-                .small()
-                .icon(&icons::REFRESH)
-                .key("banner-retry")
-                .on_press(|s| restart_engine(s))
-                .build(p),
+            Button::new("Retry").small().icon(&icons::REFRESH).key("banner-retry").on_press(restart_engine).build(p),
         );
     Some(el().w_full().px(16.0).child(glass_card(p).w_full().child(row_)))
 }

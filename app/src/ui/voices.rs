@@ -94,13 +94,13 @@ pub fn settle(s: &mut AppState) -> bool {
             shell::refresh_voices(s);
         }
     }
-    if let Some(id) = s.voices.restore.clone() {
-        if !s.shell.voices.is_empty() {
-            s.voices.restore = None;
-            if s.shell.voices.iter().any(|v| v.id == id) {
-                s.shell.active_voice = Some(id);
-                changed = true;
-            }
+    if let Some(id) = s.voices.restore.clone()
+        && !s.shell.voices.is_empty()
+    {
+        s.voices.restore = None;
+        if s.shell.voices.iter().any(|v| v.id == id) {
+            s.shell.active_voice = Some(id);
+            changed = true;
         }
     }
     crate::ui::refclip::settle(s) | changed
@@ -306,7 +306,7 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let info_col = col().grow(1.0).min_w(0.0).gap(6.0).child(title).child(meta);
 
     let mut actions = row().gap(8.0).center_y();
-    if let Some(_) = renaming {
+    if renaming.is_some() {
         actions = actions.child(kit::button(p, "Save", BtnKind::Primary, true, commit_rename)).child(kit::button(
             p,
             "Cancel",
@@ -447,7 +447,7 @@ fn scene_error(s: &mut AppState) {
     s.voices.error = Some("The engine stopped unexpectedly. Restart the app.".into());
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("voices-list", scene_list),
         ("voices-paused", scene_paused),
