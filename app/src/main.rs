@@ -70,11 +70,11 @@ fn keep_appimage_fds_to_self() {
 /// `mimvox serve ...`: the mimvox-server next to this binary, with the remaining arguments. An AppImage starts only its
 /// main binary, so this is how the bundled server is reached.
 fn serve(args: impl Iterator<Item = std::ffi::OsString>) -> ! {
-    let dir = std::env::current_exe()
-        .ok()
-        .map(|p| p.canonicalize().unwrap_or(p))
-        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-        .unwrap_or_default();
+    let exe = std::env::current_exe().ok();
+    // macOS reports a symlink's own path; Windows' canonical form would be a \\?\ path.
+    #[cfg(unix)]
+    let exe = exe.map(|p| p.canonicalize().unwrap_or(p));
+    let dir = exe.and_then(|p| p.parent().map(std::path::Path::to_path_buf)).unwrap_or_default();
     let server = dir.join(format!("mimvox-server{}", std::env::consts::EXE_SUFFIX));
     if !server.is_file() {
         eprintln!("mimvox: {} not found", server.display());
