@@ -350,4 +350,15 @@ def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("voices.import")
 def voices_import(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
+    if params.get("bundle") not in (None, ""):
+        from . import voicebundle  # noqa: PLC0415 - lazy: it imports this module
+
+        return voicebundle.import_bundle(ctx, params)
     return import_voice(ctx, params)
+
+
+@method("voices.export")
+def voices_export(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
+    from . import voicebundle  # noqa: PLC0415 - lazy: it imports this module
+
+    return voicebundle.export_voice(config.data_dir(ctx), str(params.get("id")), params.get("dest"))
