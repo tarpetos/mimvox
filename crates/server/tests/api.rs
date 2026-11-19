@@ -315,6 +315,61 @@ async fn files_up_and_down() {
 }
 
 #[tokio::test]
+async fn book_segment_timing_files() {
+    let setup = Setup::new();
+    let server = setup.start(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let data = setup.data();
+    let book = data.join("books").join("my-book");
+    let segments = book.join("segments");
+    let timing = r#"{"segments":[]}"#;
+    for (path, body) in [
+        (segments.join("001.json"), timing),
+        (book.join("book.json"), "{}"),
+        (book.join("state.json"), "{}"),
+        (book.join("work").join("001.segments.json"), "{}"),
+        (book.join("stats").join("001.json"), "{}"),
+        (data.join("secret.txt"), "no"),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+    }
+    let get = |p: &Path| client.get(server.url("/files")).query(&[("path", p.to_str().unwrap())]).send();
+
+    let res = get(&segments.join("001.json")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "application/json");
+    assert_eq!(res.text().await.unwrap(), timing);
+    assert_eq!(get(&segments.join("002.json")).await.unwrap().status(), StatusCode::NOT_FOUND);
+
+    let refused = [
+        book.join("book.json"),
+        book.join("state.json"),
+        book.join("work").join("001.segments.json"),
+        book.join("stats").join("001.json"),
+        segments.join("..").join("book.json"),
+        segments.join("..").join("work").join("001.segments.json"),
+        segments.join("..").join("..").join("..").join("secret.txt"),
+        segments.join("..").join("..").join("..").join("..").join("runtime.toml"),
+    ];
+    for p in &refused {
+        assert_eq!(get(p).await.unwrap().status(), StatusCode::FORBIDDEN, "{}", p.display());
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(book.join("book.json"), segments.join("003.json")).unwrap();
+        assert_eq!(get(&segments.join("003.json")).await.unwrap().status(), StatusCode::FORBIDDEN);
+        std::fs::create_dir_all(data.join("elsewhere")).unwrap();
+        std::fs::write(data.join("elsewhere").join("001.json"), "no").unwrap();
+        let evil = data.join("books").join("evil");
+        std::fs::create_dir_all(&evil).unwrap();
+        std::os::unix::fs::symlink(data.join("elsewhere"), evil.join("segments")).unwrap();
+        assert_eq!(get(&evil.join("segments").join("001.json")).await.unwrap().status(), StatusCode::FORBIDDEN);
+    }
+}
+
+#[tokio::test]
 async fn auth() {
     let setup = Setup::new();
     let server = setup.start(&["--require-token"], &[("MIMVOX_API_TOKEN", "s3cret-token")]).await;

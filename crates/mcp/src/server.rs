@@ -216,7 +216,8 @@ pub struct UploadArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DownloadArgs {
-    /// Absolute path on the API's machine, under <data>/outputs, <data>/tmp or <data>/api/uploads.
+    /// Absolute path on the API's machine, under <data>/outputs, <data>/tmp or <data>/api/uploads, or a book's
+    /// segments_path.
     pub path: String,
     /// Where to save it on this machine (a file or an existing folder); default: the Downloads folder.
     #[serde(default)]
@@ -835,8 +836,8 @@ impl Mimvox {
         Ok(reply(self.upload_inner(args).await))
     }
 
-    #[tool(description = "Download a file the API serves (a result in <data>/outputs, a file in <data>/tmp or an \
-                          upload) to this machine.")]
+    #[tool(description = "Download a file the API serves (a result in <data>/outputs, a file in <data>/tmp, an \
+                          upload or a book chapter's segments_path) to this machine.")]
     async fn download_file(&self, Parameters(args): Parameters<DownloadArgs>) -> Result<CallToolResult, ErrorData> {
         Ok(reply(self.download_inner(args).await))
     }
@@ -867,8 +868,8 @@ impl ServerHandler for Mimvox {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
         let file = ResourceTemplate::new(format!("{FILE_URI}{{path}}"), "file").with_description(
-            "A file the Mimvox API serves (under <data>/outputs, <data>/tmp or <data>/api/uploads); {path} is its \
-             absolute path, percent-encoded.",
+            "A file the Mimvox API serves (under <data>/outputs, <data>/tmp or <data>/api/uploads, or a book's \
+             segments_path); {path} is its absolute path, percent-encoded.",
         );
         Ok(ListResourceTemplatesResult::with_all_items(vec![file]))
     }
