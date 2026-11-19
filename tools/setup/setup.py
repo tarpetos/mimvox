@@ -137,6 +137,7 @@ DEMUCS_FILE = "hdemucs_high_trained.pt"
 DEMUCS_SIZE = 334_697_255
 DEMUCS_SHA256 = "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816"
 ENGINE_DIR = "engine"
+UV_PYTHON_DIR = "python"   # <runtime>/python, also in move_runtime.fix_venv_paths and crates/desktop/src/ui/setuprun.rs
 ENGINE_PYTHON = "3.11"
 ENGINE_TORCH = ("torch==2.8.0", "torchaudio==2.8.0")
 # pypdf (BSD-3-Clause, pure Python): PDF books; every other book format is read with the standard library.
@@ -301,6 +302,18 @@ def previous_components(data_dir: Path) -> set[str] | None:
     return {c for c in found if c in COMPONENTS} if isinstance(found, list) else None
 
 
+def recorded_gpu(data_dir: Path) -> Gpu | None:
+    """runtime.toml ``[device]`` of an earlier run; None before there was one."""
+    import tomllib  # noqa: PLC0415 - Python 3.11+, only needed here
+
+    try:
+        device = tomllib.loads((data_dir / "runtime.toml").read_text(encoding="utf-8")).get("device", {})
+        backend = str(device["backend"]).lower()
+        return Gpu(backend, str(device.get("name", "")), float(device.get("vram_gb", 0.0)), str(device.get("vendor", "")))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def has_runtime(data_dir: Path) -> bool:
     return (data_dir / "runtime.toml").is_file() or (data_dir / "runtime" / ENGINE_DIR).is_dir() \
         or (data_dir / "runtime" / LEGACY_INDEXTTS_DIR).is_dir()
@@ -407,6 +420,7 @@ class Setup:
     skip_toolchain: bool = False
     skip_models: bool = False
     force_cpu: bool = False
+    force_gpu: bool = False
     assume_yes: bool = False
     force: bool = False
     gpu: Gpu = field(default_factory=lambda: Gpu("cpu"))
@@ -420,6 +434,11 @@ class Setup:
     @property
     def runtime(self) -> Path:
         return self.data_dir / "runtime"
+
+    @property
+    def python_dir(self) -> Path:
+        """uv's Pythons (UV_PYTHON_INSTALL_DIR), which the venvs are made from."""
+        return self.runtime / UV_PYTHON_DIR
 
     @property
     def legacy_indextts(self) -> Path:
@@ -486,6 +505,8 @@ class Setup:
         # uv's package cache next to the environments: on the same drive uv hard-links the packages into them
         # instead of copying (PyTorch is several GB), and deleting the data folder removes everything setup wrote.
         env.setdefault("UV_CACHE_DIR", str(self.data_dir / "cache" / "uv"))
+        env.setdefault("UV_PYTHON_INSTALL_DIR", str(self.python_dir))
+        env.setdefault("HF_HOME", str(self.data_dir / "cache" / "huggingface"))  # the hf CLI's own state, not models
         if GUI:  # plain text for the app's log
             env["NO_COLOR"] = "1"
             env["TERM"] = "dumb"
@@ -535,21 +556,24 @@ class Setup:
 
     def detect(self) -> None:
         say(f"Platform: {self.plat} {self.arch} ({platform.platform()})")
-        self.gpu = self._detect_gpu()
+        self.gpu, cpu_chosen = self._choose_gpu()
         if self.gpu.build == "rocm":
             say(f"GPU backend: rocm ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB; AMD support is new, see the README)")
             if not os.access("/dev/kfd", os.R_OK | os.W_OK):
                 warn("/dev/kfd is not accessible, so PyTorch cannot use the AMD GPU. Add your user to the 'render' "
                      "and 'video' groups (sudo usermod -aG render,video $USER), log in again and run setup again.")
         elif self.gpu.backend == "cuda":
-            say(f"GPU backend: cuda ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB)")
+            say(f"GPU backend: cuda ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB)" if self.gpu.name else "GPU backend: cuda")
         elif self.gpu.backend == "mps":
             say("GPU backend: mps (Apple Silicon; best effort, parts of the engine may fall back to the CPU)")
         else:
             if self.plat == "macos":
                 warn("Intel Macs are not supported: PyTorch 2.8 (OmniVoice) has no wheels for them; expect the install to fail.")
-            warn("No supported GPU found: the runtime is set up for the CPU. Training a voice will be very slow "
-                 "and speech generation several times slower than real time.")
+            if cpu_chosen:
+                say("GPU backend: cpu")
+            else:
+                warn("No supported GPU found: the runtime is set up for the CPU. Training a voice will be very slow "
+                     "and speech generation several times slower than real time.")
 
     @staticmethod
     def _existing_parent(path: Path) -> Path:
@@ -557,10 +581,25 @@ class Setup:
             path = path.parent
         return path
 
-    def _detect_gpu(self) -> Gpu:
+    def _choose_gpu(self) -> tuple[Gpu, bool]:
+        """--cpu, else the backend runtime.toml records (unless --gpu), else this machine's GPU. True: the CPU was
+        chosen rather than the only one there."""
         if self.force_cpu:
             say("--cpu given: using the CPU backend.")
-            return Gpu("cpu")
+            return Gpu("cpu"), True
+        found = self._detect_gpu()
+        recorded = None if self.force_gpu else recorded_gpu(self.data_dir)
+        if recorded is None or recorded.build == found.build:
+            return found, False
+        if found.backend == "cpu":
+            say(f"Keeping the {recorded.build} backend this runtime was set up for, although no GPU was found now "
+                "(--cpu switches to the CPU).")
+        else:
+            say(f"Keeping the {recorded.build} backend this runtime was set up for ({found.name or found.build} found; "
+                "--gpu switches to it).")
+        return recorded, recorded.backend == "cpu"
+
+    def _detect_gpu(self) -> Gpu:
         if self.plat == "macos":
             return Gpu("mps") if self.arch == "arm64" else Gpu("cpu")
         smi = shutil.which("nvidia-smi")
@@ -1216,8 +1255,11 @@ class Setup:
         if not stress_ok:
             warn("The Ukrainian stress dictionary could not be installed (the next setup run tries again); Ukrainian "
                  "speech works without automatic stress.")
-        # g2p_en fetches its NLTK data (CMUdict, tagger; a few MB) on first import: do it now, not in the app.
-        if self.run([py, "-I", "-c", "import g2p_en"], cwd=self.runtime) != 0:
+        # g2p_en fetches its NLTK data (CMUdict, tagger; a few MB) on first import: do it now, not in the app. NLTK
+        # also searches <venv>/nltk_data (sys.prefix) on every OS, so the engine finds it there without NLTK_DATA.
+        nltk_data = self.engine_venv / "nltk_data"
+        nltk_data.mkdir(exist_ok=True)
+        if self.run([py, "-I", "-c", "import g2p_en"], cwd=self.runtime, extra_env={"NLTK_DATA": str(nltk_data)}) != 0:
             warn("g2p_en could not fetch its NLTK data; the recording-text analysis falls back to a simpler method.")
         if stress_ok:
             stamp.write_text(stamp_value, encoding="utf-8")
@@ -1394,16 +1436,21 @@ class Setup:
             say("Deleted.")
 
     def quick_check(self) -> list[str]:
-        """Verify an existing setup without loading a model: files, interpreters, torch and the GPU."""
+        """Verify an existing setup without loading a model: files, interpreters, torch and the GPU, for the
+        components it has."""
         problems: list[str] = []
-        training = "training" in (previous_components(self.data_dir) or set(COMPONENTS))
+        training = "training" in self.components
+        pythons = [("engine", "Engine", self.engine_python())]
+        if training:
+            pythons.append(("rvc", "Applio", self.rvc_python()))
+        if "ukrainian" in self.components:
+            pythons.append(("holos", "Ukrainian speech", self.holos_python()))
         if not self.runtime_toml.is_file():
             problems.append(f"{self.runtime_toml} is missing.")
         else:
             say(f"runtime.toml: {self.runtime_toml}")
             text = self.runtime_toml.read_text(encoding="utf-8")
-            keys = [("engine", self.engine_python())] + ([("rvc", self.rvc_python())] if training else [])
-            for key, path in keys:
+            for key, _label, path in pythons:
                 if toml_str(path) not in text:
                     problems.append(f"runtime.toml does not point [python] {key} at {path}.")
         if training:
@@ -1419,13 +1466,15 @@ class Setup:
         checks = [("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)]
         if training:
             checks.insert(0, ("Applio prerequisites", self.applio, self.applio_required()))
+        if "ukrainian" in self.components:
+            checks.append(("Ukrainian speech models", self.holos_models, (*HOLOS_FILES, HOLOS_STAMP)))
         for label, folder, files in checks:
             missing = [f for f in files if not (folder / f).is_file()]
             if missing:
                 problems.append(f"{label}: missing {', '.join(missing)} in {folder}")
             else:
                 say(f"{label}: all files present.")
-        for label, py in [("Engine", self.engine_python())] + ([("Applio", self.rvc_python())] if training else []):
+        for _key, label, py in pythons:
             problems += self._check_torch(label, py)
         if self.engine_python().exists():
             out = self.read([self.engine_python(), "-I", "-c",
@@ -1443,6 +1492,7 @@ class Setup:
 
     def _check_media(self) -> list[str]:
         problems: list[str] = []
+        has = self.components.__contains__
         exe = ".exe" if self.plat == "windows" else ""
         portable = all((self.ffmpeg_dir() / f"{name}{exe}").is_file() for name in ("ffmpeg", "ffprobe"))
         if self.plat == "windows":
@@ -1461,37 +1511,41 @@ class Setup:
                 say(f"openai-whisper {out[-1]} (Redub transcription).")
             else:
                 problems.append("openai-whisper is missing from the engine environment (Redub transcription).")
-            out = self.read([py, "-c", "import transformers, sentencepiece; print(transformers.__version__)"]
-                            ).strip().splitlines()
-            if out:
-                say(f"transformers {out[-1]} + sentencepiece (Redub translation).")
+            if has("translation"):
+                out = self.read([py, "-c", "import transformers, sentencepiece; print(transformers.__version__)"]
+                                ).strip().splitlines()
+                if out:
+                    say(f"transformers {out[-1]} + sentencepiece (Redub translation).")
+                else:
+                    problems.append("transformers or sentencepiece is missing from the engine environment "
+                                    "(Redub translation).")
+        if has("translation"):
+            nllb = self.models_dir / NLLB_DIR
+            missing = [f for f in NLLB_REQUIRED if not (nllb / f).is_file()]
+            if missing:
+                problems.append(f"Translation model: missing {', '.join(missing)} in {nllb}")
             else:
-                problems.append("transformers or sentencepiece is missing from the engine environment "
-                                "(Redub translation).")
-        nllb = self.models_dir / NLLB_DIR
-        missing = [f for f in NLLB_REQUIRED if not (nllb / f).is_file()]
-        if missing:
-            problems.append(f"Translation model: missing {', '.join(missing)} in {nllb}")
-        else:
-            say("Translation model (NLLB-200 distilled 600M): all files present.")
+                say("Translation model (NLLB-200 distilled 600M): all files present.")
         if self.has_better_translation():
             say("Better translation model (NLLB-200 distilled 1.3B): all files present.")
         elif self.wants_better_translation():
             say("Better translation model (NLLB-200 distilled 1.3B): not downloaded (optional; run setup to add it, "
                 "Redub uses the 600M meanwhile).")
-        if not (self.models_dir / "whisper" / "large-v3-turbo.pt").is_file():
+        if not (self.models_dir / "whisper" / WHISPER_FILE).is_file():
             say("Whisper turbo checkpoint: not downloaded yet (setup fetches it; otherwise the first Redub does).")
-        demucs = self.models_dir / DEMUCS_DIR / DEMUCS_FILE
-        if demucs.is_file() and demucs.stat().st_size == DEMUCS_SIZE:
-            say("Music-removal model (Hybrid Demucs): present.")
-        else:
-            say(f"Music-removal model: not downloaded yet ({demucs}); media files are used with their music until "
-                "setup fetches it.")
-        if self.has_zero_shot_vc():
-            say("Zero-shot voice converter (Seed-VC): present.")
-        else:
-            say("Zero-shot voice converter (Seed-VC): not installed (optional; untrained voices then have no native "
-                "accent until setup installs it).")
+        if has("music_removal"):
+            demucs = self.models_dir / DEMUCS_DIR / DEMUCS_FILE
+            if demucs.is_file() and demucs.stat().st_size == DEMUCS_SIZE:
+                say("Music-removal model (Hybrid Demucs): present.")
+            else:
+                say(f"Music-removal model: not downloaded yet ({demucs}); media files are used with their music until "
+                    "setup fetches it.")
+        if has("native_accent"):
+            if self.has_zero_shot_vc():
+                say("Zero-shot voice converter (Seed-VC): present.")
+            else:
+                say("Zero-shot voice converter (Seed-VC): not installed (untrained voices have no native accent until "
+                    "setup installs it).")
         return problems
 
     def _check_torch(self, label: str, py: Path) -> list[str]:
@@ -1643,7 +1697,12 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                         help="run by the app: no questions and no system packages (no sudo; implies --yes and "
                              "--skip-toolchain), plus '@@mimvox {json}' progress lines for its setup screen")
     parser.add_argument("--skip-models", action="store_true", help="set the environments up but download no models")
-    parser.add_argument("--cpu", action="store_true", help="ignore any GPU and set up the CPU backend")
+    backend = parser.add_mutually_exclusive_group()
+    backend.add_argument("--cpu", action="store_true",
+                         help="ignore any GPU and set up the CPU backend; later runs keep it until --gpu")
+    backend.add_argument("--gpu", action="store_true",
+                         help="use this machine's GPU also when the runtime was set up with --cpu (default: keep the "
+                              "backend runtime.toml records, else detect the GPU)")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="do not ask for confirmation (then --data-dir is required: no silent default)")
     parser.add_argument("--force", action="store_true",
@@ -1782,14 +1841,12 @@ def build_setup(args: argparse.Namespace) -> Setup:
     data_dir = choose_data_dir(args, plat)
     return Setup(root=root, plat=plat, arch=host_arch(), data_dir=data_dir,
                  skip_toolchain=args.skip_toolchain, skip_models=args.skip_models, force_cpu=args.cpu,
-                 assume_yes=args.yes, force=args.force, uv_path=find_uv(),
+                 force_gpu=args.gpu, assume_yes=args.yes, force=args.force, uv_path=find_uv(),
                  )
 
 
 def run_move(args: argparse.Namespace) -> int:
     """``--move-to`` (move_runtime.py); exit code 0 only when everything went through."""
-    import tomllib
-
     import move_runtime as mv
 
     plat = host_platform()
@@ -1804,13 +1861,7 @@ def run_move(args: argparse.Namespace) -> int:
         mv.out(f"Updated {len(fixer.fixed)} file(s) that held the old path")
         for path in fixer.unfixed:
             mv.out(f"warning: could not update {path}; it still points to the old place (reinstall that package to refresh it)")
-        device: dict = {}
-        try:
-            device = tomllib.loads((new / "runtime.toml").read_text(encoding="utf-8")).get("device", {})
-        except (OSError, ValueError):
-            pass
-        gpu = Gpu(str(device.get("backend", "cuda")), str(device.get("name", "")), float(device.get("vram_gb", 0.0)),
-                  str(device.get("vendor", "")))
+        gpu = recorded_gpu(new) or Gpu("cuda")
         setup = Setup(root=Path(__file__).resolve().parents[2], plat=plat, arch=host_arch(), data_dir=new, gpu=gpu,
                       components=previous_components(new) or set(COMPONENTS))
         setup.write_runtime_toml()  # also writes (or removes) location.toml

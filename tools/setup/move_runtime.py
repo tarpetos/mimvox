@@ -242,12 +242,47 @@ class PathFixer:
             self.unfixed.append(str(path))
 
 
+def _link_target(path: Path) -> str | None:
+    """A symlink's target, or a Windows junction's (uv links each Python's minor version to its patch release)."""
+    try:
+        junction = os.lstat(path).st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+    except (OSError, AttributeError):  # st_reparse_tag: Windows only
+        junction = False
+    if not (path.is_symlink() or junction):
+        return None
+    try:
+        return os.readlink(path).removeprefix("\\\\?\\")
+    except OSError:
+        return None
+
+
+def fix_link(path: Path, old: Path, new: Path, fixer: PathFixer) -> None:
+    """A link into the old folder dangles once that was renamed (a copy already re-pointed it)."""
+    target = _link_target(path)
+    if target is None or not _inside(Path(target), old):
+        return
+    moved = str(new) + target[len(str(old)):]
+    if path.is_symlink():
+        path.unlink()
+        os.symlink(moved, path, target_is_directory=Path(moved).is_dir())
+    else:
+        import _winapi  # noqa: PLC0415 - Windows only
+
+        os.rmdir(path)  # the junction, not its target
+        _winapi.CreateJunction(moved, str(path))
+    fixer.fixed.append(str(path))
+
+
 def fix_venv_paths(root: Path, old: Path, windows: bool) -> PathFixer:
     fixer = PathFixer(old, root, windows)
+    # uv's Pythons (setup.py UV_PYTHON_DIR): absolute links to the patch release each venv's home goes through.
+    for entry in sorted(root.glob("runtime/python/*")):
+        fix_link(entry, old, root, fixer)
     for venv in sorted(root.glob("runtime/*/.venv")) + sorted(root.glob("runtime/*/venv")):
         fixer.text_file(venv / "pyvenv.cfg")
         for sub in ("Scripts", "bin"):
             for f in sorted((venv / sub).glob("*")) if (venv / sub).is_dir() else []:
+                fix_link(f, old, root, fixer)
                 if f.is_file() and not f.is_symlink():
                     (fixer.launcher if f.suffix.lower() == ".exe" else fixer.text_file)(f)
         sites = list(venv.glob("Lib/site-packages")) + list(venv.glob("lib/python*/site-packages"))
