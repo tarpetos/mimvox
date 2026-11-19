@@ -1153,9 +1153,10 @@ fields as tts.generate}`
 - `ref` (a non-empty string; `null` or left out for none): the client's own name for the project, stored in
   `book.json` and shown in summaries. When a project with this `ref` exists (the oldest, found by scanning every
   `book.json`), nothing is created and the request's other fields are not used or checked: a running project answers
-  with its current `job`; a finished one with `job: null` and `status: "done"` (nothing starts, no accent or reference
-  fields); any other (`paused`, interrupted, `new`, `error`, `cancelled`) is resumed as by `book.resume`. `existing`
-  is then `true` (`false` for a new project); `status` is `running` or `done`. A second `book.start` with the same
+  with its current `job` (no accent or reference fields; its `book.done` has them); a finished one with `job: null`
+  and `status: "done"` (nothing starts, no accent or reference fields); any other (`paused`, interrupted, `new`,
+  `error`, `cancelled`) is resumed as by `book.resume`, with the accent and reference fields. `existing` is then
+  `true` (`false` for a new project); `status` is `running` or `done`. A second `book.start` with the same
   `ref` while the first is still answering gets `busy`.
 - `busy` while any generation runs (only one at a time). **While a book is read it holds the generation slot**:
   `tts.generate`, Redub, `voices.warm` and reference changes answer `busy` with the message "a book is being read;
@@ -1189,7 +1190,8 @@ fields as tts.generate}`
   them when `chapters` is left out; `[]` for none), with `voice_id` from now on when given (`not_found` for a voice
   without a reference). Each listed chapter's file, segment timing, progress and audio are dropped, and so is the M4B.
   The book is then `paused` (`new` when nothing is made), or stays `done` when every chapter is still made;
-  `book.resume` reads on. `busy` while it is being read.
+  `book.resume` reads on. `busy` while it is being read or reread; while it is reread, `book.resume` and `book.start`
+  of it answer `busy`.
 - `book.play {"id","index"}` -> `{"path","path_play"}`: a WAV to play a finished chapter with (the chapter file itself
   for WAV, else a decoded copy in `<data>/tmp/play/book-<id>-<NNN>.wav`, gone at the next engine start). `not_found`
   for a chapter that is not finished.

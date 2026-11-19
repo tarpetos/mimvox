@@ -370,7 +370,7 @@ def test_start_with_the_ref_of_a_running_book_returns_its_job(data, starts):
     first = start(data, "pub-1")
     again = start(data, "pub-1")
     assert again["id"] == first["id"] and again["job"] == first["job"]
-    assert again["existing"] is True and again["status"] == "running"
+    assert again["existing"] is True and again["status"] == "running" and "accent" not in again
     assert starts == [first["id"]] and len(books(data)) == 1
 
 
@@ -394,6 +394,64 @@ def test_start_with_the_ref_of_a_finished_book_starts_nothing(data, starts):
     assert again == {"id": first["id"], "folder": first["folder"], "chapters": 2, "words": first["words"],
                      "ref": "pub-1", "existing": True, "job": None, "status": "done"}
     assert starts == [first["id"]] and len(books(data)) == 1
+
+
+def test_start_with_the_ref_of_a_book_that_finishes_during_the_read(data, starts, monkeypatch):
+    first = start(data, "pub-1")
+    set_status(data, first["id"], "running")
+    load, finished = book._load, []
+
+    def load_while_it_finishes(data, bid):
+        out = load(data, bid)
+        if not finished:
+            finished.append(bid)
+            _, st = load(data, bid)
+            st["status"] = "done"
+            book._save_state(data, bid, st)
+            book._RUNNING.pop(bid)
+        return out
+
+    monkeypatch.setattr(book, "_load", load_while_it_finishes)
+    again = start(data, "pub-1")
+    assert again["status"] == "done" and again["job"] is None
+    assert starts == [first["id"]]
+
+
+def test_no_start_while_a_book_is_reread(data, monkeypatch):
+    bid = make(data)
+    entered, go = threading.Event(), threading.Event()
+    reread = book._reread
+
+    def slow_reread(*args):
+        entered.set()
+        go.wait(5)
+        reread(*args)
+
+    async def fake_voice(ctx, data, st):
+        return voice()
+
+    monkeypatch.setattr(book, "_reread", slow_reread)
+    monkeypatch.setattr(book, "_voice", fake_voice)
+    monkeypatch.setattr(book.tts, "start_exclusive", lambda ctx, fn, msg, holder: "job1")
+    ctx = Ctx(data.root)
+
+    async def main():
+        rereading = asyncio.ensure_future(book.book_reread(ctx, {"id": bid, "chapters": [0]}))
+        await asyncio.to_thread(entered.wait, 5)
+        try:
+            for method in (book.book_resume, book.book_reread):
+                with pytest.raises(book.EngineError) as e:
+                    await method(ctx, {"id": bid})
+                assert e.value.code == "busy"
+        finally:
+            go.set()
+            await rereading
+        return await book.book_resume(ctx, {"id": bid})
+
+    try:
+        assert asyncio.run(main())["job"] == "job1"
+    finally:
+        book._RUNNING.clear()
 
 
 def test_another_ref_with_other_chapters_is_another_book(data, starts):
