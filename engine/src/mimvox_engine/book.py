@@ -907,7 +907,7 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
         log.info("book %s (%s): %d of %d chapter(s) to read, %s, accent %s", bid, job, len(todo_ch),
                  len(book["chapters"]), v.lang, choice.accent)
         turn = zs.turn if zs is not None else None
-        todo: asyncio.Queue[tuple[int, int, int, str, str, int, str] | None] = asyncio.Queue(maxsize=2)
+        todo: asyncio.Queue[tuple[int, int, int, str | None, str, int, str] | None] = asyncio.Queue(maxsize=2)
         last_at = [time.time()]
         session = {"audio_s": 0.0, "elapsed_s": 0.0, "retries": 0}
         judge = narration.Judge()
@@ -945,58 +945,71 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
                     log.info("book %s ch %d seg %d/%d (%s): %.2fs", bid, k + 1, i + 1, len(segs), kind,
                              time.time() - t0)
                     await todo.put((k, i, len(segs), path, seg, pause, kind))
+                if start >= len(segs):  # every segment was committed before a stop: only the chapter file is missing
+                    await todo.put((k, len(segs) - 1, len(segs), None, "", 0, ""))
             await todo.put(None)
+
+        async def add_segment(k: int, i: int, path: str, seg: str, pause: int, kind: str) -> None:
+            files = [path]
+            src = await convert(k, i, path)
+            files.append(src)
+            x, m = await aio.run_io(_segment_audio, src, len(seg))
+            # a title is read differently on purpose: it neither judges nor is judged
+            score, why = judge.deviation(m) if QUALITY_CHECKS and kind != "title" else (0.0, [])
+            retried = None
+            if score > 1.0:
+                session["retries"] += 1
+                p2 = await synth(k, i, seg, "tts2")
+                s2 = await convert(k, i, p2, "2")
+                files += [p2, s2]
+                x2, m2 = await aio.run_io(_segment_audio, s2, len(seg))
+                score2, why2 = judge.deviation(m2)
+                retried = {"why": why, "score": round(score, 2), "score2": round(score2, 2),
+                           "kept": "second" if score2 < score else "first"}
+                log.info("book %s ch %d seg %d: outlier (%s), made again: %s (%.2f -> %.2f)", bid, k + 1, i + 1,
+                         ", ".join(why), retried["kept"], score, score2)
+                if score2 < score:
+                    x, m = x2, m2
+            fix_db = judge.level_fix_db(m) if QUALITY_CHECKS else 0.0
+            if fix_db:
+                x = x * np.float32(10 ** (fix_db / 20.0))
+            if kind != "title":
+                judge.accept(m)
+            stat = {"i": i, "kind": kind, "pause_ms": pause, "chars": len(seg), "dur": m["dur"],
+                    "spc": round(m["spc"], 5), "lufs": None if m["lufs"] is None else round(m["lufs"], 2),
+                    "f0": None if m["f0"] is None else round(m["f0"], 1), "fix_db": round(fix_db, 2),
+                    "retried": retried}
+            now = time.time()
+            dt, last_at[0] = now - last_at[0], now
+            # The commit finishes even when the job is stopped meanwhile: the PCM and its record stay together.
+            fut = asyncio.ensure_future(aio.run_io(_commit, data, bid, state, k, i, x, pause, len(seg), dt, stat))
+            try:
+                added = await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    await fut
+                raise
+            session["audio_s"] += added
+            session["elapsed_s"] += dt
+            for p in set(files):
+                with contextlib.suppress(OSError):
+                    await aio.run_io(os.remove, p)
+            ctx.emit("book.progress", {**_progress(book, state, k),
+                                      "segment_rtf": round(dt / added, 3) if added else None}, job=job)
 
         async def consume() -> None:
             async for k, i, n, path, seg, pause, kind in aio.queue_items(todo):
-                files = [path]
-                src = await convert(k, i, path)
-                files.append(src)
-                x, m = await aio.run_io(_segment_audio, src, len(seg))
-                # a title is read differently on purpose: it neither judges nor is judged
-                score, why = judge.deviation(m) if QUALITY_CHECKS and kind != "title" else (0.0, [])
-                retried = None
-                if score > 1.0:
-                    session["retries"] += 1
-                    p2 = await synth(k, i, seg, "tts2")
-                    s2 = await convert(k, i, p2, "2")
-                    files += [p2, s2]
-                    x2, m2 = await aio.run_io(_segment_audio, s2, len(seg))
-                    score2, why2 = judge.deviation(m2)
-                    retried = {"why": why, "score": round(score, 2), "score2": round(score2, 2),
-                               "kept": "second" if score2 < score else "first"}
-                    log.info("book %s ch %d seg %d: outlier (%s), made again: %s (%.2f -> %.2f)", bid, k + 1, i + 1,
-                             ", ".join(why), retried["kept"], score, score2)
-                    if score2 < score:
-                        x, m = x2, m2
-                fix_db = judge.level_fix_db(m) if QUALITY_CHECKS else 0.0
-                if fix_db:
-                    x = x * np.float32(10 ** (fix_db / 20.0))
-                if kind != "title":
-                    judge.accept(m)
-                stat = {"i": i, "kind": kind, "pause_ms": pause, "chars": len(seg), "dur": m["dur"],
-                        "spc": round(m["spc"], 5), "lufs": None if m["lufs"] is None else round(m["lufs"], 2),
-                        "f0": None if m["f0"] is None else round(m["f0"], 1), "fix_db": round(fix_db, 2),
-                        "retried": retried}
-                now = time.time()
-                dt, last_at[0] = now - last_at[0], now
-                # The commit finishes even when the job is stopped meanwhile: the PCM and its record stay together.
-                fut = aio.run_io(_commit, data, bid, state, k, i, x, pause, len(seg), dt, stat)
-                try:
-                    added = await asyncio.shield(fut)
-                except asyncio.CancelledError:
-                    with contextlib.suppress(Exception):
-                        await fut
-                    raise
-                session["audio_s"] += added
-                session["elapsed_s"] += dt
-                for p in set(files):
-                    with contextlib.suppress(OSError):
-                        await aio.run_io(os.remove, p)
-                ctx.emit("book.progress", {**_progress(book, state, k),
-                                          "segment_rtf": round(dt / added, 3) if added else None}, job=job)
+                if path is not None:
+                    await add_segment(k, i, path, seg, pause, kind)
                 if i == n - 1:
-                    out = await aio.run_io(_finish_chapter, data, bid, book, state, k, v.out_fmt)
+                    # Shielded like the commit; a stop meanwhile takes effect once the chapter is reported.
+                    fut = asyncio.ensure_future(aio.run_io(_finish_chapter, data, bid, book, state, k, v.out_fmt))
+                    stop: asyncio.CancelledError | None = None
+                    try:
+                        out = await asyncio.shield(fut)
+                    except asyncio.CancelledError as exc:
+                        stop = exc
+                        out = await fut
                     cs = state["chapters"][k]
                     audio, el = float(cs.get("audio_s") or 0.0), float(cs.get("elapsed_s") or 0.0)
                     log.info("book %s chapter %d done: %.1fs of audio in %.1fs (RTF %.2f), level %s", bid, k + 1,
@@ -1007,6 +1020,8 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
                                               "elapsed_s": round(el, 1), "rtf": round(el / audio, 3) if audio else None,
                                               "level": cs.get("level"), **_totals(book, state)}, job=job)
                     last_at[0] = time.time()
+                    if stop is not None:
+                        raise stop
 
         attempt, audio_at_failure = 0, 0.0
         while True:
