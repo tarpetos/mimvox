@@ -151,7 +151,7 @@ async fn serve(cli: Cli, data_dir: PathBuf) -> anyhow::Result<()> {
     eprintln!("mimvox-server: listening on http://{addr} (data folder {})", data_dir.display());
 
     let outcome = tokio::select! {
-        _ = shutdown_signal() => Ok(()),
+        _ = mimvox_api::shutdown_signal() => Ok(()),
         r = &mut server => r.map_err(anyhow::Error::from).and_then(|r| r.map_err(anyhow::Error::from)).and(Err(anyhow!("the HTTP server stopped"))),
         r = &mut supervisor => r.map_err(anyhow::Error::from).and_then(|r| r),
     };
@@ -222,33 +222,6 @@ async fn log_engine(hub: Hub) {
             Ok(ev) if ev.event == "models" => eprintln!("mimvox-server: models {}", ev.data),
             Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-        }
-    }
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut term), Ok(mut hup)) = (signal(SignalKind::terminate()), signal(SignalKind::hangup())) else {
-            let _ = tokio::signal::ctrl_c().await;
-            return;
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = term.recv() => {}
-            _ = hup.recv() => {}
-        }
-    }
-    #[cfg(windows)]
-    {
-        let Ok(mut close) = tokio::signal::windows::ctrl_close() else {
-            let _ = tokio::signal::ctrl_c().await;
-            return;
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = close.recv() => {}
         }
     }
 }

@@ -1620,8 +1620,16 @@ mimvox serve [the same arguments]
 - **Engine.** The data dir and runtime are found as the app finds them (`MIMVOX_DATA`, `location.toml`, default;
   `MIMVOX_RUNTIME`, `MIMVOX_ENGINE_SRC`, `MIMVOX_RESOURCES`), `--data-dir` overrides the first. The server starts
   the engine at once and starts it again 1 s after it exits (an exit right after `shutdown` included); three crashes
-  in a row, each within 30 s of its start, stop the server. Ctrl+C, SIGTERM, SIGHUP (Windows: Ctrl+C, closing the console) send
-  `shutdown` and exit. On Unix the engine runs in its own process group, so a terminal's Ctrl+C reaches only the server.
+  in a row, each within 30 s of its start, stop the server. Ctrl+C, SIGTERM, SIGHUP (Windows: Ctrl+C, Ctrl+Break,
+  closing the console, the system shutting down) send `shutdown` and exit. On Unix the engine runs in its own process
+  group and on Windows without the server's console, so a terminal's Ctrl+C reaches only the server.
+- **Stopping it from another program.** Send what a terminal would, so the engine gets `shutdown` and `engine.lock`
+  is freed before the server exits with code 0 (within about 8 s): on Unix SIGTERM to its pid; on Windows start it
+  with `CREATE_NEW_PROCESS_GROUP` and send `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, <its pid>)` (Ctrl+C cannot
+  be sent to another process group). That event reaches only processes on the sender's console, so the server must
+  inherit it (not `CREATE_NEW_CONSOLE`, `CREATE_NO_WINDOW` or `DETACHED_PROCESS`); a sender without a console
+  calls `AllocConsole` first. Never `shutdown` through `/rpc`: the server starts a fresh engine. Killing it
+  (SIGKILL, `TerminateProcess`) ends the engine too, but without its shutdown.
 - **One engine per data dir.** Whoever starts an engine (the app or the server) holds an OS lock on
   `<data>/engine.lock` while it runs; a second one fails with "another Mimvox engine ... is already running". The app
   shows that as the engine's stop reason. A client that dies first (killed) does not free it early: on Unix the engine
@@ -1675,7 +1683,8 @@ mimvox mcp [the same arguments]
 - **Transports.** stdio by default (one JSON-RPC message per line; logs go to stderr). `--http ADDR` serves streamable
   HTTP on `http://ADDR/mcp` instead (`ADDR` is `host:port`, or a port alone for `127.0.0.1:port`); an address other than
   loopback is refused without `--http-allow-remote`, since that endpoint has no authentication of its own and uses the
-  API's token. Without `--http-allow-remote` only loopback `Host` headers are served.
+  API's token. Without `--http-allow-remote` only loopback `Host` headers are served. With `--http` it stops on the
+  same signals as `mimvox-server`.
 - **`mimvox mcp`** runs the `mimvox-mcp` next to the app binary as `mimvox serve` runs the server (on Unix in its
   place): `./Mimvox.AppImage mcp`. Windows: run `mimvox-mcp.exe` from the install folder.
 - **API address**: `--url`, else `MIMVOX_URL`, else `http://127.0.0.1:8765` (plain HTTP; a path prefix is kept).

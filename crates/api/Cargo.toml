@@ -10,7 +10,7 @@ mimvox-engine-client.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "fs", "io-util", "net", "macros", "time", "process"] }
+tokio = { workspace = true, features = ["rt", "sync", "fs", "io-util", "net", "macros", "time", "process", "signal"] }
 axum = "0.8.9"
 tokio-util = { version = "0.7.20", features = ["io"] }
 futures-util = { version = "0.3.34", default-features = false }
