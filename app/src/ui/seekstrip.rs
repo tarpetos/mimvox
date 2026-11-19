@@ -242,10 +242,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TIMER => {
             // `try_borrow_mut`: a timer message dispatched while `show` holds the strip waits for the next one.
             STRIP.with(|slot| {
-                if let Ok(mut slot) = slot.try_borrow_mut() {
-                    if let Some(s) = slot.as_mut().filter(|s| s.hwnd == hwnd && s.shown) {
-                        paint(s);
-                    }
+                if let Ok(mut slot) = slot.try_borrow_mut()
+                    && let Some(s) = slot.as_mut().filter(|s| s.hwnd == hwnd && s.shown)
+                {
+                    paint(s);
                 }
             });
             0

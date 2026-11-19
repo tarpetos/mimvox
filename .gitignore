@@ -70,6 +70,9 @@ logs/
 # Tool state and scratch
 /tmp/
 *.tmp
+# Coding agents' worktrees and per-user settings (a shared .claude/settings.json may be committed)
+.claude/worktrees/
+.claude/settings.local.json
 # OS / editors
 .DS_Store
 Thumbs.db

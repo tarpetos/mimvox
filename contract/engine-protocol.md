@@ -229,7 +229,7 @@ the quick check, and only then delete the old directory.
 <data>/books/<book_id>/segments/<NNN>.json   # each segment's text and speech times in a finished chapter's file (see Output files)
 <data>/outputs/books/<book title>/<NN> - <chapter title>.<ext>  # one file per chapter (+ <book title>.m4b with "m4b")
 <data>/tmp/                                  # scratch (job chunks, training logs), wiped at every engine start
-<data>/engine.lock                           # OS file lock held by the app or mimvox-server while its engine runs (client side)
+<data>/engine.lock                           # OS file lock held by the app or mimvox-server while its engine runs (and by the engine on Unix)
 <data>/api/token                             # HTTP API token, user-only (see HTTP API)
 <data>/api/uploads/<uuid>-<name>             # files sent to POST /files, deleted after 24 h
 ```
@@ -1548,7 +1548,13 @@ nothing listens unless `mimvox-server` runs.
 ```
 mimvox-server [--bind 127.0.0.1:8765] [--data-dir DIR] [--require-token] [--max-upload-mb 2048]
 mimvox-server --show-token | token show | token new
+mimvox serve [the same arguments]
 ```
+
+- **`mimvox serve`.** The app binary runs the `mimvox-server` next to it with the rest of its arguments (on Unix in
+  its place, so signals and the exit code are the server's), for the Linux AppImage, which starts only its main binary:
+  `./Mimvox.AppImage serve`. No window, no single-instance check. A missing server is an error (exit 2). Windows:
+  `mimvox.exe` is a window program without a console, so run `mimvox-server.exe` from the same folder instead.
 
 - **Engine.** The data dir and runtime are found as the app finds them (`MIMVOX_DATA`, `location.toml`, default;
   `MIMVOX_RUNTIME`, `MIMVOX_ENGINE_SRC`, `MIMVOX_RESOURCES`), `--data-dir` overrides the first. The server starts
@@ -1557,7 +1563,9 @@ mimvox-server --show-token | token show | token new
   `shutdown` and exit. On Unix the engine runs in its own process group, so a terminal's Ctrl+C reaches only the server.
 - **One engine per data dir.** Whoever starts an engine (the app or the server) holds an OS lock on
   `<data>/engine.lock` while it runs; a second one fails with "another Mimvox engine ... is already running". The app
-  shows that as the engine's stop reason.
+  shows that as the engine's stop reason. A client that dies first (killed) does not free it early: on Unix the engine
+  inherits the lock (`flock`) and holds it until it exits; on Windows the engine runs in a job object that ends it with
+  its client.
 - **Updates (Windows).** The server holds the app's named mutex (`Local\Mimvox-running`) for its whole run, so the
   installer and the uninstaller ask to close it (a silent update waits 30 s, then stops) instead of failing on files
   in use.
@@ -1579,7 +1587,7 @@ mimvox-server --show-token | token show | token new
 | `GET /events` | Server-Sent Events: every engine event as one `data:` line, the same JSON as the engine's stdout (`{"event","job","data"}`, default SSE event type). Added by the server: `engine.exited {"code"}` (a new `ready` follows the restart) and `api.lagged {"missed"}` when a slow client fell 4096 events behind |
 | `POST /files?name=<file name>` | the raw body (streamed, not multipart) saved to `<data>/api/uploads/<uuid>-<safe name>` -> `{"path","size_bytes"}`; pass `path` to methods that take files. Over `--max-upload-mb` is 413 and nothing is kept. Uploads older than 24 h are deleted at start and after each upload |
 | `GET /files?path=<absolute path>` | the file, streamed, if it lies inside `<data>/outputs`, `<data>/tmp` or `<data>/api/uploads`: first checked on the path alone (`..` resolved, Windows `\\?\` and `\\.\` paths refused, a UNC path only inside a data folder on that share), so nothing outside is ever opened, then again after resolving symlinks. 403 outside, 400 relative or a folder, 404 missing. Voices, models and the token are never served |
-| `POST /v1/audio/speech` | OpenAI-compatible: `{"model","input","voice","response_format"?,"speed"?}` (+ `"language"`, default the voice's) -> audio bytes. `model` is ignored; `voice` is a voice id or name (case-insensitive). `response_format`: `mp3` (default), `wav`, `flac`, `opus` (Ogg), `aac` (AAC in MP4, `audio/mp4`), `pcm` (16-bit mono 44.1 kHz little-endian, not OpenAI's 24 kHz); the engine's `output_format` rules apply (`not_ready` without the encoder). `speed` is clamped to 0.8-1.3 by the engine; `input` is at most 4096 characters (400). Runs `tts.generate`, waits for its `tts.done` event, returns the file and deletes it with `outputs.delete`. Requests queue one at a time, and a turn lasts until its job has ended: a client that disconnects, a job past 30 minutes (`timeout` 504) or missed events cancel the job (waiting up to 30 s for its end) and delete its result |
+| `POST /v1/audio/speech` | OpenAI-compatible: `{"model","input","voice","response_format"?,"speed"?}` (+ `"language"`, default the voice's) -> audio bytes. `model` is ignored; `voice` is a voice id or name (case-insensitive). `response_format`: `mp3` (default), `wav`, `flac`, `opus` (Ogg), `aac` (raw ADTS, `audio/aac`: the engine's `m4a` remuxed without re-encoding by the ffmpeg the engine would use, found the same way; `not_ready` 503 without one), `pcm` (raw 16-bit signed little-endian mono at 24 kHz, as OpenAI's, resampled from the engine's WAV); the engine's `output_format` rules apply (`not_ready` without the encoder). `speed` is clamped to 0.8-1.3 by the engine; `input` is at most 4096 characters (400). Runs `tts.generate`, waits for its `tts.done` event, returns the file and deletes it with `outputs.delete`. Requests queue one at a time, and a turn lasts until its job has ended: a client that disconnects, a job past 30 minutes (`timeout` 504) or missed events cancel the job (waiting up to 30 s for its end) and delete its result |
 | `GET /v1/models` | `{"object":"list","data":[{"id":"mimvox",...}]}` |
 | `GET /v1/audio/voices` | the `voices.list` result |
 

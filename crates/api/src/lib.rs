@@ -1,5 +1,6 @@
 //! The local HTTP API: contract/engine-protocol.md, "HTTP API".
 
+mod ffmpeg;
 mod files;
 mod hub;
 mod openai;

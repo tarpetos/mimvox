@@ -260,6 +260,8 @@ pub struct EngineClient {
     log_path: PathBuf,
     shut_down: AtomicBool,
     _lock: Option<File>,
+    #[cfg(windows)]
+    _job: Option<std::os::windows::io::OwnedHandle>,
 }
 
 impl EngineClient {
@@ -326,8 +328,26 @@ impl EngineClient {
         }
         #[cfg(not(unix))]
         let _ = opts;
+        // std locks with flock on Unix, which belongs to the open file: the engine's inherited copy keeps the data dir
+        // locked until the engine itself exits, even when the client is killed first.
+        #[cfg(unix)]
+        if let Some(fd) = lock.as_ref().map(std::os::fd::AsRawFd::as_raw_fd) {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: fcntl is async-signal-safe and only changes the flags of the child's copy of the descriptor.
+            unsafe {
+                cmd.pre_exec(move || {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
 
         let mut child = cmd.spawn().with_context(|| format!("cannot start the engine with {}", python.display()))?;
+        #[cfg(windows)]
+        let job = kill_on_close_job(&child);
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("engine stdin unavailable"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("engine stdout unavailable"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("engine stderr unavailable"))?;
@@ -403,6 +423,8 @@ impl EngineClient {
             log_path,
             shut_down: AtomicBool::new(false),
             _lock: lock,
+            #[cfg(windows)]
+            _job: job,
         })
     }
 
@@ -473,10 +495,45 @@ impl EngineClient {
         }
         // Still running. The reader holds the child only once stdout has closed (the process is then already at
         // its very end), so never block on it here.
-        if let Ok(mut child) = self.child.try_lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+        match self.child.try_lock() {
+            Ok(mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            // The engine holds the data dir lock until it is gone, so a client started next must not race its end.
+            Err(_) => {
+                let _ = self.exited.lock().unwrap_or_else(|e| e.into_inner()).recv_timeout(STDERR_FLUSH);
+            }
         }
+    }
+}
+
+/// Windows file locks end with the process that took them, not with the engine: a job that kills the engine when the
+/// client's handle closes (the client exiting, even killed) keeps "one engine per data dir".
+#[cfg(windows)]
+fn kill_on_close_job(child: &Child) -> Option<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+    // SAFETY: plain Win32 calls on a job handle this function owns (closed by OwnedHandle) and on the child's handle,
+    // which outlives the call.
+    unsafe {
+        let raw = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if raw.is_null() {
+            return None;
+        }
+        let job = OwnedHandle::from_raw_handle(raw);
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let set = SetInformationJobObject(
+            raw,
+            JobObjectExtendedLimitInformation,
+            (&raw const info).cast(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        (set != 0 && AssignProcessToJobObject(raw, child.as_raw_handle()) != 0).then_some(job)
     }
 }
 
@@ -538,5 +595,93 @@ mod tests {
         drop(first);
         assert!(lock_data_dir(&dir).unwrap().is_some());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const HOLDER_ENV: &str = "MIMVOX_TEST_LOCK_HOLDER";
+    const HOLDER_TEST: &str = "tests::the_engine_keeps_its_data_dir_after_its_client_is_killed";
+    /// Outlives its stdin until `release` appears in the data dir.
+    const LINGERING_ENGINE: &str = r#"import os, pathlib, sys, time
+data = pathlib.Path(sys.argv[sys.argv.index("--data-dir") + 1])
+(data / "started").write_text(str(os.getpid()))
+sys.stdin.read()
+while not (data / "release").exists():
+    time.sleep(0.05)
+"#;
+
+    fn python() -> PathBuf {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::split_paths(&path)
+            .flat_map(|d| ["python3", "python", "python.exe"].map(|n| d.join(n)))
+            .find(|p| p.is_file())
+            .expect("python3 on PATH")
+    }
+
+    fn lingering_engine(base: &Path) -> EngineConfig {
+        let src = base.join("src");
+        fs::create_dir_all(src.join("mimvox_engine")).unwrap();
+        fs::write(src.join("mimvox_engine").join("__init__.py"), "").unwrap();
+        fs::write(src.join("mimvox_engine").join("__main__.py"), LINGERING_ENGINE).unwrap();
+        let python = python().display().to_string().replace('\\', "/");
+        fs::write(base.join("runtime.toml"), format!("[python]\nengine = \"{python}\"\n")).unwrap();
+        EngineConfig { runtime_toml: base.join("runtime.toml"), engine_src: src, data_dir: base.join("data") }
+    }
+
+    fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn the_engine_keeps_its_data_dir_after_its_client_is_killed() {
+        if let Some(base) = std::env::var_os(HOLDER_ENV) {
+            let cfg = lingering_engine(Path::new(&base));
+            let _client =
+                EngineClient::spawn_with(&cfg, Arc::new(|_, _| {}), SpawnOptions { own_process_group: true }).unwrap();
+            loop {
+                thread::sleep(Duration::from_secs(60));
+            }
+        }
+        let base = std::env::temp_dir().join(format!("mimvox-lock-engine-{}", std::process::id()));
+        let cfg = lingering_engine(&base);
+        let mut holder = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", HOLDER_TEST, "--nocapture"])
+            .env(HOLDER_ENV, &base)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = cfg.data_dir.join("started");
+        wait_for("the engine to start", || fs::read_to_string(&started).is_ok_and(|pid| !pid.is_empty()));
+        #[cfg(windows)]
+        let engine = {
+            use std::os::windows::io::{FromRawHandle, OwnedHandle};
+            use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+            let pid: u32 = fs::read_to_string(&started).unwrap().trim().parse().unwrap();
+            // SAFETY: a handle this test owns from here on.
+            unsafe { OwnedHandle::from_raw_handle(OpenProcess(PROCESS_SYNCHRONIZE, 0, pid)) }
+        };
+        holder.kill().unwrap();
+        holder.wait().unwrap();
+
+        #[cfg(unix)]
+        {
+            let held = lock_data_dir(&cfg.data_dir).err().map(|e| e.to_string()).unwrap_or_default();
+            fs::write(cfg.data_dir.join("release"), "").unwrap();
+            assert!(held.contains("already running"), "the lock ended with the client while its engine runs");
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+            use windows_sys::Win32::System::Threading::WaitForSingleObject;
+            // SAFETY: a live process handle.
+            let ended = unsafe { WaitForSingleObject(engine.as_raw_handle(), 20_000) };
+            fs::write(cfg.data_dir.join("release"), "").unwrap();
+            assert_eq!(ended, WAIT_OBJECT_0, "the engine outlived its killed client");
+        }
+        wait_for("the lock to be free", || lock_data_dir(&cfg.data_dir).is_ok_and(|l| l.is_some()));
+        let _ = fs::remove_dir_all(&base);
     }
 }
