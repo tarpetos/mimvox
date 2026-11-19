@@ -1093,10 +1093,12 @@ only shows it.
 
 ### `book.resume` / `book.pause` / `book.cancel`
 - `book.resume {"id"}` -> as `book.start` (`id`, `job`, ...). Continues a `paused`, `error`, `cancelled` or `new` book
-  with the settings it was started with, from the next unfinished segment (see Resume). `bad_request` for a finished
-  book, `busy` as above.
-- `book.pause {"id"}` -> `{}`: stops the job now (the segment being made is made again on resume) and frees the slot;
-  `book.paused` follows. `bad_request` when the book is not being read.
+  with the settings it was started with, from the next unfinished segment (see Resume); a chapter whose segments were
+  all made before the stop but whose file was not written is finished first (`book.chapter`). `bad_request` for a
+  finished book, `busy` as above.
+- `book.pause {"id"}` -> `{}`: stops the job now (the segment being made is made again on resume; a chapter file being
+  written is finished first, with its `book.chapter`) and frees the slot; `book.paused` follows. `bad_request` when
+  the book is not being read.
 - `book.cancel {"id"}` -> `{}`: stops a running book (`book.error {"code":"cancelled"}` follows) or marks a paused one
   `cancelled`, and drops the unfinished chapter's progress. Finished chapter files stay; a resume starts that chapter
   again.
