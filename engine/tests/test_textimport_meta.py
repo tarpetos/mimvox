@@ -77,6 +77,13 @@ def test_epub_without_author_roles_keeps_every_creator(tmp_path, import_book):
     assert meta["date"] is None
 
 
+def test_epub2_cover_meta_naming_the_image_href(tmp_path, import_book):
+    md = '<dc:title>Old Book</dc:title><meta name="cover" content="images/front.jpeg"/>'
+    path = epub(tmp_path / "e.epub", version="2.0", toc="ncx", metadata=md,
+                extra_items=image_item("img1", "images/front.jpeg"), files={"OEBPS/images/front.jpeg": JPEG})
+    assert cover_bytes(import_book(path)["meta"]) == JPEG
+
+
 def test_epub_cover_found_by_name(tmp_path, import_book):
     path = epub(tmp_path / "e.epub", extra_items=image_item("img9", "pics/Cover_Art.jpg"),
                 files={"OEBPS/pics/Cover_Art.jpg": JPEG})
