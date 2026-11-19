@@ -1,7 +1,7 @@
 Required Notice: Copyright 2026 tarpetos (https://github.com/tarpetos)
 
 This license covers the source code of this repository, except third-party components that carry their own
-license (for example `app/vendor/rune-patched/`, MIT) and the models and tools that setup downloads; see
+license (for example `crates/desktop/vendor/rune-patched/`, MIT) and the models and tools that setup downloads; see
 THIRD_PARTY_NOTICES.md. For commercial use, ask the licensor for a separate license.
 
 # PolyForm Noncommercial License 1.0.0

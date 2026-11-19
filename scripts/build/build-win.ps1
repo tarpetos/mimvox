@@ -28,7 +28,7 @@ $jobs = if ($env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS } else { "6" }
 $env:CARGO_BUILD_JOBS = $jobs
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$appDir = Join-Path $repoRoot "app"
+$appDir = Join-Path $repoRoot "crates\desktop"
 $distDir = Join-Path $repoRoot "dist"
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoRoot "target" }
 Set-Location -LiteralPath $appDir
@@ -72,7 +72,8 @@ if (-not $hasMsvc -and -not (Get-Command link.exe -ErrorAction SilentlyContinue)
 $cargoVersion = ((Get-Content Cargo.toml) | Select-String '^version\s*=\s*"([^"]*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $packagerCfgVersion = ((Get-Content Packager.toml) | Select-String '^version\s*=\s*"([^"]*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 if ($cargoVersion -ne $packagerCfgVersion) {
-    Write-Host "Version mismatch: app\Cargo.toml has $cargoVersion, app\Packager.toml has $packagerCfgVersion."
+    Write-Host ("Version mismatch: crates\desktop\Cargo.toml has $cargoVersion, " +
+        "crates\desktop\Packager.toml has $packagerCfgVersion.")
     exit 1
 }
 
@@ -100,8 +101,8 @@ foreach ($bin in @($binName, $serverBin, $mcpBin)) {
     }
 }
 
-# cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
-# --binaries-dir points elsewhere, so a build into another CARGO_TARGET_DIR is copied there first.
+# cargo-packager resolves the binary through Packager.toml's binaries-dir (crates/desktop/target/release) even
+# when --binaries-dir points elsewhere, so a build into another CARGO_TARGET_DIR is copied there first.
 $appRelease = Join-Path $appDir "target\release"
 if ((Resolve-Path $releaseDir).Path -ne (Join-Path (Resolve-Path $appDir).Path "target\release")) {
     New-Item -ItemType Directory -Force -Path $appRelease | Out-Null

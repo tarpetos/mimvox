@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["app", "crates/engine-client", "crates/api", "crates/server", "crates/mcp"]
-exclude = ["app/vendor"]
+members = ["crates/desktop", "crates/engine-client", "crates/api", "crates/server", "crates/mcp"]
+exclude = ["crates/desktop/vendor"]
 
 [workspace.dependencies]
 mimvox-engine-client = { path = "crates/engine-client" }
@@ -15,6 +15,7 @@ tokio = "1.54"
 lto = "thin"
 codegen-units = 1
 
-# Rune with a small patch for the caption buttons (see app/vendor/README.md): remove once upstream has an equivalent.
+# Rune with a small patch for the caption buttons (see crates/desktop/vendor/README.md): remove once upstream has an
+# equivalent.
 [patch."https://github.com/anomalyco/rune"]
-rune = { path = "app/vendor/rune-patched" }
+rune = { path = "crates/desktop/vendor/rune-patched" }

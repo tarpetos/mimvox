@@ -1,7 +1,7 @@
 # Building the desktop installers
 
-One script per OS builds the Rust app (`app/`) and packages it with
-[cargo-packager](https://github.com/crabnebula-dev/cargo-packager) using `app/Packager.toml`. Output goes to
+One script per OS builds the Rust app (`crates/desktop/`) and packages it with
+[cargo-packager](https://github.com/crabnebula-dev/cargo-packager) using `crates/desktop/Packager.toml`. Output goes to
 `dist/` (git-ignored). Each script installs `cargo-packager` itself when it is missing.
 
 | OS | Script | Output |
@@ -16,7 +16,7 @@ Installers are built on the OS they target (no cross-compiling).
 ## What goes into an installer
 
 The release binary plus the runtime resources, staged by `scripts/build/stage_resources.py` into
-`app/target/bundle-resources/` (no `__pycache__`, venvs or data):
+`crates/desktop/target/bundle-resources/` (no `__pycache__`, venvs or data):
 
 - `engine/src/` the Python engine
 - `presets/` guided reading presets
@@ -25,8 +25,8 @@ The release binary plus the runtime resources, staged by `scripts/build/stage_re
 - `setup.sh`, `setup.cmd`, `DISCLAIMER.md`, `THIRD_PARTY_NOTICES.md` when present
 
 The heavy parts (Python virtualenvs, Applio, model weights, several GB) are **not** bundled: first run
-downloads them into the per-user data directory. The header of `app/Packager.toml` documents where each installer
-puts the resources and the lookup order the app uses to find them.
+downloads them into the per-user data directory. The header of `crates/desktop/Packager.toml` documents where each
+installer puts the resources and the lookup order the app uses to find them.
 
 The icon set in `tools/release/icons/` is committed. To regenerate it:
 `uv run --with pillow python tools/release/make_icons.py`.
@@ -66,14 +66,14 @@ sudo apt install build-essential pkg-config libasound2-dev libxkbcommon-dev libw
 - `uv`: `powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"`
 - If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope Process -Bypass` once in that window.
 - The setup `.exe` is built with Inno Setup by `scripts/build/inno.py`: a pinned, portable Inno Setup is downloaded
-  once (checked against its SHA-256) into `app\target\inno` (`$env:MIMVOX_INNO_CACHE` overrides). The wizard is dark
-  in the app's palette, its pictures are drawn at build time from the app icon, and the uninstaller asks what to remove
-  (the app, also the speech engine, or everything). The installer is per-user (no admin rights).
+  once (checked against its SHA-256) into `crates\desktop\target\inno` (`$env:MIMVOX_INNO_CACHE` overrides). The
+  wizard is dark in the app's palette, its pictures are drawn at build time from the app icon, and the uninstaller asks
+  what to remove (the app, also the speech engine, or everything). The installer is per-user (no admin rights).
 - The `.msi` (`-Format msi`) is made by cargo-packager with WiX (downloaded on first use); it is not shipped in releases.
 - With `$env:CARGO_PACKAGER_SIGN_PRIVATE_KEY` (and `_PASSWORD`) set, the setup `.exe` gets the `.sig` the app's
   updater checks.
 
 ## Releasing a new version
 
-Bump `version` in `app/Cargo.toml` **and** `app/Packager.toml` (the scripts refuse to build when they differ), then run
-the script on each OS.
+Bump `version` in `crates/desktop/Cargo.toml` **and** `crates/desktop/Packager.toml` (the scripts refuse to build when
+they differ), then run the script on each OS.

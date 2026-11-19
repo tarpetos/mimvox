@@ -53,7 +53,7 @@ jobs:
           check() { if grep -qE "$2" <<< "$files"; then echo "$1=true" >> "$GITHUB_OUTPUT"; fi; }
           check python '\.py$|(^|/)(ruff\.toml|pyproject\.toml)$|^\.github/workflows/(ci|lint)\.yml$'
           check engine '^engine/.*\.py$|^engine/(pyproject\.toml|uv\.lock)$|^\.github/workflows/(ci|test)\.yml$'
-          check rust '^app/|^crates/|(^|/)(Cargo\.toml|Cargo\.lock|rustfmt\.toml)$|^\.github/workflows/(ci|lint|test)\.yml$'
+          check rust '^crates/|(^|/)(Cargo\.toml|Cargo\.lock|rustfmt\.toml)$|^\.github/workflows/(ci|lint|test)\.yml$'
 
   lint:
     name: Lint

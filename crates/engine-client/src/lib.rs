@@ -78,7 +78,8 @@ fn is_resources_root(dir: &Path) -> bool {
     is_engine_src(&dir.join("engine").join("src"))
 }
 
-/// The folder that holds `engine/`, `presets/`, `tools/`, `contract/`; the layouts must match `app/Packager.toml`.
+/// The folder that holds `engine/`, `presets/`, `tools/`, `contract/`; the layouts must match
+/// `crates/desktop/Packager.toml`.
 pub fn find_resources() -> Option<PathBuf> {
     if let Some(p) = env_path("MIMVOX_RESOURCES") {
         return Some(p);
