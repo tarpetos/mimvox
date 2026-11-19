@@ -40,6 +40,7 @@ MEMORY_RETRY_WAIT_S = (20.0, 60.0, 180.0, 300.0)
 _RUNNING: dict[str, str] = {}   # loop thread only
 _STOP: dict[str, str] = {}
 _STARTING: set[str] = set()  # loop thread only: refs whose book.start is under way
+_REREADING: set[str] = set()  # loop thread only
 # Changed on IO threads (the producer cuts the next chapter while the consumer appends to this one) and read on the
 # loop: every change and save holds this lock.
 _LOCK = threading.RLock()
@@ -409,7 +410,10 @@ async def book_start(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         bid = await aio.run_io(find_ref, data, ref)
         if bid is None:
             return await _start_new(ctx, data, params, ref)
+        running = bid in _RUNNING
         book, state = await aio.run_io(_load, data, bid)
+        if running and bid not in _RUNNING:  # the job ended during the read, which may hold its state from before
+            book, state = await aio.run_io(_load, data, bid)
         out = {"id": bid, "folder": book["folder"], "chapters": len(book["chapters"]), "words": book.get("words"),
                "ref": ref, "existing": True}
         if bid in _RUNNING:
@@ -464,6 +468,8 @@ def _start(ctx: Context, data: config.DataDir, bid: str, v: _Voice) -> str:
     """Loop thread, with no await since the busy checks."""
     if bid in _RUNNING:
         raise EngineError("busy", "this book is being read already")
+    if bid in _REREADING:
+        raise EngineError("busy", "this book is being reread")
     job = tts.start_exclusive(ctx, lambda j: _run(ctx, j, data, bid, v), "another generation is running", HOLDER)
     _RUNNING[bid] = job
     _STOP.pop(bid, None)
@@ -562,6 +568,16 @@ async def book_reread(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     bid = str(params.get("id") or "")
     if bid in _RUNNING:
         raise EngineError("busy", "this book is being read; pause it first")
+    if bid in _REREADING:
+        raise EngineError("busy", "this book is being reread")
+    _REREADING.add(bid)
+    try:
+        return await _reread_checked(data, bid, params)
+    finally:
+        _REREADING.discard(bid)
+
+
+async def _reread_checked(data: config.DataDir, bid: str, params: dict[str, Any]) -> dict[str, Any]:
     book, state = await aio.run_io(_load, data, bid)
     n = len(book["chapters"])
     raw = params.get("chapters")
