@@ -24,10 +24,11 @@ class WorkerDied(Exception):
 
 
 class WorkerError(Exception):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, permanent: bool = False) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.permanent = permanent
 
 
 class WorkerCancelled(Exception):
@@ -262,7 +263,8 @@ class WorkerClient:
         elif msg.get("code") == "cancelled":
             req.done.set_exception(WorkerCancelled())
         else:
-            req.done.set_exception(WorkerError(str(msg.get("code") or "internal"), str(msg.get("error") or "failed")))
+            req.done.set_exception(WorkerError(str(msg.get("code") or "internal"), str(msg.get("error") or "failed"),
+                                               bool(msg.get("permanent"))))
 
     def _write(self, obj: dict[str, Any]) -> None:
         proc = self._proc

@@ -358,11 +358,12 @@ def _check_ram():
     if not _on_cpu():
         return
     model = _state["model"]
-    msg = kit.ram_too_small(CPU_RAM_NEED_GB) or (model is not None and kit.ram_short(
+    too_small = kit.ram_too_small(CPU_RAM_NEED_GB)
+    msg = too_small or (model is not None and kit.ram_short(
         [(p.data_ptr(), p.numel() * p.element_size()) for p in model.parameters()]))
     if msg:
         _log(msg)
-        raise kit.OpError("no_memory", msg)
+        raise kit.OpError("no_memory", msg, permanent=bool(too_small))
 
 
 def op_warm(req):

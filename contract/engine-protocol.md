@@ -921,8 +921,10 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
     page in 16 sampled; Windows: not in the working set, so compressed or in the page file; Linux: `mincore`):
     `no_memory` with "not enough free memory (RAM): ... close other programs and try again".
 
-  A Book then shows `stage: "memory"` and retries; `tts.generate` ends with `tts.error` `no_memory` and that
-  message. On a GPU or MPS neither check runs.
+  The worker's error line for the first one carries `"permanent": true`, as waiting cannot help there: a Book ends at
+  once with `book.error` `no_memory` and that message. After the second one a Book shows `stage: "memory"` and
+  retries. `tts.generate` ends with `tts.error` `no_memory` and the message in both cases. On a GPU or MPS neither
+  check runs.
 
 ### Native accent (`accent`)
 
@@ -1229,14 +1231,15 @@ fields as tts.generate}`
   every segment (`segment` = segments of that chapter done). `percent` is by characters, `audio_s` the audio made so
   far, `elapsed_s` the generation time over all sessions, `rtf = elapsed_s / audio_s`, `eta_s` the time left at the
   measured pace (null until the first segment), `est_audio_s` the whole book's length extrapolated. `stage: "m4b"` while
-  the M4B is made, about once a second with `stage_pct` (0-100) and `stage_eta_s`; `stage: "memory"` when the computer ran short of RAM or VRAM (with speech on the CPU also when the RAM is full and the speech model is paged out, see [RAM on the CPU](#speech-model-and-languages-omnivoice)): reading goes on from the same sentence
+  the M4B is made, about once a second with `stage_pct` (0-100) and `stage_eta_s`; `stage: "memory"` when the computer ran short of RAM or VRAM (with speech on the CPU also when the RAM is full and the speech model is paged out, see [RAM on the CPU](#speech-model-and-languages-omnivoice); not when the computer has too little RAM in all for speech on the CPU, which ends the book at once with `book.error` `no_memory`): reading goes on from the same sentence
   after `retry_in_s` (20 s, 60 s, 180 s, 300 s; the count starts again once a segment is made), and only then fails.
 - `book.chapter {"id","index","title","path","segments_path","duration_s","audio_s","elapsed_s","rtf",
   "level":{"lufs_in","gain_db","peak_dbfs"}, ...totals}`: a chapter file is finished (`rtf` of that chapter alone;
   `segments_path` its segment timing file, see Output files, null when the segment records were incomplete).
 - `book.done {"id","folder","m4b","m4b_requested","chapters","retries","session_elapsed_s","session_audio_s", ...totals,
   ...accent and reference fields}`; `book.paused {summary}`; `book.error {"id","code","message"}` (`cancelled` after
-  `book.cancel`; `no_memory` when the retries of the `memory` stage did not help). The slot is free when the end event arrives.
+  `book.cancel`; `no_memory` when the retries of the `memory` stage did not help, or at once on a computer with too little RAM
+  for speech on the CPU). The slot is free when the end event arrives.
 
 ### Narration (how a book sounds)
 The pipeline is `tts.generate`'s (backend, native accent and its converter, RVC), with these differences

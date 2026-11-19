@@ -179,6 +179,15 @@ def test_a_thrashing_cpu_worker_is_short_of_memory_for_a_book(tmp_path):
     assert book._short_of_memory(info.value)
 
 
+def test_too_little_ram_in_all_is_not_worth_a_book_retry(tmp_path):
+    msg = worker_kit.NO_RAM_CPU_TOTAL.format(need=11, total=7.4)
+    b = _backend("cpu", error=WorkerError("no_memory", msg, permanent=True))
+    with pytest.raises(EngineError) as info:
+        _synth(b, tmp_path)
+    assert info.value.code == "no_memory" and info.value.message == f"OmniVoice: {msg}"
+    assert not book._short_of_memory(info.value)
+
+
 def test_no_memory_keeps_its_code_from_warm_and_the_speech_worker(tmp_path):
     b = _backend("cpu", error=WorkerError("no_memory", "not enough memory (RAM)"))
     with pytest.raises(EngineError) as info:
@@ -313,7 +322,7 @@ def _omnivoice_worker(tmp_path, device, need_gb, ops):
                 try:
                     answers.append(await client.call(op, params, timeout=60.0, retry=False))
                 except WorkerError as exc:
-                    answers.append(exc.code)
+                    answers.append((exc.code, exc.permanent))
         finally:
             await client.close()
         return answers
@@ -326,7 +335,7 @@ needs_ram_figure = pytest.mark.skipif(worker_kit.physical_memory() is None, reas
 
 @needs_ram_figure
 def test_cpu_refuses_every_pass_up_front_on_a_computer_with_too_little_ram(tmp_path):
-    assert _omnivoice_worker(tmp_path, "cpu", 10**6, ["warm", "synth", "inspect"]) == ["no_memory"] * 3
+    assert _omnivoice_worker(tmp_path, "cpu", 10**6, ["warm", "synth", "inspect"]) == [("no_memory", True)] * 3
     assert not (tmp_path / "loaded").exists()   # refused before the model was loaded
 
 

@@ -17,9 +17,12 @@ class Cancelled(Exception):
 
 
 class OpError(Exception):
-    def __init__(self, code, message):
+    """``permanent``: trying again later cannot help (a computer with too little RAM in all)."""
+
+    def __init__(self, code, message, permanent=False):
         super().__init__(message)
         self.code = code
+        self.permanent = permanent
 
 
 # On Windows the NVIDIA "CUDA sysmem fallback" (default since driver 536.40) moves an allocation that does not fit
@@ -423,7 +426,8 @@ class Worker:
         except Cancelled:
             self.send({"id": rid, "ok": False, "code": "cancelled", "error": "cancelled"})
         except OpError as exc:
-            self.send({"id": rid, "ok": False, "code": exc.code, "error": str(exc)})
+            self.send({"id": rid, "ok": False, "code": exc.code, "error": str(exc),
+                       **({"permanent": True} if exc.permanent else {})})
         except MemoryError:
             gpu_cleanup()
             self.log(f"op {req.get('op')} ran out of RAM: {traceback.format_exc()}")

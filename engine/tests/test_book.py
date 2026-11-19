@@ -9,6 +9,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 from mimvox_engine import accent, book, config, narration
+from mimvox_engine.registry import EngineError
+from mimvox_engine.workerproc import WorkerError
 
 TEXT = ("The quick brown fox jumps over the lazy dog. " * 3 + "\n\n") * 3
 
@@ -62,19 +64,19 @@ def make(data, read_titles=False):
     return book._create(data, "Test Book", None, None, chapters, settings)["id"]
 
 
-def voice():
-    return book._Voice(Backend(), "en", "", "", "", 0.0, None, accent.Choice("own", "auto", None), None, 0.0, 0.8,
+def voice(backend=None):
+    return book._Voice(backend or Backend(), "en", "", "", "", 0.0, None, accent.Choice("own", "auto", None), None, 0.0, 0.8,
                        "fast", 1.0, "wav", {})
 
 
-def run(data, bid, on_start=None):
+def run(data, bid, on_start=None, backend=None):
     """Runs the book job to its end; a ``Crash`` raised inside it is caught and recorded."""
     ctx = Ctx()
 
     async def main():
         job = f"job{time.time_ns()}"
         book._RUNNING[bid] = job
-        task = asyncio.ensure_future(book._run(ctx, job, data, bid, voice()))
+        task = asyncio.ensure_future(book._run(ctx, job, data, bid, voice(backend)))
         if on_start:
             on_start(asyncio.get_running_loop(), task)
         try:
@@ -134,6 +136,45 @@ def test_reads_a_book(data):
     w, sr = sf.read(cs["path"])
     assert abs(len(w) / sr - doc["duration_s"]) < 1e-3
     assert book._chapter_rows(b, st)[1]["segments_path"] == st["chapters"][1]["segments_path"]
+
+
+class ShortOfRam(Backend):
+    """Refuses the first ``fails`` segments the way the OmniVoice backend passes on the CPU worker's RAM check."""
+
+    def __init__(self, permanent, fails):
+        self.permanent, self.fails, self.calls = permanent, fails, 0
+
+    async def synthesize(self, seg, lang, ref, p):
+        self.calls += 1
+        if self.calls <= self.fails:
+            msg = "not enough memory (RAM) for speech on the processor" if self.permanent else "not enough free memory"
+            try:
+                raise WorkerError("no_memory", msg, permanent=self.permanent)
+            except WorkerError as exc:
+                raise EngineError("no_memory", f"OmniVoice: {msg}") from exc
+        return await super().synthesize(seg, lang, ref, p)
+
+
+def test_too_little_ram_in_all_ends_the_book_at_once(data, monkeypatch):
+    monkeypatch.setattr(book, "MEMORY_RETRY_WAIT_S", (0.0,) * 4)
+    bid = make(data)
+    backend = ShortOfRam(permanent=True, fails=10**6)
+    ctx = run(data, bid, backend=backend)
+    assert ctx.names("book.done", "book.paused", "book.error") == ["book.error"]
+    err = next(d for e, d in ctx.events if e == "book.error")
+    assert err["code"] == "no_memory" and "for speech on the processor" in err["message"]
+    assert not [d for e, d in ctx.events if e == "book.progress" and d.get("stage") == "memory"]
+    assert backend.calls == 1
+    assert book._load(data, bid)[1]["error"]["code"] == "no_memory"
+
+
+def test_a_full_ram_still_waits_in_the_memory_stage(data, monkeypatch):
+    monkeypatch.setattr(book, "MEMORY_RETRY_WAIT_S", (0.0,) * 4)
+    bid = make(data)
+    ctx = run(data, bid, backend=ShortOfRam(permanent=False, fails=1))
+    assert [d for e, d in ctx.events if e == "book.progress" and d.get("stage") == "memory"]
+    assert ctx.names("book.done", "book.paused", "book.error") == ["book.done"]
+    assert_finished(data, bid)
 
 
 def test_crash_after_the_last_commit_then_resume_finishes_the_chapter(data, monkeypatch):
