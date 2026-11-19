@@ -101,13 +101,17 @@ fn run() -> anyhow::Result<()> {
     let cfg = build_config(&args)?;
     println!("config: {cfg:#?}");
 
-    let mut engine = EngineClient::spawn(&cfg)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sink: engine::EngineSink = std::sync::Arc::new(move |_, msg| {
+        let _ = tx.send(msg);
+    });
+    let mut engine = EngineClient::spawn(&cfg, sink)?;
     println!("engine log: {}", engine.log_path().display());
 
     let player = if args.no_play {
         None
     } else {
-        match audio::Player::new() {
+        match audio::Player::new(None) {
             Ok(p) => Some(p),
             Err(e) => {
                 eprintln!("warning: playback disabled: {e:#}");
@@ -125,7 +129,7 @@ fn run() -> anyhow::Result<()> {
     let mut finished = false;
 
     while started.elapsed() < Duration::from_secs(300) {
-        for msg in engine.poll() {
+        for msg in rx.try_iter() {
             match msg {
                 EngineMsg::Ready(hello) => {
                     println!("hello: {hello:#?}");
@@ -145,7 +149,18 @@ fn run() -> anyhow::Result<()> {
                         anyhow::bail!("no voices to speak with; create one first");
                     };
                     println!("tts.generate voice={vid} text={:?}", args.text);
-                    tts_req = Some(engine.send(protocol::tts_generate(vid, &args.text, 0.8, 1.0, protocol::Quality::Best, 1.0)));
+                    tts_req = Some(engine.send(protocol::tts_generate(
+                        vid,
+                        &args.text,
+                        0.8,
+                        1.0,
+                        protocol::Quality::Best,
+                        1.0,
+                        "en",
+                        "wav",
+                        None,
+                        false,
+                    )));
                 }
                 EngineMsg::Response { id, result } if Some(id) == tts_req => {
                     let started: protocol::JobStarted = protocol::parse_result(result.map_err(anyhow::Error::from)?)?;
@@ -156,10 +171,10 @@ fn run() -> anyhow::Result<()> {
                 EngineMsg::Event(ev) => match ev.parse() {
                     EngineEvent::TtsChunk { chunk, .. } => {
                         println!("chunk {} {:.2}s {}", chunk.index, chunk.duration_s, chunk.path.display());
-                        if let Some(p) = &player {
-                            if let Err(e) = p.enqueue(&chunk.path) {
-                                eprintln!("cannot play chunk: {e:#}");
-                            }
+                        if let Some(p) = &player
+                            && let Err(e) = p.enqueue(&chunk.path)
+                        {
+                            eprintln!("cannot play chunk: {e:#}");
                         }
                     }
                     EngineEvent::TtsDone { done, .. } => {
@@ -179,7 +194,7 @@ fn run() -> anyhow::Result<()> {
                 }
             }
         }
-        if finished && player.as_ref().map_or(true, |p| !p.is_playing()) {
+        if finished && player.as_ref().is_none_or(|p| !p.is_playing()) {
             break;
         }
         std::thread::sleep(Duration::from_millis(30));

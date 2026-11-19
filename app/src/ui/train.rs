@@ -5,11 +5,11 @@ use rune::{Cx, El, Tx, col, el, row, text};
 use serde_json::{Value, json};
 
 use crate::engine::EngineMsg;
-use crate::state::{AppState, Screen};
-use crate::ui::theme::{self, Palette, radius, ty};
 use crate::engine::protocol::PausedTraining;
+use crate::state::{AppState, Screen};
 use crate::ui::components::{Tone, icon_el, icons};
 use crate::ui::shell;
+use crate::ui::theme::{self, Palette, radius, ty};
 use crate::ui::voices::{
     self,
     kit::{self, BtnKind},
@@ -57,7 +57,10 @@ pub enum Phase {
     Idle,
     Starting,
     Running,
-    Done { epochs: u32, elapsed_s: f32 },
+    Done {
+        epochs: u32,
+        elapsed_s: f32,
+    },
     Failed(String),
 }
 
@@ -157,7 +160,9 @@ pub fn is_training(s: &AppState) -> bool {
 
 /// Of the active voice, else of any voice.
 pub fn paused_run(s: &AppState) -> Option<&PausedTraining> {
-    voices::active_voice_info(s).and_then(|v| v.paused.as_ref()).or_else(|| s.shell.voices.iter().find_map(|v| v.paused.as_ref()))
+    voices::active_voice_info(s)
+        .and_then(|v| v.paused.as_ref())
+        .or_else(|| s.shell.voices.iter().find_map(|v| v.paused.as_ref()))
 }
 
 /// Short status for a badge: `"Training 42%"`, `"Starting"`, `"Resuming"`, `"Pausing"` or `"Paused 118/300"`.
@@ -294,7 +299,10 @@ fn start(s: &mut AppState) {
     t.resuming = false;
     t.note = None;
     if !send(s, Tag::Start, "train.start", json!({ "voice_id": id, "epochs": epochs })) {
-        finish_run(&mut s.train, Phase::Failed("The voice engine is not running. Check the status at the top and press Retry.".into()));
+        finish_run(
+            &mut s.train,
+            Phase::Failed("The voice engine is not running. Check the status at the top and press Retry.".into()),
+        );
     }
 }
 
@@ -318,7 +326,10 @@ fn resume(s: &mut AppState) {
     t.confirm_discard = false;
     t.note = None;
     if !send(s, Tag::Resume, "train.resume", json!({ "voice_id": id })) {
-        finish_run(&mut s.train, Phase::Failed("The voice engine is not running. Check the status at the top and press Retry.".into()));
+        finish_run(
+            &mut s.train,
+            Phase::Failed("The voice engine is not running. Check the status at the top and press Retry.".into()),
+        );
     }
 }
 
@@ -492,7 +503,8 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 }
                 "train.error" => {
                     let code = ev.data.get("code").and_then(Value::as_str).unwrap_or("");
-                    let message = ev.data.get("message").and_then(Value::as_str).unwrap_or("Training failed.").to_string();
+                    let message =
+                        ev.data.get("message").and_then(Value::as_str).unwrap_or("Training failed.").to_string();
                     t.close = CloseDialog::Hidden;
                     if code == "cancelled" {
                         finish_run(t, Phase::Idle);
@@ -508,7 +520,10 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
         EngineMsg::Exited { .. } => {
             s.train.pending.clear();
             if is_training(s) {
-                finish_run(&mut s.train, Phase::Failed("The engine stopped while training. Restart the app and try again.".into()));
+                finish_run(
+                    &mut s.train,
+                    Phase::Failed("The engine stopped while training. Restart the app and try again.".into()),
+                );
             }
         }
         _ => {}
@@ -518,7 +533,13 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
 fn fmt_dur(secs: f32) -> String {
     let t = secs.max(0.0).round() as u64;
     let (h, m, s) = (t / 3600, (t % 3600) / 60, t % 60);
-    if h > 0 { format!("{h}h {m:02}m") } else if m > 0 { format!("{m}m {s:02}s") } else { format!("{s}s") }
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else if m > 0 {
+        format!("{m}m {s:02}s")
+    } else {
+        format!("{s}s")
+    }
 }
 
 fn level_label(level: &str) -> (&'static str, Tone) {
@@ -563,7 +584,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
             }
         }
         Phase::Starting | Phase::Running => body = body.child(progress_view(t, &p, name.as_deref().unwrap_or("voice"))),
-        Phase::Done { epochs, elapsed_s } => body = body.child(done_view(&p, *epochs, *elapsed_s, name.as_deref().unwrap_or("voice"))),
+        Phase::Done { epochs, elapsed_s } => {
+            body = body.child(done_view(&p, *epochs, *elapsed_s, name.as_deref().unwrap_or("voice")))
+        }
         Phase::Failed(msg) => body = body.child(failed_view(&p, msg)),
     }
     kit::page(body)
@@ -606,7 +629,12 @@ fn setup_view(s: &AppState, p: &Palette) -> El {
                         .child(stat(p, "RECORDED", format!("{:.1} min", x.total_minutes)))
                         .child(stat(p, "PARTS", x.parts.to_string()))
                         .child(stat(p, "RECOMMENDED", format!("{} epochs", x.recommended_epochs)))
-                        .child(col().gap(6.0).child(text("LEVEL").font(ty::OVERLINE).color(p.text_faint)).child(kit::badge(p, label, tone))),
+                        .child(
+                            col()
+                                .gap(6.0)
+                                .child(text("LEVEL").font(ty::OVERLINE).color(p.text_faint))
+                                .child(kit::badge(p, label, tone)),
+                        ),
                 )
                 .child(text(x.message.clone()).font(ty::BODY).color(p.text_dim).wrap());
         }
@@ -629,15 +657,16 @@ fn setup_view(s: &AppState, p: &Palette) -> El {
             "There is not enough audio yet. Record at least a few minutes first."
         };
         out = out.child(
-            kit::card(p)
-                .gap(12.0)
-                .child(text(msg).font(ty::BODY).color(p.text).wrap())
-                .child(
-                    row()
-                        .gap(10.0)
-                        .child(kit::button(p, "Go to Record", BtnKind::Primary, true, |s: &mut AppState| s.screen = Screen::Record))
-                        .child(kit::button(p, "Go to Speak", BtnKind::Glass, zero, |s: &mut AppState| s.screen = Screen::Speak)),
-                ),
+            kit::card(p).gap(12.0).child(text(msg).font(ty::BODY).color(p.text).wrap()).child(
+                row()
+                    .gap(10.0)
+                    .child(kit::button(p, "Go to Record", BtnKind::Primary, true, |s: &mut AppState| {
+                        s.screen = Screen::Record
+                    }))
+                    .child(kit::button(p, "Go to Speak", BtnKind::Glass, zero, |s: &mut AppState| {
+                        s.screen = Screen::Speak
+                    })),
+            ),
         );
         return out;
     }
@@ -666,7 +695,13 @@ fn setup_view(s: &AppState, p: &Palette) -> El {
 fn epochs_card(s: &AppState, p: &Palette) -> El {
     let t = &s.train;
     let rec = t.summary.as_ref().map_or(0, |(_, x)| x.recommended_epochs);
-    let shown = if t.manual { t.epochs } else if rec > 0 { rec } else { t.epochs };
+    let shown = if t.manual {
+        t.epochs
+    } else if rec > 0 {
+        rec
+    } else {
+        t.epochs
+    };
 
     let seg = |label: &'static str, on: bool, manual: bool| {
         row()
@@ -682,17 +717,21 @@ fn epochs_card(s: &AppState, p: &Palette) -> El {
             .hover(p.glass_hover)
             .on_press(move |s: &mut AppState| {
                 s.train.manual = manual;
-                if !manual {
-                    if let Some((_, x)) = &s.train.summary {
-                        if x.recommended_epochs > 0 {
-                            s.train.epochs = x.recommended_epochs.clamp(EPOCH_MIN, EPOCH_MAX);
-                        }
-                    }
+                if !manual
+                    && let Some((_, x)) = &s.train.summary
+                    && x.recommended_epochs > 0
+                {
+                    s.train.epochs = x.recommended_epochs.clamp(EPOCH_MIN, EPOCH_MAX);
                 }
             })
             .child(text(label).font(ty::LABEL).color(if on { p.on_accent } else { p.text_dim }))
     };
-    let toggle = row().gap(2.0).padding(3.0).radius(radius::CONTROL).fill(p.well).border(1.0, p.well_rim)
+    let toggle = row()
+        .gap(2.0)
+        .padding(3.0)
+        .radius(radius::CONTROL)
+        .fill(p.well)
+        .border(1.0, p.well_rim)
         .child(seg("Auto", !t.manual, false))
         .child(seg("Custom", t.manual, true));
 
@@ -701,11 +740,12 @@ fn epochs_card(s: &AppState, p: &Palette) -> El {
             .w_full()
             .center_y()
             .child(
-                col()
-                    .grow(1.0)
-                    .gap(2.0)
-                    .child(text("Epochs").font(ty::TITLE).color(p.text))
-                    .child(text("One epoch is one pass over your recordings. More epochs can sound closer but take longer.").font(ty::CAPTION).color(p.text_dim).wrap()),
+                col().grow(1.0).gap(2.0).child(text("Epochs").font(ty::TITLE).color(p.text)).child(
+                    text("One epoch is one pass over your recordings. More epochs can sound closer but take longer.")
+                        .font(ty::CAPTION)
+                        .color(p.text_dim)
+                        .wrap(),
+                ),
             )
             .child(toggle),
     );
@@ -720,11 +760,9 @@ fn epochs_card(s: &AppState, p: &Palette) -> El {
     if t.manual {
         line = line
             .child(stepper("-", -(EPOCH_STEP as i32)))
-            .child(
-                el().w(110.0).h(40.0).center().radius(radius::CONTROL).fill(p.well).border(1.0, p.well_rim).child(
-                    text(shown.to_string()).font(rune::TextStyle::new(20.0, 650.0).features("'tnum' 1")).color(p.text),
-                ),
-            )
+            .child(el().w(110.0).h(40.0).center().radius(radius::CONTROL).fill(p.well).border(1.0, p.well_rim).child(
+                text(shown.to_string()).font(rune::TextStyle::new(20.0, 650.0).features("'tnum' 1")).color(p.text),
+            ))
             .child(stepper("+", EPOCH_STEP as i32));
         for preset in [100u32, 200, 300, 500] {
             let on = t.epochs == preset;
@@ -746,7 +784,11 @@ fn epochs_card(s: &AppState, p: &Palette) -> El {
         }
     } else {
         line = line
-            .child(text(if rec > 0 { rec.to_string() } else { "Auto".into() }).font(rune::TextStyle::new(20.0, 650.0).features("'tnum' 1")).color(p.text))
+            .child(
+                text(if rec > 0 { rec.to_string() } else { "Auto".into() })
+                    .font(rune::TextStyle::new(20.0, 650.0).features("'tnum' 1"))
+                    .color(p.text),
+            )
             .child(text("chosen from the length of your recordings").font(ty::CAPTION).color(p.text_dim));
     }
     card = card.child(line);
@@ -767,7 +809,15 @@ fn stage_chips(p: &Palette, current: Stage, done: bool) -> El {
         if i > 0 {
             r = r.child(text("\u{2192}").font(ty::CAPTION).color(p.text_faint));
         }
-        let mut chip = row().key(format!("stage-{i}")).h(28.0).px(14.0).center().radius(radius::CONTROL).fill(fill).border(1.0, border).gap(6.0);
+        let mut chip = row()
+            .key(format!("stage-{i}"))
+            .h(28.0)
+            .px(14.0)
+            .center()
+            .radius(radius::CONTROL)
+            .fill(fill)
+            .border(1.0, border)
+            .gap(6.0);
         if done || i < idx {
             chip = chip.child(text("\u{2713}").font(ty::CAPTION).color(ink));
         }
@@ -800,7 +850,7 @@ fn progress_view(t: &TrainState, p: &Palette, name: &str) -> El {
     } else {
         String::new()
     };
-    let eta = t.eta_s.map_or("calculating...".to_string(), |e| fmt_dur(e));
+    let eta = t.eta_s.map_or("calculating...".to_string(), fmt_dur);
 
     let metrics = row()
         .w_full()
@@ -814,13 +864,19 @@ fn progress_view(t: &TrainState, p: &Palette, name: &str) -> El {
         actions = actions
             .child(text("Stop training? Progress of this run is lost.").font(ty::CAPTION).color(p.bad))
             .child(kit::button(p, "Stop", BtnKind::Danger, true, cancel))
-            .child(kit::button(p, "Keep training", BtnKind::Glass, true, |s: &mut AppState| s.train.confirm_cancel = false));
+            .child(kit::button(p, "Keep training", BtnKind::Glass, true, |s: &mut AppState| {
+                s.train.confirm_cancel = false
+            }));
     } else {
         let can_pause = t.phase == Phase::Running && t.stage == Stage::Train && !t.pausing && t.job.is_some();
         let label = if t.pausing { "Pausing..." } else { "Pause" };
-        actions = actions
-            .child(kit::button(p, label, BtnKind::Glass, can_pause, pause))
-            .child(kit::button(p, "Cancel", BtnKind::Glass, true, |s: &mut AppState| s.train.confirm_cancel = true));
+        actions = actions.child(kit::button(p, label, BtnKind::Glass, can_pause, pause)).child(kit::button(
+            p,
+            "Cancel",
+            BtnKind::Glass,
+            true,
+            |s: &mut AppState| s.train.confirm_cancel = true,
+        ));
     }
 
     let mut card = kit::panel(p)
@@ -887,9 +943,12 @@ fn paused_view(s: &AppState, p: &Palette, pz: &PausedTraining, name: &str) -> El
         .items_center()
         .gap(14.0)
         .child(
-            el().size(56.0, 56.0).radius(radius::CARD).center().fill(p.warn.alpha(0.18)).border(1.0, p.warn.alpha(0.5)).child(
-                icon_el(&icons::PAUSE, 26.0, p.warn),
-            ),
+            el().size(56.0, 56.0)
+                .radius(radius::CARD)
+                .center()
+                .fill(p.warn.alpha(0.18))
+                .border(1.0, p.warn.alpha(0.5))
+                .child(icon_el(&icons::PAUSE, 26.0, p.warn)),
         )
         .child(text(title).font(ty::DISPLAY).color(p.text))
         .child(text(body).font(ty::BODY).color(p.text_dim).wrap())
@@ -912,9 +971,13 @@ fn paused_view(s: &AppState, p: &Palette, pz: &PausedTraining, name: &str) -> El
             .child(kit::button(p, "Discard", BtnKind::Danger, true, discard))
             .child(kit::button(p, "Keep it", BtnKind::Glass, true, |s: &mut AppState| s.train.confirm_discard = false));
     } else {
-        actions = actions
-            .child(kit::big_button(p, "Resume", ready, resume))
-            .child(kit::button(p, "Discard", BtnKind::Ghost, true, |s: &mut AppState| s.train.confirm_discard = true));
+        actions = actions.child(kit::big_button(p, "Resume", ready, resume)).child(kit::button(
+            p,
+            "Discard",
+            BtnKind::Ghost,
+            true,
+            |s: &mut AppState| s.train.confirm_discard = true,
+        ));
     }
     card = card.child(actions);
     let hint = if ready {
@@ -971,24 +1034,34 @@ pub fn close_overlay(s: &AppState, p: &Palette) -> Option<El> {
             card = card.child(kit::notice(p, Tone::Warning, n));
         }
         if !can_pause {
-            card = card.child(text("Pausing is possible once learning starts; before that nothing is saved yet.").font(ty::CAPTION).color(p.text_faint).wrap());
-        }
-        let anyway = if has_ckpt { "Close anyway (resume later from the last checkpoint)" } else { "Close anyway (this run starts over)" };
-        card = card
-            .child(
-                col()
-                    .w_full()
-                    .gap(8.0)
-                    .child(kit::big_button(p, "Pause and close", can_pause, |s: &mut AppState| {
-                        pause(s);
-                        if s.train.pausing {
-                            s.train.close = CloseDialog::Pausing;
-                            s.train.close_note = None;
-                        }
-                    }))
-                    .child(kit::button(p, "Keep training", BtnKind::Glass, true, |s: &mut AppState| s.train.close = CloseDialog::Hidden))
-                    .child(kit::button(p, anyway, BtnKind::Ghost, true, |s: &mut AppState| s.train.quit_requested = true)),
+            card = card.child(
+                text("Pausing is possible once learning starts; before that nothing is saved yet.")
+                    .font(ty::CAPTION)
+                    .color(p.text_faint)
+                    .wrap(),
             );
+        }
+        let anyway = if has_ckpt {
+            "Close anyway (resume later from the last checkpoint)"
+        } else {
+            "Close anyway (this run starts over)"
+        };
+        card = card.child(
+            col()
+                .w_full()
+                .gap(8.0)
+                .child(kit::big_button(p, "Pause and close", can_pause, |s: &mut AppState| {
+                    pause(s);
+                    if s.train.pausing {
+                        s.train.close = CloseDialog::Pausing;
+                        s.train.close_note = None;
+                    }
+                }))
+                .child(kit::button(p, "Keep training", BtnKind::Glass, true, |s: &mut AppState| {
+                    s.train.close = CloseDialog::Hidden
+                }))
+                .child(kit::button(p, anyway, BtnKind::Ghost, true, |s: &mut AppState| s.train.quit_requested = true)),
+        );
     }
     Some(
         el().key("close-layer")
@@ -1005,12 +1078,20 @@ fn done_view(p: &Palette, epochs: u32, elapsed_s: f32, name: &str) -> El {
         .items_center()
         .gap(14.0)
         .child(
-            el().size(56.0, 56.0).radius(radius::CARD).center().fill(p.ok.alpha(0.2)).border(1.0, p.ok.alpha(0.5)).child(
-                text("\u{2713}").font(rune::TextStyle::new(26.0, 700.0)).color(p.ok),
-            ),
+            el().size(56.0, 56.0)
+                .radius(radius::CARD)
+                .center()
+                .fill(p.ok.alpha(0.2))
+                .border(1.0, p.ok.alpha(0.5))
+                .child(text("\u{2713}").font(rune::TextStyle::new(26.0, 700.0)).color(p.ok)),
         )
         .child(text("Your voice is ready").font(ty::DISPLAY).color(p.text))
-        .child(text(format!("\"{name}\" was trained for {epochs} epochs in {}.", fmt_dur(elapsed_s))).font(ty::BODY).color(p.text_dim).wrap())
+        .child(
+            text(format!("\"{name}\" was trained for {epochs} epochs in {}.", fmt_dur(elapsed_s)))
+                .font(ty::BODY)
+                .color(p.text_dim)
+                .wrap(),
+        )
         .child(stage_chips(p, Stage::Index, true))
         .child(kit::big_button(p, "Go to Speak", true, |s: &mut AppState| {
             s.train.phase = Phase::Idle;
@@ -1023,24 +1104,24 @@ fn done_view(p: &Palette, epochs: u32, elapsed_s: f32, name: &str) -> El {
 }
 
 fn failed_view(p: &Palette, msg: &str) -> El {
-    col()
-        .w_full()
-        .gap(14.0)
-        .child(kit::notice(p, Tone::Danger, msg))
-        .child(
-            row()
-                .gap(10.0)
-                .child(kit::button(p, "Try again", BtnKind::Primary, true, |s: &mut AppState| {
-                    s.train.phase = Phase::Idle;
-                    refresh_summary(s);
-                }))
-                .child(kit::button(p, "Go to Voices", BtnKind::Glass, true, |s: &mut AppState| s.screen = Screen::Voices)),
-        )
+    col().w_full().gap(14.0).child(kit::notice(p, Tone::Danger, msg)).child(
+        row()
+            .gap(10.0)
+            .child(kit::button(p, "Try again", BtnKind::Primary, true, |s: &mut AppState| {
+                s.train.phase = Phase::Idle;
+                refresh_summary(s);
+            }))
+            .child(kit::button(p, "Go to Voices", BtnKind::Glass, true, |s: &mut AppState| s.screen = Screen::Voices)),
+    )
 }
 
 fn base(s: &mut AppState) {
     s.screen = Screen::Train;
-    s.shell.set_engine(shell::EngineStatus::Ready { device: None, tts: Some("ready".into()), rvc: Some("ready".into()) });
+    s.shell.set_engine(shell::EngineStatus::Ready {
+        device: None,
+        tts: Some("ready".into()),
+        rvc: Some("ready".into()),
+    });
     s.shell.voices = vec![shell::VoiceInfo {
         preset: None,
         id: "my-voice".into(),
@@ -1130,16 +1211,13 @@ fn scene_done(s: &mut AppState) {
 }
 fn scene_error(s: &mut AppState) {
     base(s);
-    s.train.phase = Phase::Failed("CUDA out of memory while training. Close other programs that use the GPU and try again.".into());
+    s.train.phase =
+        Phase::Failed("CUDA out of memory while training. Close other programs that use the GPU and try again.".into());
 }
 
 fn paused_at(s: &mut AppState, epoch: u32, interrupted: bool) {
-    s.shell.voices[0].paused = Some(PausedTraining {
-        epoch,
-        total_epochs: 300,
-        paused_at: Some("2026-11-11T17:42:10".into()),
-        interrupted,
-    });
+    s.shell.voices[0].paused =
+        Some(PausedTraining { epoch, total_epochs: 300, paused_at: Some("2026-11-11T17:42:10".into()), interrupted });
 }
 fn scene_pausing(s: &mut AppState) {
     scene_running(s);
@@ -1149,11 +1227,17 @@ fn scene_pausing(s: &mut AppState) {
 fn scene_paused(s: &mut AppState) {
     base(s);
     paused_at(s, 115, false);
-    s.train.note = Some("Training paused at epoch 115 of 300. Speech is available again as soon as the models have loaded.".into());
+    s.train.note = Some(
+        "Training paused at epoch 115 of 300. Speech is available again as soon as the models have loaded.".into(),
+    );
 }
 fn scene_paused_loading(s: &mut AppState) {
     scene_paused(s);
-    s.shell.set_engine(shell::EngineStatus::Ready { device: None, tts: Some("loading".into()), rvc: Some("loading".into()) });
+    s.shell.set_engine(shell::EngineStatus::Ready {
+        device: None,
+        tts: Some("loading".into()),
+        rvc: Some("loading".into()),
+    });
 }
 fn scene_discard_confirm(s: &mut AppState) {
     scene_paused(s);
@@ -1190,7 +1274,7 @@ fn scene_close_pausing(s: &mut AppState) {
     s.train.close = CloseDialog::Pausing;
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("train-pausing", scene_pausing),
         ("train-paused", scene_paused),

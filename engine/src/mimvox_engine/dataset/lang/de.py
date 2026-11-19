@@ -28,7 +28,7 @@ _SHORT = {"a": "a", "e": "ɛ", "i": "ɪ", "o": "ɔ", "u": "ʊ", "ä": "ɛ", "ö"
 _SHORT_WORDS = {
     "an", "am", "im", "in", "um", "mit", "das", "des", "es", "man", "ob", "ab", "bis", "hat", "was", "von", "vom",
     "zum", "ins", "ums", "wann", "dann", "denn", "wenn", "bin", "hin", "drin", "weg", "ich", "mich", "dich", "sich",
-    "nicht", "doch", "noch", "ist", "und", "mal", "ganz", "jetzt", "es", "uns", "bis", "kann", "will",
+    "nicht", "doch", "noch", "ist", "und", "mal", "ganz", "jetzt", "uns", "kann", "will",
 }
 _CONS_CLUSTERS = [("tsch", ["tʃ"]), ("sch", ["ʃ"]), ("chs", ["k", "s"]), ("ck", ["k"]), ("tz", ["ts"]),
                   ("pf", ["pf"]), ("dt", ["t"]), ("ph", ["f"]), ("th", ["t"]), ("qu", ["k", "v"]), ("ng", ["ŋ"]), ("nk", ["ŋ", "k"]),

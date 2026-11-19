@@ -8,12 +8,20 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// (wire name = file extension, label).
-pub const EXPORT_ALL: [(&str, &str); 7] =
-    [("wav", "WAV"), ("mp3", "MP3"), ("flac", "FLAC"), ("ogg", "OGG"), ("opus", "Opus"), ("m4a", "M4A"), ("aiff", "AIFF")];
+pub const EXPORT_ALL: [(&str, &str); 7] = [
+    ("wav", "WAV"),
+    ("mp3", "MP3"),
+    ("flac", "FLAC"),
+    ("ogg", "OGG"),
+    ("opus", "Opus"),
+    ("m4a", "M4A"),
+    ("aiff", "AIFF"),
+];
 
 /// Used until the engine answers `formats.list`.
 const DEFAULT_IMPORT: &[&str] = &[
-    "wav", "mp3", "flac", "ogg", "oga", "opus", "m4a", "aac", "wma", "aiff", "aif", "mp4", "mkv", "mov", "avi", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "3gp",
+    "wav", "mp3", "flac", "ogg", "oga", "opus", "m4a", "aac", "wma", "aiff", "aif", "mp4", "mkv", "mov", "avi", "webm",
+    "m4v", "wmv", "flv", "mpg", "mpeg", "3gp",
 ];
 
 pub static DOWNLOAD: Icon = Icon {
@@ -83,7 +91,10 @@ enum Phase {
     #[default]
     Idle,
     Picking(Job),
-    Exporting { req: u64, dest: PathBuf },
+    Exporting {
+        req: u64,
+        dest: PathBuf,
+    },
 }
 
 pub struct FormatsState {
@@ -178,25 +189,29 @@ fn settings_path() -> PathBuf {
 
 fn read_settings(s: &mut AppState) {
     s.formats.settings_read = true;
-    let v: Value = std::fs::read_to_string(settings_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}));
-    if let Some(f) = v.get("export_format").and_then(Value::as_str) {
-        if EXPORT_ALL.iter().any(|(e, _)| *e == f) {
-            s.formats.format = f.to_owned();
-        }
+    let v: Value = std::fs::read_to_string(settings_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| json!({}));
+    if let Some(f) = v.get("export_format").and_then(Value::as_str)
+        && EXPORT_ALL.iter().any(|(e, _)| *e == f)
+    {
+        s.formats.format = f.to_owned();
     }
     if let Some(q) = v.get("export_quality").and_then(Value::as_str).and_then(ExportQuality::parse) {
         s.formats.quality = q;
     }
-    if let Some(f) = v.get("output_format").and_then(Value::as_str) {
-        if EXPORT_ALL.iter().any(|(e, _)| *e == f) {
-            s.formats.output = f.to_owned();
-        }
+    if let Some(f) = v.get("output_format").and_then(Value::as_str)
+        && EXPORT_ALL.iter().any(|(e, _)| *e == f)
+    {
+        s.formats.output = f.to_owned();
     }
 }
 
 fn write_settings(format: &str, quality: ExportQuality) {
     let path = settings_path();
-    let mut v: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}));
+    let mut v: Value =
+        std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}));
     if !v.is_object() {
         v = json!({});
     }
@@ -218,7 +233,9 @@ fn ext_list(v: Option<&Value>) -> Vec<String> {
     a.iter()
         .filter_map(|x| match x {
             Value::String(t) => Some(t.clone()),
-            Value::Object(o) => ["ext", "id", "name"].iter().find_map(|k| o.get(*k).and_then(Value::as_str)).map(str::to_owned),
+            Value::Object(o) => {
+                ["ext", "id", "name"].iter().find_map(|k| o.get(*k).and_then(Value::as_str)).map(str::to_owned)
+            }
             _ => None,
         })
         .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
@@ -237,7 +254,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 }
                 if !exp.is_empty() {
                     s.formats.export = exp;
-                    if !s.formats.export.iter().any(|e| *e == s.formats.format) {
+                    if !s.formats.export.contains(&s.formats.format) {
                         s.formats.format = s.formats.export.first().cloned().unwrap_or_else(|| "wav".into());
                     }
                 }
@@ -252,7 +269,12 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             s.formats.phase = Phase::Idle;
             match result {
                 Ok(v) => {
-                    let size = v.get("size_bytes").and_then(Value::as_u64).map(size_text).map(|t| format!(" ({t})")).unwrap_or_default();
+                    let size = v
+                        .get("size_bytes")
+                        .and_then(Value::as_u64)
+                        .map(size_text)
+                        .map(|t| format!(" ({t})"))
+                        .unwrap_or_default();
                     shell::toast(s, Tone::Success, format!("Exported {}{size}", file_name(&dest)));
                 }
                 Err(e) => shell::toast(s, Tone::Danger, format!("Export failed: {}", e.message)),
@@ -284,10 +306,10 @@ pub fn settle(s: &mut AppState) -> bool {
 }
 
 fn on_picked(s: &mut AppState, choice: Option<PathBuf>) {
-    if let Phase::Picking(job) = std::mem::take(&mut s.formats.phase) {
-        if let Some(dest) = choice {
-            finish_pick(s, job, dest);
-        }
+    if let Phase::Picking(job) = std::mem::take(&mut s.formats.phase)
+        && let Some(dest) = choice
+    {
+        finish_pick(s, job, dest);
     }
 }
 
@@ -304,7 +326,11 @@ pub fn size_text(bytes: u64) -> String {
 pub fn export_button(p: Palette, key: impl Into<String>, src: &Path, audio: &Path, grow: bool) -> El {
     let (key, src, audio) = (key.into(), src.to_path_buf(), audio.to_path_buf());
     let k = key.clone();
-    let mut b = Button::new("Export as…").small().icon(&DOWNLOAD).key(key).on_press(move |s: &mut AppState| toggle_menu(s, &k, &src, &audio));
+    let mut b = Button::new("Export as…")
+        .small()
+        .icon(&DOWNLOAD)
+        .key(key)
+        .on_press(move |s: &mut AppState| toggle_menu(s, &k, &src, &audio));
     if grow {
         b = b.grow();
     }
@@ -340,7 +366,11 @@ fn start_export(s: &mut AppState) {
         return;
     }
     let job = Job { src: menu.src, audio: menu.audio, format: s.formats.format.clone(), quality: s.formats.quality };
-    let name = format!("{}.{}", job.src.file_stem().map_or_else(|| "audio".into(), |n| n.to_string_lossy().into_owned()), job.format);
+    let name = format!(
+        "{}.{}",
+        job.src.file_stem().map_or_else(|| "audio".into(), |n| n.to_string_lossy().into_owned()),
+        job.format
+    );
     let (ext, label) = (job.format.clone(), label_of(&job.format).to_owned());
     let dir = job.src.parent().map(Path::to_path_buf).filter(|d| d.is_dir());
     s.formats.phase = Phase::Picking(job);
@@ -392,9 +422,13 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// Added at the root after the screens so it draws above them.
 pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
     let m = s.formats.menu.as_ref()?;
-    let scrim = el().key("export-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.formats.menu = None);
+    let scrim = el()
+        .key("export-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .on_press(|s: &mut AppState| s.formats.menu = None);
 
-    let avail: Vec<&(&str, &str)> = EXPORT_ALL.iter().filter(|(e, _)| s.formats.export.iter().any(|x| x == e)).collect();
+    let avail: Vec<&(&str, &str)> =
+        EXPORT_ALL.iter().filter(|(e, _)| s.formats.export.iter().any(|x| x == e)).collect();
     let avail = if avail.is_empty() { EXPORT_ALL.iter().collect() } else { avail };
     let mut grid = col().w_full().gap(6.0);
     for chunk in avail.chunks(4) {
@@ -403,7 +437,16 @@ pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
             let on = s.formats.format == *ext;
             let ext_owned = (*ext).to_owned();
             r = r.child(
-                row().key(format!("export-fmt-{ext}")).role("button").label(*label).checked(on).focusable(true).grow(1.0).h(32.0).center().radius(16.0)
+                row()
+                    .key(format!("export-fmt-{ext}"))
+                    .role("button")
+                    .label(*label)
+                    .checked(on)
+                    .focusable(true)
+                    .grow(1.0)
+                    .h(32.0)
+                    .center()
+                    .radius(16.0)
                     .fill(if on { p.accent.alpha(0.22) } else { p.well })
                     .border(1.0, if on { p.accent.alpha(0.55) } else { p.well_rim })
                     .hover(if on { p.accent.alpha(0.28) } else { p.glass_hover })
@@ -420,18 +463,37 @@ pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
     }
 
     let lossless_now = lossless(&s.formats.format);
-    let quality = segmented(p, "export-quality", &["High", "Standard", "Small"], s.formats.quality.index(), |s, i| pick_quality(s, ExportQuality::from_index(i)));
-    let quality_block = col().w_full().gap(6.0)
-        .child(row().w_full().center_y().justify_between()
-            .child(text("Quality").font(ty::LABEL).color(p.text))
-            .child(quality))
+    let quality = segmented(p, "export-quality", &["High", "Standard", "Small"], s.formats.quality.index(), |s, i| {
+        pick_quality(s, ExportQuality::from_index(i))
+    });
+    let quality_block = col()
+        .w_full()
+        .gap(6.0)
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .justify_between()
+                .child(text("Quality").font(ty::LABEL).color(p.text))
+                .child(quality),
+        )
         .opacity(if lossless_now { 0.4 } else { 1.0 });
-    let blurb_text = if lossless_now { "Lossless: every detail is kept, so quality does not apply.".to_owned() } else { blurb(&s.formats.format).to_owned() };
+    let blurb_text = if lossless_now {
+        "Lossless: every detail is kept, so quality does not apply.".to_owned()
+    } else {
+        blurb(&s.formats.format).to_owned()
+    };
 
     let name = file_name(&m.src);
     let go = Button::new("Export…").primary().small().icon(&DOWNLOAD).key("export-go").on_press(start_export).build(p);
-    let cancel = Button::new("Cancel").ghost().small().key("export-cancel").on_press(|s| s.formats.menu = None).build(p);
-    let panel = col().key("export-menu").w(318.0).padding(14.0).gap(12.0).radius(radius::PANEL + 4.0)
+    let cancel =
+        Button::new("Cancel").ghost().small().key("export-cancel").on_press(|s| s.formats.menu = None).build(p);
+    let panel = col()
+        .key("export-menu")
+        .w(318.0)
+        .padding(14.0)
+        .gap(12.0)
+        .radius(radius::PANEL + 4.0)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.97))
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
@@ -439,9 +501,13 @@ pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
         .backdrop_blur(28.0)
         .anchored(m.anchor.clone(), Side::Bottom, Align::End, 8.0)
         .transition(rune::Transition::scale(0.98))
-        .child(col().w_full().gap(1.0)
-            .child(text("Export as").font(ty::TITLE).color(p.text))
-            .child(text(name).font(ty::CAPTION).color(p.text_faint).truncate()))
+        .child(
+            col()
+                .w_full()
+                .gap(1.0)
+                .child(text("Export as").font(ty::TITLE).color(p.text))
+                .child(text(name).font(ty::CAPTION).color(p.text_faint).truncate()),
+        )
         .child(grid)
         .child(text(blurb_text).font(ty::CAPTION).color(p.text_dim).wrap())
         .child(quality_block)
@@ -507,37 +573,72 @@ fn pick_output(s: &mut AppState, ext: &str) {
 pub fn output_chip(s: &AppState, p: Palette, key: &str) -> El {
     let label = format!("Save as {}", label_of(&output_format(s)));
     let k = key.to_owned();
-    dropdown_chip(p, key, &icons::FILE, &label, format!("Results are saved as {}", label_of(&output_format(s))), true, move |s: &mut AppState| {
-        if s.formats.output_menu.as_deref() == Some(k.as_str()) {
-            s.formats.output_menu = None;
-        } else {
-            s.formats.menu = None;
-            s.formats.output_menu = Some(k.clone());
-        }
-    })
+    dropdown_chip(
+        p,
+        key,
+        &icons::FILE,
+        &label,
+        format!("Results are saved as {}", label_of(&output_format(s))),
+        true,
+        move |s: &mut AppState| {
+            if s.formats.output_menu.as_deref() == Some(k.as_str()) {
+                s.formats.output_menu = None;
+            } else {
+                s.formats.menu = None;
+                s.formats.output_menu = Some(k.clone());
+            }
+        },
+    )
     .help("The format new results are saved in")
 }
 
 pub fn output_overlay(s: &AppState, p: Palette) -> Option<El> {
     let anchor = s.formats.output_menu.clone()?;
-    let scrim = el().key("outfmt-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.formats.output_menu = None);
+    let scrim = el()
+        .key("outfmt-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .on_press(|s: &mut AppState| s.formats.output_menu = None);
     let cur = output_format(s);
     let mut list = col().w_full().gap(2.0);
     for (ext, label) in writable(s) {
         let on = cur == *ext;
         let e = (*ext).to_owned();
         list = list.child(
-            row().key(format!("outfmt-{ext}")).role("button").label(*label).checked(on).w_full().min_h(40.0).px(12.0).py(4.0).gap(10.0).center_y().radius(16.0)
+            row()
+                .key(format!("outfmt-{ext}"))
+                .role("button")
+                .label(*label)
+                .checked(on)
+                .w_full()
+                .min_h(40.0)
+                .px(12.0)
+                .py(4.0)
+                .gap(10.0)
+                .center_y()
+                .radius(16.0)
                 .fill(if on { p.accent.alpha(0.16) } else { Color::TRANSPARENT })
-                .hover(p.glass_hover).focusable(true).motion(motion::UI)
+                .hover(p.glass_hover)
+                .focusable(true)
+                .motion(motion::UI)
                 .on_press(move |s: &mut AppState| pick_output(s, &e))
-                .child(col().grow(1.0).min_w(0.0).gap(1.0)
-                    .child(text(*label).font(ty::LABEL).color(p.text).a11y_hidden())
-                    .child(text(blurb(ext)).font(ty::CAPTION).color(p.text_faint).truncate().a11y_hidden()))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(1.0)
+                        .child(text(*label).font(ty::LABEL).color(p.text).a11y_hidden())
+                        .child(text(blurb(ext)).font(ty::CAPTION).color(p.text_faint).truncate().a11y_hidden()),
+                )
                 .child(el().w(16.0).children(on.then(|| icon_el(&icons::CHECK, 14.0, p.accent)))),
         );
     }
-    let panel = col().key("outfmt-menu").w(300.0).min_h(0.0).padding(10.0).gap(8.0).radius(radius::PANEL + 4.0)
+    let panel = col()
+        .key("outfmt-menu")
+        .w(300.0)
+        .min_h(0.0)
+        .padding(10.0)
+        .gap(8.0)
+        .radius(radius::PANEL + 4.0)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.97))
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
@@ -545,9 +646,28 @@ pub fn output_overlay(s: &AppState, p: Palette) -> Option<El> {
         .backdrop_blur(28.0)
         .anchored_fit(anchor, Side::Bottom, Align::End, 8.0)
         .transition(rune::Transition::scale(0.98))
-        .child(col().w_full().gap(1.0).px(4.0)
-            .child(text("Save results as").font(ty::TITLE).color(p.text))
-            .child(text("Speak and Redub save each new result as one file in this format.").font(ty::CAPTION).color(p.text_faint).wrap()))
-        .child(col().key("outfmt-list").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).child(list));
-    Some(el().key("outfmt-menu-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(glass_edge(p, panel)))
+        .child(
+            col().w_full().gap(1.0).px(4.0).child(text("Save results as").font(ty::TITLE).color(p.text)).child(
+                text("Speak and Redub save each new result as one file in this format.")
+                    .font(ty::CAPTION)
+                    .color(p.text_faint)
+                    .wrap(),
+            ),
+        )
+        .child(
+            col()
+                .key("outfmt-list")
+                .w_full()
+                .shrink()
+                .min_h(0.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .scroll_edge_fade(12.0)
+                .child(list),
+        );
+    Some(
+        el().key("outfmt-menu-layer")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .child(scrim)
+            .child(glass_edge(p, panel)),
+    )
 }

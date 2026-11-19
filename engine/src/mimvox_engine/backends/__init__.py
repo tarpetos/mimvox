@@ -33,13 +33,13 @@ class TtsBackend(abc.ABC):
         """The main backend always; an optional one only while ready, so its languages fall through otherwise."""
         return True
 
-    async def load(self, runtime: dict[str, Any]) -> None:
+    async def load(self, runtime: dict[str, Any]) -> None:  # noqa: B027 - optional hook, a no-op by default
         """Called at start-up and after a training gives the GPU back."""
 
-    async def release(self) -> None:
+    async def release(self) -> None:  # noqa: B027
         """Free the GPU and host RAM before a training takes the GPU."""
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # noqa: B027
         """Stop any process the backend started and await its exit."""
 
     def count_tokens(self, text: str) -> int:
@@ -48,7 +48,7 @@ class TtsBackend(abc.ABC):
     def is_warm(self, reference: str) -> bool:
         return False
 
-    def forget_reference(self) -> None:
+    def forget_reference(self) -> None:  # noqa: B027
         """Callable from any thread."""
 
 

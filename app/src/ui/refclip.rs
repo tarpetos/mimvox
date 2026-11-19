@@ -190,7 +190,8 @@ fn preview_title(s: &AppState, path: &str) -> String {
     if let Some(c) = s.voices.refclip.candidates.iter().find(|c| c.preview_path == path) {
         return where_line(c);
     }
-    if let Some(code) = Path::new(path).file_stem().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("reference_")) {
+    if let Some(code) = Path::new(path).file_stem().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("reference_"))
+    {
         return format!("{} reference", lang::label(code));
     }
     "Reference clip".to_owned()
@@ -205,7 +206,9 @@ fn toggle_play(s: &mut AppState, path: &str) {
 }
 
 fn use_clip(s: &mut AppState, i: usize) {
-    let (Some(id), Some(c)) = (s.shell.active_voice.clone(), s.voices.refclip.candidates.get(i).cloned()) else { return };
+    let (Some(id), Some(c)) = (s.shell.active_voice.clone(), s.voices.refclip.candidates.get(i).cloned()) else {
+        return;
+    };
     if s.voices.refclip.applying {
         return;
     }
@@ -229,21 +232,66 @@ fn use_clip(s: &mut AppState, i: usize) {
 
 /// Languages without reading presets; Latin and Cyrillic only, the app font draws them.
 const SAMPLES: &[(&str, &str)] = &[
-    ("it", "Stamattina sono uscito presto per una passeggiata lungo il fiume. L'aria era fresca e il cielo limpido, e ho pensato che fosse il momento giusto per registrare la mia voce."),
-    ("pt", "Esta manhã saí cedo para caminhar junto ao rio. O ar estava fresco e o céu limpo, e pensei que era o momento certo para gravar a minha voz."),
-    ("cs", "Dnes ráno jsem vyšel brzy na procházku podél řeky. Vzduch byl svěží a nebe jasné, a napadlo mě, že je to ta pravá chvíle nahrát svůj hlas."),
-    ("ru", "Сегодня утром я рано вышел прогуляться вдоль реки. Воздух был свежий, небо ясное, и я подумал, что это подходящий момент записать свой голос."),
-    ("nl", "Vanochtend ging ik vroeg wandelen langs de rivier. De lucht was fris en helder, en ik dacht dat het het juiste moment was om mijn stem op te nemen."),
-    ("sk", "Dnes ráno som vyšiel skoro na prechádzku popri rieke. Vzduch bol svieži a obloha jasná, a napadlo mi, že je to vhodná chvíľa nahrať svoj hlas."),
-    ("sv", "I morse gick jag ut tidigt på en promenad längs ån. Luften var frisk och himlen klar, och jag tänkte att det var rätt tillfälle att spela in min röst."),
-    ("be", "Сёння раніцай я рана выйшаў пагуляць уздоўж ракі. Паветра было свежае, неба яснае, і я падумаў, што гэта добры момант запісаць свой голас."),
-    ("bg", "Тази сутрин излязох рано на разходка покрай реката. Въздухът беше свеж, небето ясно, и си помислих, че е подходящ момент да запиша гласа си."),
-    ("hr", "Jutros sam rano izašao u šetnju uz rijeku. Zrak je bio svjež, a nebo vedro, i pomislio sam da je pravi trenutak da snimim svoj glas."),
-    ("tr", "Bu sabah erkenden nehir kıyısında yürüyüşe çıktım. Hava serin ve gökyüzü açıktı, sesimi kaydetmek için doğru an olduğunu düşündüm."),
-    ("da", "I morges gik jeg tidligt en tur langs åen. Luften var frisk og himlen klar, og jeg tænkte, at det var det rette tidspunkt at optage min stemme."),
-    ("fi", "Tänä aamuna lähdin aikaisin kävelylle joen rantaan. Ilma oli raikas ja taivas kirkas, ja ajattelin, että nyt on oikea hetki äänittää ääneni."),
-    ("ro", "Azi-dimineață am ieșit devreme la o plimbare pe malul râului. Aerul era proaspăt și cerul senin, și m-am gândit că este momentul potrivit să îmi înregistrez vocea."),
-    ("hu", "Ma reggel korán elindultam sétálni a folyó mentén. A levegő friss volt, az ég tiszta, és arra gondoltam, hogy most van itt a jó pillanat felvenni a hangomat."),
+    (
+        "it",
+        "Stamattina sono uscito presto per una passeggiata lungo il fiume. L'aria era fresca e il cielo limpido, e ho pensato che fosse il momento giusto per registrare la mia voce.",
+    ),
+    (
+        "pt",
+        "Esta manhã saí cedo para caminhar junto ao rio. O ar estava fresco e o céu limpo, e pensei que era o momento certo para gravar a minha voz.",
+    ),
+    (
+        "cs",
+        "Dnes ráno jsem vyšel brzy na procházku podél řeky. Vzduch byl svěží a nebe jasné, a napadlo mě, že je to ta pravá chvíle nahrát svůj hlas.",
+    ),
+    (
+        "ru",
+        "Сегодня утром я рано вышел прогуляться вдоль реки. Воздух был свежий, небо ясное, и я подумал, что это подходящий момент записать свой голос.",
+    ),
+    (
+        "nl",
+        "Vanochtend ging ik vroeg wandelen langs de rivier. De lucht was fris en helder, en ik dacht dat het het juiste moment was om mijn stem op te nemen.",
+    ),
+    (
+        "sk",
+        "Dnes ráno som vyšiel skoro na prechádzku popri rieke. Vzduch bol svieži a obloha jasná, a napadlo mi, že je to vhodná chvíľa nahrať svoj hlas.",
+    ),
+    (
+        "sv",
+        "I morse gick jag ut tidigt på en promenad längs ån. Luften var frisk och himlen klar, och jag tänkte att det var rätt tillfälle att spela in min röst.",
+    ),
+    (
+        "be",
+        "Сёння раніцай я рана выйшаў пагуляць уздоўж ракі. Паветра было свежае, неба яснае, і я падумаў, што гэта добры момант запісаць свой голас.",
+    ),
+    (
+        "bg",
+        "Тази сутрин излязох рано на разходка покрай реката. Въздухът беше свеж, небето ясно, и си помислих, че е подходящ момент да запиша гласа си.",
+    ),
+    (
+        "hr",
+        "Jutros sam rano izašao u šetnju uz rijeku. Zrak je bio svjež, a nebo vedro, i pomislio sam da je pravi trenutak da snimim svoj glas.",
+    ),
+    (
+        "tr",
+        "Bu sabah erkenden nehir kıyısında yürüyüşe çıktım. Hava serin ve gökyüzü açıktı, sesimi kaydetmek için doğru an olduğunu düşündüm.",
+    ),
+    (
+        "da",
+        "I morges gik jeg tidligt en tur langs åen. Luften var frisk og himlen klar, og jeg tænkte, at det var det rette tidspunkt at optage min stemme.",
+    ),
+    (
+        "fi",
+        "Tänä aamuna lähdin aikaisin kävelylle joen rantaan. Ilma oli raikas ja taivas kirkas, ja ajattelin, että nyt on oikea hetki äänittää ääneni.",
+    ),
+    (
+        "ro",
+        "Azi-dimineață am ieșit devreme la o plimbare pe malul râului. Aerul era proaspăt și cerul senin, și m-am gândit că este momentul potrivit să îmi înregistrez vocea.",
+    ),
+    (
+        "hu",
+        "Ma reggel korán elindultam sétálni a folyó mentén. A levegő friss volt, az ég tiszta, és arra gondoltam, hogy most van itt a jó pillanat felvenni a hangomat.",
+    ),
 ];
 
 /// Languages with reading presets (`presets.list`).
@@ -272,18 +320,18 @@ pub fn start_language(s: &mut AppState, code: &str) {
     let voice = s.shell.active_voice.clone().unwrap_or_default();
     s.voices.refclip.adding = Some(LangRef { voice, lang: code.clone(), sample, ..Default::default() });
     s.voices.refclip.error = None;
-    if PRESET_LANGS.contains(&code.as_str()) {
-        if let Some(req) = shell::request(s, "presets.list", json!({ "language": code })) {
-            s.voices.refclip.pending.insert(req, Kind::Sample(code));
-        }
+    if PRESET_LANGS.contains(&code.as_str())
+        && let Some(req) = shell::request(s, "presets.list", json!({ "language": code }))
+    {
+        s.voices.refclip.pending.insert(req, Kind::Sample(code));
     }
 }
 
 fn cancel_adding(s: &mut AppState) {
-    if let Some(mut a) = s.voices.refclip.adding.take() {
-        if let Some(r) = a.recorder.take() {
-            let _ = shell::guard(|| drop(r));
-        }
+    if let Some(mut a) = s.voices.refclip.adding.take()
+        && let Some(r) = a.recorder.take()
+    {
+        let _ = shell::guard(|| drop(r));
     }
 }
 
@@ -304,11 +352,21 @@ fn start_capture(s: &mut AppState) {
     s.voices.refclip.capture_seq += 1;
     let seq = s.voices.refclip.capture_seq;
     let device = s.record.input_device.clone();
-    let started = shell::guard(|| Recorder::start(device.as_deref(), Some(super::record::meter_sink(seq, on_capture)))).map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
+    let started = shell::guard(|| Recorder::start(device.as_deref(), Some(super::record::meter_sink(seq, on_capture))))
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()));
     let Some(a) = s.voices.refclip.adding.as_mut() else { return };
     match started {
         Ok(rec) => {
-            *a = LangRef { voice: a.voice.clone(), lang: a.lang.clone(), sample: a.sample.take(), phase: AddPhase::Recording, recorder: Some(rec), seq, ..Default::default() };
+            *a = LangRef {
+                voice: a.voice.clone(),
+                lang: a.lang.clone(),
+                sample: a.sample.take(),
+                phase: AddPhase::Recording,
+                recorder: Some(rec),
+                seq,
+                ..Default::default()
+            };
         }
         Err(e) => a.error = Some(format!("Cannot open the microphone: {e}")),
     }
@@ -361,7 +419,10 @@ fn import_take(s: &mut AppState) {
     }
     let exts = super::formats::import_extensions(s);
     std::thread::spawn(move || {
-        let choice = rfd::FileDialog::new().set_title("Choose a short recording in this language").add_filter("Audio and video", &exts).pick_file();
+        let choice = rfd::FileDialog::new()
+            .set_title("Choose a short recording in this language")
+            .add_filter("Audio and video", &exts)
+            .pick_file();
         super::events::post(move |s| {
             if let Some(a) = s.voices.refclip.adding.as_mut() {
                 a.importing = false;
@@ -406,7 +467,9 @@ fn set_refs(s: &mut AppState, id: &str, v: &Value) {
 }
 
 fn on_capture(s: &mut AppState, seq: u64, ev: CaptureEvent) -> bool {
-    let Some(a) = s.voices.refclip.adding.as_mut().filter(|a| a.seq == seq && a.recorder.is_some()) else { return false };
+    let Some(a) = s.voices.refclip.adding.as_mut().filter(|a| a.seq == seq && a.recorder.is_some()) else {
+        return false;
+    };
     match ev {
         CaptureEvent::Level { level, peak, elapsed_s } => {
             a.level = if level > a.level { level } else { a.level * 0.82 + level * 0.18 };
@@ -442,7 +505,11 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     r.loading = false;
                     r.voice = Some(voice);
                     r.current = v.get("current").and_then(Clip::from_json);
-                    r.candidates = v.get("candidates").and_then(Value::as_array).map(|a| a.iter().filter_map(Clip::from_json).collect()).unwrap_or_default();
+                    r.candidates = v
+                        .get("candidates")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Clip::from_json).collect())
+                        .unwrap_or_default();
                     r.pool = v.get("media").and_then(Pool::from_json);
                 }
                 (Kind::List(_), Err(_)) => s.voices.refclip.loading = false,
@@ -452,8 +519,14 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     r.open = false;
                     r.stale = true;
                     match code {
-                        Some(c) => shell::toast(s, Tone::Success, format!("{} reference changed. Speech in {} now uses it.", lang::name(&c), lang::name(&c))),
-                        None => shell::toast(s, Tone::Success, "Reference clip changed. The next speech uses its pace."),
+                        Some(c) => shell::toast(
+                            s,
+                            Tone::Success,
+                            format!("{} reference changed. Speech in {} now uses it.", lang::name(&c), lang::name(&c)),
+                        ),
+                        None => {
+                            shell::toast(s, Tone::Success, "Reference clip changed. The next speech uses its pace.")
+                        }
                     }
                 }
                 (Kind::Set(..), Err(e)) => {
@@ -461,8 +534,15 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     s.voices.refclip.error = Some(friendly(&e.code, &e.message));
                 }
                 (Kind::Sample(code), Ok(v)) => {
-                    let quick = v.get("presets").and_then(Value::as_array).and_then(|a| a.iter().find(|p| p.get("id").and_then(Value::as_str) == Some("quick")).or(a.first()).cloned());
-                    let part = quick.as_ref().and_then(|p| p.get("parts")).and_then(Value::as_array).and_then(|a| a.first()).cloned();
+                    let quick = v.get("presets").and_then(Value::as_array).and_then(|a| {
+                        a.iter().find(|p| p.get("id").and_then(Value::as_str) == Some("quick")).or(a.first()).cloned()
+                    });
+                    let part = quick
+                        .as_ref()
+                        .and_then(|p| p.get("parts"))
+                        .and_then(Value::as_array)
+                        .and_then(|a| a.first())
+                        .cloned();
                     if let (Some(a), Some(part)) = (s.voices.refclip.adding.as_mut().filter(|a| a.lang == code), part) {
                         let t = part.get("text").and_then(Value::as_str).unwrap_or("");
                         let est = part.get("est_seconds").and_then(Value::as_f64).unwrap_or(0.0) as f32;
@@ -476,7 +556,11 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     if let Some(a) = s.voices.refclip.adding.as_mut().filter(|a| a.take.as_ref() == Some(&path)) {
                         a.phase = AddPhase::Checked;
                         a.verdict = v.get("verdict").and_then(Value::as_str).map(str::to_owned);
-                        a.issues = v.get("issues").and_then(Value::as_array).map(|x| x.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+                        a.issues = v
+                            .get("issues")
+                            .and_then(Value::as_array)
+                            .map(|x| x.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect())
+                            .unwrap_or_default();
                         a.duration_s = v.get("duration_s").and_then(Value::as_f64).map_or(a.duration_s, |d| d as f32);
                     }
                 }
@@ -484,7 +568,11 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 (Kind::Add(id, code), Ok(v)) => {
                     set_refs(s, &id, v);
                     s.voices.refclip.adding = None;
-                    shell::toast(s, Tone::Success, format!("{} reference saved. Speech in {} now uses it.", lang::name(&code), lang::name(&code)));
+                    shell::toast(
+                        s,
+                        Tone::Success,
+                        format!("{} reference saved. Speech in {} now uses it.", lang::name(&code), lang::name(&code)),
+                    );
                     shell::refresh_voices(s);
                 }
                 (Kind::Add(..), Err(e)) => {
@@ -601,8 +689,16 @@ fn where_line(c: &Clip) -> String {
 }
 
 pub(super) fn play_button(p: &Palette, key: String, path: String, on: bool) -> El {
-    let b = el().key(key).role("button").label(if on { "Pause" } else { "Play" }).size(36.0, 36.0).radius(18.0).center()
-        .hover(rune::Color::WHITE.alpha(0.1)).focusable(true).motion(motion::UI)
+    let b = el()
+        .key(key)
+        .role("button")
+        .label(if on { "Pause" } else { "Play" })
+        .size(36.0, 36.0)
+        .radius(18.0)
+        .center()
+        .hover(rune::Color::WHITE.alpha(0.1))
+        .focusable(true)
+        .motion(motion::UI)
         .on_press(move |s: &mut AppState| toggle_play(s, &path))
         .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 15.0, p.on_accent));
     accent_glass(*p, b)
@@ -623,12 +719,20 @@ fn clip_row(s: &AppState, p: &Palette, key: &str, c: &Clip, action: Option<El>) 
     } else {
         format!("{}-{} · {:.0} s", clock(c.start_s), clock(c.end_s), c.duration_s)
     };
-    let mut r = row().w_full().gap(10.0).center_y()
+    let mut r = row()
+        .w_full()
+        .gap(10.0)
+        .center_y()
         .child(play_button(p, format!("{key}-play"), c.preview_path.clone(), on))
-        .child(col().grow(1.0).min_w(0.0).gap(3.0)
-            .child(text(where_line(c)).font(ty::LABEL).color(p.text).truncate())
-            .child(text(span).font(ty::CAPTION).color(p.text_faint))
-            .child(badges));
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(3.0)
+                .child(text(where_line(c)).font(ty::LABEL).color(p.text).truncate())
+                .child(text(span).font(ty::CAPTION).color(p.text_faint))
+                .child(badges),
+        );
     if let Some(a) = action {
         r = r.child(a);
     }
@@ -639,9 +743,19 @@ fn languages_block(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let r = &s.voices.refclip;
     let own = lang::name(info.lang());
     let busy = r.adding.as_ref().is_some_and(|a| a.phase != AddPhase::Ready && a.phase != AddPhase::Checked);
-    let head = row().w_full().gap(10.0).center_y().justify_between()
-        .child(col().gap(1.0).min_w(0.0).grow(1.0)
-            .child(text(format!("Recorded in {own}. A short clip in another language makes speech in it sound native.")).font(ty::CAPTION).color(p.text_faint).wrap()))
+    let head = row()
+        .w_full()
+        .gap(10.0)
+        .center_y()
+        .justify_between()
+        .child(
+            col().gap(1.0).min_w(0.0).grow(1.0).child(
+                text(format!("Recorded in {own}. A short clip in another language makes speech in it sound native."))
+                    .font(ty::CAPTION)
+                    .color(p.text_faint)
+                    .wrap(),
+            ),
+        )
         .child(lang::chip(p, "refclip-add-lang", "Add a language", lang::Target::Reference, !busy));
     let mut c = col().key("refclip-langs").w_full().gap(8.0).child(head);
     if !info.references.is_empty() {
@@ -651,16 +765,43 @@ fn languages_block(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
             let on = previewing(s, &path);
             let (pp, rc) = (path.clone(), code.clone());
             pills = pills.child(
-                row().key(format!("refclip-lang-{code}")).h(32.0).pl(4.0).pr(4.0).gap(6.0).center_y().radius(16.0).fill(p.glass).border(1.0, p.rim_top)
-                    .child(el().key(format!("refclip-lang-play-{code}")).role("button").label(if on { "Pause" } else { "Play" }).size(24.0, 24.0).radius(12.0).center()
-                        .fill(p.accent.alpha(0.25)).hover(p.accent.alpha(0.4)).focusable(true)
-                        .on_press(move |s: &mut AppState| toggle_play(s, &pp))
-                        .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 11.0, p.text)))
+                row()
+                    .key(format!("refclip-lang-{code}"))
+                    .h(32.0)
+                    .pl(4.0)
+                    .pr(4.0)
+                    .gap(6.0)
+                    .center_y()
+                    .radius(16.0)
+                    .fill(p.glass)
+                    .border(1.0, p.rim_top)
+                    .child(
+                        el().key(format!("refclip-lang-play-{code}"))
+                            .role("button")
+                            .label(if on { "Pause" } else { "Play" })
+                            .size(24.0, 24.0)
+                            .radius(12.0)
+                            .center()
+                            .fill(p.accent.alpha(0.25))
+                            .hover(p.accent.alpha(0.4))
+                            .focusable(true)
+                            .on_press(move |s: &mut AppState| toggle_play(s, &pp))
+                            .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 11.0, p.text)),
+                    )
                     .child(text(lang::label(code)).font(ty::LABEL).color(p.text))
-                    .child(el().key(format!("refclip-lang-del-{code}")).role("button").label("Remove").help("Remove this reference").size(24.0, 24.0).radius(12.0).center()
-                        .hover(p.glass_hover).focusable(true)
-                        .on_press(move |s: &mut AppState| remove_lang(s, &rc))
-                        .child(icon_el(&icons::CLOSE, 10.0, p.text_dim))),
+                    .child(
+                        el().key(format!("refclip-lang-del-{code}"))
+                            .role("button")
+                            .label("Remove")
+                            .help("Remove this reference")
+                            .size(24.0, 24.0)
+                            .radius(12.0)
+                            .center()
+                            .hover(p.glass_hover)
+                            .focusable(true)
+                            .on_press(move |s: &mut AppState| remove_lang(s, &rc))
+                            .child(icon_el(&icons::CLOSE, 10.0, p.text_dim)),
+                    ),
             );
         }
         c = c.child(pills);
@@ -682,53 +823,138 @@ fn verdict_badge(p: &Palette, v: Option<&str>) -> El {
 
 fn adding_panel(s: &AppState, p: &Palette, a: &LangRef) -> El {
     let name = lang::name(&a.lang);
-    let head = row().w_full().gap(10.0).center_y()
-        .child(text(format!("Reference for {}", lang::label(&a.lang))).font(ty::TITLE).color(p.text).grow(1.0).min_w(0.0).truncate())
+    let head = row()
+        .w_full()
+        .gap(10.0)
+        .center_y()
+        .child(
+            text(format!("Reference for {}", lang::label(&a.lang)))
+                .font(ty::TITLE)
+                .color(p.text)
+                .grow(1.0)
+                .min_w(0.0)
+                .truncate(),
+        )
         .child(Button::new("Cancel").ghost().small().key("refadd-cancel").on_press(cancel_adding).build(*p));
     let intro = match &a.sample {
         Some(_) => format!("Read this aloud in {name} at your natural pace (about 10 seconds):"),
         None => format!("Read two or three sentences aloud in {name} at your natural pace (about 10 seconds)."),
     };
-    let mut c = col().key("refadd").w_full().gap(10.0).padding(12.0).radius(radius::CONTROL)
-        .fill(p.accent.alpha(0.06)).border(1.0, p.accent.alpha(0.25))
+    let mut c = col()
+        .key("refadd")
+        .w_full()
+        .gap(10.0)
+        .padding(12.0)
+        .radius(radius::CONTROL)
+        .fill(p.accent.alpha(0.06))
+        .border(1.0, p.accent.alpha(0.25))
         .child(head)
         .child(text(intro).font(ty::CAPTION).color(p.text_dim).wrap());
     if let Some(t) = &a.sample {
-        c = c.child(col().key("refadd-sample").w_full().padding(12.0).radius(radius::CONTROL).fill(p.glass).border(1.0, p.rim_top.alpha(p.rim_top.a * 0.6))
-            .child(text(t.clone()).font(ty::BODY).color(p.text).wrap()));
+        c = c.child(
+            col()
+                .key("refadd-sample")
+                .w_full()
+                .padding(12.0)
+                .radius(radius::CONTROL)
+                .fill(p.glass)
+                .border(1.0, p.rim_top.alpha(p.rim_top.a * 0.6))
+                .child(text(t.clone()).font(ty::BODY).color(p.text).wrap()),
+        );
     }
     match a.phase {
         AddPhase::Recording => {
-            c = c.child(row().w_full().gap(12.0).center_y()
-                .child(Button::new("Stop").primary().small().icon(&icons::STOP).key("refadd-stop").on_press(toggle_capture).build(*p))
-                .child(el().grow(1.0).min_w(0.0).child(level_meter(*p, a.level, Some(a.peak))))
-                .child(text(clock(a.elapsed_s)).font(ty::NUM).color(if a.elapsed_s >= 8.0 { p.ok } else { p.text_dim })));
+            c = c.child(
+                row()
+                    .w_full()
+                    .gap(12.0)
+                    .center_y()
+                    .child(
+                        Button::new("Stop")
+                            .primary()
+                            .small()
+                            .icon(&icons::STOP)
+                            .key("refadd-stop")
+                            .on_press(toggle_capture)
+                            .build(*p),
+                    )
+                    .child(el().grow(1.0).min_w(0.0).child(level_meter(*p, a.level, Some(a.peak))))
+                    .child(text(clock(a.elapsed_s)).font(ty::NUM).color(if a.elapsed_s >= 8.0 {
+                        p.ok
+                    } else {
+                        p.text_dim
+                    })),
+            );
         }
         AddPhase::Checking | AddPhase::Saving => {
             let what = if a.phase == AddPhase::Checking { "Checking the recording…" } else { "Saving…" };
-            c = c.child(row().gap(8.0).center_y().child(crate::ui::components::status_dot(*p, Tone::Accent, true)).child(text(what).font(ty::CAPTION).color(p.text_dim)));
+            c = c.child(
+                row()
+                    .gap(8.0)
+                    .center_y()
+                    .child(crate::ui::components::status_dot(*p, Tone::Accent, true))
+                    .child(text(what).font(ty::CAPTION).color(p.text_dim)),
+            );
         }
         AddPhase::Checked => {
             let take = a.take.as_ref().map(|t| t.to_string_lossy().into_owned()).unwrap_or_default();
             let on = previewing(s, &take);
-            let mut line = row().w_full().gap(10.0).center_y()
+            let mut line = row()
+                .w_full()
+                .gap(10.0)
+                .center_y()
                 .child(play_button(p, "refadd-play".into(), take, on))
                 .child(verdict_badge(p, a.verdict.as_deref()))
                 .child(text(format!("{:.0} s", a.duration_s)).font(ty::CAPTION).color(p.text_faint))
                 .child(el().grow(1.0));
-            line = line.child(Button::new("Record again").small().icon(&icons::MIC).key("refadd-again").on_press(toggle_capture).build(*p));
+            line = line.child(
+                Button::new("Record again")
+                    .small()
+                    .icon(&icons::MIC)
+                    .key("refadd-again")
+                    .on_press(toggle_capture)
+                    .build(*p),
+            );
             let ok = a.verdict.as_deref() != Some("bad");
-            line = line.child(Button::new(format!("Use for {name}")).primary().small().key("refadd-save").disabled(!ok).on_press(save_take).build(*p));
+            line = line.child(
+                Button::new(format!("Use for {name}"))
+                    .primary()
+                    .small()
+                    .key("refadd-save")
+                    .disabled(!ok)
+                    .on_press(save_take)
+                    .build(*p),
+            );
             c = c.child(line);
             for i in &a.issues {
                 c = c.child(text(format!("• {i}")).font(ty::CAPTION).color(if ok { p.text_dim } else { p.bad }).wrap());
             }
         }
         AddPhase::Ready => {
-            c = c.child(row().w_full().gap(10.0).center_y()
-                .child(Button::new("Record").primary().small().icon(&icons::MIC).key("refadd-record").on_press(toggle_capture).build(*p))
-                .child(Button::new("Import file…").small().key("refadd-import").disabled(a.importing).on_press(import_take).build(*p))
-                .child(text("Quiet room, normal distance to the mic.").font(ty::CAPTION).color(p.text_faint)));
+            c = c.child(
+                row()
+                    .w_full()
+                    .gap(10.0)
+                    .center_y()
+                    .child(
+                        Button::new("Record")
+                            .primary()
+                            .small()
+                            .icon(&icons::MIC)
+                            .key("refadd-record")
+                            .on_press(toggle_capture)
+                            .build(*p),
+                    )
+                    .child(
+                        Button::new("Import file…")
+                            .small()
+                            .key("refadd-import")
+                            .disabled(a.importing)
+                            .on_press(import_take)
+                            .build(*p),
+                    )
+                    .child(text("Quiet room, normal distance to the mic.").font(ty::CAPTION).color(p.text_faint)),
+            );
         }
     }
     if let Some(e) = &a.error {
@@ -740,12 +966,21 @@ fn adding_panel(s: &AppState, p: &Palette, a: &LangRef) -> El {
 fn media_heading(p: &Palette, pool: Option<&Pool>, after_parts: bool) -> El {
     let mut line = "From your media".to_owned();
     if let Some(pool) = pool {
-        line.push_str(&format!(" · {} file{} · {}", pool.files, if pool.files == 1 { "" } else { "s" }, clock(pool.duration_s)));
+        line.push_str(&format!(
+            " · {} file{} · {}",
+            pool.files,
+            if pool.files == 1 { "" } else { "s" },
+            clock(pool.duration_s)
+        ));
         if let Some(code) = &pool.language {
             line.push_str(&format!(" · for {}", lang::name(code)));
         }
     }
-    let h = row().key("refclip-media-head").w_full().gap(8.0).center_y()
+    let h = row()
+        .key("refclip-media-head")
+        .w_full()
+        .gap(8.0)
+        .center_y()
         .child(icon_el(&icons::FOLDER, 12.0, p.text_faint))
         .child(text(line.to_uppercase()).font(ty::OVERLINE).color(p.text_faint).truncate());
     if after_parts { h.pt(6.0) } else { h }
@@ -754,32 +989,69 @@ fn media_heading(p: &Palette, pool: Option<&Pool>, after_parts: bool) -> El {
 fn language_line(p: &Palette, info: &VoiceInfo, zero_shot_vc: bool) -> El {
     let Some(code) = info.reference_language.as_deref() else {
         return row().key("refclip-spoken").w_full().child(
-            text("Spoken language: not checked yet (the next time this voice is prepared or speaks).").font(ty::CAPTION).color(p.text_faint).wrap(),
+            text("Spoken language: not checked yet (the next time this voice is prepared or speaks).")
+                .font(ty::CAPTION)
+                .color(p.text_faint)
+                .wrap(),
         );
     };
-    let mismatch = info.reference_mismatch() && !info.references.iter().any(|r| lang::base(r) == lang::base(info.lang()));
-    let head = row().key("refclip-spoken").w_full().gap(8.0).center_y()
-        .child(kit::badge(p, &format!("{} speech", lang::name(code)), if mismatch { Tone::Warning } else { Tone::Neutral }))
+    let mismatch =
+        info.reference_mismatch() && !info.references.iter().any(|r| lang::base(r) == lang::base(info.lang()));
+    let head = row()
+        .key("refclip-spoken")
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(kit::badge(
+            p,
+            &format!("{} speech", lang::name(code)),
+            if mismatch { Tone::Warning } else { Tone::Neutral },
+        ))
         .child(text("detected in this clip").font(ty::CAPTION).color(p.text_faint));
     if !mismatch {
         return head;
     }
     let own = lang::name(info.lang());
     let note = if lang::base(info.lang()) == "en" {
-        let fix = if info.trained || zero_shot_vc { "or choose Native accent when it speaks" } else { "or train the voice for a native accent" };
+        let fix = if info.trained || zero_shot_vc {
+            "or choose Native accent when it speaks"
+        } else {
+            "or train the voice for a native accent"
+        };
         format!("English will carry this clip's accent. Add an English clip under Other languages, {fix}.")
     } else {
-        format!("{own} will carry this clip's accent. Add {} {own} clip under Other languages.", if own.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" })
+        format!(
+            "{own} will carry this clip's accent. Add {} {own} clip under Other languages.",
+            if own.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" }
+        )
     };
-    let mut c = col().w_full().gap(6.0).child(head).child(text(note).key("refclip-spoken-note").font(ty::CAPTION).color(p.warn).wrap());
+    let mut c = col()
+        .w_full()
+        .gap(6.0)
+        .child(head)
+        .child(text(note).key("refclip-spoken-note").font(ty::CAPTION).color(p.warn).wrap());
     // The voice's language decides which output counts as foreign (the accent choice, and how strongly the
     // voice model applies).
     if lang::base(code) != lang::base(info.lang()) {
         let (id, to) = (info.id.clone(), lang::base(code));
         let label = format!("Set the voice to {}", lang::name(&to));
-        c = c.child(row().key("refclip-set-lang").gap(10.0).center_y()
-            .child(kit::button(p, &label, BtnKind::Glass, true, move |s: &mut AppState| set_voice_language(s, &id, &to)))
-            .child(text("Changes only how languages are treated; recordings and training stay as they are.").font(ty::CAPTION).color(p.text_faint).wrap().grow(1.0).min_w(0.0)));
+        c = c.child(
+            row()
+                .key("refclip-set-lang")
+                .gap(10.0)
+                .center_y()
+                .child(kit::button(p, &label, BtnKind::Glass, true, move |s: &mut AppState| {
+                    set_voice_language(s, &id, &to)
+                }))
+                .child(
+                    text("Changes only how languages are treated; recordings and training stay as they are.")
+                        .font(ty::CAPTION)
+                        .color(p.text_faint)
+                        .wrap()
+                        .grow(1.0)
+                        .min_w(0.0),
+                ),
+        );
     }
     c
 }
@@ -790,7 +1062,7 @@ fn set_voice_language(s: &mut AppState, id: &str, code: &str) {
     }
     if shell::request(s, "voices.rename", json!({ "id": id, "language": code })).is_some() {
         shell::refresh_voices(s);
-        shell::toast(s, Tone::Success, &format!("The voice is now set to {}.", lang::name(code)));
+        shell::toast(s, Tone::Success, format!("The voice is now set to {}.", lang::name(code)));
     } else {
         shell::toast(s, Tone::Danger, "The engine is not running: try again once it is ready.");
     }
@@ -805,19 +1077,34 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     } else {
         Some(kit::button(p, "Choose…", BtnKind::Glass, !r.loading, toggle_open))
     };
-    let mut head = row().w_full().gap(10.0).center_y().justify_between()
-        .child(col().gap(1.0)
-            .child(text("Reference clip").font(ty::LABEL).color(p.text))
-            .child(text("The pace and manner of your cloned voice are copied from this clip.").font(ty::CAPTION).color(p.text_faint)));
+    let mut head = row().w_full().gap(10.0).center_y().justify_between().child(
+        col().gap(1.0).child(text("Reference clip").font(ty::LABEL).color(p.text)).child(
+            text("The pace and manner of your cloned voice are copied from this clip.")
+                .font(ty::CAPTION)
+                .color(p.text_faint),
+        ),
+    );
     if let Some(a) = head_action {
         head = head.child(a);
     }
 
     let mut c = col().key("refclip").w_full().gap(10.0).child(head);
     match &r.current {
-        Some(cur) => c = c.child(clip_row(s, p, "refclip-current", cur, None)).child(language_line(p, info, s.shell.zero_shot_vc)),
+        Some(cur) => {
+            c = c.child(clip_row(s, p, "refclip-current", cur, None)).child(language_line(
+                p,
+                info,
+                s.shell.zero_shot_vc,
+            ))
+        }
         None if r.loading => c = c.child(text("Checking the clip…").font(ty::CAPTION).color(p.text_dim)),
-        None => c = c.child(text("No reference clip yet. Record this voice, or add media files of it below.").font(ty::CAPTION).color(p.text_dim)),
+        None => {
+            c = c.child(
+                text("No reference clip yet. Record this voice, or add media files of it below.")
+                    .font(ty::CAPTION)
+                    .color(p.text_dim),
+            )
+        }
     }
     if let Some(e) = &r.error {
         c = c.child(kit::notice(p, Tone::Danger, e));
@@ -839,8 +1126,13 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
                 let action = if cand.is_current {
                     kit::badge(p, "In use", Tone::Success)
                 } else {
-                    kit::button(p, if r.applying { "Switching…" } else { "Use this one" }, BtnKind::Primary, !r.applying,
-                        move |s: &mut AppState| use_clip(s, i))
+                    kit::button(
+                        p,
+                        if r.applying { "Switching…" } else { "Use this one" },
+                        BtnKind::Primary,
+                        !r.applying,
+                        move |s: &mut AppState| use_clip(s, i),
+                    )
                 };
                 list = list.child(clip_row(s, p, &format!("refclip-c{i}"), cand, Some(action)));
             }
@@ -860,7 +1152,14 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     } else {
         "Combine files of the same speaker into a cleaner reference"
     };
-    c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(p, "more-media", "Use other recordings", media_note, media_open(s), More::Media));
+    c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(
+        p,
+        "more-media",
+        "Use other recordings",
+        media_note,
+        media_open(s),
+        More::Media,
+    ));
     if r.current.is_some() || !info.references.is_empty() || r.adding.is_some() {
         let have: Vec<String> = info.references.iter().map(|c| super::lang::label(c)).collect();
         let note = match &r.adding {
@@ -868,7 +1167,14 @@ pub fn section(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
             None if have.is_empty() => "A short clip in another language makes speech in it sound native".to_owned(),
             None => have.join(", "),
         };
-        c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(p, "more-langs", "Other languages", &note, r.more == Some(More::Languages), More::Languages));
+        c = c.child(el().w_full().h(1.0).fill(p.well_rim)).child(more_row(
+            p,
+            "more-langs",
+            "Other languages",
+            &note,
+            r.more == Some(More::Languages),
+            More::Languages,
+        ));
     }
     el().w_full().padding(12.0).radius(radius::CONTROL).fill(p.well).border(1.0, p.well_rim).child(c)
 }
@@ -878,15 +1184,27 @@ fn media_open(s: &AppState) -> bool {
 }
 
 fn more_row(p: &Palette, key: &str, title: &str, note: &str, open: bool, which: More) -> El {
-    row().key(key.to_owned()).role("button").label(title.to_owned()).w_full().gap(10.0).center_y().px(6.0).py(7.0).radius(radius::CONTROL)
+    row()
+        .key(key.to_owned())
+        .role("button")
+        .label(title.to_owned())
+        .w_full()
+        .gap(10.0)
+        .center_y()
+        .px(6.0)
+        .py(7.0)
+        .radius(radius::CONTROL)
         .fill(if open { p.glass_hover } else { rune::Color::TRANSPARENT })
-        .hover(p.glass_hover).focusable(true)
+        .hover(p.glass_hover)
+        .focusable(true)
         .on_press(move |s: &mut AppState| {
             let r = &mut s.voices.refclip;
             r.more = if r.more == Some(which) { None } else { Some(which) };
         })
         .child(text(title.to_owned()).font(ty::LABEL).color(p.text).a11y_hidden())
-        .child(text(note.to_owned()).font(ty::CAPTION).color(p.text_faint).grow(1.0).min_w(0.0).truncate().a11y_hidden())
+        .child(
+            text(note.to_owned()).font(ty::CAPTION).color(p.text_faint).grow(1.0).min_w(0.0).truncate().a11y_hidden(),
+        )
         .child(text("Open").font(ty::CAPTION).color(p.accent).a11y_hidden())
 }
 
@@ -901,10 +1219,17 @@ pub fn more_overlay(s: &AppState, p: &Palette) -> Option<El> {
         More::Media => ("more-media", "Use other recordings", super::refmedia::block(s, p, info, r.pool.is_some())),
         More::Languages => ("more-langs", "Other languages", languages_block(s, p, info)),
     };
-    let content = col().w_full().gap(12.0)
-        .child(row().w_full().center_y().justify_between()
-            .child(text(title).font(ty::TITLE).color(p.text))
-            .child(kit::button(p, "Done", BtnKind::Glass, true, close_more)))
+    let content = col()
+        .w_full()
+        .gap(12.0)
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .justify_between()
+                .child(text(title).font(ty::TITLE).color(p.text))
+                .child(kit::button(p, "Done", BtnKind::Glass, true, close_more)),
+        )
         .child(body);
     Some(crate::ui::components::popover(*p, "voice-more", anchor, 640.0, rune::Align::Start, close_more, content))
 }
@@ -920,8 +1245,17 @@ fn close_more(s: &mut AppState) {
 
 fn clip(part: u32, title: &str, start: f32, end: f32, rate: f32, pauses: f32, hint: &str) -> Clip {
     Clip {
-        part: Some(part), title: Some(title.into()), start_s: start, end_s: end, duration_s: end - start, rate, pauses, snr_db: 38.0,
-        hint: hint.into(), preview_path: format!("/tmp/demo/part{part}.wav"), ..Default::default()
+        part: Some(part),
+        title: Some(title.into()),
+        start_s: start,
+        end_s: end,
+        duration_s: end - start,
+        rate,
+        pauses,
+        snr_db: 38.0,
+        hint: hint.into(),
+        preview_path: format!("/tmp/demo/part{part}.wav"),
+        ..Default::default()
     }
 }
 
@@ -959,8 +1293,18 @@ pub(super) fn scene_demo_media(s: &mut AppState) {
     demo(s);
     let r = &mut s.voices.refclip;
     let media = |file: u32, title: &str, start: f32, end: f32, rate: f32, snr: f32, hint: &str| Clip {
-        source: "media".into(), file: Some(file), title: Some(title.into()), start_s: start, end_s: end, duration_s: end - start, rate, pauses: 0.0,
-        snr_db: snr, hint: hint.into(), preview_path: format!("/tmp/demo/cand_media{file}.wav"), ..Default::default()
+        source: "media".into(),
+        file: Some(file),
+        title: Some(title.into()),
+        start_s: start,
+        end_s: end,
+        duration_s: end - start,
+        rate,
+        pauses: 0.0,
+        snr_db: snr,
+        hint: hint.into(),
+        preview_path: format!("/tmp/demo/cand_media{file}.wav"),
+        ..Default::default()
     };
     let mut cur = media(3, "podcast-ep-14.m4a", 131.2, 142.6, 4.6, 41.0, "natural");
     cur.manual = true;
@@ -982,7 +1326,16 @@ pub(super) fn scene_demo_media(s: &mut AppState) {
 fn scene_choose(s: &mut AppState) {
     demo(s);
     s.voices.refclip.open = true;
-    playbar::scene_now(s, "/tmp/demo/part3.wav", "Part 3 · The lighthouse keeper", "Voices · My voice", playbar::Source::Voices, playbar::Status::Playing, 6.0, 19.0);
+    playbar::scene_now(
+        s,
+        "/tmp/demo/part3.wav",
+        "Part 3 · The lighthouse keeper",
+        "Voices · My voice",
+        playbar::Source::Voices,
+        playbar::Status::Playing,
+        6.0,
+        19.0,
+    );
 }
 
 fn scene_choose_busy(s: &mut AppState) {
@@ -1057,7 +1410,7 @@ fn scene_spoken_unknown(s: &mut AppState) {
     s.shell.voices[0].reference_language = None;
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("voices_reference_spoken_mismatch", scene_spoken_mismatch),
         ("voices_reference_spoken_match", scene_spoken_match),

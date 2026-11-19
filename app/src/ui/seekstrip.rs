@@ -6,15 +6,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER,
-    BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC,
+    AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CreateCompatibleDC,
+    CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, HBITMAP, HDC, SelectObject,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GetWindow, GetWindowThreadProcessId, IsWindowVisible, KillTimer,
-    RegisterClassW, SetTimer, SetWindowPos, ShowWindow, UpdateLayeredWindow, GW_OWNER, HTTRANSPARENT, SWP_NOACTIVATE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOWNA, ULW_ALPHA, WM_NCHITTEST, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GW_OWNER, GetWindow, GetWindowThreadProcessId,
+    HTTRANSPARENT, IsWindowVisible, KillTimer, RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetTimer, SetWindowPos, ShowWindow, ULW_ALPHA, UpdateLayeredWindow, WM_NCHITTEST, WM_TIMER, WNDCLASSW, WS_CHILD,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
 };
 
 /// The window timer's period, rounded down to whole milliseconds.
@@ -99,7 +100,11 @@ pub fn show(rail_pt: [f32; 4], scale: f32, look: Look, track: u64, playing: bool
                 s.shown = true;
             }
             if playing != s.ticking {
-                if playing { SetTimer(s.hwnd, 1, TICK_MS, None); } else { KillTimer(s.hwnd, 1); }
+                if playing {
+                    SetTimer(s.hwnd, 1, TICK_MS, None);
+                } else {
+                    KillTimer(s.hwnd, 1);
+                }
                 s.ticking = playing;
             }
         }
@@ -158,7 +163,11 @@ fn paint(s: &mut Strip) {
         let row = &mut pixels[y * w..(y + 1) * w];
         let in_fill_rows = dy.abs() <= half + 1.0;
         let t = ((dy + half) / (2.0 * half)).clamp(0.0, 1.0);
-        let fill_rgb = [mix(look.fill_top[0], look.fill_bottom[0], t), mix(look.fill_top[1], look.fill_bottom[1], t), mix(look.fill_top[2], look.fill_bottom[2], t)];
+        let fill_rgb = [
+            mix(look.fill_top[0], look.fill_bottom[0], t),
+            mix(look.fill_top[1], look.fill_bottom[1], t),
+            mix(look.fill_top[2], look.fill_bottom[2], t),
+        ];
         let (a, b) = (x0 + half, (at).max(x0 + half));
         let knob_left = if look.knob { at - radius - shadow_reach - 2.0 } else { x0 };
         let x_start = (x0 - 1.0).min(knob_left).floor().max(0.0) as usize;
@@ -201,7 +210,12 @@ fn paint(s: &mut Strip) {
     }
     let size = SIZE { cx: s.size.0, cy: s.size.1 };
     let origin = POINT { x: 0, y: 0 };
-    let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
     // SAFETY: the strip's window and its memory DC with the DIB section selected; the structs live through the call.
     unsafe {
         UpdateLayeredWindow(s.hwnd, std::ptr::null_mut(), std::ptr::null(), &size, s.dc, &origin, 0, &blend, ULW_ALPHA);
@@ -270,35 +284,84 @@ fn create(x: i32, y: i32, w: i32, h: i32) -> Option<Strip> {
         static REGISTERED: AtomicBool = AtomicBool::new(false);
         if !REGISTERED.swap(true, Relaxed) {
             let wc = WNDCLASSW {
-                style: 0, lpfnWndProc: Some(wndproc), cbClsExtra: 0, cbWndExtra: 0, hInstance: instance, hIcon: std::ptr::null_mut(),
-                hCursor: std::ptr::null_mut(), hbrBackground: std::ptr::null_mut(), lpszMenuName: std::ptr::null(), lpszClassName: class.as_ptr(),
+                style: 0,
+                lpfnWndProc: Some(wndproc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: instance,
+                hIcon: std::ptr::null_mut(),
+                hCursor: std::ptr::null_mut(),
+                hbrBackground: std::ptr::null_mut(),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: class.as_ptr(),
             };
             RegisterClassW(&wc);
         }
-        let hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE, class.as_ptr(), std::ptr::null(), WS_CHILD, x, y, w, h,
-            parent, std::ptr::null_mut(), instance, std::ptr::null());
+        let hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+            class.as_ptr(),
+            std::ptr::null(),
+            WS_CHILD,
+            x,
+            y,
+            w,
+            h,
+            parent,
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        );
         if hwnd.is_null() {
             return None; // no layered child windows here: the bar draws its own knob
         }
         let dc = CreateCompatibleDC(std::ptr::null_mut());
         let mut info: BITMAPINFO = std::mem::zeroed();
         info.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32,
-            biCompression: BI_RGB, biSizeImage: 0, biXPelsPerMeter: 0, biYPelsPerMeter: 0, biClrUsed: 0, biClrImportant: 0,
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
         };
         let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
         let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
         if dc.is_null() || bitmap.is_null() || bits.is_null() {
-            if !bitmap.is_null() { DeleteObject(bitmap); }
-            if !dc.is_null() { DeleteDC(dc); }
+            if !bitmap.is_null() {
+                DeleteObject(bitmap);
+            }
+            if !dc.is_null() {
+                DeleteDC(dc);
+            }
             DestroyWindow(hwnd);
             return None;
         }
         SelectObject(dc, bitmap);
         Some(Strip {
-            hwnd, dc, bitmap, bits: bits.cast(), size: (w, h), rail: (0.0, 1.0, h as f32 / 2.0), scale: 1.0,
-            look: Look { track_pt: 5.0, knob_pt: 14.0, fill_top: [0; 3], fill_bottom: [0; 3], ring: [0; 3], knob: true },
-            ticking: false, shown: false, drawn: f32::NAN, glide: super::playbar::Glide::new(),
+            hwnd,
+            dc,
+            bitmap,
+            bits: bits.cast(),
+            size: (w, h),
+            rail: (0.0, 1.0, h as f32 / 2.0),
+            scale: 1.0,
+            look: Look {
+                track_pt: 5.0,
+                knob_pt: 14.0,
+                fill_top: [0; 3],
+                fill_bottom: [0; 3],
+                ring: [0; 3],
+                knob: true,
+            },
+            ticking: false,
+            shown: false,
+            drawn: f32::NAN,
+            glide: super::playbar::Glide::new(),
         })
     }
 }

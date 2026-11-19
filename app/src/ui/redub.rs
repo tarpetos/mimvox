@@ -1,17 +1,19 @@
 use super::components::{
-    Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel, segmented_help, status_dot, well,
+    Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar,
+    section_panel, segmented_help, status_dot, well,
 };
 use super::formats;
 use super::lang;
+use super::playbar;
 use super::shell::{self, EngineStatus, VoiceInfo};
 use super::speak;
 use super::theme::{self, Palette, motion, radius, ty};
 use super::trash;
-use super::playbar;
 use super::voices::kit;
 use crate::engine::EngineMsg;
 use crate::engine::protocol::{
-    self, EngineEvent, JobStarted, RedubDone, RedubDubParams, RedubMode, RedubOutput, RedubProbe, RedubReview, RedubSegmentIn, RedubTiming, RedubTranscript, TextLanguage,
+    self, EngineEvent, JobStarted, RedubDone, RedubDubParams, RedubMode, RedubOutput, RedubProbe, RedubReview,
+    RedubSegmentIn, RedubTiming, RedubTranscript, TextLanguage,
 };
 use crate::state::{AppState, Screen};
 use rune::{Cx, El, ScrollSpec, TextEdit, col, edit_access, el, row, text, text_input};
@@ -48,10 +50,10 @@ struct Source {
 
 impl Source {
     fn preview(&self) -> Option<PathBuf> {
-        if let Probe::Ready(p) = &self.probe {
-            if let Some(pv) = &p.preview_path {
-                return Some(pv.clone());
-            }
+        if let Probe::Ready(p) = &self.probe
+            && let Some(pv) = &p.preview_path
+        {
+            return Some(pv.clone());
         }
         is_wav(&self.path).then(|| self.path.clone())
     }
@@ -86,7 +88,17 @@ struct Run {
 
 impl Run {
     fn new(req: u64, now: f64) -> Run {
-        Run { req, job: None, started: now, stage: String::new(), pct: 0.0, segment: None, cancel: false, voice_id: String::new(), warned: false }
+        Run {
+            req,
+            job: None,
+            started: now,
+            stage: String::new(),
+            pct: 0.0,
+            segment: None,
+            cancel: false,
+            voice_id: String::new(),
+            warned: false,
+        }
     }
 
     fn for_voice(req: u64, now: f64, voice_id: &str) -> Run {
@@ -109,7 +121,12 @@ enum Job {
     #[default]
     Idle,
     Transcribing(Run),
-    Rendering { run: Run, mode: RedubMode, source: String, voice: String },
+    Rendering {
+        run: Run,
+        mode: RedubMode,
+        source: String,
+        voice: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -281,7 +298,11 @@ fn source_is_video(r: &RedubState) -> bool {
 }
 
 fn output(r: &RedubState) -> RedubOutput {
-    if source_is_video(r) { RedubOutput { video: r.video_out, keep_background: r.keep_bg && r.can_separate } } else { RedubOutput::default() }
+    if source_is_video(r) {
+        RedubOutput { video: r.video_out, keep_background: r.keep_bg && r.can_separate }
+    } else {
+        RedubOutput::default()
+    }
 }
 
 fn timing_forced(r: &RedubState) -> bool {
@@ -317,11 +338,13 @@ fn toggle_keep_timing(s: &mut AppState) {
 
 /// `redub_timing`: `{"audio": "keep"|"natural", "video": ...}`, each only once the user chose.
 fn parse_timing_pref(v: Option<serde_json::Value>) -> [Option<bool>; 2] {
-    let get = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(|x| x.as_str()).and_then(|x| match x {
-        "keep" => Some(true),
-        "natural" => Some(false),
-        _ => None,
-    });
+    let get = |k: &str| {
+        v.as_ref().and_then(|v| v.get(k)).and_then(|x| x.as_str()).and_then(|x| match x {
+            "keep" => Some(true),
+            "natural" => Some(false),
+            _ => None,
+        })
+    };
     [get("audio"), get("video")]
 }
 
@@ -340,14 +363,23 @@ fn timing_block(s: &AppState, p: Palette, key: &str) -> El {
     let on = keep_timing(r);
     let forced = timing_forced(r);
     let hint = match (on, source_is_video(r)) {
-        _ if forced => "A video result always keeps the original timing, so your voice stays in sync with the picture. Fits each phrase into its time; may speed up speech.",
+        _ if forced => {
+            "A video result always keeps the original timing, so your voice stays in sync with the picture. Fits each phrase into its time; may speed up speech."
+        }
         (true, true) => "Fits each phrase into the original timing; may speed up speech. Stays in sync with the video.",
         (true, false) => "Fits each phrase into the original timing; may speed up speech.",
         (false, true) => "Natural pace; the result can be longer, so it drifts out of sync with the video.",
         (false, false) => "Natural pace; the result can be longer.",
     };
-    col().key(key.to_owned()).w_full().gap(3.0)
-        .child(kit::checkbox(&p, on, "Keep original timing", toggle_keep_timing).opacity(if forced { 0.55 } else { 1.0 }))
+    col()
+        .key(key.to_owned())
+        .w_full()
+        .gap(3.0)
+        .child(kit::checkbox(&p, on, "Keep original timing", toggle_keep_timing).opacity(if forced {
+            0.55
+        } else {
+            1.0
+        }))
         .child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
 }
 
@@ -360,13 +392,25 @@ pub enum Fold {
 
 /// `pinned`: the section is shown in full under the line, which then only names it.
 fn fold_row(p: Palette, key: &str, title: &str, summary: &str, open: bool, pinned: bool, which: Fold) -> El {
-    let r = row().key(key.to_owned()).w_full().gap(10.0).center_y().px(6.0).py(6.0).radius(radius::CONTROL)
+    let r = row()
+        .key(key.to_owned())
+        .w_full()
+        .gap(10.0)
+        .center_y()
+        .px(6.0)
+        .py(6.0)
+        .radius(radius::CONTROL)
         .child(text(title.to_owned()).font(ty::LABEL).color(p.text).a11y_hidden())
-        .child(text(summary.to_owned()).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).truncate().a11y_hidden());
+        .child(
+            text(summary.to_owned()).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).truncate().a11y_hidden(),
+        );
     if pinned {
         return r;
     }
-    r.role("button").label(title.to_owned()).hover(p.glass_hover).focusable(true)
+    r.role("button")
+        .label(title.to_owned())
+        .hover(p.glass_hover)
+        .focusable(true)
         .fill(if open { p.glass_hover } else { rune::Color::TRANSPARENT })
         .on_press(move |s: &mut AppState| s.redub.fold = if s.redub.fold == Some(which) { None } else { Some(which) })
         .child(text("Change").font(ty::CAPTION).color(p.accent).a11y_hidden())
@@ -391,11 +435,19 @@ pub fn fold_overlay(s: &AppState, p: Palette) -> Option<El> {
         }
         Fold::Transcription => ("respeak-transcription-head".to_owned(), transcription_choices(s, p)),
     };
-    let content = col().w_full().gap(12.0)
-        .child(body)
-        .child(row().w_full().justify_end()
-            .child(Button::new("Done").small().key("fold-done").on_press(|s: &mut AppState| s.redub.fold = None).build(p)));
-    Some(super::components::popover(p, "redub-fold", &anchor, 520.0, rune::Align::End, |s: &mut AppState| s.redub.fold = None, content))
+    let content =
+        col().w_full().gap(12.0).child(body).child(row().w_full().justify_end().child(
+            Button::new("Done").small().key("fold-done").on_press(|s: &mut AppState| s.redub.fold = None).build(p),
+        ));
+    Some(super::components::popover(
+        p,
+        "redub-fold",
+        &anchor,
+        520.0,
+        rune::Align::End,
+        |s: &mut AppState| s.redub.fold = None,
+        content,
+    ))
 }
 
 fn transcription_choices(s: &AppState, p: Palette) -> El {
@@ -410,21 +462,51 @@ fn transcription_choices(s: &AppState, p: Palette) -> El {
     });
     let mut tr = row().w_full().gap(12.0).center_y().child(el().grow(1.0).min_w(0.0).child(translate));
     if r.translate {
-        tr = tr.child(row().gap(8.0).center_y().child(text("To").font(ty::LABEL).color(p.text)).child(lang::chip(&p, "respeak-to", &lang::label(&r.to), lang::Target::RedubTo, !busy)));
+        tr = tr.child(row().gap(8.0).center_y().child(text("To").font(ty::LABEL).color(p.text)).child(lang::chip(
+            &p,
+            "respeak-to",
+            &lang::label(&r.to),
+            lang::Target::RedubTo,
+            !busy,
+        )));
     }
     let tr_note = if r.translate {
         format!("The transcript is written in {to_name}, so your cloned voice speaks {to_name}.")
     } else {
         "Your voice speaks the transcript in its own language.".to_owned()
     };
-    col().key("respeak-transcription").w_full().gap(12.0)
-        .child(row().w_full().gap(10.0).center_y().child(text("Spoken language").font(ty::LABEL).color(p.text)).child(from))
-        .child(col().w_full().gap(3.0).child(tr).child(text(tr_note).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)))
+    col()
+        .key("respeak-transcription")
+        .w_full()
+        .gap(12.0)
+        .child(
+            row()
+                .w_full()
+                .gap(10.0)
+                .center_y()
+                .child(text("Spoken language").font(ty::LABEL).color(p.text))
+                .child(from),
+        )
+        .child(
+            col()
+                .w_full()
+                .gap(3.0)
+                .child(tr)
+                .child(text(tr_note).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)),
+        )
         .child(transcribe_row(s, p))
 }
 
 fn accent_section(s: &AppState, p: Palette, key: &str) -> El {
-    fold_row(p, &format!("{key}-head"), "Accent", &speak::accent_summary(s), s.redub.fold == Some(Fold::Accent), false, Fold::Accent)
+    fold_row(
+        p,
+        &format!("{key}-head"),
+        "Accent",
+        &speak::accent_summary(s),
+        s.redub.fold == Some(Fold::Accent),
+        false,
+        Fold::Accent,
+    )
 }
 
 fn output_section(s: &AppState, p: Palette, key: &str) -> El {
@@ -436,13 +518,23 @@ fn output_section(s: &AppState, p: Palette, key: &str) -> El {
         what.push(if r.keep_bg { "music and sounds kept" } else { "voice alone" });
     }
     what.push(if keep_timing(r) { "original timing" } else { "natural pace" });
-    fold_row(p, &format!("{key}-output-head"), "Output", &what.join(" · "), r.fold == Some(Fold::Output), false, Fold::Output)
+    fold_row(
+        p,
+        &format!("{key}-output-head"),
+        "Output",
+        &what.join(" · "),
+        r.fold == Some(Fold::Output),
+        false,
+        Fold::Output,
+    )
 }
 
 fn output_block(s: &AppState, p: Palette, key: &str) -> El {
     let r = &s.redub;
     let caption = match (r.video_out, r.keep_bg) {
-        (true, true) => "A copy of the video with your voice over the original music and sounds. The picture is copied as it is.",
+        (true, true) => {
+            "A copy of the video with your voice over the original music and sounds. The picture is copied as it is."
+        }
         (true, false) => "A copy of the video with your voice alone. The picture is copied as it is.",
         (false, true) => "The new audio only, with the original music and sounds, saved as set in Results.",
         (false, false) => "The new audio only, your voice alone, saved as set in Results.",
@@ -471,14 +563,32 @@ fn output_block(s: &AppState, p: Palette, key: &str) -> El {
             s.redub.persist();
         }
     });
-    col().key(key.to_owned()).w_full().gap(10.0)
-        .child(row().w_full().center_y().justify_between().gap(10.0)
-            .child(col().grow(1.0).min_w(0.0).gap(1.0)
-                .child(text("Output").font(ty::LABEL).color(p.text))
-                .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap()))
-            .child(pick))
+    col()
+        .key(key.to_owned())
+        .w_full()
+        .gap(10.0)
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .justify_between()
+                .gap(10.0)
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(1.0)
+                        .child(text("Output").font(ty::LABEL).color(p.text))
+                        .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap()),
+                )
+                .child(pick),
+        )
         .child(if r.can_separate {
-            col().w_full().gap(3.0).child(keep).child(text(bg_hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
+            col()
+                .w_full()
+                .gap(3.0)
+                .child(keep)
+                .child(text(bg_hint).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
         } else {
             super::setuprun::install_line(s, p, "music_removal", "Keeping the background music and sounds")
         })
@@ -500,7 +610,9 @@ fn translator(s: &AppState) -> Option<&'static str> {
 fn engine_blocker(s: &AppState) -> Option<&'static str> {
     match &s.shell.engine {
         EngineStatus::Idle | EngineStatus::Starting { .. } => return Some("Waiting for the engine to start…"),
-        EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => return Some("The engine is not running. Press Retry above."),
+        EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => {
+            return Some("The engine is not running. Press Retry above.");
+        }
         EngineStatus::Ready { .. } => {}
     }
     if s.redub.mode == RedubMode::Dub && !super::setuprun::has(s, "translation") {
@@ -537,16 +649,28 @@ fn render_blocker(s: &AppState) -> Option<(String, bool)> {
         return Some((b, !calm));
     }
     let Some(v) = shell::active_voice(s) else {
-        return Some(("Add a voice first (from files or by reading aloud), or pick one at the top right.".into(), true));
+        return Some((
+            "Add a voice first (from files or by reading aloud), or pick one at the top right.".into(),
+            true,
+        ));
     };
     match s.redub.mode {
-        RedubMode::Dub if s.redub.reviewing && s.redub.kept_segments().next().is_none() => Some(("Every line is empty. Add some text.".into(), false)),
-        RedubMode::Convert if !v.trained => Some((format!("“{}” is not trained yet. Convert voice needs a trained voice.", v.name), true)),
+        RedubMode::Dub if s.redub.reviewing && s.redub.kept_segments().next().is_none() => {
+            Some(("Every line is empty. Add some text.".into(), false))
+        }
+        RedubMode::Convert if !v.trained => {
+            Some((format!("“{}” is not trained yet. Convert voice needs a trained voice.", v.name), true))
+        }
         RedubMode::Respeak if s.redub.kept_segments().next().is_none() => {
-            let hint = if s.redub.segments.is_empty() { "Transcribe the file first, then edit the text." } else { "Every segment is empty. Add some text." };
+            let hint = if s.redub.segments.is_empty() {
+                "Transcribe the file first, then edit the text."
+            } else {
+                "Every segment is empty. Add some text."
+            };
             Some((hint.into(), false))
         }
-        RedubMode::Respeak => unspeakable_lang(s).map(|l| (format!("The voice cannot speak {l}. Use Translate & dub, or tick Translate."), true)),
+        RedubMode::Respeak => unspeakable_lang(s)
+            .map(|l| (format!("The voice cannot speak {l}. Use Translate & dub, or tick Translate."), true)),
         _ => None,
     }
 }
@@ -578,7 +702,11 @@ pub fn set_to(s: &mut AppState, code: &str) {
 
 pub fn set_file(s: &mut AppState, path: PathBuf) {
     if s.redub.busy() {
-        shell::toast(s, Tone::Warning, "Wait for the current job to finish, or cancel it, before choosing another file.");
+        shell::toast(
+            s,
+            Tone::Warning,
+            "Wait for the current job to finish, or cancel it, before choosing another file.",
+        );
         return;
     }
     s.redub.fold = None;
@@ -616,7 +744,8 @@ pub fn choose_file(s: &mut AppState) {
     let exts = formats::import_extensions(s);
     let start = s.redub.file.as_ref().and_then(|f| f.path.parent().map(Path::to_path_buf)).filter(|d| d.is_dir());
     std::thread::spawn(move || {
-        let mut dialog = rfd::FileDialog::new().set_title("Choose an audio or video file").add_filter("Audio and video", &exts);
+        let mut dialog =
+            rfd::FileDialog::new().set_title("Choose an audio or video file").add_filter("Audio and video", &exts);
         if let Some(d) = start {
             dialog = dialog.set_directory(d);
         }
@@ -654,7 +783,8 @@ fn start_transcribe(s: &mut AppState) {
     }
     let Some(path) = s.redub.file.as_ref().map(|f| f.path.clone()) else { return };
     let to = s.redub.to.clone();
-    let (method, params) = protocol::redub_transcribe(&path, &s.redub.from, s.redub.translate.then_some(to.as_str()), translator(s));
+    let (method, params) =
+        protocol::redub_transcribe(&path, &s.redub.from, s.redub.translate.then_some(to.as_str()), translator(s));
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
         return;
@@ -708,7 +838,12 @@ fn start_dub(s: &mut AppState) {
     r.clear_text();
     r.result = None;
     r.error = None;
-    r.job = Job::Rendering { run: Run::for_voice(req, now, &voice.id), mode: RedubMode::Dub, source: src.name, voice: voice.name };
+    r.job = Job::Rendering {
+        run: Run::for_voice(req, now, &voice.id),
+        mode: RedubMode::Dub,
+        source: src.name,
+        voice: voice.name,
+    };
 }
 
 fn start_render(s: &mut AppState) {
@@ -723,8 +858,11 @@ fn start_render(s: &mut AppState) {
     let mode = s.redub.mode;
     // A reviewed dub is finished as a re-speak of the edited translation; the history still calls it a dub.
     let wire = if mode == RedubMode::Dub { RedubMode::Respeak } else { mode };
-    let segs: Vec<RedubSegmentIn> =
-        s.redub.kept_segments().map(|g| RedubSegmentIn { start: g.start, end: g.end, text: g.edit.text.trim().to_owned() }).collect();
+    let segs: Vec<RedubSegmentIn> = s
+        .redub
+        .kept_segments()
+        .map(|g| RedubSegmentIn { start: g.start, end: g.end, text: g.edit.text.trim().to_owned() })
+        .collect();
     let out = formats::output_format(s);
     // A reviewed dub and a Re-speak in English offer the accent choice (Convert keeps the original speech).
     let accent = match mode {
@@ -757,7 +895,12 @@ fn start_render(s: &mut AppState) {
     stop_play(s);
     s.redub.result = None;
     s.redub.error = None;
-    s.redub.job = Job::Rendering { run: Run::for_voice(req, shell::clock_now(s), &voice.id), mode, source: src.name, voice: voice.name };
+    s.redub.job = Job::Rendering {
+        run: Run::for_voice(req, shell::clock_now(s), &voice.id),
+        mode,
+        source: src.name,
+        voice: voice.name,
+    };
 }
 
 fn cancel(s: &mut AppState) {
@@ -812,7 +955,9 @@ fn friendly_error(code: &str, message: &str) -> String {
         "not_ready" => "The engine is still loading its models. Try again in a moment.".into(),
         "busy" => "The engine is busy with another job. Try again when it finishes.".into(),
         "not_found" => "That file or voice could not be found.".into(),
-        "not_trained" => "This voice is not trained yet. Train it, or use Translate & dub, which works with any voice.".into(),
+        "not_trained" => {
+            "This voice is not trained yet. Train it, or use Translate & dub, which works with any voice.".into()
+        }
         "no_audio" => "That file has no audio track.".into(),
         _ if message.is_empty() => "Something went wrong.".into(),
         _ => message.to_owned(),
@@ -826,10 +971,10 @@ fn fail(s: &mut AppState, text: String) {
 }
 
 pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
-    if matches!(msg, EngineMsg::Exited { .. }) {
-        if let Some(f) = s.redub.file.as_mut() {
-            f.prepared = false;
-        }
+    if matches!(msg, EngineMsg::Exited { .. })
+        && let Some(f) = s.redub.file.as_mut()
+    {
+        f.prepared = false;
     }
     on_probe(s, msg);
     let run = match &s.redub.job {
@@ -881,7 +1026,9 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
             }
             _ => {}
         },
-        EngineMsg::Exited { .. } => fail(s, "The engine stopped while working. Press Retry above and try again.".into()),
+        EngineMsg::Exited { .. } => {
+            fail(s, "The engine stopped while working. Press Retry above and try again.".into())
+        }
         _ => {}
     }
 }
@@ -920,13 +1067,20 @@ fn on_transcript(s: &mut AppState, t: RedubTranscript) {
     let target = t.target_language.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| r.to.clone());
     let same = |l: &str| l.trim().eq_ignore_ascii_case(&target);
     // An engine that does not say whether it translated is taken at the request.
-    let translated = t.segments.iter().any(|g| g.translated) || t.translated.unwrap_or(r.translate && !same(&t.language));
+    let translated =
+        t.segments.iter().any(|g| g.translated) || t.translated.unwrap_or(r.translate && !same(&t.language));
     r.segments = t
         .segments
         .into_iter()
         .map(|g| {
             r.next_seg += 1;
-            Seg { key: r.next_seg, start: g.start, end: g.end.max(g.start), source: g.source_text.unwrap_or_default().trim().to_owned(), edit: TextEdit::new(g.text.trim()) }
+            Seg {
+                key: r.next_seg,
+                start: g.start,
+                end: g.end.max(g.start),
+                source: g.source_text.unwrap_or_default().trim().to_owned(),
+                edit: TextEdit::new(g.text.trim()),
+            }
         })
         .collect();
     r.reviewing = review && !r.segments.is_empty();
@@ -957,11 +1111,18 @@ fn on_review(s: &mut AppState, rv: RedubReview) {
         .into_iter()
         .map(|g| {
             r.next_seg += 1;
-            Seg { key: r.next_seg, start: g.start, end: g.end.max(g.start), source: g.source_text.trim().to_owned(), edit: TextEdit::new(g.text.trim()) }
+            Seg {
+                key: r.next_seg,
+                start: g.start,
+                end: g.end.max(g.start),
+                source: g.source_text.trim().to_owned(),
+                edit: TextEdit::new(g.text.trim()),
+            }
         })
         .collect();
     let lang = Some(rv.language).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| r.to.clone());
-    r.transcript_from = Some(rv.source_language).filter(|l| !l.trim().is_empty() && !l.eq_ignore_ascii_case("auto") && !l.eq_ignore_ascii_case(&lang));
+    r.transcript_from = Some(rv.source_language)
+        .filter(|l| !l.trim().is_empty() && !l.eq_ignore_ascii_case("auto") && !l.eq_ignore_ascii_case(&lang));
     r.transcript_lang = Some(lang);
     r.transcript_translated = true;
     r.reviewing = true;
@@ -974,15 +1135,19 @@ fn on_review(s: &mut AppState, rv: RedubReview) {
 fn on_done(s: &mut AppState, done: RedubDone) {
     let Job::Rendering { mode, source, voice, run } = std::mem::take(&mut s.redub.job) else { return };
     let to = (mode == RedubMode::Dub).then(|| {
-        done.target_language.clone().filter(|l| !l.is_empty()).or_else(|| s.redub.transcript_lang.clone()).unwrap_or_else(|| s.redub.to.clone())
+        done.target_language
+            .clone()
+            .filter(|l| !l.is_empty())
+            .or_else(|| s.redub.transcript_lang.clone())
+            .unwrap_or_else(|| s.redub.to.clone())
     });
     if let Some(spoken) = to.clone().or_else(|| done.language.clone()).filter(|l| !l.is_empty()) {
         speak::note_reference(s, &run.voice_id, &spoken, &done.reference);
     }
-    if !run.warned {
-        if let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty()) {
-            shell::toast(s, Tone::Warning, n);
-        }
+    if !run.warned
+        && let Some(n) = done.reference.reference_note.clone().filter(|n| !n.is_empty())
+    {
+        shell::toast(s, Tone::Warning, n);
     }
     if mode == RedubMode::Dub {
         s.redub.clear_text();
@@ -996,7 +1161,24 @@ fn on_done(s: &mut AppState, done: RedubDone) {
     let id = s.redub.new_id();
     let elapsed = if done.elapsed_s > 0.0 { done.elapsed_s } else { (s.shell.now - run.started) as f32 };
     let created = super::history::now_unix();
-    s.redub.history.insert(0, Redub { id, name: source, voice, mode: Some(mode), path, play, preview, duration_s: done.duration_s, elapsed_s: Some(elapsed), drift_s: done.drift_s.filter(|d| d.abs() >= 0.5), to, video, created });
+    s.redub.history.insert(
+        0,
+        Redub {
+            id,
+            name: source,
+            voice,
+            mode: Some(mode),
+            path,
+            play,
+            preview,
+            duration_s: done.duration_s,
+            elapsed_s: Some(elapsed),
+            drift_s: done.drift_s.filter(|d| d.abs() >= 0.5),
+            to,
+            video,
+            created,
+        },
+    );
     s.redub.result = Some(id);
 }
 
@@ -1032,7 +1214,12 @@ pub fn settle(s: &mut AppState) -> bool {
             changed = true;
         } else if s.redub.prefs_dirty {
             s.redub.prefs_dirty = false;
-            super::onboarding::save_redub_prefs(mode_key(s.redub.mode), &s.redub.from, s.redub.review_first, &s.redub.to);
+            super::onboarding::save_redub_prefs(
+                mode_key(s.redub.mode),
+                &s.redub.from,
+                s.redub.review_first,
+                &s.redub.to,
+            );
             let t = if s.redub.faster_translation { TRANSLATOR_FASTER } else { TRANSLATOR_BETTER };
             super::onboarding::save_setting("redub_translator", json!(t));
             if s.redub.keep_timing.iter().any(Option::is_some) {
@@ -1043,7 +1230,10 @@ pub fn settle(s: &mut AppState) -> bool {
         }
     }
 
-    if shell::engine_ready(s) && !s.shell.scripted() && matches!(s.redub.file.as_ref().map(|f| &f.probe), Some(Probe::Pending)) {
+    if shell::engine_ready(s)
+        && !s.shell.scripted()
+        && matches!(s.redub.file.as_ref().map(|f| &f.probe), Some(Probe::Pending))
+    {
         let path = s.redub.file.as_ref().map(|f| f.path.clone()).unwrap_or_default();
         let (method, params) = protocol::redub_probe(&path);
         if let Some(req) = shell::request(s, method, params) {
@@ -1056,13 +1246,19 @@ pub fn settle(s: &mut AppState) -> bool {
 
     // Preload so the first click does not wait; failures do not matter, the job loads what it needs anyway.
     let want_prepare = s.redub.file.as_ref().is_some_and(|f| !f.prepared && !matches!(f.probe, Probe::Failed(_)));
-    if want_prepare && shell::engine_ready(s) && !s.shell.scripted() && !s.redub.busy() && !super::train::is_training(s) && !s.speak.is_generating() {
+    if want_prepare
+        && shell::engine_ready(s)
+        && !s.shell.scripted()
+        && !s.redub.busy()
+        && !super::train::is_training(s)
+        && !s.speak.is_generating()
+    {
         let path = s.redub.file.as_ref().map(|f| f.path.clone()).unwrap_or_default();
         let (method, params) = protocol::redub_prepare(&path, wants_separation(&s.redub));
-        if shell::request(s, method, params).is_some() {
-            if let Some(f) = s.redub.file.as_mut() {
-                f.prepared = true;
-            }
+        if shell::request(s, method, params).is_some()
+            && let Some(f) = s.redub.file.as_mut()
+        {
+            f.prepared = true;
         }
     }
 
@@ -1078,25 +1274,44 @@ pub fn clock_origin(s: &AppState) -> Option<f64> {
 
 fn fmt_time(secs: f32) -> String {
     let t = secs.max(0.0).round() as u32;
-    if t >= 3600 { format!("{}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60) } else { format!("{}:{:02}", t / 60, t % 60) }
+    if t >= 3600 {
+        format!("{}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60)
+    } else {
+        format!("{}:{:02}", t / 60, t % 60)
+    }
 }
 
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
-    row().key("redub").w_full().h_full().px(16.0).pb(16.0).gap(16.0)
-        .child(main_panel(s, p))
-        .child(speak::side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
+    row().key("redub").w_full().h_full().px(16.0).pb(16.0).gap(16.0).child(main_panel(s, p)).child(speak::side_column(
+        s,
+        p,
+        cx,
+        |own_scroll| results_panel(s, p, own_scroll),
+    ))
 }
 
 fn main_panel(s: &AppState, p: Palette) -> El {
-    let mut body = col().key("redub-body").w_full().grow(1.0).min_h(0.0).gap(16.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
+    let mut body = col()
+        .key("redub-body")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .gap(16.0)
+        .scroll(ScrollSpec { stick_bottom: false })
+        .scroll_edge_fade(14.0)
         .child(source_card(s, p))
         .child(mode_block(s, p));
     if let Some(e) = &s.redub.error {
         body = body.child(kit::notice(&p, Tone::Danger, e));
     }
     body = if s.redub.file.is_none() {
-        body.child(text("Choose a file above: the options for the chosen mode appear then.").font(ty::CAPTION).color(p.text_dim).wrap())
+        body.child(
+            text("Choose a file above: the options for the chosen mode appear then.")
+                .font(ty::CAPTION)
+                .color(p.text_dim)
+                .wrap(),
+        )
     } else {
         match s.redub.mode {
             RedubMode::Dub => body.child(dub_block(s, p)),
@@ -1105,10 +1320,10 @@ fn main_panel(s: &AppState, p: Palette) -> El {
         }
     };
     let mut bottom = col().key("redub-bottom").w_full().gap(12.0);
-    if let Some(r) = s.redub.result.and_then(|id| s.redub.history.iter().find(|h| h.id == id)) {
-        if !s.redub.busy() {
-            bottom = bottom.child(result_card(s, p, r));
-        }
+    if let Some(r) = s.redub.result.and_then(|id| s.redub.history.iter().find(|h| h.id == id))
+        && !s.redub.busy()
+    {
+        bottom = bottom.child(result_card(s, p, r));
     }
     bottom = bottom.child(action_bar(s, p));
     section_panel(p, "Redub").key("redub-panel").grow(1.0).min_w(0.0).h_full().gap(14.0).child(body).child(bottom)
@@ -1123,7 +1338,13 @@ fn source_card(s: &AppState, p: Palette) -> El {
 }
 
 fn badge_circle(p: Palette, glyph: &'static rune::Icon, ink: rune::Color) -> El {
-    let b = el().size(44.0, 44.0).radius(22.0).center().fill(p.glass).gradient(p.glass_top, p.glass_bottom).border_gradient(1.0, p.rim_top, p.rim_bottom)
+    let b = el()
+        .size(44.0, 44.0)
+        .radius(22.0)
+        .center()
+        .fill(p.glass)
+        .gradient(p.glass_top, p.glass_bottom)
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .child(icon_el(glyph, 19.0, ink));
     super::components::glass_edge(p, b)
 }
@@ -1134,7 +1355,16 @@ fn drop_zone(s: &AppState, p: Palette, over: bool) -> El {
     } else {
         ("Drop an audio or video file here".to_owned(), formats::import_hint(s))
     };
-    col().key("drop-zone").role("button").label("Choose a file").w_full().h(172.0).center().gap(9.0).radius(radius::CARD).continuous_corners()
+    col()
+        .key("drop-zone")
+        .role("button")
+        .label("Choose a file")
+        .w_full()
+        .h(172.0)
+        .center()
+        .gap(9.0)
+        .radius(radius::CARD)
+        .continuous_corners()
         .fill(if over { p.accent.alpha(0.13) } else { p.well })
         .border(if over { 2.0 } else { 1.0 }, if over { p.accent } else { p.well_rim.alpha(p.well_rim.a * 1.8) })
         .motion(motion::UI)
@@ -1176,34 +1406,93 @@ fn file_card(s: &AppState, p: Palette, f: &Source, over: bool) -> El {
         Some(path) => {
             let on = playbar::playing(s, &path);
             let name = f.name.clone();
-            let b = el().key("play-original").role("button").label(if on { "Pause original" } else { "Play original" }).help(if on { "Pause" } else { "Play the original" })
-                .size(40.0, 40.0).radius(20.0).center().hover(rune::Color::WHITE.alpha(0.1)).focusable(true).motion(motion::UI)
+            let b = el()
+                .key("play-original")
+                .role("button")
+                .label(if on { "Pause original" } else { "Play original" })
+                .help(if on { "Pause" } else { "Play the original" })
+                .size(40.0, 40.0)
+                .radius(20.0)
+                .center()
+                .hover(rune::Color::WHITE.alpha(0.1))
+                .focusable(true)
+                .motion(motion::UI)
                 .on_press(move |s: &mut AppState| toggle_play(s, &path, name.clone(), "Redub · original"))
                 .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 16.0, p.on_accent));
             accent_glass(p, b)
         }
-        None => icon_button(p, "play-original", &icons::PLAY, "Preview needs a WAV file, but the original is still used for the redub", |_| {}).opacity(0.4),
+        None => icon_button(
+            p,
+            "play-original",
+            &icons::PLAY,
+            "Preview needs a WAV file, but the original is still used for the redub",
+            |_| {},
+        )
+        .opacity(0.4),
     };
     let meta_color = if tone == Tone::Danger { p.bad } else { p.text_faint };
-    let change = Button::new("Change…").ghost().small().key("change-file").disabled(busy).on_press(choose_file).build(p);
-    let remove = icon_button(p, "remove-file", &icons::CLOSE, "Remove the file", clear_file).opacity(if busy { 0.4 } else { 1.0 });
-    glass_card(p).key("file-card").w_full().padding(14.0)
-        .border_gradient(if over { 2.0 } else { 1.0 }, if over { p.accent } else { p.rim_top.alpha(p.rim_top.a * 0.7) }, if over { p.accent.alpha(0.5) } else { p.rim_bottom })
-        .child(row().w_full().gap(14.0).center_y()
-            .child(badge_circle(p, &icons::FILE, p.accent))
-            .child(col().grow(1.0).min_w(0.0).gap(2.0)
-                .child(text(f.name.clone()).font(ty::TITLE).color(p.text).truncate())
-                .child(row().gap(8.0).center_y()
-                    .children(matches!(f.probe, Probe::Pending | Probe::Asking(_)).then(|| status_dot(p, Tone::Accent, true)))
-                    .child(text(if over { "Drop to replace this file".to_owned() } else { meta }).font(ty::CAPTION).color(meta_color))))
-            .child(play)
-            .child(change)
-            .child(remove))
+    let change =
+        Button::new("Change…").ghost().small().key("change-file").disabled(busy).on_press(choose_file).build(p);
+    let remove = icon_button(p, "remove-file", &icons::CLOSE, "Remove the file", clear_file).opacity(if busy {
+        0.4
+    } else {
+        1.0
+    });
+    glass_card(p)
+        .key("file-card")
+        .w_full()
+        .padding(14.0)
+        .border_gradient(
+            if over { 2.0 } else { 1.0 },
+            if over { p.accent } else { p.rim_top.alpha(p.rim_top.a * 0.7) },
+            if over { p.accent.alpha(0.5) } else { p.rim_bottom },
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(14.0)
+                .center_y()
+                .child(badge_circle(p, &icons::FILE, p.accent))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(2.0)
+                        .child(text(f.name.clone()).font(ty::TITLE).color(p.text).truncate())
+                        .child(
+                            row()
+                                .gap(8.0)
+                                .center_y()
+                                .children(
+                                    matches!(f.probe, Probe::Pending | Probe::Asking(_))
+                                        .then(|| status_dot(p, Tone::Accent, true)),
+                                )
+                                .child(
+                                    text(if over { "Drop to replace this file".to_owned() } else { meta })
+                                        .font(ty::CAPTION)
+                                        .color(meta_color),
+                                ),
+                        ),
+                )
+                .child(play)
+                .child(change)
+                .child(remove),
+        )
 }
 
 fn mode_card(p: Palette, key: &str, title: &str, sub: &str, on: bool, mode: RedubMode) -> El {
-    col().key(key.to_owned()).role("button").label(title.to_owned()).checked(on).focusable(true).grow(1.0).min_w(0.0).gap(3.0).padding(12.0)
-        .radius(radius::CARD).continuous_corners()
+    col()
+        .key(key.to_owned())
+        .role("button")
+        .label(title.to_owned())
+        .checked(on)
+        .focusable(true)
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(3.0)
+        .padding(12.0)
+        .radius(radius::CARD)
+        .continuous_corners()
         .fill(if on { p.accent.alpha(0.16) } else { p.well })
         .border(if on { 1.5 } else { 1.0 }, if on { p.accent.alpha(0.7) } else { p.well_rim.alpha(p.well_rim.a * 1.5) })
         .hover(if on { p.accent.alpha(0.22) } else { p.glass_hover })
@@ -1220,25 +1509,63 @@ fn mode_block(s: &AppState, p: Palette) -> El {
         RedubMode::Convert if !super::setuprun::has(s, "training") => Some(("training", "")),
         _ => None,
     };
-    col().key("mode-block").w_full().gap(8.0)
+    col()
+        .key("mode-block")
+        .w_full()
+        .gap(8.0)
         .child(text("Mode").font(ty::TITLE).color(p.text))
-        .child(row().w_full().gap(10.0)
-            .child(mode_card(p, "mode-dub", "Translate & dub", "Any language to another, in your voice", m == RedubMode::Dub, RedubMode::Dub))
-            .child(mode_card(p, "mode-convert", "Convert voice", "Same recording, your voice", m == RedubMode::Convert, RedubMode::Convert))
-            .child(mode_card(p, "mode-respeak", "Re-speak", "Edit the words, then speak", m == RedubMode::Respeak, RedubMode::Respeak)))
+        .child(
+            row()
+                .w_full()
+                .gap(10.0)
+                .child(mode_card(
+                    p,
+                    "mode-dub",
+                    "Translate & dub",
+                    "Any language to another, in your voice",
+                    m == RedubMode::Dub,
+                    RedubMode::Dub,
+                ))
+                .child(mode_card(
+                    p,
+                    "mode-convert",
+                    "Convert voice",
+                    "Same recording, your voice",
+                    m == RedubMode::Convert,
+                    RedubMode::Convert,
+                ))
+                .child(mode_card(
+                    p,
+                    "mode-respeak",
+                    "Re-speak",
+                    "Edit the words, then speak",
+                    m == RedubMode::Respeak,
+                    RedubMode::Respeak,
+                )),
+        )
         .children(missing.map(|(id, why)| super::setuprun::install_card(s, p, id, why)))
 }
 
 fn voice_chip(p: Palette, v: &VoiceInfo) -> El {
-    row().gap(8.0).center_y()
+    row()
+        .gap(8.0)
+        .center_y()
         .child(icon_el(&icons::USER, 14.0, p.accent))
         .child(text(v.name.clone()).font(ty::LABEL).color(p.text))
-        .child(badge(p, if v.trained { "Trained" } else { "Zero-shot" }, if v.trained { Tone::Success } else { Tone::Accent }))
+        .child(badge(
+            p,
+            if v.trained { "Trained" } else { "Zero-shot" },
+            if v.trained { Tone::Success } else { Tone::Accent },
+        ))
 }
 
 fn convert_block(s: &AppState, p: Palette) -> El {
-    let mut c = col().key("convert-block").w_full().gap(10.0)
-        .child(text("Keeps the original timing and delivery, and swaps in your trained voice.").font(ty::CAPTION).color(p.text_dim).wrap());
+    let mut c = col().key("convert-block").w_full().gap(10.0).child(
+        text("Keeps the original timing and delivery, and swaps in your trained voice.")
+            .font(ty::CAPTION)
+            .color(p.text_dim)
+            .wrap(),
+    );
     match shell::active_voice(s) {
         None => {
             c = c.child(kit::notice(&p, Tone::Warning, "No voice selected. Add a voice first (from files or by reading aloud), or pick one at the top right."))
@@ -1251,12 +1578,26 @@ fn convert_block(s: &AppState, p: Palette) -> El {
                     .child(Button::new("Use Translate & dub").small().key("convert-dub").on_press(|s| set_mode(s, RedubMode::Dub)).build(p)));
         }
         Some(v) => {
-            c = c.child(glass_card(p).w_full().padding(12.0).child(row().w_full().gap(12.0).center_y()
-                .child(voice_chip(p, v))
-                .child(el().grow(1.0))
-                .child(text(format!("{} epochs", v.trained_epochs)).font(ty::CAPTION).color(p.text_faint))));
+            c = c.child(
+                glass_card(p).w_full().padding(12.0).child(
+                    row()
+                        .w_full()
+                        .gap(12.0)
+                        .center_y()
+                        .child(voice_chip(p, v))
+                        .child(el().grow(1.0))
+                        .child(text(format!("{} epochs", v.trained_epochs)).font(ty::CAPTION).color(p.text_faint)),
+                ),
+            );
             if source_is_video(&s.redub) {
-                c = c.child(glass_card(p).key("convert-options").w_full().padding(14.0).opacity(if s.redub.busy() { 0.6 } else { 1.0 }).child(output_block(s, p, "convert-output")));
+                c = c.child(
+                    glass_card(p)
+                        .key("convert-options")
+                        .w_full()
+                        .padding(14.0)
+                        .opacity(if s.redub.busy() { 0.6 } else { 1.0 })
+                        .child(output_block(s, p, "convert-output")),
+                );
             }
         }
     }
@@ -1301,11 +1642,21 @@ fn dub_block(s: &AppState, p: Palette) -> El {
         }
     });
     let to_name = lang_name(&r.to);
-    let pair = row().w_full().gap(12.0).center_y().flex_wrap()
+    let pair = row()
+        .w_full()
+        .gap(12.0)
+        .center_y()
+        .flex_wrap()
         .child(row().gap(8.0).center_y().child(text("From").font(ty::LABEL).color(p.text)).child(from))
         .child(icon_el(&ARROW, 14.0, p.text_faint))
         .child(row().gap(8.0).center_y().child(text("To").font(ty::LABEL).color(p.text)).child(to));
-    let mut options = glass_card(p).key("dub-options").w_full().padding(14.0).gap(12.0).opacity(if locked { 0.6 } else { 1.0 }).child(pair);
+    let mut options = glass_card(p)
+        .key("dub-options")
+        .w_full()
+        .padding(14.0)
+        .gap(12.0)
+        .opacity(if locked { 0.6 } else { 1.0 })
+        .child(pair);
     if let Some(note) = foreign_note(s, &r.to) {
         options = options.child(text(note).font(ty::CAPTION).color(p.text_faint).wrap());
     }
@@ -1318,15 +1669,29 @@ fn dub_block(s: &AppState, p: Palette) -> El {
         options = options.child(super::setuprun::install_line(s, p, "better_translation", "Fewer mistranslations"));
     }
     options = options.child(output_section(s, p, "dub"));
-    options = options.child(col().w_full().gap(3.0).child(review)
-        .child(text(format!("Stops after the translation so you can fix the {to_name} before it is spoken.")).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)));
+    options = options.child(
+        col().w_full().gap(3.0).child(review).child(
+            text(format!("Stops after the translation so you can fix the {to_name} before it is spoken."))
+                .font(ty::CAPTION)
+                .color(p.text_faint)
+                .wrap()
+                .pl(32.0),
+        ),
+    );
     let mut c = col().key("dub-block").w_full().gap(12.0);
     if !r.reviewing {
         c = c.child(options);
     }
     if shell::active_voice(s).is_none() {
-        c = c.child(kit::notice(&p, Tone::Warning, "No voice selected. Add a voice first (from files or by reading aloud), or pick one at the top right."))
-            .child(row().child(Button::new("Add a voice").small().key("dub-record").on_press(super::record::start_new_voice).build(p)));
+        c = c
+            .child(kit::notice(
+                &p,
+                Tone::Warning,
+                "No voice selected. Add a voice first (from files or by reading aloud), or pick one at the top right.",
+            ))
+            .child(row().child(
+                Button::new("Add a voice").small().key("dub-record").on_press(super::record::start_new_voice).build(p),
+            ));
     }
     if r.reviewing {
         c = c.child(review_table(s, p));
@@ -1335,16 +1700,33 @@ fn dub_block(s: &AppState, p: Palette) -> El {
 }
 
 fn translation_quality(r: &RedubState, p: Palette) -> El {
-    let caption = if r.faster_translation { "NLLB-200 600M · the smaller model, about 1.5× faster" } else { "NLLB-200 1.3B · the larger, generally more accurate model" };
-    row().key("translation-quality").w_full().center_y().justify_between().gap(10.0)
-        .child(col().grow(1.0).min_w(0.0).gap(1.0)
-            .child(text("Translation quality").font(ty::LABEL).color(p.text))
-            .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap()))
+    let caption = if r.faster_translation {
+        "NLLB-200 600M · the smaller model, about 1.5× faster"
+    } else {
+        "NLLB-200 1.3B · the larger, generally more accurate model"
+    };
+    row()
+        .key("translation-quality")
+        .w_full()
+        .center_y()
+        .justify_between()
+        .gap(10.0)
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(1.0)
+                .child(text("Translation quality").font(ty::LABEL).color(p.text))
+                .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap()),
+        )
         .child(segmented_help(
             p,
             "translator-pick",
             &["Better (1.3B)", "Faster (600M)"],
-            &["The larger translation model, generally more accurate (about 3 GB of GPU memory)", "The smaller translation model: quicker, about 1.5 GB of GPU memory"],
+            &[
+                "The larger translation model, generally more accurate (about 3 GB of GPU memory)",
+                "The smaller translation model: quicker, about 1.5 GB of GPU memory",
+            ],
             usize::from(r.faster_translation),
             |s, i| {
                 if !s.redub.busy() && !s.redub.reviewing {
@@ -1363,40 +1745,85 @@ fn review_table(s: &AppState, p: Palette) -> El {
     if let Some(l) = r.lang_label() {
         head = head.child(badge(p, &l, Tone::Neutral));
     }
-    head = head.child(el().grow(1.0)).child(text(format!("{n} line{} · {} of speech", if n == 1 { "" } else { "s" }, fmt_time(total))).font(ty::CAPTION).color(p.text_faint));
-    let cols = row().w_full().gap(10.0)
+    head = head.child(el().grow(1.0)).child(
+        text(format!("{n} line{} · {} of speech", if n == 1 { "" } else { "s" }, fmt_time(total)))
+            .font(ty::CAPTION)
+            .color(p.text_faint),
+    );
+    let cols = row()
+        .w_full()
+        .gap(10.0)
         .child(el().w(84.0))
         .child(text("Original").font(ty::OVERLINE).color(p.text_faint).grow(1.0))
-        .child(text(format!("{} (edit if needed)", lang_name(r.transcript_lang.as_deref().unwrap_or(&r.to)))).font(ty::OVERLINE).color(p.text_faint).grow(1.0))
+        .child(
+            text(format!("{} (edit if needed)", lang_name(r.transcript_lang.as_deref().unwrap_or(&r.to))))
+                .font(ty::OVERLINE)
+                .color(p.text_faint)
+                .grow(1.0),
+        )
         .child(el().w(32.0));
     let rows = r.segments.iter().enumerate().map(|(i, g)| segment_row(p, i, g, r.busy(), true));
-    col().key("review").w_full().gap(10.0)
+    col()
+        .key("review")
+        .w_full()
+        .gap(10.0)
         .child(head)
-        .child(text("Fix any line, then press Dub it. Empty lines are skipped.").font(ty::CAPTION).color(p.text_dim).wrap())
+        .child(
+            text("Fix any line, then press Dub it. Empty lines are skipped.")
+                .font(ty::CAPTION)
+                .color(p.text_dim)
+                .wrap(),
+        )
         .child(cols)
         .child(col().w_full().gap(8.0).children(rows))
-        .child(row().child(Button::new("Discard review").ghost().small().key("review-discard").on_press(|s| {
-            if !s.redub.busy() {
-                s.redub.clear_text();
-            }
-        }).build(p)))
+        .child(
+            row().child(
+                Button::new("Discard review")
+                    .ghost()
+                    .small()
+                    .key("review-discard")
+                    .on_press(|s| {
+                        if !s.redub.busy() {
+                            s.redub.clear_text();
+                        }
+                    })
+                    .build(p),
+            ),
+        )
 }
 
 fn respeak_block(s: &AppState, p: Palette) -> El {
     let r = &s.redub;
     let busy = r.busy();
     let to_name = lang_name(&r.to);
-    let mut options = glass_card(p).key("respeak-options").w_full().padding(14.0).gap(12.0)
-        .opacity(if busy { 0.6 } else { 1.0 });
+    let mut options =
+        glass_card(p).key("respeak-options").w_full().padding(14.0).gap(12.0).opacity(if busy { 0.6 } else { 1.0 });
     let mut c = col().key("respeak-block").w_full().gap(12.0);
     if r.segments.is_empty() {
         options = options.child(transcription_choices(s, p));
         c = c.child(text("Transcribes the speech so you can fix or translate the words, then says them again in your voice's own delivery.").font(ty::CAPTION).color(p.text_dim).wrap());
     } else {
         let pinned = matches!(r.job, Job::Transcribing(_)) || unspeakable_lang(s).is_some();
-        let heard = r.transcript_lang.as_deref().filter(|l| !l.trim().is_empty()).map(lang_name).unwrap_or_else(|| from_label(&r.from));
-        let summary = if r.translate { format!("{heard} · translated to {to_name}") } else { format!("{heard} · not translated") };
-        options = options.gap(6.0).child(fold_row(p, "respeak-transcription-head", "Transcription", &summary, r.fold == Some(Fold::Transcription), pinned, Fold::Transcription));
+        let heard = r
+            .transcript_lang
+            .as_deref()
+            .filter(|l| !l.trim().is_empty())
+            .map(lang_name)
+            .unwrap_or_else(|| from_label(&r.from));
+        let summary = if r.translate {
+            format!("{heard} · translated to {to_name}")
+        } else {
+            format!("{heard} · not translated")
+        };
+        options = options.gap(6.0).child(fold_row(
+            p,
+            "respeak-transcription-head",
+            "Transcription",
+            &summary,
+            r.fold == Some(Fold::Transcription),
+            pinned,
+            Fold::Transcription,
+        ));
         if pinned {
             options = options.child(el().w_full().pb(6.0).child(transcription_choices(s, p)));
         }
@@ -1425,23 +1852,55 @@ fn transcribe_row(s: &AppState, p: Palette) -> El {
             _ => ("Starting…".to_owned(), None),
         };
         let elapsed = (s.shell.now - run.started).max(0.0) as f32;
-        return row().key("transcribing").w_full().gap(16.0).center_y()
-            .child(col().grow(1.0).min_w(0.0).gap(7.0)
-                .child(row().w_full().center_y().justify_between()
-                    .child(text(label).font(ty::LABEL).color(p.text))
-                    .child(text(fmt_time(elapsed)).font(ty::NUM).color(p.text_dim)))
-                .child(progress_bar(p, frac)))
-            .child(Button::new("Cancel").small().icon(&icons::STOP).key("cancel-transcribe").on_press(cancel).build(p));
+        return row()
+            .key("transcribing")
+            .w_full()
+            .gap(16.0)
+            .center_y()
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(7.0)
+                    .child(
+                        row()
+                            .w_full()
+                            .center_y()
+                            .justify_between()
+                            .child(text(label).font(ty::LABEL).color(p.text))
+                            .child(text(fmt_time(elapsed)).font(ty::NUM).color(p.text_dim)),
+                    )
+                    .child(progress_bar(p, frac)),
+            )
+            .child(
+                Button::new("Cancel").small().icon(&icons::STOP).key("cancel-transcribe").on_press(cancel).build(p),
+            );
     }
     let block = transcribe_blocker(s);
     let again = !s.redub.segments.is_empty();
-    let go = Button::new(if again { "Transcribe again" } else { "Transcribe" }).small().icon(&icons::WAVE).key("transcribe").disabled(block.is_some() || s.redub.busy());
+    let go = Button::new(if again { "Transcribe again" } else { "Transcribe" })
+        .small()
+        .icon(&icons::WAVE)
+        .key("transcribe")
+        .disabled(block.is_some() || s.redub.busy());
     let go = if again { go } else { go.primary() }.on_press(start_transcribe).build(p);
     let hint = match &block {
-        Some(b) => text(b.clone()).font(ty::CAPTION).color(if b == "Choose a file first." || b == "Reading the file…" { p.text_faint } else { p.warn }),
-        None => text(if again { "Transcribing again replaces your edits." } else { "Turns the speech into editable text." }).font(ty::CAPTION).color(p.text_faint),
+        Some(b) => text(b.clone())
+            .font(ty::CAPTION)
+            .color(if b == "Choose a file first." || b == "Reading the file…" { p.text_faint } else { p.warn }),
+        None => {
+            text(if again { "Transcribing again replaces your edits." } else { "Turns the speech into editable text." })
+                .font(ty::CAPTION)
+                .color(p.text_faint)
+        }
     };
-    row().key("transcribe-row").w_full().gap(14.0).center_y().child(go).child(el().grow(1.0).min_w(0.0).child(hint.wrap()))
+    row()
+        .key("transcribe-row")
+        .w_full()
+        .gap(14.0)
+        .center_y()
+        .child(go)
+        .child(el().grow(1.0).min_w(0.0).child(hint.wrap()))
 }
 
 fn transcript_list(s: &AppState, p: Palette) -> El {
@@ -1452,7 +1911,11 @@ fn transcript_list(s: &AppState, p: Palette) -> El {
     if let Some(l) = r.lang_label() {
         head = head.child(badge(p, &l, Tone::Neutral));
     }
-    head = head.child(el().grow(1.0)).child(text(format!("{n} segment{} · {} of speech", if n == 1 { "" } else { "s" }, fmt_time(total))).font(ty::CAPTION).color(p.text_faint));
+    head = head.child(el().grow(1.0)).child(
+        text(format!("{n} segment{} · {} of speech", if n == 1 { "" } else { "s" }, fmt_time(total)))
+            .font(ty::CAPTION)
+            .color(p.text_faint),
+    );
     let busy = r.busy();
     let rows = r.segments.iter().enumerate().map(|(i, g)| segment_row(p, i, g, busy, false));
     col().key("transcript").w_full().gap(10.0).child(head).child(col().w_full().gap(8.0).children(rows))
@@ -1471,18 +1934,37 @@ fn segment_row(p: Palette, i: usize, g: &Seg, busy: bool, with_source: bool) -> 
             let last = s.redub.segments.len().saturating_sub(1);
             &mut s.redub.segments[i.min(last)].edit
         }));
-    let well_ = well(p).key(format!("seg-well-{key}")).grow(1.0).min_w(0.0).px(12.0).py(8.0)
+    let well_ = well(p)
+        .key(format!("seg-well-{key}"))
+        .grow(1.0)
+        .min_w(0.0)
+        .px(12.0)
+        .py(8.0)
         .border(1.0, if focused { p.accent.alpha(0.8) } else { p.well_rim })
         .child(field);
-    let stamp = col().w(84.0).pt(8.0).gap(1.0)
+    let stamp = col()
+        .w(84.0)
+        .pt(8.0)
+        .gap(1.0)
         .child(text(fmt_time(g.start)).font(ty::NUM).color(p.text_dim))
         .child(text(format!("to {}", fmt_time(g.end))).font(ty::CAPTION).color(p.text_faint));
-    let del = icon_button(p, &format!("seg-del-{key}"), &icons::TRASH, "Remove this segment", move |s| remove_segment(s, key)).opacity(if busy { 0.4 } else { 1.0 });
+    let del = icon_button(p, &format!("seg-del-{key}"), &icons::TRASH, "Remove this segment", move |s| {
+        remove_segment(s, key)
+    })
+    .opacity(if busy { 0.4 } else { 1.0 });
     let mut line = row().key(format!("seg-{key}")).w_full().gap(10.0).items_start().child(stamp);
     if with_source {
         let src = if g.source.is_empty() { "(no original text)".to_owned() } else { g.source.clone() };
         line = line.child(
-            col().key(format!("seg-src-{key}")).grow(1.0).min_w(0.0).px(12.0).py(8.0).radius(radius::CONTROL + 2.0).continuous_corners().fill(p.glass)
+            col()
+                .key(format!("seg-src-{key}"))
+                .grow(1.0)
+                .min_w(0.0)
+                .px(12.0)
+                .py(8.0)
+                .radius(radius::CONTROL + 2.0)
+                .continuous_corners()
+                .fill(p.glass)
                 .border(1.0, p.rim_top.alpha(p.rim_top.a * 0.5))
                 .child(text(src).font(ty::BODY).color(p.text_dim).wrap()),
         );
@@ -1497,11 +1979,17 @@ fn open_reveal(p: Palette, id: u64, tag: &str, r: &Redub) -> (El, El) {
             shell::toast(s, Tone::Danger, e);
         }
     });
-    let open = icon_button(p, &format!("open-{tag}{id}"), &icons::OPEN, if r.video.is_some() { "Open the audio" } else { "Open file" }, move |s| {
-        if let Err(e) = speak::open_file(&b) {
-            shell::toast(s, Tone::Danger, e);
-        }
-    });
+    let open = icon_button(
+        p,
+        &format!("open-{tag}{id}"),
+        &icons::OPEN,
+        if r.video.is_some() { "Open the audio" } else { "Open file" },
+        move |s| {
+            if let Err(e) = speak::open_file(&b) {
+                shell::toast(s, Tone::Danger, e);
+            }
+        },
+    );
     (reveal, open)
 }
 
@@ -1520,9 +2008,12 @@ fn ab_buttons(s: &AppState, p: Palette, r: &Redub, tag: &str) -> El {
             None => b.disabled(true).build(p),
         }
     };
-    row().w_full().gap(8.0)
-        .child(mk("Original", format!("ab-orig-{tag}{id}"), r.preview.clone(), false))
-        .child(mk("Result", format!("ab-res-{tag}{id}"), Some(r.play.clone()), true))
+    row().w_full().gap(8.0).child(mk("Original", format!("ab-orig-{tag}{id}"), r.preview.clone(), false)).child(mk(
+        "Result",
+        format!("ab-res-{tag}{id}"),
+        Some(r.play.clone()),
+        true,
+    ))
 }
 
 fn mode_past(r: &Redub) -> String {
@@ -1546,23 +2037,38 @@ fn result_card(s: &AppState, p: Palette, r: &Redub) -> El {
     if let Some(d) = r.drift_s {
         meta = format!("{meta} · {d:.1} s longer than the original");
     }
-    let mut head = row().w_full().gap(10.0).center_y()
-        .child(badge(p, "Done", Tone::Success))
-        .child(col().grow(1.0).min_w(0.0).gap(1.0)
+    let mut head = row().w_full().gap(10.0).center_y().child(badge(p, "Done", Tone::Success)).child(
+        col()
+            .grow(1.0)
+            .min_w(0.0)
+            .gap(1.0)
             .child(text(format!("Your redub of {} is ready", r.name)).font(ty::LABEL).color(p.text).truncate())
-            .child(text(meta).font(ty::CAPTION).color(p.text_faint)));
+            .child(text(meta).font(ty::CAPTION).color(p.text_faint)),
+    );
     if let Some(v) = r.video.clone() {
-        head = head.child(Button::new("Open video").small().icon(&icons::OPEN).key(format!("open-video-main{}", r.id)).on_press(move |s| {
-            if let Err(e) = speak::open_file(&v) {
-                shell::toast(s, Tone::Danger, e);
-            }
-        }).build(p));
+        head = head.child(
+            Button::new("Open video")
+                .small()
+                .icon(&icons::OPEN)
+                .key(format!("open-video-main{}", r.id))
+                .on_press(move |s| {
+                    if let Err(e) = speak::open_file(&v) {
+                        shell::toast(s, Tone::Danger, e);
+                    }
+                })
+                .build(p),
+        );
     }
-    glass_card(p).key("result-card").w_full().padding(12.0).gap(10.0)
-        .child(head
-            .child(formats::export_button(p, format!("export-main{}", r.id), &r.path, &r.play, false))
-            .child(reveal)
-            .children(r.video.is_none().then_some(open)))
+    glass_card(p)
+        .key("result-card")
+        .w_full()
+        .padding(12.0)
+        .gap(10.0)
+        .child(
+            head.child(formats::export_button(p, format!("export-main{}", r.id), &r.path, &r.play, false))
+                .child(reveal)
+                .children(r.video.is_none().then_some(open)),
+        )
         .child(ab_buttons(s, p, r, "main"))
 }
 
@@ -1582,9 +2088,19 @@ fn stage_label(run: &Run, mode: RedubMode) -> (String, Option<f32>) {
             Some((k, n)) => {
                 let k = k.clamp(1, n.max(1));
                 let by_part = (k.saturating_sub(1)) as f32 / n.max(1) as f32;
-                (format!("Speaking part {k} of {n}…"), Some(if run.pct > 0.0 { run.pct / 100.0 } else { by_part }.max(0.03)))
+                (
+                    format!("Speaking part {k} of {n}…"),
+                    Some(if run.pct > 0.0 { run.pct / 100.0 } else { by_part }.max(0.03)),
+                )
             }
-            None if run.pct > 0.0 => (if mode == RedubMode::Convert { format!("Converting the voice… {:.0}%", run.pct) } else { format!("Working… {:.0}%", run.pct) }, frac),
+            None if run.pct > 0.0 => (
+                if mode == RedubMode::Convert {
+                    format!("Converting the voice… {:.0}%", run.pct)
+                } else {
+                    format!("Working… {:.0}%", run.pct)
+                },
+                frac,
+            ),
             None => ("Starting…".to_owned(), None),
         },
     }
@@ -1594,38 +2110,93 @@ fn action_bar(s: &AppState, p: Palette) -> El {
     if let Job::Rendering { run, mode, voice, .. } = &s.redub.job {
         let elapsed = (s.shell.now - run.started).max(0.0) as f32;
         let (label, frac) = stage_label(run, *mode);
-        let sub = format!("{} as {voice}. Long files take a few minutes; you can use other tabs meanwhile.", if *mode == RedubMode::Dub { "Dubbing" } else { "Speaking" });
-        return row().key("bar-rendering").w_full().gap(20.0).center_y()
-            .child(col().grow(1.0).min_w(0.0).gap(8.0)
-                .child(row().w_full().center_y().justify_between()
-                    .child(text(label).font(ty::LABEL).color(p.text))
-                    .child(text(fmt_time(elapsed)).font(ty::NUM).color(p.text_dim)))
-                .child(progress_bar(p, frac))
-                .child(text(sub).font(ty::CAPTION).color(p.text_faint).truncate()))
+        let sub = format!(
+            "{} as {voice}. Long files take a few minutes; you can use other tabs meanwhile.",
+            if *mode == RedubMode::Dub { "Dubbing" } else { "Speaking" }
+        );
+        return row()
+            .key("bar-rendering")
+            .w_full()
+            .gap(20.0)
+            .center_y()
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(8.0)
+                    .child(
+                        row()
+                            .w_full()
+                            .center_y()
+                            .justify_between()
+                            .child(text(label).font(ty::LABEL).color(p.text))
+                            .child(text(fmt_time(elapsed)).font(ty::NUM).color(p.text_dim)),
+                    )
+                    .child(progress_bar(p, frac))
+                    .child(text(sub).font(ty::CAPTION).color(p.text_faint).truncate()),
+            )
             .child(Button::new("Cancel").large().icon(&icons::STOP).key("cancel-render").on_press(cancel).build(p));
     }
     let block = render_blocker(s);
     let working = s.redub.busy();
     let voice_line = match shell::active_voice(s) {
-        Some(v) => col().gap(2.0)
-            .child(row().gap(8.0).center_y().child(text(format!("{} as {}", if s.redub.mode == RedubMode::Dub { "Dubbing" } else { "Redubbing" }, v.name)).font(ty::LABEL).color(p.text))
-                .child(badge(p, if v.trained { "Trained" } else { "Zero-shot" }, if v.trained { Tone::Success } else { Tone::Accent })))
-            .child(match &block {
-                Some((b, serious)) => text(b.clone()).font(ty::CAPTION).color(if *serious { p.warn } else { p.text_faint }),
-                None if s.shell.preparing_voice() => text("Preparing voice…").font(ty::CAPTION).color(p.text_dim),
-                None if s.redub.mode == RedubMode::Dub && !s.redub.reviewing => text(if s.redub.review_first { format!("Ready. You will review the {} before it is spoken.", lang_name(&s.redub.to)) } else { format!("Ready to translate to {} and dub.", lang_name(&s.redub.to)) }).font(ty::CAPTION).color(p.text_faint),
-                None => text("Ready to render.").font(ty::CAPTION).color(p.text_faint),
-            }.wrap()),
-        None => col().gap(2.0)
-            .child(text("No voice selected").font(ty::LABEL).color(p.text))
-            .child(text("Add a voice first (from files or by reading aloud), or pick one at the top right.").font(ty::CAPTION).color(p.warn)),
+        Some(v) => col()
+            .gap(2.0)
+            .child(
+                row()
+                    .gap(8.0)
+                    .center_y()
+                    .child(
+                        text(format!(
+                            "{} as {}",
+                            if s.redub.mode == RedubMode::Dub { "Dubbing" } else { "Redubbing" },
+                            v.name
+                        ))
+                        .font(ty::LABEL)
+                        .color(p.text),
+                    )
+                    .child(badge(
+                        p,
+                        if v.trained { "Trained" } else { "Zero-shot" },
+                        if v.trained { Tone::Success } else { Tone::Accent },
+                    )),
+            )
+            .child(
+                match &block {
+                    Some((b, serious)) => {
+                        text(b.clone()).font(ty::CAPTION).color(if *serious { p.warn } else { p.text_faint })
+                    }
+                    None if s.shell.preparing_voice() => text("Preparing voice…").font(ty::CAPTION).color(p.text_dim),
+                    None if s.redub.mode == RedubMode::Dub && !s.redub.reviewing => text(if s.redub.review_first {
+                        format!("Ready. You will review the {} before it is spoken.", lang_name(&s.redub.to))
+                    } else {
+                        format!("Ready to translate to {} and dub.", lang_name(&s.redub.to))
+                    })
+                    .font(ty::CAPTION)
+                    .color(p.text_faint),
+                    None => text("Ready to render.").font(ty::CAPTION).color(p.text_faint),
+                }
+                .wrap(),
+            ),
+        None => col().gap(2.0).child(text("No voice selected").font(ty::LABEL).color(p.text)).child(
+            text("Add a voice first (from files or by reading aloud), or pick one at the top right.")
+                .font(ty::CAPTION)
+                .color(p.warn),
+        ),
     };
     let label = match (s.redub.mode, s.redub.reviewing) {
         (RedubMode::Dub, false) => "Translate & dub",
         (RedubMode::Dub, true) => "Dub it",
         _ => "Render",
     };
-    let go = Button::new(label).primary().large().icon(&icons::SPARKLE).key("render").disabled(block.is_some() || working).on_press(start_primary).build(p);
+    let go = Button::new(label)
+        .primary()
+        .large()
+        .icon(&icons::SPARKLE)
+        .key("render")
+        .disabled(block.is_some() || working)
+        .on_press(start_primary)
+        .build(p);
     row().key("bar-idle").w_full().gap(20.0).center_y().child(el().grow(1.0).min_w(0.0).child(voice_line)).child(go)
 }
 
@@ -1634,12 +2205,27 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let more = super::history::has_older(s, trash::Kind::Redub);
     let head = speak::results_head(s, p, trash::Kind::Redub, h.len(), more, "redub-outfmt");
     let body = if h.is_empty() {
-        col().key("redubs-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &ICON, "No redubs yet", "Finished redubs appear here."))
+        col().key("redubs-empty").w_full().grow(1.0).justify_center().child(empty_state(
+            p,
+            &ICON,
+            "No redubs yet",
+            "Finished redubs appear here.",
+        ))
     } else {
-        let list = col().w_full().gap(8.0).children(h.iter().map(|r| history_row(s, p, r)))
+        let list = col()
+            .w_full()
+            .gap(8.0)
+            .children(h.iter().map(|r| history_row(s, p, r)))
             .children(more.then(|| super::history::older_button(s, p, trash::Kind::Redub)));
         if own_scroll {
-            col().key("redubs").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(list)
+            col()
+                .key("redubs")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .scroll_edge_fade(14.0)
+                .child(list)
         } else {
             col().key("redubs").w_full().child(list)
         }
@@ -1649,14 +2235,25 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
 
 fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
     let (reveal, open) = open_reveal(p, r.id, "h", r);
-    let title = r.video.as_ref().and_then(|v| v.file_name()).map(|n| n.to_string_lossy().into_owned())
-        .filter(|_| r.name.starts_with("redub_")).unwrap_or_else(|| r.name.clone());
+    let title = r
+        .video
+        .as_ref()
+        .and_then(|v| v.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|_| r.name.starts_with("redub_"))
+        .unwrap_or_else(|| r.name.clone());
     let video_btn = r.video.clone().map(|v| {
-        Button::new("Open video").small().grow().icon(&icons::OPEN).key(format!("open-video-h{}", r.id)).on_press(move |s| {
-            if let Err(e) = speak::open_file(&v) {
-                shell::toast(s, Tone::Danger, e);
-            }
-        }).build(p)
+        Button::new("Open video")
+            .small()
+            .grow()
+            .icon(&icons::OPEN)
+            .key(format!("open-video-h{}", r.id))
+            .on_press(move |s| {
+                if let Err(e) = speak::open_file(&v) {
+                    shell::toast(s, Tone::Danger, e);
+                }
+            })
+            .build(p)
     });
     let mut meta = format!("{} · {}", capitalize(&mode_past(r)), fmt_time(r.duration_s));
     if let Some(e) = r.elapsed_s {
@@ -1665,18 +2262,34 @@ fn history_row(s: &AppState, p: Palette, r: &Redub) -> El {
     if !r.voice.is_empty() {
         meta = format!("{meta} · {}", r.voice);
     }
-    glass_card(p).key(format!("redub{}", r.id)).w_full().padding(10.0).gap(8.0)
-        .child(col().w_full().gap(1.0)
-            .child(row().w_full().gap(8.0).center_y()
-                .child(text(title).font(ty::LABEL).color(p.text).truncate().grow(1.0).min_w(0.0))
-                .children(r.video.is_some().then(|| badge(p, "Video", Tone::Accent))))
-            .child(text(meta).font(ty::CAPTION).color(p.text_faint).truncate()))
+    glass_card(p)
+        .key(format!("redub{}", r.id))
+        .w_full()
+        .padding(10.0)
+        .gap(8.0)
+        .child(
+            col()
+                .w_full()
+                .gap(1.0)
+                .child(
+                    row()
+                        .w_full()
+                        .gap(8.0)
+                        .center_y()
+                        .child(text(title).font(ty::LABEL).color(p.text).truncate().grow(1.0).min_w(0.0))
+                        .children(r.video.is_some().then(|| badge(p, "Video", Tone::Accent))),
+                )
+                .child(text(meta).font(ty::CAPTION).color(p.text_faint).truncate()),
+        )
         .child(ab_buttons(s, p, r, "h"))
         .children(video_btn.map(|b| row().w_full().child(b)))
         .child(if trash::confirming(s, trash::Kind::Redub, r.id) {
             trash::confirm_row(s, p, trash::Kind::Redub, r.id, &r.path, &r.play)
         } else {
-            row().w_full().gap(8.0).center_y()
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
                 .child(formats::export_button(p, format!("export-h{}", r.id), &r.path, &r.play, true))
                 .child(reveal)
                 .child(open)
@@ -1707,18 +2320,48 @@ fn demo(s: &mut AppState, trained: bool) {
     s.screen = Screen::Redub;
     s.formats.scene_ready();
     s.shell.voices = vec![
-        VoiceInfo { id: "me".into(), name: "My voice".into(), preset: Some("standard".into()), dataset_minutes: 6.4, parts: 5, trained, trained_epochs: if trained { 300 } else { 0 }, ..Default::default() },
-        VoiceInfo { id: "pro".into(), name: "Studio take".into(), preset: Some("pro".into()), dataset_minutes: 15.0, parts: 12, trained: true, trained_epochs: 300, ..Default::default() },
+        VoiceInfo {
+            id: "me".into(),
+            name: "My voice".into(),
+            preset: Some("standard".into()),
+            dataset_minutes: 6.4,
+            parts: 5,
+            trained,
+            trained_epochs: if trained { 300 } else { 0 },
+            ..Default::default()
+        },
+        VoiceInfo {
+            id: "pro".into(),
+            name: "Studio take".into(),
+            preset: Some("pro".into()),
+            dataset_minutes: 15.0,
+            parts: 12,
+            trained: true,
+            trained_epochs: 300,
+            ..Default::default()
+        },
     ];
     s.shell.active_voice = Some("me".into());
-    s.shell.set_engine(EngineStatus::Ready { device: Some("NVIDIA GeForce RTX 4070".into()), tts: Some("ready".into()), rvc: Some("ready".into()) });
+    s.shell.set_engine(EngineStatus::Ready {
+        device: Some("NVIDIA GeForce RTX 4070".into()),
+        tts: Some("ready".into()),
+        rvc: Some("ready".into()),
+    });
 }
 
 fn demo_file(s: &mut AppState) {
     s.redub.file = Some(Source {
         path: SAMPLE_PATH.into(),
         name: "interview-take-2.mp3".into(),
-        probe: Probe::Ready(RedubProbe { duration_s: 161.0, sample_rate: 44100, channels: 2, has_audio: true, has_video: Some(false), format: "mp3".into(), preview_path: Some("/tmp/interview-take-2-preview.wav".into()) }),
+        probe: Probe::Ready(RedubProbe {
+            duration_s: 161.0,
+            sample_rate: 44100,
+            channels: 2,
+            has_audio: true,
+            has_video: Some(false),
+            format: "mp3".into(),
+            preview_path: Some("/tmp/interview-take-2-preview.wav".into()),
+        }),
         prepared: true,
     });
 }
@@ -1733,14 +2376,34 @@ fn demo_segments(s: &mut AppState) {
     s.redub.segments = lines
         .iter()
         .enumerate()
-        .map(|(i, (a, b, t))| Seg { key: i as u64 + 1, start: *a, end: *b, source: String::new(), edit: TextEdit::new(*t) })
+        .map(|(i, (a, b, t))| Seg {
+            key: i as u64 + 1,
+            start: *a,
+            end: *b,
+            source: String::new(),
+            edit: TextEdit::new(*t),
+        })
         .collect();
     s.redub.next_seg = lines.len() as u64;
     s.redub.transcript_lang = Some("en".into());
 }
 
 fn demo_history(s: &mut AppState) {
-    let mk = |id, name: &str, mode, d, e| Redub { id, name: name.into(), voice: "My voice".into(), mode: Some(mode), path: format!("/tmp/redub{id}.wav").into(), play: format!("/tmp/redub{id}.wav").into(), preview: Some(format!("/tmp/orig{id}.wav").into()), duration_s: d, elapsed_s: Some(e), drift_s: None, to: None, video: None, created: 0.0 };
+    let mk = |id, name: &str, mode, d, e| Redub {
+        id,
+        name: name.into(),
+        voice: "My voice".into(),
+        mode: Some(mode),
+        path: format!("/tmp/redub{id}.wav").into(),
+        play: format!("/tmp/redub{id}.wav").into(),
+        preview: Some(format!("/tmp/orig{id}.wav").into()),
+        duration_s: d,
+        elapsed_s: Some(e),
+        drift_s: None,
+        to: None,
+        video: None,
+        created: 0.0,
+    };
     s.redub.history = vec![
         mk(2, "podcast-intro.wav", RedubMode::Respeak, 48.0, 31.0),
         mk(1, "interview-take-1.mp3", RedubMode::Convert, 161.0, 74.0),
@@ -1795,7 +2458,8 @@ fn scene_transcript(s: &mut AppState) {
     demo_file(s);
     s.redub.mode = RedubMode::Respeak;
     demo_segments(s);
-    s.redub.segments[1].edit = TextEdit::new("Today we are going to talk about how a voice is cloned from only a few minutes of speech.");
+    s.redub.segments[1].edit =
+        TextEdit::new("Today we are going to talk about how a voice is cloned from only a few minutes of speech.");
     demo_history(s);
 }
 
@@ -1809,7 +2473,12 @@ fn scene_rendering(s: &mut AppState) {
     run.stage = "speak".into();
     run.segment = Some((3, 4));
     run.pct = 58.0;
-    s.redub.job = Job::Rendering { run, mode: RedubMode::Respeak, source: "interview-take-2.mp3".into(), voice: "My voice".into() };
+    s.redub.job = Job::Rendering {
+        run,
+        mode: RedubMode::Respeak,
+        source: "interview-take-2.mp3".into(),
+        voice: "My voice".into(),
+    };
     demo_history(s);
 }
 
@@ -1818,7 +2487,24 @@ fn scene_done(s: &mut AppState) {
     demo_file(s);
     s.redub.mode = RedubMode::Convert;
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: Some(RedubMode::Convert), path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 161.0, elapsed_s: Some(68.4), drift_s: None, to: None, video: None, created: 0.0 });
+    s.redub.history.insert(
+        0,
+        Redub {
+            id: 3,
+            name: "interview-take-2.mp3".into(),
+            voice: "My voice".into(),
+            mode: Some(RedubMode::Convert),
+            path: "/tmp/redub3.wav".into(),
+            play: "/tmp/redub3.wav".into(),
+            preview: Some("/tmp/interview-take-2-preview.wav".into()),
+            duration_s: 161.0,
+            elapsed_s: Some(68.4),
+            drift_s: None,
+            to: None,
+            video: None,
+            created: 0.0,
+        },
+    );
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1844,7 +2530,11 @@ fn scene_drop_hover(s: &mut AppState) {
 
 fn scene_export_menu(s: &mut AppState) {
     scene_done(s);
-    s.formats.menu = Some(formats::Menu { anchor: "export-main3".into(), src: "/tmp/redub3.wav".into(), audio: "/tmp/redub3.wav".into() });
+    s.formats.menu = Some(formats::Menu {
+        anchor: "export-main3".into(),
+        src: "/tmp/redub3.wav".into(),
+        audio: "/tmp/redub3.wav".into(),
+    });
     s.formats.format = "mp3".into();
 }
 
@@ -1860,8 +2550,18 @@ fn scene_output_menu(s: &mut AppState) {
 
 const DUB_LINES: [(f32, f32, &str, &str); 4] = [
     (0.0, 4.2, "Привіт усім, і ласкаво просимо назад на шоу.", "Hello everyone, and welcome back to the show."),
-    (4.6, 9.8, "Сьогодні ми поговоримо про те, як клонують голос лише з кількох хвилин мовлення.", "Today we will talk about how a voice is cloned from just a few minutes of speech."),
-    (10.3, 15.1, "Це звучить як магія, але насправді це уважний запис і трохи терпіння.", "It sounds like magic, but it is really careful recording and a bit of patience."),
+    (
+        4.6,
+        9.8,
+        "Сьогодні ми поговоримо про те, як клонують голос лише з кількох хвилин мовлення.",
+        "Today we will talk about how a voice is cloned from just a few minutes of speech.",
+    ),
+    (
+        10.3,
+        15.1,
+        "Це звучить як магія, але насправді це уважний запис і трохи терпіння.",
+        "It sounds like magic, but it is really careful recording and a bit of patience.",
+    ),
     (15.8, 19.0, "Почнімо.", "Let's begin."),
 ];
 
@@ -1927,7 +2627,8 @@ fn scene_dub_separating(s: &mut AppState) {
     run.job = Some("job3".into());
     run.stage = "separate".into();
     run.pct = 36.0;
-    s.redub.job = Job::Rendering { run, mode: RedubMode::Dub, source: "game-tour.mp4".into(), voice: "My voice".into() };
+    s.redub.job =
+        Job::Rendering { run, mode: RedubMode::Dub, source: "game-tour.mp4".into(), voice: "My voice".into() };
     demo_history(s);
 }
 
@@ -1935,21 +2636,24 @@ fn scene_dub_done_video(s: &mut AppState) {
     demo_dub_file(s);
     demo_video(s);
     demo_history(s);
-    s.redub.history.insert(0, Redub {
-        id: 3,
-        name: "game-tour.mp4".into(),
-        voice: "My voice".into(),
-        mode: Some(RedubMode::Dub),
-        path: "/tmp/redub3.mp3".into(),
-        play: "/tmp/redub3.wav".into(),
-        preview: Some("/tmp/game-tour-preview.wav".into()),
-        duration_s: 119.4,
-        elapsed_s: Some(96.0),
-        drift_s: None,
-        to: Some("en".into()),
-        video: Some("/tmp/redub3.mp4".into()),
-        created: 0.0,
-    });
+    s.redub.history.insert(
+        0,
+        Redub {
+            id: 3,
+            name: "game-tour.mp4".into(),
+            voice: "My voice".into(),
+            mode: Some(RedubMode::Dub),
+            path: "/tmp/redub3.mp3".into(),
+            play: "/tmp/redub3.wav".into(),
+            preview: Some("/tmp/game-tour-preview.wav".into()),
+            duration_s: 119.4,
+            elapsed_s: Some(96.0),
+            drift_s: None,
+            to: Some("en".into()),
+            video: Some("/tmp/redub3.mp4".into()),
+            created: 0.0,
+        },
+    );
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -1976,7 +2680,8 @@ fn scene_dub_running(s: &mut AppState) {
     run.job = Some("job3".into());
     run.stage = "translate".into();
     run.pct = 34.0;
-    s.redub.job = Job::Rendering { run, mode: RedubMode::Dub, source: "interview-take-2.mp3".into(), voice: "My voice".into() };
+    s.redub.job =
+        Job::Rendering { run, mode: RedubMode::Dub, source: "interview-take-2.mp3".into(), voice: "My voice".into() };
     demo_history(s);
 }
 
@@ -1986,7 +2691,13 @@ fn scene_dub_review(s: &mut AppState) {
     s.redub.segments = DUB_LINES
         .iter()
         .enumerate()
-        .map(|(i, (a, b, src, en))| Seg { key: i as u64 + 1, start: *a, end: *b, source: (*src).into(), edit: TextEdit::new(*en) })
+        .map(|(i, (a, b, src, en))| Seg {
+            key: i as u64 + 1,
+            start: *a,
+            end: *b,
+            source: (*src).into(),
+            edit: TextEdit::new(*en),
+        })
         .collect();
     s.redub.next_seg = DUB_LINES.len() as u64;
     s.redub.reviewing = true;
@@ -1999,7 +2710,24 @@ fn scene_dub_review(s: &mut AppState) {
 fn scene_dub_done(s: &mut AppState) {
     demo_dub_file(s);
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "interview-take-2.mp3".into(), voice: "My voice".into(), mode: Some(RedubMode::Dub), path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/interview-take-2-preview.wav".into()), duration_s: 163.2, elapsed_s: Some(92.0), drift_s: Some(2.2), to: Some("en".into()), video: None, created: 0.0 });
+    s.redub.history.insert(
+        0,
+        Redub {
+            id: 3,
+            name: "interview-take-2.mp3".into(),
+            voice: "My voice".into(),
+            mode: Some(RedubMode::Dub),
+            path: "/tmp/redub3.wav".into(),
+            play: "/tmp/redub3.wav".into(),
+            preview: Some("/tmp/interview-take-2-preview.wav".into()),
+            duration_s: 163.2,
+            elapsed_s: Some(92.0),
+            drift_s: Some(2.2),
+            to: Some("en".into()),
+            video: None,
+            created: 0.0,
+        },
+    );
     s.redub.next_id = 3;
     s.redub.result = Some(3);
 }
@@ -2011,7 +2739,24 @@ fn scene_dub_to_uk(s: &mut AppState) {
     s.redub.from = "en".into();
     s.redub.to = "uk".into();
     demo_history(s);
-    s.redub.history.insert(0, Redub { id: 3, name: "podcast-intro.wav".into(), voice: "My voice".into(), mode: Some(RedubMode::Dub), path: "/tmp/redub3.wav".into(), play: "/tmp/redub3.wav".into(), preview: Some("/tmp/orig3.wav".into()), duration_s: 49.5, elapsed_s: Some(41.0), drift_s: None, to: Some("uk".into()), video: None, created: 0.0 });
+    s.redub.history.insert(
+        0,
+        Redub {
+            id: 3,
+            name: "podcast-intro.wav".into(),
+            voice: "My voice".into(),
+            mode: Some(RedubMode::Dub),
+            path: "/tmp/redub3.wav".into(),
+            play: "/tmp/redub3.wav".into(),
+            preview: Some("/tmp/orig3.wav".into()),
+            duration_s: 49.5,
+            elapsed_s: Some(41.0),
+            drift_s: None,
+            to: Some("uk".into()),
+            video: None,
+            created: 0.0,
+        },
+    );
     s.redub.next_id = 3;
 }
 
@@ -2028,7 +2773,13 @@ fn scene_dub_review_uk(s: &mut AppState) {
     s.redub.segments = DUB_LINES
         .iter()
         .enumerate()
-        .map(|(i, (a, b, uk, en))| Seg { key: i as u64 + 1, start: *a, end: *b, source: (*en).into(), edit: TextEdit::new(*uk) })
+        .map(|(i, (a, b, uk, en))| Seg {
+            key: i as u64 + 1,
+            start: *a,
+            end: *b,
+            source: (*en).into(),
+            edit: TextEdit::new(*uk),
+        })
         .collect();
     s.redub.next_seg = DUB_LINES.len() as u64;
     s.redub.reviewing = true;
@@ -2104,10 +2855,19 @@ fn scene_trash_confirm(s: &mut AppState) {
     scene_file(s);
     demo_history(s);
     trash::scene_confirm(s, trash::Kind::Redub, 2);
-    playbar::scene_now(s, "/tmp/redub1.wav", "interview-take-1.mp3", "Redub · result", playbar::Source::Redub, playbar::Status::Paused, 97.0, 161.0);
+    playbar::scene_now(
+        s,
+        "/tmp/redub1.wav",
+        "interview-take-1.mp3",
+        "Redub · result",
+        playbar::Source::Redub,
+        playbar::Status::Paused,
+        97.0,
+        161.0,
+    );
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("redub_trash_confirm", scene_trash_confirm),
         ("redub_dub_accent_foreign_ref", scene_dub_accent_foreign_ref),
@@ -2150,4 +2910,3 @@ pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
         ("redub_output_menu", scene_output_menu),
     ]
 }
-

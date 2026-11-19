@@ -51,15 +51,33 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
         };
         let disc = glass_edge(
             p,
-            el().key(format!("{key}-disc")).size(DIAMETER, DIAMETER).radius(DIAMETER / 2.0).center()
-                .fill(p.glass).gradient(p.glass_top, p.glass_bottom)
+            el().key(format!("{key}-disc"))
+                .size(DIAMETER, DIAMETER)
+                .radius(DIAMETER / 2.0)
+                .center()
+                .fill(p.glass)
+                .gradient(p.glass_top, p.glass_bottom)
                 .border_gradient(1.0, p.rim_top, p.rim_bottom)
                 .shadow(3.0, 10.0, p.shadow_soft),
         )
-        .child(el().key(format!("{key}-wash")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).radius(DIAMETER / 2.0).fill(fill).inert().motion(motion::UI))
+        .child(
+            el().key(format!("{key}-wash"))
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .radius(DIAMETER / 2.0)
+                .fill(fill)
+                .inert()
+                .motion(motion::UI),
+        )
         .child(icon_el(glyph, 16.0, ink).motion(motion::UI).a11y_hidden());
         // The system presses these (non-client hits); assistive technology invokes them.
-        col().key(key).role("button").label(label).focusable(false).w(CELL).h(height).justify_center()
+        col()
+            .key(key)
+            .role("button")
+            .label(label)
+            .focusable(false)
+            .w(CELL)
+            .h(height)
+            .justify_center()
             .on_press_tx(move |_: &mut crate::state::AppState, tx: &mut Tx| match button {
                 CaptionButton::Minimize => tx.minimize(),
                 CaptionButton::Maximize => tx.toggle_maximized(),
@@ -67,21 +85,32 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
             })
             .child(disc)
     };
-    row().key("caption").pin(None, Some(0.0), Some(0.0), None).h(height)
+    row()
+        .key("caption")
+        .pin(None, Some(0.0), Some(0.0), None)
+        .h(height)
         .child(cell(CaptionButton::Minimize))
         .child(cell(CaptionButton::Maximize))
         .child(cell(CaptionButton::Close))
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut crate::state::AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("caption_idle", |s| preview(s, CaptionView::default())),
         ("caption_crowded", crowded),
         ("caption_maximized", |s| preview(s, CaptionView { maximized: true, ..CaptionView::default() })),
-        ("caption_hover_min", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Minimize), ..CaptionView::default() })),
-        ("caption_hover_max", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Maximize), ..CaptionView::default() })),
-        ("caption_hover_close", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Close), ..CaptionView::default() })),
-        ("caption_press_close", |s| preview(s, CaptionView { hovered: Some(CaptionButton::Close), pressed: true, ..CaptionView::default() })),
+        ("caption_hover_min", |s| {
+            preview(s, CaptionView { hovered: Some(CaptionButton::Minimize), ..CaptionView::default() })
+        }),
+        ("caption_hover_max", |s| {
+            preview(s, CaptionView { hovered: Some(CaptionButton::Maximize), ..CaptionView::default() })
+        }),
+        ("caption_hover_close", |s| {
+            preview(s, CaptionView { hovered: Some(CaptionButton::Close), ..CaptionView::default() })
+        }),
+        ("caption_press_close", |s| {
+            preview(s, CaptionView { hovered: Some(CaptionButton::Close), pressed: true, ..CaptionView::default() })
+        }),
     ]
 }
 
@@ -91,7 +120,11 @@ fn crowded(s: &mut crate::state::AppState) {
     if let Some(v) = s.shell.voices.first_mut() {
         v.name = "Gigachad Sage (UA)".into();
     }
-    s.shell.set_engine(super::shell::EngineStatus::Ready { device: Some("cuda".into()), tts: Some("loading".into()), rvc: Some("loading".into()) });
+    s.shell.set_engine(super::shell::EngineStatus::Ready {
+        device: Some("cuda".into()),
+        tts: Some("loading".into()),
+        rvc: Some("loading".into()),
+    });
     preview(s, CaptionView::default());
 }
 

@@ -63,8 +63,18 @@ pub struct Component {
 }
 
 pub const COMPONENTS: [Component; 7] = [
-    Component { id: "speech", label: "Speech", gb: 12.6, what: "Speak and Book in about 60 languages, and Redub's Re-speak. Always installed." },
-    Component { id: "training", label: "Voice training", gb: 12.0, what: "Train your voice: voice match for trained voices and Redub's Convert voice." },
+    Component {
+        id: "speech",
+        label: "Speech",
+        gb: 12.6,
+        what: "Speak and Book in about 60 languages, and Redub's Re-speak. Always installed.",
+    },
+    Component {
+        id: "training",
+        label: "Voice training",
+        gb: 12.0,
+        what: "Train your voice: voice match for trained voices and Redub's Convert voice.",
+    },
     Component { id: "translation", label: "Translation", gb: 2.5, what: "Redub's Translate & dub (NLLB-200 600M)." },
     Component {
         id: "better_translation",
@@ -72,8 +82,18 @@ pub const COMPONENTS: [Component; 7] = [
         gb: 2.7,
         what: "Fewer mistranslations in Redub (NLLB-200 1.3B). Installed only with an NVIDIA or AMD GPU.",
     },
-    Component { id: "native_accent", label: "Native accent", gb: 2.0, what: "English with a native accent for voices that are not trained (Seed-VC, GPL-3.0)." },
-    Component { id: "music_removal", label: "Music removal", gb: 0.3, what: "Keeps only the voice: Redub keeps a video's background, references come out clean." },
+    Component {
+        id: "native_accent",
+        label: "Native accent",
+        gb: 2.0,
+        what: "English with a native accent for voices that are not trained (Seed-VC, GPL-3.0).",
+    },
+    Component {
+        id: "music_removal",
+        label: "Music removal",
+        gb: 0.3,
+        what: "Keeps only the voice: Redub keeps a video's background, references come out clean.",
+    },
     Component {
         id: "ukrainian",
         label: "Ukrainian speech",
@@ -102,7 +122,9 @@ fn uv_path() -> Option<PathBuf> {
     if let Some(p) = res.as_ref().map(|r| r.join("bin").join(exe)).filter(|p| p.is_file()) {
         return Some(p);
     }
-    if let Some(p) = res.as_ref().map(|r| r.join("bin").join("uv.gz")).filter(|p| p.is_file()).and_then(|gz| unpack_uv(&gz)) {
+    if let Some(p) =
+        res.as_ref().map(|r| r.join("bin").join("uv.gz")).filter(|p| p.is_file()).and_then(|gz| unpack_uv(&gz))
+    {
         return Some(p);
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
@@ -110,7 +132,9 @@ fn uv_path() -> Option<PathBuf> {
         return Some(p);
     }
     let home = dirs::home_dir()?;
-    [home.join(".local").join("bin").join(exe), home.join(".cargo").join("bin").join(exe)].into_iter().find(|p| p.is_file())
+    [home.join(".local").join("bin").join(exe), home.join(".cargo").join("bin").join(exe)]
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 /// The Linux installers carry uv gzipped (the AppImage tool would rewrite a bare one and break it): unpacked once into
@@ -138,7 +162,8 @@ fn unpack_uv(gz: &std::path::Path) -> Option<PathBuf> {
 }
 
 pub fn command(args: &[OsString]) -> Result<Command, String> {
-    let res = crate::engine::find_resources().ok_or("The app's setup files are missing (engine, tools). Reinstall Mimvox.")?;
+    let res = crate::engine::find_resources()
+        .ok_or("The app's setup files are missing (engine, tools). Reinstall Mimvox.")?;
     let script = res.join("tools").join("setup").join("setup.py");
     if !script.is_file() {
         return Err(format!("The setup program is missing: {}. Reinstall Mimvox.", script.display()));
@@ -175,7 +200,8 @@ pub fn running(s: &AppState) -> bool {
 }
 
 pub fn start(s: &mut AppState, data_dir: &str) {
-    let chosen: Vec<&str> = COMPONENTS.iter().map(|c| c.id).filter(|id| !s.setup.left_out.iter().any(|x| x == id)).collect();
+    let chosen: Vec<&str> =
+        COMPONENTS.iter().map(|c| c.id).filter(|id| !s.setup.left_out.iter().any(|x| x == id)).collect();
     let mut args = base_args(data_dir);
     args.push("--components".into());
     args.push(chosen.join(",").into());
@@ -228,7 +254,8 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, dat
         s.shell.engine = super::shell::EngineStatus::Stopped { code: None, detail: "Stopped while setup runs.".into() };
     }
     let left_out = std::mem::take(&mut s.setup.left_out);
-    s.setup = SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, adding, left_out, ..Default::default() };
+    s.setup =
+        SetupRunState { phase: Phase::Running, show_log: s.setup.show_log, adding, left_out, ..Default::default() };
     let cache = PathBuf::from(data_dir.trim()).join("cache").join("uv");
     let spawned = command(&args).and_then(|mut c| {
         if !data_dir.trim().is_empty() {
@@ -375,7 +402,9 @@ fn on_exit(s: &mut AppState, code: Option<i32>, signal: Option<i32>) {
             Some(0) => Phase::Finished(true),
             None if cancelled => Phase::Error("Setup was stopped. Run it again to continue where it stopped.".into()),
             None => Phase::Error(match signal {
-                Some(sig) => format!("Setup crashed (signal {sig}). Run it again; if it keeps crashing, report it on the project's GitHub page."),
+                Some(sig) => format!(
+                    "Setup crashed (signal {sig}). Run it again; if it keeps crashing, report it on the project's GitHub page."
+                ),
                 None => "Setup ended unexpectedly. Run it again to continue where it stopped.".into(),
             }),
             Some(c) if last.is_empty() => Phase::Error(format!("Setup stopped (exit code {c}).")),
@@ -415,7 +444,8 @@ pub fn stop_on_exit() {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).creation_flags(0x0800_0000).status();
+        let _ =
+            Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).creation_flags(0x0800_0000).status();
     }
     #[cfg(unix)]
     {
@@ -442,7 +472,13 @@ fn weight(id: &str) -> f32 {
 
 pub fn progress(s: &AppState) -> f32 {
     let total: f32 = s.setup.steps.iter().map(|st| weight(&st.id)).sum();
-    let done: f32 = s.setup.steps.iter().filter(|st| !matches!(st.state, StepState::Waiting | StepState::Running)).map(|st| weight(&st.id)).sum();
+    let done: f32 = s
+        .setup
+        .steps
+        .iter()
+        .filter(|st| !matches!(st.state, StepState::Waiting | StepState::Running))
+        .map(|st| weight(&st.id))
+        .sum();
     if total > 0.0 { done / total } else { 0.0 }
 }
 
@@ -470,7 +506,12 @@ pub fn panel(s: &AppState, p: Palette) -> El {
             _ => p.text,
         };
         let mut r = col().w_full().gap(2.0).child(
-            row().w_full().gap(10.0).center_y().child(el().w(16.0).center().child(mark)).child(text(st.label.clone()).font(ty::LABEL).color(color)),
+            row()
+                .w_full()
+                .gap(10.0)
+                .center_y()
+                .child(el().w(16.0).center().child(mark))
+                .child(text(st.label.clone()).font(ty::LABEL).color(color)),
         );
         if let Some(m) = st.message.as_ref().filter(|_| st.state == StepState::Failed) {
             r = r.child(text(m.clone()).font(ty::CAPTION).color(p.text_dim).wrap().pl(26.0));
@@ -484,10 +525,10 @@ pub fn panel(s: &AppState, p: Palette) -> El {
         c = c.child(progress_bar(p, None));
     }
     c = c.child(list);
-    if running(s) {
-        if let Some(line) = last_line(s) {
-            c = c.child(text(line.to_owned()).font(ty::CAPTION).color(p.text_dim).truncate());
-        }
+    if running(s)
+        && let Some(line) = last_line(s)
+    {
+        c = c.child(text(line.to_owned()).font(ty::CAPTION).color(p.text_dim).truncate());
     }
     if s.setup.show_log && !s.setup.log.is_empty() {
         // One line each, cut with an ellipsis: a long path or a progress bar never widens the card.
@@ -506,7 +547,16 @@ pub fn toggle_log(s: &mut AppState) {
 }
 
 pub fn scene_running(s: &mut AppState) {
-    let states = [StepState::Ok, StepState::Ok, StepState::Ok, StepState::Running, StepState::Waiting, StepState::Waiting, StepState::Waiting, StepState::Waiting];
+    let states = [
+        StepState::Ok,
+        StepState::Ok,
+        StepState::Ok,
+        StepState::Running,
+        StepState::Waiting,
+        StepState::Waiting,
+        StepState::Waiting,
+        StepState::Waiting,
+    ];
     let plan = [
         ("toolchain", "System tools"),
         ("applio_source", "Voice training tools: source"),
@@ -523,10 +573,14 @@ pub fn scene_running(s: &mut AppState) {
         .zip(states)
         .map(|((id, label), state)| Step { id: (*id).into(), label: (*label).into(), state, message: None })
         .collect();
-    s.setup.log = ["== Speech model ==", "OmniVoice model: downloading k2-fsa/OmniVoice (about 3.3 GB, resumable)...", "model.safetensors:  41%|████      | 1.35G/3.30G [00:42<01:01, 31.8MB/s]"]
-        .iter()
-        .map(|l| (*l).to_owned())
-        .collect();
+    s.setup.log = [
+        "== Speech model ==",
+        "OmniVoice model: downloading k2-fsa/OmniVoice (about 3.3 GB, resumable)...",
+        "model.safetensors:  41%|████      | 1.35G/3.30G [00:42<01:01, 31.8MB/s]",
+    ]
+    .iter()
+    .map(|l| (*l).to_owned())
+    .collect();
     s.setup.show_log = true;
 }
 
@@ -557,30 +611,65 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
             }
         };
         let check = if required {
-            row().w_full().gap(12.0).items_start().opacity(0.5).help("Always installed: everything else builds on it.")
-                .child(el().size(20.0, 20.0).radius(super::theme::radius::CONTROL * 0.4).fill(p.text_faint).center()
-                    .child(icon_el(&icons::CHECK, 13.0, p.bg_top)))
+            row()
+                .w_full()
+                .gap(12.0)
+                .items_start()
+                .opacity(0.5)
+                .help("Always installed: everything else builds on it.")
+                .child(
+                    el().size(20.0, 20.0)
+                        .radius(super::theme::radius::CONTROL * 0.4)
+                        .fill(p.text_faint)
+                        .center()
+                        .child(icon_el(&icons::CHECK, 13.0, p.bg_top)),
+                )
                 .child(text(label).font(ty::BODY).color(p.text))
         } else {
             kit::checkbox(&p, on, &label, toggle)
         };
         list = list.child(
-            col().key(format!("component-{id}")).w_full().gap(2.0)
+            col()
+                .key(format!("component-{id}"))
+                .w_full()
+                .gap(2.0)
                 .child(check)
                 .child(text(c.what).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)),
         );
     }
     let all = s.setup.left_out.is_empty();
     let toggle_all = move |s: &mut AppState| {
-        s.setup.left_out = if all { COMPONENTS.iter().filter(|c| c.id != "speech").map(|c| c.id.to_owned()).collect() } else { Vec::new() };
+        s.setup.left_out = if all {
+            COMPONENTS.iter().filter(|c| c.id != "speech").map(|c| c.id.to_owned()).collect()
+        } else {
+            Vec::new()
+        };
     };
-    col().w_full().gap(10.0)
-        .child(row().w_full().center_y().justify_between()
-            .child(text(format!("What to install · about {total:.0} GB")).font(ty::LABEL).color(p.text))
-            .child(super::components::Button::new(if all { "Only what is required" } else { "Everything" }).ghost().small()
-                .key("components-all").on_press(toggle_all).build(p)))
+    col()
+        .w_full()
+        .gap(10.0)
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .justify_between()
+                .child(text(format!("What to install · about {total:.0} GB")).font(ty::LABEL).color(p.text))
+                .child(
+                    super::components::Button::new(if all { "Only what is required" } else { "Everything" })
+                        .ghost()
+                        .small()
+                        .key("components-all")
+                        .on_press(toggle_all)
+                        .build(p),
+                ),
+        )
         .child(list)
-        .child(text("Anything left out can be installed later in one click, on the screen that needs it.").font(ty::CAPTION).color(p.text_dim).wrap())
+        .child(
+            text("Anything left out can be installed later in one click, on the screen that needs it.")
+                .font(ty::CAPTION)
+                .color(p.text_dim)
+                .wrap(),
+        )
 }
 
 fn turned_off(s: &AppState, id: &str) -> bool {
@@ -591,12 +680,35 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
     use super::components::{Button, glass_card};
     let Some(c) = component(id) else { return el() };
     if turned_off(s, id) {
-        let row_ = row().key(format!("install-card-{id}")).w_full().px(14.0).py(12.0).gap(12.0).center_y()
+        let row_ = row()
+            .key(format!("install-card-{id}"))
+            .w_full()
+            .px(14.0)
+            .py(12.0)
+            .gap(12.0)
+            .center_y()
             .child(icon_el(&icons::SPARKLE, 16.0, p.accent))
-            .child(col().grow(1.0).min_w(0.0).gap(4.0)
-                .child(text(format!("{} is turned off", c.label)).font(ty::LABEL).color(p.text))
-                .child(text("Its files are still installed. Turn it on in Modules (the status pill at the top).").font(ty::CAPTION).color(p.text_dim).wrap()))
-            .child(Button::new("Modules").ghost().small().key(format!("install-{id}-modules")).on_press(super::modules::open).build(p));
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(4.0)
+                    .child(text(format!("{} is turned off", c.label)).font(ty::LABEL).color(p.text))
+                    .child(
+                        text("Its files are still installed. Turn it on in Modules (the status pill at the top).")
+                            .font(ty::CAPTION)
+                            .color(p.text_dim)
+                            .wrap(),
+                    ),
+            )
+            .child(
+                Button::new("Modules")
+                    .ghost()
+                    .small()
+                    .key(format!("install-{id}-modules"))
+                    .on_press(super::modules::open)
+                    .build(p),
+            );
         return glass_card(p).w_full().child(row_);
     }
     let this = s.setup.adding.as_deref() == Some(id);
@@ -610,11 +722,17 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
         Some(Button::new("Cancel").ghost().small().key(format!("install-{id}-cancel")).on_press(cancel).build(p))
     } else {
         let failed = this && matches!(s.setup.phase, Phase::Error(_) | Phase::Finished(false));
-        info = info
-            .child(text(format!("{} is not installed", c.label)).font(ty::LABEL).color(p.text))
-            .child(text(format!("{}{} About {:.1} GB; it installs in the background, and the engine restarts when it is done.",
-                if needed_for.is_empty() { String::new() } else { format!("{needed_for} ") }, c.what, c.gb))
-                .font(ty::CAPTION).color(p.text_dim).wrap());
+        info = info.child(text(format!("{} is not installed", c.label)).font(ty::LABEL).color(p.text)).child(
+            text(format!(
+                "{}{} About {:.1} GB; it installs in the background, and the engine restarts when it is done.",
+                if needed_for.is_empty() { String::new() } else { format!("{needed_for} ") },
+                c.what,
+                c.gb
+            ))
+            .font(ty::CAPTION)
+            .color(p.text_dim)
+            .wrap(),
+        );
         if failed {
             let why = match &s.setup.phase {
                 Phase::Error(e) => e.clone(),
@@ -625,14 +743,23 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
         let id_owned = id.to_owned();
         Some(
             Button::new(if failed { "Try again".to_owned() } else { format!("Install · {:.1} GB", c.gb) })
-                .primary().small().icon(&icons::SPARKLE).key(format!("install-{id}"))
+                .primary()
+                .small()
+                .icon(&icons::SPARKLE)
+                .key(format!("install-{id}"))
                 .disabled(running(s))
                 .help(if running(s) { "Another setup is running; this can start when it is done." } else { "" })
                 .on_press(move |s| install(s, &id_owned))
                 .build(p),
         )
     };
-    let row_ = row().key(format!("install-card-{id}")).w_full().px(14.0).py(12.0).gap(12.0).center_y()
+    let row_ = row()
+        .key(format!("install-card-{id}"))
+        .w_full()
+        .px(14.0)
+        .py(12.0)
+        .gap(12.0)
+        .center_y()
         .child(icon_el(&icons::SPARKLE, 16.0, p.accent))
         .child(info)
         .children(button);
@@ -653,19 +780,46 @@ pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
     let this = s.setup.adding.as_deref() == Some(id) && running(s);
     let id_owned = id.to_owned();
     if turned_off(s, id) {
-        return row().key(format!("install-line-{id}")).w_full().gap(8.0).center_y()
-            .child(text(format!("{what}: {} is turned off.", mid_sentence(c.label))).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).wrap())
-            .child(Button::new("Modules").ghost().small().key(format!("install-line-{id}-modules")).on_press(super::modules::open).build(p));
+        return row()
+            .key(format!("install-line-{id}"))
+            .w_full()
+            .gap(8.0)
+            .center_y()
+            .child(
+                text(format!("{what}: {} is turned off.", mid_sentence(c.label)))
+                    .font(ty::CAPTION)
+                    .color(p.text_dim)
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .wrap(),
+            )
+            .child(
+                Button::new("Modules")
+                    .ghost()
+                    .small()
+                    .key(format!("install-line-{id}-modules"))
+                    .on_press(super::modules::open)
+                    .build(p),
+            );
     }
     let line = if this {
         format!("Installing {}… {:.0}%", c.label, progress(s) * 100.0)
     } else {
         format!("{what} needs {} ({:.1} GB).", mid_sentence(c.label), c.gb)
     };
-    row().key(format!("install-line-{id}")).w_full().gap(8.0).center_y()
+    row()
+        .key(format!("install-line-{id}"))
+        .w_full()
+        .gap(8.0)
+        .center_y()
         .child(text(line).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).wrap())
         .children((!this).then(|| {
-            Button::new("Install").ghost().small().key(format!("install-line-{id}-go")).disabled(running(s))
-                .on_press(move |s| install(s, &id_owned)).build(p)
+            Button::new("Install")
+                .ghost()
+                .small()
+                .key(format!("install-line-{id}-go"))
+                .disabled(running(s))
+                .on_press(move |s| install(s, &id_owned))
+                .build(p)
         }))
 }

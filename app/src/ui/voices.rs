@@ -58,7 +58,10 @@ fn send(s: &mut AppState, tag: Tag, method: &str, params: Value) {
         Some(id) => {
             s.voices.pending.insert(id, tag);
         }
-        None => s.voices.error = Some("The voice engine is not running. Check the status at the top and press Retry.".into()),
+        None => {
+            s.voices.error =
+                Some("The voice engine is not running. Check the status at the top and press Retry.".into())
+        }
     }
 }
 
@@ -91,13 +94,13 @@ pub fn settle(s: &mut AppState) -> bool {
             shell::refresh_voices(s);
         }
     }
-    if let Some(id) = s.voices.restore.clone() {
-        if !s.shell.voices.is_empty() {
-            s.voices.restore = None;
-            if s.shell.voices.iter().any(|v| v.id == id) {
-                s.shell.active_voice = Some(id);
-                changed = true;
-            }
+    if let Some(id) = s.voices.restore.clone()
+        && !s.shell.voices.is_empty()
+    {
+        s.voices.restore = None;
+        if s.shell.voices.iter().any(|v| v.id == id) {
+            s.shell.active_voice = Some(id);
+            changed = true;
         }
     }
     crate::ui::refclip::settle(s) | changed
@@ -181,21 +184,20 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     let v = &s.voices;
 
-    let create_card = kit::card(&p)
-        .gap(12.0)
-        .child(text("New voice").font(ty::TITLE).color(p.text))
-        .child(
-            row()
-                .w_full()
-                .gap(10.0)
-                .center_y()
-                .child(
-                    kit::submit_field(&p, &v.new_name, "Name your voice, for example \"My voice\"", |s: &mut AppState| {
-                        &mut s.voices.new_name
-                    }, create),
-                )
-                .child(kit::button(&p, "Create voice", BtnKind::Primary, !v.new_name.text.trim().is_empty(), create)),
-        );
+    let create_card = kit::card(&p).gap(12.0).child(text("New voice").font(ty::TITLE).color(p.text)).child(
+        row()
+            .w_full()
+            .gap(10.0)
+            .center_y()
+            .child(kit::submit_field(
+                &p,
+                &v.new_name,
+                "Name your voice, for example \"My voice\"",
+                |s: &mut AppState| &mut s.voices.new_name,
+                create,
+            ))
+            .child(kit::button(&p, "Create voice", BtnKind::Primary, !v.new_name.text.trim().is_empty(), create)),
+    );
 
     let mut list = col().w_full().gap(14.0);
     if s.shell.voices.is_empty() {
@@ -205,15 +207,24 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         list = list.child(voice_card(s, &p, info));
     }
 
-    let refresh = super::components::icon_button(p, "voices-refresh", &super::components::icons::REFRESH,
-        "Reload the voices from the data folder (voices added or removed on disk)", shell::refresh_voices);
-    let mut body = col().w_full().gap(18.0).child(row().w_full().gap(12.0)
-        .child(el().grow(1.0).min_w(0.0).child(kit::header(
-            &p,
-            "Your voices",
-            "Each voice keeps its own recordings and trained model. Pick one to work on.",
-        )))
-        .child(if shell::voices_loading(s) { refresh.opacity(0.5) } else { refresh }));
+    let refresh = super::components::icon_button(
+        p,
+        "voices-refresh",
+        &super::components::icons::REFRESH,
+        "Reload the voices from the data folder (voices added or removed on disk)",
+        shell::refresh_voices,
+    );
+    let mut body = col().w_full().gap(18.0).child(
+        row()
+            .w_full()
+            .gap(12.0)
+            .child(el().grow(1.0).min_w(0.0).child(kit::header(
+                &p,
+                "Your voices",
+                "Each voice keeps its own recordings and trained model. Pick one to work on.",
+            )))
+            .child(if shell::voices_loading(s) { refresh.opacity(0.5) } else { refresh }),
+    );
     if let Some(err) = &v.error {
         body = body.child(kit::notice(&p, Tone::Danger, err));
     }
@@ -254,9 +265,13 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
         Some(r) => {
             let rid = id.clone();
             let _ = rid;
-            kit::submit_field(p, &r.edit, "Voice name", |s: &mut AppState| {
-                &mut s.voices.renaming.as_mut().expect("renaming").edit
-            }, commit_rename)
+            kit::submit_field(
+                p,
+                &r.edit,
+                "Voice name",
+                |s: &mut AppState| &mut s.voices.renaming.as_mut().expect("renaming").edit,
+                commit_rename,
+            )
         }
         None => text(info.name.clone()).font(ty::TITLE).color(p.text).truncate(),
     };
@@ -268,7 +283,11 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
         if info.trained { Tone::Success } else { Tone::Warning },
     ));
     if let Some(pz) = &info.paused {
-        let label = if pz.interrupted { format!("Interrupted {}/{}", pz.epoch, pz.total_epochs) } else { format!("Paused {}/{}", pz.epoch, pz.total_epochs) };
+        let label = if pz.interrupted {
+            format!("Interrupted {}/{}", pz.epoch, pz.total_epochs)
+        } else {
+            format!("Paused {}/{}", pz.epoch, pz.total_epochs)
+        };
         meta = meta.child(kit::badge(p, &label, Tone::Warning));
     }
     if active {
@@ -287,10 +306,14 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     let info_col = col().grow(1.0).min_w(0.0).gap(6.0).child(title).child(meta);
 
     let mut actions = row().gap(8.0).center_y();
-    if let Some(_) = renaming {
-        actions = actions
-            .child(kit::button(p, "Save", BtnKind::Primary, true, commit_rename))
-            .child(kit::button(p, "Cancel", BtnKind::Glass, true, |s: &mut AppState| s.voices.renaming = None));
+    if renaming.is_some() {
+        actions = actions.child(kit::button(p, "Save", BtnKind::Primary, true, commit_rename)).child(kit::button(
+            p,
+            "Cancel",
+            BtnKind::Glass,
+            true,
+            |s: &mut AppState| s.voices.renaming = None,
+        ));
     } else if confirming {
         let did = id.clone();
         actions = actions
@@ -300,9 +323,10 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     } else {
         let (sel, ren, del) = (id.clone(), id.clone(), id.clone());
         if !active {
-            actions = actions.child(kit::button(p, "Use this voice", BtnKind::Primary, true, move |s: &mut AppState| {
-                select(s, &sel)
-            }));
+            actions =
+                actions.child(kit::button(p, "Use this voice", BtnKind::Primary, true, move |s: &mut AppState| {
+                    select(s, &sel)
+                }));
         }
         actions = actions
             .child(kit::button(p, "Rename", BtnKind::Ghost, true, move |s: &mut AppState| start_rename(s, &ren)))
@@ -326,7 +350,11 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     }
     if active && renaming.is_none() && !confirming {
         card = card.child(crate::ui::refclip::section(s, p, info));
-        let go = row().w_full().gap(8.0).center_y().child(text("Next:").font(ty::CAPTION).color(p.text_faint))
+        let go = row()
+            .w_full()
+            .gap(8.0)
+            .center_y()
+            .child(text("Next:").font(ty::CAPTION).color(p.text_faint))
             .child(kit::button(p, "Record", BtnKind::Glass, true, |s: &mut AppState| s.screen = Screen::Record))
             .child(kit::button(p, "Train", BtnKind::Glass, true, |s: &mut AppState| s.screen = Screen::Train))
             .child(kit::button(p, "Speak", BtnKind::Glass, true, |s: &mut AppState| s.screen = Screen::Speak));
@@ -337,9 +365,36 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
 
 fn demo_voices() -> Vec<VoiceInfo> {
     vec![
-        VoiceInfo { preset: None, id: "my-voice".into(), name: "My voice".into(), dataset_minutes: 6.4, parts: 5, trained: true, trained_epochs: 300, ..Default::default() },
-        VoiceInfo { preset: None, id: "narrator".into(), name: "Narrator".into(), dataset_minutes: 2.1, parts: 2, trained: false, trained_epochs: 0, ..Default::default() },
-        VoiceInfo { preset: None, id: "quick".into(), name: "Quick test".into(), dataset_minutes: 0.0, parts: 0, trained: false, trained_epochs: 0, ..Default::default() },
+        VoiceInfo {
+            preset: None,
+            id: "my-voice".into(),
+            name: "My voice".into(),
+            dataset_minutes: 6.4,
+            parts: 5,
+            trained: true,
+            trained_epochs: 300,
+            ..Default::default()
+        },
+        VoiceInfo {
+            preset: None,
+            id: "narrator".into(),
+            name: "Narrator".into(),
+            dataset_minutes: 2.1,
+            parts: 2,
+            trained: false,
+            trained_epochs: 0,
+            ..Default::default()
+        },
+        VoiceInfo {
+            preset: None,
+            id: "quick".into(),
+            name: "Quick test".into(),
+            dataset_minutes: 0.0,
+            parts: 0,
+            trained: false,
+            trained_epochs: 0,
+            ..Default::default()
+        },
     ]
 }
 
@@ -351,7 +406,14 @@ pub(crate) fn scene_list(s: &mut AppState) {
 }
 fn scene_paused(s: &mut AppState) {
     scene_list(s);
-    let paused = |epoch, interrupted| Some(crate::engine::protocol::PausedTraining { epoch, total_epochs: 300, paused_at: Some("2026-11-11T17:42:10".into()), interrupted });
+    let paused = |epoch, interrupted| {
+        Some(crate::engine::protocol::PausedTraining {
+            epoch,
+            total_epochs: 300,
+            paused_at: Some("2026-11-11T17:42:10".into()),
+            interrupted,
+        })
+    };
     s.shell.voices[1].paused = paused(118, false);
     s.shell.voices[2].paused = paused(45, true);
 }
@@ -366,7 +428,11 @@ fn scene_loading(s: &mut AppState) {
 }
 fn ready(s: &mut AppState) {
     s.screen = Screen::Voices;
-    s.shell.set_engine(shell::EngineStatus::Ready { device: None, tts: Some("ready".into()), rvc: Some("ready".into()) });
+    s.shell.set_engine(shell::EngineStatus::Ready {
+        device: None,
+        tts: Some("ready".into()),
+        rvc: Some("ready".into()),
+    });
 }
 fn scene_rename(s: &mut AppState) {
     scene_list(s);
@@ -381,7 +447,7 @@ fn scene_error(s: &mut AppState) {
     s.voices.error = Some("The engine stopped unexpectedly. Restart the app.".into());
 }
 
-pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {
+pub fn scenes() -> &'static [super::Scene] {
     &[
         ("voices-list", scene_list),
         ("voices-paused", scene_paused),
@@ -430,7 +496,13 @@ pub(crate) mod kit {
         components::glass_panel(*p).w_full().padding(24.0)
     }
 
-    pub fn button(p: &Palette, label: &str, kind: BtnKind, enabled: bool, on_press: impl Fn(&mut AppState) + 'static) -> El {
+    pub fn button(
+        p: &Palette,
+        label: &str,
+        kind: BtnKind,
+        enabled: bool,
+        on_press: impl Fn(&mut AppState) + 'static,
+    ) -> El {
         let b = Button::new(label).small().disabled(!enabled).on_press(on_press);
         match kind {
             BtnKind::Primary => b.primary(),
@@ -519,7 +591,9 @@ pub(crate) mod kit {
         let mark = if checked {
             el().size(20.0, 20.0).radius(radius::CONTROL * 0.4).fill(p.accent).child(
                 rune::canvas(
-                    Shape::new().stroke(vec![[5.0, 10.5], [8.5, 14.0], [15.0, 6.5]], 2.2, p.on_accent).view_box(20.0, 20.0),
+                    Shape::new()
+                        .stroke(vec![[5.0, 10.5], [8.5, 14.0], [15.0, 6.5]], 2.2, p.on_accent)
+                        .view_box(20.0, 20.0),
                 )
                 .size(20.0, 20.0),
             )

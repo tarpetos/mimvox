@@ -78,7 +78,7 @@ def word_phonemes(word: str) -> list[str]:
         nxt = w[i + 1] if i + 1 < n else "#"
 
         def at(k: int) -> str:
-            return w[i + k] if i + k < n else "#"
+            return w[i + k] if i + k < n else "#"  # noqa: B023 - called only within this iteration
 
         if r.startswith("eau"):
             out.append("o"); i += 3; continue  # noqa: E702

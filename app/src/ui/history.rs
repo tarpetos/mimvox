@@ -86,8 +86,13 @@ pub fn loading(s: &AppState, kind: Kind) -> bool {
 }
 
 pub fn refresh_button(s: &AppState, p: Palette, kind: Kind) -> El {
-    let b = super::components::icon_button(p, &format!("{}-refresh", kind_str(kind)), &super::components::icons::REFRESH,
-        "Reload from the outputs folder (files added or removed on disk)", move |s| refresh(s, kind));
+    let b = super::components::icon_button(
+        p,
+        &format!("{}-refresh", kind_str(kind)),
+        &super::components::icons::REFRESH,
+        "Reload from the outputs folder (files added or removed on disk)",
+        move |s| refresh(s, kind),
+    );
     if loading(s, kind) { b.opacity(0.5) } else { b }
 }
 
@@ -186,7 +191,9 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     s.history.listing(kind).req = None;
                     match result.clone().and_then(protocol::parse_result::<OutputsPage>) {
                         Ok(page) => apply(s, kind, page, older),
-                        Err(e) if older => shell::toast(s, Tone::Danger, format!("Could not load older results: {}", e.message)),
+                        Err(e) if older => {
+                            shell::toast(s, Tone::Danger, format!("Could not load older results: {}", e.message))
+                        }
                         Err(_) => {}
                     }
                     return;
@@ -196,7 +203,11 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 let (_, kind, item) = s.history.play.remove(i);
                 match result {
                     Ok(v) => {
-                        let Some(path) = v.get("path_play").and_then(Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from) else { return };
+                        let Some(path) =
+                            v.get("path_play").and_then(Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from)
+                        else {
+                            return;
+                        };
                         if !playable_now(&path) {
                             shell::toast(s, Tone::Danger, "Could not play the result: the engine gave no WAV to play.");
                             return;
@@ -209,7 +220,11 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     }
                     Err(e) if e.code == "not_found" => {
                         drop_result(s, kind, item);
-                        shell::toast(s, Tone::Warning, "That result's file was deleted, so it was removed from the list.");
+                        shell::toast(
+                            s,
+                            Tone::Warning,
+                            "That result's file was deleted, so it was removed from the list.",
+                        );
                     }
                     Err(e) => shell::toast(s, Tone::Danger, format!("Could not play the result: {}", e.message)),
                 }

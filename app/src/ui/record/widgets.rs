@@ -75,9 +75,5 @@ pub fn fmt_dur(secs: f32) -> String {
 }
 
 pub fn fmt_min(minutes: f32) -> String {
-    if minutes < 1.0 {
-        format!("{} s", (minutes * 60.0).round() as u32)
-    } else {
-        format!("{minutes:.1} min")
-    }
+    if minutes < 1.0 { format!("{} s", (minutes * 60.0).round() as u32) } else { format!("{minutes:.1} min") }
 }

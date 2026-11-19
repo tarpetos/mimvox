@@ -661,19 +661,55 @@ impl TtsDone {
 
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
-    TtsChunk { job: Option<String>, chunk: TtsChunk },
-    TtsDone { job: Option<String>, done: TtsDone },
-    TtsError { job: Option<String>, error: EngineError },
-    TrainProgress { job: Option<String>, progress: TrainProgress },
-    TrainDone { job: Option<String>, done: TrainDone },
-    TrainPaused { job: Option<String>, paused: TrainPaused },
-    TrainError { job: Option<String>, error: EngineError },
+    TtsChunk {
+        job: Option<String>,
+        chunk: TtsChunk,
+    },
+    TtsDone {
+        job: Option<String>,
+        done: TtsDone,
+    },
+    TtsError {
+        job: Option<String>,
+        error: EngineError,
+    },
+    TrainProgress {
+        job: Option<String>,
+        progress: TrainProgress,
+    },
+    TrainDone {
+        job: Option<String>,
+        done: TrainDone,
+    },
+    TrainPaused {
+        job: Option<String>,
+        paused: TrainPaused,
+    },
+    TrainError {
+        job: Option<String>,
+        error: EngineError,
+    },
     VoiceWarm(VoiceWarm),
-    RedubProgress { job: Option<String>, progress: RedubProgress },
-    RedubTranscript { job: Option<String>, transcript: RedubTranscript },
-    RedubReview { job: Option<String>, review: RedubReview },
-    RedubDone { job: Option<String>, done: RedubDone },
-    RedubError { job: Option<String>, error: EngineError },
+    RedubProgress {
+        job: Option<String>,
+        progress: RedubProgress,
+    },
+    RedubTranscript {
+        job: Option<String>,
+        transcript: RedubTranscript,
+    },
+    RedubReview {
+        job: Option<String>,
+        review: RedubReview,
+    },
+    RedubDone {
+        job: Option<String>,
+        done: RedubDone,
+    },
+    RedubError {
+        job: Option<String>,
+        error: EngineError,
+    },
     /// Unknown event or a payload that did not match the contract (kept raw).
     Other(Event),
 }
@@ -866,17 +902,20 @@ pub fn tts_generate(
 ) -> Request {
     (
         "tts.generate",
-        with_accent(json!({
-            "exact_stress": exact_stress,
-            "voice_id": voice_id,
-            "text": text,
-            "expressiveness": expressiveness,
-            "voice_match": voice_match,
-            "quality": quality.as_str(),
-            "speed": speed,
-            "language": language,
-            "output_format": output_format,
-        }), accent),
+        with_accent(
+            json!({
+                "exact_stress": exact_stress,
+                "voice_id": voice_id,
+                "text": text,
+                "expressiveness": expressiveness,
+                "voice_match": voice_match,
+                "quality": quality.as_str(),
+                "speed": speed,
+                "language": language,
+                "output_format": output_format,
+            }),
+            accent,
+        ),
     )
 }
 
@@ -898,8 +937,16 @@ pub fn redub_probe(path: &std::path::Path) -> Request {
 }
 
 /// `language` is `"auto"` or an ISO code; `translator: None` picks the best one installed.
-pub fn redub_transcribe(path: &std::path::Path, language: &str, translate_to: Option<&str>, translator: Option<&str>) -> Request {
-    ("redub.transcribe", json!({ "path": path, "language": language, "translate_to": translate_to, "translator": translator }))
+pub fn redub_transcribe(
+    path: &std::path::Path,
+    language: &str,
+    translate_to: Option<&str>,
+    translator: Option<&str>,
+) -> Request {
+    (
+        "redub.transcribe",
+        json!({ "path": path, "language": language, "translate_to": translate_to, "translator": translator }),
+    )
 }
 
 /// Preloads models for `path`; `separate` also splits voice and background. Failures are harmless.

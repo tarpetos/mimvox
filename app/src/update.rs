@@ -118,7 +118,8 @@ pub fn releases() -> Result<Vec<Release>, String> {
         .user_agent(concat!("mimvox/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client.get(RELEASES_API).header("Accept", "application/vnd.github+json").send().map_err(|e| e.to_string())?;
+    let response =
+        client.get(RELEASES_API).header("Accept", "application/vnd.github+json").send().map_err(|e| e.to_string())?;
     let status = response.status();
     if status.as_u16() == 403 || status.as_u16() == 429 {
         return Err("GitHub is limiting requests from this network for now. Try again in an hour.".into());
@@ -136,7 +137,8 @@ fn listed(list: Vec<ApiRelease>) -> Vec<Release> {
         .into_iter()
         .filter(|r| !r.draft && !r.prerelease)
         .filter_map(|r| {
-            let v = Version::parse(r.tag_name.trim_start_matches('v')).ok().filter(|v| *v >= oldest && v.pre.is_empty())?;
+            let v =
+                Version::parse(r.tag_name.trim_start_matches('v')).ok().filter(|v| *v >= oldest && v.pre.is_empty())?;
             let date = r.published_at.as_deref().and_then(|d| d.get(..10)).unwrap_or_default().to_owned();
             Some((v.clone(), Release { version: v.to_string(), date, notes: r.body.unwrap_or_default() }))
         })
@@ -243,7 +245,14 @@ mod tests {
 
     #[test]
     fn lists_releases_from_the_oldest_installable_one_newest_first() {
-        let got = listed(vec![api("v0.2.0", false), api("v0.1.5", true), api("v0.1.4", false), api("v0.3.0", false), api("v0.4.0", true), api("v0.10.0", false)]);
+        let got = listed(vec![
+            api("v0.2.0", false),
+            api("v0.1.5", true),
+            api("v0.1.4", false),
+            api("v0.3.0", false),
+            api("v0.4.0", true),
+            api("v0.10.0", false),
+        ]);
         let versions: Vec<_> = got.iter().map(|r| r.version.as_str()).collect();
         assert_eq!(versions, ["0.10.0", "0.3.0", "0.2.0"]);
         assert_eq!(got[1].date, "2026-11-14");

@@ -1,8 +1,8 @@
 use super::theme::{Palette, motion, radius, ty};
 use crate::state::AppState;
 use rune::{
-    Align, Color, Cycle, Drag, El, Icon, Key, LoopSpec, Phase, Shadow, TextEdit, TextStyle, Transition, col, edit_access,
-    el, icon, row, text, text_input,
+    Align, Color, Cycle, Drag, El, Icon, Key, LoopSpec, Phase, Shadow, TextEdit, TextStyle, Transition, col,
+    edit_access, el, icon, row, text, text_input,
 };
 use std::f32::consts::PI;
 use std::rc::Rc;
@@ -26,24 +26,64 @@ pub mod icons {
     stroke_icon!(PLAY, "play", r#"<path d="M5.2 3.4L12.4 8L5.2 12.6Z"/>"#);
     stroke_icon!(PAUSE, "pause", r#"<path d="M5.6 3.8V12.2M10.4 3.8V12.2"/>"#);
     stroke_icon!(STOP, "stop", r#"<rect x="4" y="4" width="8" height="8" rx="1.6"/>"#);
-    stroke_icon!(CHIP, "chip", r#"<rect x="4" y="4" width="8" height="8" rx="1.6"/><path d="M6.6 6.6H9.4V9.4H6.6ZM6 1.8V4M10 1.8V4M6 12V14.2M10 12V14.2M1.8 6H4M1.8 10H4M12 6H14.2M12 10H14.2"/>"#);
-    stroke_icon!(FOLDER, "folder", r#"<path d="M2 4.6A1.6 1.6 0 0 1 3.6 3H6.2L7.7 4.8H12.4A1.6 1.6 0 0 1 14 6.4V11.4A1.6 1.6 0 0 1 12.4 13H3.6A1.6 1.6 0 0 1 2 11.4Z"/>"#);
-    stroke_icon!(OPEN, "open-external", r#"<path d="M9.2 2.8H13.2V6.8M13.2 2.8L7.6 8.4M11 9.6V11.6A1.4 1.4 0 0 1 9.6 13H4.4A1.4 1.4 0 0 1 3 11.6V6.4A1.4 1.4 0 0 1 4.4 5H6.4"/>"#);
-    stroke_icon!(FILE, "file", r#"<path d="M4.2 2H9L12.2 5.2V13.2A.8.8 0 0 1 11.4 14H4.6A.8.8 0 0 1 3.8 13.2V2.8A.8.8 0 0 1 4.2 2Z"/><path d="M9 2V5.4H12.2"/>"#);
-    stroke_icon!(MIC, "mic", r#"<rect x="6" y="1.8" width="4" height="7.4" rx="2"/><path d="M3.7 7.6A4.3 4.3 0 0 0 12.3 7.6M8 11.9V14.2"/>"#);
-    stroke_icon!(WAVE, "waveform", r#"<path d="M2.2 8V8M4.7 5.4V10.6M7.2 2.8V13.2M9.8 5.8V10.2M12.3 4V12M14 7.4V8.6"/>"#);
+    stroke_icon!(
+        CHIP,
+        "chip",
+        r#"<rect x="4" y="4" width="8" height="8" rx="1.6"/><path d="M6.6 6.6H9.4V9.4H6.6ZM6 1.8V4M10 1.8V4M6 12V14.2M10 12V14.2M1.8 6H4M1.8 10H4M12 6H14.2M12 10H14.2"/>"#
+    );
+    stroke_icon!(
+        FOLDER,
+        "folder",
+        r#"<path d="M2 4.6A1.6 1.6 0 0 1 3.6 3H6.2L7.7 4.8H12.4A1.6 1.6 0 0 1 14 6.4V11.4A1.6 1.6 0 0 1 12.4 13H3.6A1.6 1.6 0 0 1 2 11.4Z"/>"#
+    );
+    stroke_icon!(
+        OPEN,
+        "open-external",
+        r#"<path d="M9.2 2.8H13.2V6.8M13.2 2.8L7.6 8.4M11 9.6V11.6A1.4 1.4 0 0 1 9.6 13H4.4A1.4 1.4 0 0 1 3 11.6V6.4A1.4 1.4 0 0 1 4.4 5H6.4"/>"#
+    );
+    stroke_icon!(
+        FILE,
+        "file",
+        r#"<path d="M4.2 2H9L12.2 5.2V13.2A.8.8 0 0 1 11.4 14H4.6A.8.8 0 0 1 3.8 13.2V2.8A.8.8 0 0 1 4.2 2Z"/><path d="M9 2V5.4H12.2"/>"#
+    );
+    stroke_icon!(
+        MIC,
+        "mic",
+        r#"<rect x="6" y="1.8" width="4" height="7.4" rx="2"/><path d="M3.7 7.6A4.3 4.3 0 0 0 12.3 7.6M8 11.9V14.2"/>"#
+    );
+    stroke_icon!(
+        WAVE,
+        "waveform",
+        r#"<path d="M2.2 8V8M4.7 5.4V10.6M7.2 2.8V13.2M9.8 5.8V10.2M12.3 4V12M14 7.4V8.6"/>"#
+    );
     stroke_icon!(CHECK, "check", r#"<path d="M3.4 8.4L6.6 11.6L12.6 4.6"/>"#);
     stroke_icon!(CLOSE, "close", r#"<path d="M4 4L12 12M12 4L4 12"/>"#);
     stroke_icon!(REFRESH, "refresh", r#"<path d="M13.2 8A5.2 5.2 0 1 1 11.6 4.2M13.2 2.4V5.6H10"/>"#);
     stroke_icon!(CHEVRON_DOWN, "chevron-down", r#"<path d="M4.2 6.3L8 10L11.8 6.3"/>"#);
     stroke_icon!(ARROW_RIGHT, "arrow-right", r#"<path d="M3 8H13M9 4L13 8L9 12"/>"#);
     stroke_icon!(PLUS, "plus", r#"<path d="M8 3V13M3 8H13"/>"#);
-    stroke_icon!(USER, "user", r#"<circle cx="8" cy="5.6" r="2.6"/><path d="M3 13.4C3.4 10.9 5.4 9.6 8 9.6S12.6 10.9 13 13.4"/>"#);
+    stroke_icon!(
+        USER,
+        "user",
+        r#"<circle cx="8" cy="5.6" r="2.6"/><path d="M3 13.4C3.4 10.9 5.4 9.6 8 9.6S12.6 10.9 13 13.4"/>"#
+    );
     stroke_icon!(ALERT, "alert", r#"<path d="M8 2.4L14 12.8H2Z"/><path d="M8 6.6V9.4M8 11.2V11.3"/>"#);
-    stroke_icon!(SPARKLE, "sparkle", r#"<path d="M7.2 2.6L8.5 6L11.9 7.3L8.5 8.6L7.2 12L5.9 8.6L2.5 7.3L5.9 6Z"/><path d="M12.4 1.8V4.2M11.2 3H13.6"/>"#);
-    stroke_icon!(TRASH, "trash", r#"<path d="M3 4.4H13M6.4 4.4V3A.8.8 0 0 1 7.2 2.2H8.8A.8.8 0 0 1 9.6 3V4.4M4.2 4.4L4.8 12.8A1 1 0 0 0 5.8 13.8H10.2A1 1 0 0 0 11.2 12.8L11.8 4.4"/>"#);
+    stroke_icon!(
+        SPARKLE,
+        "sparkle",
+        r#"<path d="M7.2 2.6L8.5 6L11.9 7.3L8.5 8.6L7.2 12L5.9 8.6L2.5 7.3L5.9 6Z"/><path d="M12.4 1.8V4.2M11.2 3H13.6"/>"#
+    );
+    stroke_icon!(
+        TRASH,
+        "trash",
+        r#"<path d="M3 4.4H13M6.4 4.4V3A.8.8 0 0 1 7.2 2.2H8.8A.8.8 0 0 1 9.6 3V4.4M4.2 4.4L4.8 12.8A1 1 0 0 0 5.8 13.8H10.2A1 1 0 0 0 11.2 12.8L11.8 4.4"/>"#
+    );
     stroke_icon!(POWER, "power", r#"<path d="M8 2.2V7.4M4.7 4.3A5 5 0 1 0 11.3 4.3"/>"#);
-    stroke_icon!(VOLUME, "volume", r#"<path d="M2.6 6.2H5L8.2 3.4V12.6L5 9.8H2.6Z" stroke-width="1.3"/><path d="M10.4 5.8A3.2 3.2 0 0 1 10.4 10.2M12.2 4A5.6 5.6 0 0 1 12.2 12"/>"#);
+    stroke_icon!(
+        VOLUME,
+        "volume",
+        r#"<path d="M2.6 6.2H5L8.2 3.4V12.6L5 9.8H2.6Z" stroke-width="1.3"/><path d="M10.4 5.8A3.2 3.2 0 0 1 10.4 10.2M12.2 4A5.6 5.6 0 0 1 12.2 12"/>"#
+    );
 }
 
 pub fn icon_el(i: &'static Icon, size: f32, color: Color) -> El {
@@ -73,24 +113,67 @@ impl Tone {
 
 pub fn glass_edge(p: Palette, e: El) -> El {
     e.box_shadow(Shadow { x: 0.0, y: 1.0, blur: 1.5, spread: 0.0, color: p.highlight, inset: true })
-        .box_shadow(Shadow { x: 1.0, y: 2.0, blur: 18.0, spread: 0.0, color: p.highlight.alpha(p.highlight.a * 0.3), inset: true })
-        .box_shadow(Shadow { x: -1.0, y: -1.0, blur: 10.0, spread: 0.0, color: p.highlight.alpha(p.highlight.a * 0.14), inset: true })
+        .box_shadow(Shadow {
+            x: 1.0,
+            y: 2.0,
+            blur: 18.0,
+            spread: 0.0,
+            color: p.highlight.alpha(p.highlight.a * 0.3),
+            inset: true,
+        })
+        .box_shadow(Shadow {
+            x: -1.0,
+            y: -1.0,
+            blur: 10.0,
+            spread: 0.0,
+            color: p.highlight.alpha(p.highlight.a * 0.14),
+            inset: true,
+        })
 }
 
 /// Opens next to the element keyed `anchor` (below it, or above when there is no room); a press outside runs
 /// `close`. Add it at the root, above the screens.
-pub fn popover(p: Palette, key: &str, anchor: &str, width: f32, align: Align, close: impl Fn(&mut AppState) + 'static, content: El) -> El {
+pub fn popover(
+    p: Palette,
+    key: &str,
+    anchor: &str,
+    width: f32,
+    align: Align,
+    close: impl Fn(&mut AppState) + 'static,
+    content: El,
+) -> El {
     // The panel is opaque: text under a translucent one showed through.
-    let scrim = el().key(format!("{key}-scrim")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.22)).on_press(close);
-    let panel = col().key(format!("{key}-panel")).w(width).min_h(0.0).padding(14.0).radius(radius::PANEL)
+    let scrim = el()
+        .key(format!("{key}-scrim"))
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(Color::BLACK.alpha(0.22))
+        .on_press(close);
+    let panel = col()
+        .key(format!("{key}-panel"))
+        .w(width)
+        .min_h(0.0)
+        .padding(14.0)
+        .radius(radius::PANEL)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0))
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(18.0, 50.0, p.shadow)
         .anchored_fit(anchor.to_owned(), rune::Side::Bottom, align, 6.0)
         .transition(Transition::scale(0.98))
-        .child(col().key(format!("{key}-body")).w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).child(content));
-    el().key(format!("{key}-layer")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(glass_edge(p, panel))
+        .child(
+            col()
+                .key(format!("{key}-body"))
+                .w_full()
+                .shrink()
+                .min_h(0.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .scroll_edge_fade(12.0)
+                .child(content),
+        );
+    el().key(format!("{key}-layer"))
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .child(scrim)
+        .child(glass_edge(p, panel))
 }
 
 pub fn accent_glass(p: Palette, e: El) -> El {
@@ -158,7 +241,10 @@ fn sheen(p: Palette, r: f32) -> El {
         .key("sheen-line")
         .pin(Some(r), Some(0.5), Some(r), None)
         .h(1.0)
-        .linear_gradient(PI / 2.0, [(0.0, p.sheen.alpha(0.0)), (0.3, p.sheen.alpha(p.sheen.a * 0.8)), (1.0, p.sheen.alpha(0.0))])
+        .linear_gradient(
+            PI / 2.0,
+            [(0.0, p.sheen.alpha(0.0)), (0.3, p.sheen.alpha(p.sheen.a * 0.8)), (1.0, p.sheen.alpha(0.0))],
+        )
         .inert();
     el().key("sheen").pin(Some(0.0), Some(0.0), Some(0.0), None).h(r * 4.0).inert().child(wash).child(line)
 }
@@ -173,7 +259,12 @@ pub fn empty_state(p: Palette, glyph: &'static Icon, title: &str, subtitle: &str
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .child(icon_el(glyph, 20.0, p.text_dim));
     let badge = glass_edge(p, badge);
-    let mut c = col().w_full().center().gap(10.0).py(18.0).child(badge)
+    let mut c = col()
+        .w_full()
+        .center()
+        .gap(10.0)
+        .py(18.0)
+        .child(badge)
         .child(text(title).font(ty::LABEL).color(p.text_dim).align(Align::Center));
     if !subtitle.is_empty() {
         c = c.child(text(subtitle).font(ty::CAPTION).color(p.text_faint).align(Align::Center).wrap().max_w(260.0));
@@ -197,6 +288,7 @@ pub enum ButtonSize {
 }
 
 type Handler = Rc<dyn Fn(&mut AppState)>;
+type ValueHandler = Rc<dyn Fn(&mut AppState, f32)>;
 
 pub struct Button {
     label: String,
@@ -289,7 +381,15 @@ impl Button {
             ButtonKind::Ghost => p.text_dim,
         };
         let key = self.key.clone().unwrap_or_else(|| self.label.clone());
-        let mut b = row().key(key).role("button").label(self.label.clone()).h(h).px(px).gap(8.0).center().radius(h / 2.0)
+        let mut b = row()
+            .key(key)
+            .role("button")
+            .label(self.label.clone())
+            .h(h)
+            .px(px)
+            .gap(8.0)
+            .center()
+            .radius(h / 2.0)
             .motion(motion::UI);
         if self.grow {
             b = b.grow(1.0);
@@ -298,7 +398,8 @@ impl Button {
             ButtonKind::Primary => accent_glass(p, b).hover(Color::WHITE.alpha(0.1)).press(Color::BLACK.alpha(0.1)),
             ButtonKind::Danger => glass_edge(
                 p,
-                b.fill(p.bad.alpha(0.3)).gradient(p.bad.alpha(0.5), p.bad.alpha(0.2))
+                b.fill(p.bad.alpha(0.3))
+                    .gradient(p.bad.alpha(0.5), p.bad.alpha(0.2))
                     .border_gradient(1.0, Color::WHITE.alpha(0.6), p.bad.alpha(0.35))
                     .shadow(6.0, 20.0, p.bad.alpha(0.3)),
             )
@@ -306,7 +407,10 @@ impl Button {
             .press(Color::BLACK.alpha(0.1)),
             ButtonKind::Secondary => glass_edge(
                 p,
-                b.fill(p.glass).gradient(p.glass_top, p.glass_bottom).border_gradient(1.0, p.rim_top, p.rim_bottom).shadow(4.0, 14.0, p.shadow_soft),
+                b.fill(p.glass)
+                    .gradient(p.glass_top, p.glass_bottom)
+                    .border_gradient(1.0, p.rim_top, p.rim_bottom)
+                    .shadow(4.0, 14.0, p.shadow_soft),
             )
             .hover(p.glass_hover)
             .press(p.glass_press),
@@ -336,7 +440,8 @@ pub fn icon_button(
     help: &str,
     on_press: impl Fn(&mut AppState) + 'static,
 ) -> El {
-    let b = el().key(key.to_owned())
+    let b = el()
+        .key(key.to_owned())
         .role("button")
         .label(help.to_owned())
         .size(32.0, 32.0)
@@ -357,13 +462,31 @@ pub fn icon_button(
 }
 
 /// `key` anchors the dropdown; `a11y` is the accessible label.
-pub fn dropdown_chip(p: Palette, key: &str, glyph: &'static Icon, label: &str, a11y: String, enabled: bool, on_press: impl Fn(&mut AppState) + 'static) -> El {
-    let b = row().key(key.to_owned()).role("button").label(a11y).h(30.0).pl(12.0).pr(9.0).gap(7.0).center_y().radius(15.0)
+pub fn dropdown_chip(
+    p: Palette,
+    key: &str,
+    glyph: &'static Icon,
+    label: &str,
+    a11y: String,
+    enabled: bool,
+    on_press: impl Fn(&mut AppState) + 'static,
+) -> El {
+    let b = row()
+        .key(key.to_owned())
+        .role("button")
+        .label(a11y)
+        .h(30.0)
+        .pl(12.0)
+        .pr(9.0)
+        .gap(7.0)
+        .center_y()
+        .radius(15.0)
         .fill(p.glass)
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(3.0, 10.0, p.shadow_soft);
-    let b = glass_edge(p, b).motion(motion::UI)
+    let b = glass_edge(p, b)
+        .motion(motion::UI)
         .child(icon_el(glyph, 13.0, p.accent))
         .child(text(label.to_owned()).font(ty::LABEL).color(p.text).max_w(150.0).truncate().a11y_hidden())
         .child(icon_el(&icons::CHEVRON_DOWN, 11.0, p.text_dim));
@@ -380,7 +503,7 @@ pub struct Slider {
     decimals: usize,
     unit: &'static str,
     ends: Option<(String, String)>,
-    on_change: Option<Rc<dyn Fn(&mut AppState, f32)>>,
+    on_change: Option<ValueHandler>,
 }
 
 impl Slider {
@@ -439,7 +562,8 @@ impl Slider {
         let step_size = if step > 0.0 { step } else { (max - min) / 20.0 };
         let (cur, key) = (self.value, self.key.clone());
 
-        let knob = el().key("knob")
+        let knob = el()
+            .key("knob")
             .size(KNOB, KNOB)
             .pin(None, Some((TRACK - KNOB) / 2.0), Some(-KNOB / 2.0), None)
             .radius(KNOB / 2.0)
@@ -489,10 +613,10 @@ impl Slider {
                 if matches!(d.phase, Phase::Move) {
                     tx.instant();
                 }
-                if !d.cancelled() {
-                    if let Some(f) = &on_change {
-                        f(s, to_value(d.x, d.w));
-                    }
+                if !d.cancelled()
+                    && let Some(f) = &on_change
+                {
+                    f(s, to_value(d.x, d.w));
                 }
             })
             .child(track);
@@ -506,7 +630,10 @@ impl Slider {
         let mut c = col().key(self.key).w_full().gap(2.0).child(head).child(hit);
         if let Some((l, r)) = self.ends {
             c = c.child(
-                row().w_full().justify_between().child(text(l).font(ty::CAPTION).color(p.text_faint))
+                row()
+                    .w_full()
+                    .justify_between()
+                    .child(text(l).font(ty::CAPTION).color(p.text_faint))
                     .child(text(r).font(ty::CAPTION).color(p.text_faint)),
             );
         }
@@ -526,7 +653,15 @@ pub struct TextArea<'a> {
 
 impl<'a> TextArea<'a> {
     pub fn new(key: impl Into<String>, edit: &'a TextEdit, access: fn(&mut AppState) -> &mut TextEdit) -> Self {
-        TextArea { key: key.into(), edit, access, placeholder: String::new(), font: ty::EDITOR, min_h: 120.0, on_submit: None }
+        TextArea {
+            key: key.into(),
+            edit,
+            access,
+            placeholder: String::new(),
+            font: ty::EDITOR,
+            min_h: 120.0,
+            on_submit: None,
+        }
     }
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {
         self.placeholder = text.into();
@@ -592,23 +727,51 @@ pub fn progress_bar(p: Palette, value: Option<f32>) -> El {
     let bar = |e: El| e.radius(h / 2.0).gradient(p.accent_top, p.accent).shadow(0.0, 10.0, p.accent_glow);
     match value {
         Some(v) => track.child(bar(el().key("bar").h(h).w_frac(v.clamp(0.0, 1.0)).motion(motion::SOFT))),
-        None => track.child(bar(el().key("shimmer").h(h).w_frac(0.32).looping(LoopSpec::slide(1.5, [-1.0, 0.0], [3.2, 0.0])))),
+        None => track.child(bar(el().key("shimmer").h(h).w_frac(0.32).looping(LoopSpec::slide(
+            1.5,
+            [-1.0, 0.0],
+            [3.2, 0.0],
+        )))),
     }
 }
 
-pub fn segmented(p: Palette, key: &str, options: &[&str], selected: usize, on_pick: impl Fn(&mut AppState, usize) + Clone + 'static) -> El {
+pub fn segmented(
+    p: Palette,
+    key: &str,
+    options: &[&str],
+    selected: usize,
+    on_pick: impl Fn(&mut AppState, usize) + Clone + 'static,
+) -> El {
     segmented_help(p, key, options, &[], selected, on_pick)
 }
 
 /// [`segmented`] with a tooltip per option; missing or empty `helps` get none.
-pub fn segmented_help(p: Palette, key: &str, options: &[&str], helps: &[&str], selected: usize, on_pick: impl Fn(&mut AppState, usize) + Clone + 'static) -> El {
-    let mut strip = row().key(key.to_owned()).padding(3.0).gap(2.0).radius(17.0)
-        .fill(p.well)
-        .border_gradient(1.0, Color::BLACK.alpha(0.35), p.well_rim);
+pub fn segmented_help(
+    p: Palette,
+    key: &str,
+    options: &[&str],
+    helps: &[&str],
+    selected: usize,
+    on_pick: impl Fn(&mut AppState, usize) + Clone + 'static,
+) -> El {
+    let mut strip = row().key(key.to_owned()).padding(3.0).gap(2.0).radius(17.0).fill(p.well).border_gradient(
+        1.0,
+        Color::BLACK.alpha(0.35),
+        p.well_rim,
+    );
     for (i, name) in options.iter().enumerate() {
         let on = i == selected;
         let pick = on_pick.clone();
-        let mut opt = row().key(format!("{key}-{i}")).role("button").label(*name).checked(on).focusable(true).h(28.0).px(14.0).center().radius(14.0)
+        let mut opt = row()
+            .key(format!("{key}-{i}"))
+            .role("button")
+            .label(*name)
+            .checked(on)
+            .focusable(true)
+            .h(28.0)
+            .px(14.0)
+            .center()
+            .radius(14.0)
             .fill(if on { p.accent.alpha(0.22) } else { Color::TRANSPARENT })
             .border(1.0, if on { p.accent.alpha(0.5) } else { Color::TRANSPARENT })
             .hover(if on { p.accent.alpha(0.28) } else { p.glass_hover })
@@ -634,20 +797,34 @@ pub fn segmented_fill(
     enabled: bool,
     on_pick: impl Fn(&mut AppState, usize) + Clone + 'static,
 ) -> El {
-    let mut strip = row().key(key.to_owned()).w_full().padding(3.0).gap(2.0).radius(17.0)
-        .fill(p.well)
-        .border_gradient(1.0, Color::BLACK.alpha(0.35), p.well_rim);
+    let mut strip = row().key(key.to_owned()).w_full().padding(3.0).gap(2.0).radius(17.0).fill(p.well).border_gradient(
+        1.0,
+        Color::BLACK.alpha(0.35),
+        p.well_rim,
+    );
     for (i, name) in options.iter().enumerate() {
         let on = i == selected;
-        let mut opt = row().key(format!("{key}-{i}")).role("button").label(*name).checked(on).focusable(enabled).grow(1.0).min_w(0.0).h(28.0).px(8.0)
-            .center().radius(14.0)
+        let mut opt = row()
+            .key(format!("{key}-{i}"))
+            .role("button")
+            .label(*name)
+            .checked(on)
+            .focusable(enabled)
+            .grow(1.0)
+            .min_w(0.0)
+            .h(28.0)
+            .px(8.0)
+            .center()
+            .radius(14.0)
             .fill(if on { p.accent.alpha(0.22) } else { Color::TRANSPARENT })
             .border(1.0, if on { p.accent.alpha(0.5) } else { Color::TRANSPARENT })
             .motion(motion::UI)
             .child(text(*name).font(ty::LABEL).color(if on { p.text } else { p.text_dim }).truncate().a11y_hidden());
         if enabled {
             let pick = on_pick.clone();
-            opt = opt.hover(if on { p.accent.alpha(0.28) } else { p.glass_hover }).on_press(move |s: &mut AppState| pick(s, i));
+            opt = opt
+                .hover(if on { p.accent.alpha(0.28) } else { p.glass_hover })
+                .on_press(move |s: &mut AppState| pick(s, i));
         }
         if let Some(h) = helps.get(i).filter(|h| !h.is_empty()) {
             opt = opt.help((*h).to_owned());
@@ -664,14 +841,26 @@ pub fn level_meter(p: Palette, level: f32, peak: Option<f32>) -> El {
     let peak_i = peak.map(|v| ((v.clamp(0.0, 1.0) * N as f32).round() as usize).clamp(1, N) - 1);
     let seg = (0..N).map(|i| {
         let t = (i as f32 + 0.5) / N as f32;
-        let tone = if t > 0.88 { p.bad } else if t > 0.65 { p.warn } else { p.ok };
+        let tone = if t > 0.88 {
+            p.bad
+        } else if t > 0.65 {
+            p.warn
+        } else {
+            p.ok
+        };
         let on = i < lit || peak_i == Some(i);
         el().key(format!("seg{i}"))
             .grow(1.0)
             .h_full()
             .radius(2.0)
             .fill(if on { tone } else { p.well_rim })
-            .opacity(if i < lit { 1.0 } else if on { 0.75 } else { 1.0 })
+            .opacity(if i < lit {
+                1.0
+            } else if on {
+                0.75
+            } else {
+                1.0
+            })
             .motion(motion::SNAP)
     });
     row().w_full().h(14.0).gap(3.0).children(seg)
@@ -679,18 +868,18 @@ pub fn level_meter(p: Palette, level: f32, peak: Option<f32>) -> El {
 
 pub fn badge(p: Palette, label: &str, tone: Tone) -> El {
     let c = tone.color(p);
-    row()
-        .h(20.0)
-        .px(8.0)
-        .center()
-        .radius(10.0)
-        .fill(c.alpha(0.14))
-        .border(1.0, c.alpha(0.35))
-        .child(text(label).font(TextStyle::new(11.0, 600.0).lh(14.0)).color(if tone == Tone::Neutral { p.text_dim } else { c }))
+    row().h(20.0).px(8.0).center().radius(10.0).fill(c.alpha(0.14)).border(1.0, c.alpha(0.35)).child(
+        text(label).font(TextStyle::new(11.0, 600.0).lh(14.0)).color(if tone == Tone::Neutral {
+            p.text_dim
+        } else {
+            c
+        }),
+    )
 }
 
 pub fn status_dot(p: Palette, tone: Tone, pulsing: bool) -> El {
-    const PULSE: Cycle = Cycle { period: 1.4, phase: 0.0, stops: &[(0.0, 1.0), (0.5, 0.35), (1.0, 1.0)], still: 1.0, fps: 12.0 };
+    const PULSE: Cycle =
+        Cycle { period: 1.4, phase: 0.0, stops: &[(0.0, 1.0), (0.5, 0.35), (1.0, 1.0)], still: 1.0, fps: 12.0 };
     let c = tone.color(p);
     let d = el().size(8.0, 8.0).radius(4.0).fill(c);
     if pulsing { d.cycle(PULSE) } else { d }
@@ -710,7 +899,8 @@ pub fn toast_stack(p: Palette, toasts: &[Toast], bottom: f32) -> El {
         let id = t.id;
         // Width estimated from the text: a centred wrapping text would otherwise shrink to its longest word.
         let width = (t.text.chars().count() as f32 * 7.8 + 72.0).clamp(160.0, 640.0);
-        row().key(format!("toast{id}"))
+        row()
+            .key(format!("toast{id}"))
             .w(width)
             .px(16.0)
             .py(10.0)
@@ -728,7 +918,13 @@ pub fn toast_stack(p: Palette, toasts: &[Toast], bottom: f32) -> El {
             .child(status_dot(p, t.tone, false))
             .child(text(t.text.clone()).font(ty::LABEL).color(p.text).wrap().grow(1.0).min_w(0.0))
     });
-    col().key("toasts").pin(Some(0.0), None, Some(0.0), Some(bottom)).items_center().gap(10.0).inert_if_empty(toasts.is_empty()).children(items)
+    col()
+        .key("toasts")
+        .pin(Some(0.0), None, Some(0.0), Some(bottom))
+        .items_center()
+        .gap(10.0)
+        .inert_if_empty(toasts.is_empty())
+        .children(items)
 }
 
 trait InertIfEmpty {

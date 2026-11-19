@@ -7,6 +7,3 @@ requires-python = ">=3.10,<3.12"
 # No dependencies of its own: it runs with the engine venv that tools/setup/setup.py builds (torch, omnivoice,
 # openai-whisper, num2words, sentencepiece, g2p_en, soundfile, librosa, scipy, numpy).
 dependencies = []
-
-[tool.ruff]
-line-length = 120

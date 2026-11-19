@@ -99,11 +99,15 @@ fn merge_restore(window: &mut Value, at: (i32, i32), size: (f64, f64), saved: (f
 fn restore_rect(window: &rune::WindowHandle) -> Option<(i32, i32, i32, i32)> {
     use rune::raw_window_handle::RawWindowHandle;
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowPlacement, SPI_GETWORKAREA, SystemParametersInfoW, WINDOWPLACEMENT};
-    let hwnd = window.with_raw_handle(|h| match h.as_raw() {
-        RawWindowHandle::Win32(w) => Some(w.hwnd.get() as windows_sys::Win32::Foundation::HWND),
-        _ => None,
-    }).ok()??;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowPlacement, SPI_GETWORKAREA, SystemParametersInfoW, WINDOWPLACEMENT,
+    };
+    let hwnd = window
+        .with_raw_handle(|h| match h.as_raw() {
+            RawWindowHandle::Win32(w) => Some(w.hwnd.get() as windows_sys::Win32::Foundation::HWND),
+            _ => None,
+        })
+        .ok()??;
     // SAFETY: plain reads into structures of the size given; `hwnd` is the live window `with_raw_handle` lent.
     unsafe {
         let mut wp: WINDOWPLACEMENT = std::mem::zeroed();
@@ -130,9 +134,18 @@ fn restore_rect(_window: &rune::WindowHandle) -> Option<(i32, i32, i32, i32)> {
 /// Whether a window of `w` x `h` pixels at (`x`, `y`) would have its title area on a display.
 #[cfg(windows)]
 fn on_a_display(x: i32, y: i32, w: f32, _h: f32) -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
     // SAFETY: plain metric reads.
-    let (vx, vy, vw, vh) = unsafe { (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN)) };
+    let (vx, vy, vw, vh) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
     if vw <= 0 || vh <= 0 {
         return true;
     }
