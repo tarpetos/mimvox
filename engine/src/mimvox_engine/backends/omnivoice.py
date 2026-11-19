@@ -36,6 +36,9 @@ def sampling_for(expressiveness: float) -> dict[str, float]:
 
 SYNTH_TIMEOUT_S = 300.0   # includes a first-time reference transcription and a cold model load
 LOAD_TIMEOUT_S = 300.0
+# On the CPU a segment took 190-213 s and a first reference transcription 125 s on an 8 GB laptop: no fixed limit, the
+# worker reports each model pass and only a silence this long ends it.
+CPU_STALL_S = 600.0
 
 # Languages with at least ~100 h of OmniVoice training data (its docs/languages.md): quality drops below that.
 LANGS: dict[str, str] = {
@@ -79,6 +82,7 @@ class OmniVoiceBackend(TtsBackend):
 
     def __init__(self, unload_after_s: float = UNLOAD_AFTER_S) -> None:
         self._client: WorkerClient | None = None
+        self._device = ""
         self._status = "loading"
         self._warm: OrderedDict[tuple, None] = OrderedDict()
         self.unload_after_s = unload_after_s
@@ -95,8 +99,9 @@ class OmniVoiceBackend(TtsBackend):
             py, model = omnivoice_python(runtime), omnivoice_model_dir(runtime)
             whisper_dir = os.path.join(os.path.dirname(model), "whisper") if model else ""
             device = config.backend(runtime)
+            self._device = device if device in ("cuda", "mps", "cpu") else "cuda"
             argv = [py, *isolated(), WORKER, "--model-dir", model, "--whisper-dir", whisper_dir,
-                    "--device", device if device in ("cuda", "mps", "cpu") else "cuda", "--prompt-cache", str(PROMPT_CACHE)]
+                    "--device", self._device, "--prompt-cache", str(PROMPT_CACHE)]
             if self.unload_after_s > 0:
                 argv += ["--unload-after", str(self.unload_after_s)]
             self._client = WorkerClient("omnivoice", argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"),
@@ -132,6 +137,13 @@ class OmniVoiceBackend(TtsBackend):
         if self._client is not None:
             await self._client.close()
 
+    def on_cpu(self) -> bool:
+        return (self.last_load.get("device") or self._device) == "cpu"
+
+    def limits(self) -> dict[str, float | None]:
+        """``WorkerClient.call`` limits of a synth, warm or inspect call."""
+        return {"timeout": None, "stall": CPU_STALL_S} if self.on_cpu() else {"timeout": SYNTH_TIMEOUT_S}
+
     async def synthesize(self, text: str, lang: str, reference: str, params: SynthParams) -> str:
         lang = (lang or "").lower()
         model_lang = LANGS.get(lang)
@@ -151,7 +163,7 @@ class OmniVoiceBackend(TtsBackend):
                                                     **sampling_for(params.temperature),
                                                     **({"ref_text": params.reference_text} if params.reference_text
                                                        else {})},
-                                          timeout=SYNTH_TIMEOUT_S)
+                                          **self.limits())
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
         except WorkerError as exc:
@@ -170,7 +182,7 @@ class OmniVoiceBackend(TtsBackend):
         ref = reference if reference_text else reference_for(reference, lang)
         try:
             await self._client.call("warm", {"ref": ref, **({"ref_text": reference_text} if reference_text else {})},
-                                    timeout=SYNTH_TIMEOUT_S)
+                                    **self.limits())
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "warm-up cancelled") from exc
         except (WorkerError, WorkerDied) as exc:
@@ -182,7 +194,7 @@ class OmniVoiceBackend(TtsBackend):
         if self._client is None or self._status != "ready":
             return None
         try:
-            res = await self._client.call("inspect", {"ref": reference, "detect": detect}, timeout=SYNTH_TIMEOUT_S)
+            res = await self._client.call("inspect", {"ref": reference, "detect": detect}, **self.limits())
         except (WorkerError, WorkerDied, WorkerCancelled) as exc:
             log.warning("OmniVoice could not inspect %s: %s", reference, exc)
             return None

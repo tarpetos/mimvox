@@ -35,15 +35,17 @@ class WorkerCancelled(Exception):
 
 
 class _Request:
-    __slots__ = ("id", "msg", "done", "progress", "timeout", "start", "abandoned")
+    __slots__ = ("id", "msg", "done", "progress", "timeout", "stall", "seen", "start", "abandoned")
 
     def __init__(self, rid: int, msg: dict[str, Any], progress: Progress | None, timeout: float | None,
-                 start: bool) -> None:
+                 start: bool, stall: float | None = None) -> None:
         self.id = rid
         self.msg = msg
         self.done: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.progress = progress
         self.timeout = timeout
+        self.stall = stall
+        self.seen = 0.0  # loop time of the latest message about this request
         self.start = start
         self.abandoned = False
 
@@ -93,11 +95,13 @@ class WorkerClient:
         return self.current is not None or (self._queue is not None and not self._queue.empty())
 
     async def call(self, op: str, params: dict[str, Any] | None = None, progress: Progress | None = None,
-                   timeout: float | None = None, start: bool = True, retry: bool = True) -> dict[str, Any]:
+                   timeout: float | None = None, start: bool = True, retry: bool = True,
+                   stall: float | None = None) -> dict[str, Any]:
         """A worker that dies under the request is restarted and the request retried once (``retry``).
-        ``start=False``: answer ``{}`` without starting a process when none is running."""
+        ``start=False``: answer ``{}`` without starting a process when none is running. ``stall``: the request
+        also fails after that many seconds without a progress message from the worker (``timeout`` None: no cap)."""
         try:
-            return await self._call_once(op, params, progress, timeout, start)
+            return await self._call_once(op, params, progress, timeout, start, stall)
         except WorkerDied as exc:
             self.last_error = str(exc)
             if not retry:
@@ -111,11 +115,11 @@ class WorkerClient:
                 raise
             log.warning("%s: not enough GPU memory for %s; %s released their models, retrying once", self.name, op,
                         ", ".join(freed))
-        return await self._call_once(op, params, progress, timeout, start)
+        return await self._call_once(op, params, progress, timeout, start, stall)
 
     async def _call_once(self, op: str, params: dict[str, Any] | None, progress: Progress | None,
-                         timeout: float | None, start: bool) -> dict[str, Any]:
-        req = _Request(next(self._ids), {"op": op, **(params or {})}, progress, timeout, start)
+                         timeout: float | None, start: bool, stall: float | None = None) -> dict[str, Any]:
+        req = _Request(next(self._ids), {"op": op, **(params or {})}, progress, timeout, start, stall)
         memguard.refresh()
         self._ensure_owner()
         assert self._queue is not None
@@ -164,10 +168,10 @@ class WorkerClient:
         self._write({"id": req.id, **req.msg})
         if req.abandoned:  # cancelled between dequeuing and sending
             self._write({"op": "cancel", "id": req.id})
-        done, _ = await asyncio.wait({req.done}, timeout=req.timeout)
-        if not done:
+        why = await _watch(req)
+        if why is not None:
             self._pending.pop(req.id, None)
-            req.done.set_exception(WorkerError("internal", f"the {self.name} worker timed out in {req.msg['op']}"))
+            req.done.set_exception(WorkerError("internal", f"the {self.name} worker {why} in {req.msg['op']}"))
             await self.stop(graceful=False)
         if req.done.done() and not req.done.cancelled():
             req.done.exception()  # mark it retrieved even when the caller has gone away
@@ -239,6 +243,7 @@ class WorkerClient:
         req = self._pending.get(msg.get("id"))  # type: ignore[arg-type]
         if req is None:
             return
+        req.seen = asyncio.get_running_loop().time()
         if "progress" in msg:
             if req.progress is not None and not req.abandoned:
                 try:
@@ -292,6 +297,28 @@ class WorkerClient:
         await self.stop()
         if self._queue is not None:
             self._queue.put_nowait(None)
+
+
+async def _watch(req: _Request) -> str | None:
+    """Waits for the answer; why the request gave up (past ``timeout``, or ``stall`` seconds without news), or None."""
+    loop = asyncio.get_running_loop()
+    begun = req.seen = loop.time()
+    while True:
+        now = loop.time()
+        limits = []
+        if req.timeout is not None:
+            limits.append(begun + req.timeout - now)
+        if req.stall is not None:
+            limits.append(req.seen + req.stall - now)
+        wait = max(0.0, min(limits)) if limits else None
+        done, _ = await asyncio.wait({req.done}, timeout=wait)
+        if done:
+            return None
+        now = loop.time()
+        if req.timeout is not None and now - begun >= req.timeout:
+            return "timed out"
+        if req.stall is not None and now - req.seen >= req.stall:
+            return f"made no progress for {req.stall:.0f} s"
 
 
 def isolated() -> list[str]:

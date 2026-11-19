@@ -37,7 +37,9 @@ This file is the single source of truth. Rust types live in `crates/engine-clien
   worker that consumes a request queue, writes one request (`{"id","op",...}`), and awaits its reply; a reader task
   resolves replies by `id` and turns `progress` lines into callbacks. A worker that exits fails every pending request
   at once (the exit is awaited, not polled) and the next request starts a new process. Workers run ops on one thread
-  and use timers for idle unload/exit.
+  and use timers for idle unload/exit. A request may have a time limit and a no-progress limit (any `progress` line
+  about it starts that one again); past either the worker is killed and the request fails with `internal` ("the
+  omnivoice worker timed out in synth" / "made no progress for 600 s in synth").
 - **`shutdown` / stdin EOF.** The engine answers `shutdown` with `{}`, lets requests in flight answer (up to 10 s),
   stops a running training's Applio process tree (Windows: `taskkill /T`; the run stays resumable as an interrupted
   one), cancels the remaining jobs, stops the workers (`quit`, exit awaited, killed after 5 s) and exits. A request
@@ -896,6 +898,17 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
   (`rvc.index_rate_for`; `tts.generate`, Redub respeak and dub); index 1.0 garbled Ukrainian words (Whisper WER 25 %
   instead of 6 %), 0.3 keeps them and most of the timbre. `MIMVOX_RVC_FOREIGN_INDEX` overrides the 0.3.
 - **Training hand-over**: the worker process is ended (all its VRAM and RAM back) and started again after the training.
+- **Time limits**: on a GPU a `synth`, `warm` or `inspect` call has 300 s, a first transcription of the reference and
+  a cold load included. On the CPU (`backend = "cpu"`, or no usable GPU at load) it has no fixed limit: the worker sends
+  `progress` at most every 2 s while a model runs (OmniVoice, its audio tokenizer, Whisper), and only 600 s without
+  one end the call. A short segment takes minutes there (see [performance](../docs/performance.md#speech-on-the-processor-cpu)).
+- **RAM on the CPU**: every decoding step reads all the fp32 weights (about 3 GB), so the worker does not trim its
+  working set after loading or after Whisper as it does on a GPU (there those pages only carried the weights to the
+  card). Before each segment on the CPU the worker checks the RAM: when the available physical memory is below 5 % of
+  it (at least 0.5 GB) and at least 1 GB of the weights is not in RAM (one page in 16 sampled; Windows: not in the
+  working set, so compressed or in the page file; Linux: `mincore`), `synth` fails with `no_memory` and "not
+  enough free memory (RAM): ... close other programs and try again". A Book then shows `stage: "memory"` and
+  retries; `tts.generate` ends with `tts.error` `internal` and that message.
 
 ### Native accent (`accent`)
 
@@ -1202,7 +1215,7 @@ fields as tts.generate}`
   every segment (`segment` = segments of that chapter done). `percent` is by characters, `audio_s` the audio made so
   far, `elapsed_s` the generation time over all sessions, `rtf = elapsed_s / audio_s`, `eta_s` the time left at the
   measured pace (null until the first segment), `est_audio_s` the whole book's length extrapolated. `stage: "m4b"` while
-  the M4B is made, about once a second with `stage_pct` (0-100) and `stage_eta_s`; `stage: "memory"` when the computer ran short of RAM or VRAM: reading goes on from the same sentence
+  the M4B is made, about once a second with `stage_pct` (0-100) and `stage_eta_s`; `stage: "memory"` when the computer ran short of RAM or VRAM (with speech on the CPU also when the RAM is full and the speech model is paged out, see [RAM on the CPU](#speech-model-and-languages-omnivoice)): reading goes on from the same sentence
   after `retry_in_s` (20 s, 60 s, 180 s, 300 s; the count starts again once a segment is made), and only then fails.
 - `book.chapter {"id","index","title","path","segments_path","duration_s","audio_s","elapsed_s","rtf",
   "level":{"lufs_in","gain_db","peak_dbfs"}, ...totals}`: a chapter file is finished (`rtf` of that chapter alone;

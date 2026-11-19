@@ -73,7 +73,9 @@ flowchart LR
   (`workerproc.make_room`). On Windows the engine and its workers share one Job Object whose memory cap is the system's
   commit limit minus what other programs use and a reserve, recomputed before every worker op (GPU memory counts
   against commit under WDDM, so a share of the RAM would be wrong); the job also ends them with the engine; on Linux the engine raises its OOM score, so the kernel stops Mimvox first
-  (`memguard.py`).
+  (`memguard.py`). The commit counts the page file, so it misses a model on the CPU being paged out: before each CPU
+  segment the speech worker checks the RAM and how much of its weights is still in it (`worker_kit.ram_short`) and
+  reports a thrashing machine as short of memory.
 - **A persistent engine.** Loading the models is the slow part. The engine starts once with the app and keeps OmniVoice
   and the RVC worker loaded in GPU memory, so each phrase pays only for synthesis (see
   [performance.md](performance.md)).

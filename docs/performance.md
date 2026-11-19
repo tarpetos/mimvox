@@ -142,6 +142,50 @@ Tried and not used:
 - `torch.compile` (no Triton in the runtime), a fused `F.rms_norm` (no faster), `empty_cache` after each segment (no
   measurable cost).
 
+## Speech on the processor (CPU)
+
+Without a supported GPU OmniVoice runs on the CPU in fp32 (2.45 GB model, 0.8 GB audio tokenizer) through the library's
+decoding loop (`omnivoice_fast` needs CUDA). The worker run directly with `--device cpu` on the developer's machine
+(8-core Ryzen, Zen 3, 32 GB, Windows 11, torch 2.8 with 8 threads), the 11.7 s native male clip as the reference.
+The machine was shared: one 16-step run took 157 s instead of about 40 s and is left out.
+
+| Step | Measured |
+| --- | --- |
+| Model load | 2.4-10 s; the process then holds 5.0 GB of private memory (1.2 GB before loading), 3.7 GB in RAM |
+| First use of a reference (Whisper turbo, fp32) | 30-43 s in the worker, 13 s of it the transcription |
+| 2.3-2.6 s of speech, 32 steps (*best*) | 113-234 s |
+| 7.1 s of speech, 32 steps | 155-170 s |
+| 2.6 s of speech, 16 steps (*fast*, a first segment) | 37-49 s |
+| Worker after a first transcription and three segments | 12.1 GB private, 6.4 GB in RAM |
+
+On an 8 GB laptop (Ryzen 5 3550H, 4 cores) a short segment took 190-213 s and the first transcription 125 s; the worker
+held 6.4 GB of private memory, Windows compressed 5.4 GB, no RAM was available and it paged about 1750 pages/s. A fixed
+300 s limit per call stopped the first segment of a new voice and any segment past it, so on the CPU the engine only
+stops a call after 600 s without progress from the worker, and the worker checks the RAM before each segment
+(protocol: "RAM on the CPU"; reading which of the 3.0 GB of weights are in RAM takes 55 ms).
+
+- **The working set is the model.** The worker used to trim its working set after loading and after Whisper, which on a
+  GPU gives back pages that only carried the weights to the card. On the CPU they are the weights, read in full at
+  every step: a trim right after loading took the working set from 3.7 GB to 0 (all but 0.04 % of the weights' pages)
+  and the first 16-step segment from 37-48 s to 54 s here, with 20 GB free and the pages still in RAM; on a full
+  machine they come back from the compression store or the page file. No trim on the CPU any more.
+- **The allocator.** PyTorch on Windows allocates CPU tensors with mimalloc, which decommits freed blocks 10 ms later:
+  a 16-step segment took 6.6-9.2 million page faults (fresh zeroed pages for every activation). With
+  `MIMALLOC_PURGE_DELAY=1000` it took 33-57 thousand and 37-39 s instead of 48-49 s, but held 10.6 GB instead of
+  7.1; with `0` Whisper's 3.6 GB came back at once after its transcription, which then took 52 s instead of 13 s.
+  Either way costs memory or time, so it is left at the default. What mimalloc keeps is committed and idle: what
+  Windows compresses first on a full machine.
+- **Whisper on the CPU** is now built from the memory-mapped checkpoint (as on the GPU, in fp32): after loading it held
+  3.8 GB instead of 5.5 GB (`whisper.load_model` keeps a copy of the checkpoint); the peak commit is the same, as
+  Windows charges a mapped copy-on-write view in full.
+- **Faster options, not used yet** (16 steps, the same sentence): int8 dynamic quantization of the transformer's
+  linear layers (`torch.ao.quantization.quantize_dynamic`, fbgemm) took 23-28 s instead of 37-45 s and 5.9 GB
+  instead of 9.1 GB after the segment, and Whisper read the sentence back exactly; speaker similarity and other
+  languages are not measured. The packed CFG loop of `omnivoice_fast` without the CUDA graph took 20-32 s but spoke
+  0.9 s of wrong words in a first try. Each step's cost grows with the reference (an 11.7 s clip is about 290 of the
+  410 positions), so a shorter reference or fewer steps also help. bf16 and fp16 have no fast matrix kernels on these
+  CPUs (no AVX-512 BF16 or AMX) and were not tried.
+
 ## Zero-shot native accent (Seed-VC)
 
 The native accent of an **untrained** voice: OmniVoice speaks the English from the shipped native clip
@@ -400,3 +444,5 @@ the clearest symptom), which is why the app does not use them.
   converter (Seed-VC, only while an untrained voice uses the native accent) ~1.6 GB. Below 10 GB of VRAM OmniVoice and
   the converter take turns instead of overlapping. 8 GB or more is
   recommended and 12 GB was used in testing.
+- Without a GPU the speech model works from RAM: the worker holds 5 GB after loading and 7-12 GB of committed memory
+  while speaking (see [Speech on the processor](#speech-on-the-processor-cpu)); an 8 GB laptop ran out of RAM.
