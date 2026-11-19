@@ -142,9 +142,12 @@ APP_MUTEX = "Local\\Mimvox-running"
 # Inno's uninstall entry: <AppId>_is1 under the install mode's root (HKA: per user here).
 def uninstall_key(app_id: str) -> str:
     return f"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{app_id}_is1"
-# Never delete the data folder blindly: a folder the user chose may hold other files.
-ENGINE_ENTRIES = ("runtime", "cache", "tmp", "runtime.toml")
-USER_ENTRIES = ("voices", "outputs", "books", "logs", "settings.json")
+# Never delete the data folder blindly: a folder the user chose may hold other files. A ".tmp" is a write cut short.
+ENGINE_ENTRIES = ("runtime", "cache", "tmp", "runtime.toml", "runtime.toml.tmp", "engine.lock")
+USER_ENTRIES = ("voices", "outputs", "books", "logs", "api", "settings.json", "settings.json.tmp", "components.json",
+                "components.json.tmp", "book-draft.json", "book-draft.json.tmp", "speak-text.txt", "speak-text.txt.tmp")
+# Restart Manager cannot close it when its client gave it no console; it is stateless and clients start it again.
+MCP_BINARY = "mimvox-mcp.exe"
 
 RUNNING_CODE = r"""
 function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: Longword): Longword;
@@ -155,6 +158,57 @@ function KillTimer(hWnd, nIDEvent: Longword): Bool;
 function AppRunning(): Boolean;
 begin
   Result := CheckForMutexes('@MUTEX@');
+end;
+
+{ Counts (and with Kill, ends) the mimvox-mcp processes started from Dir: another install's are left alone. }
+function McpPass(Dir: String; Kill: Boolean): Integer;
+var
+  Wmi, Found, Process: Variant;
+  Path: String;
+  I, Pid: Integer;
+begin
+  Result := 0;
+  Wmi := CreateOleObject('WbemScripting.SWbemLocator');
+  Wmi := Wmi.ConnectServer('.', 'root\CIMV2');
+  Found := Wmi.ExecQuery('SELECT ProcessId, ExecutablePath FROM Win32_Process WHERE Name = ''@MCP@''');
+  for I := 0 to Found.Count - 1 do
+  begin
+    Process := Found.ItemIndex(I);
+    if VarIsNull(Process.ExecutablePath) then continue;
+    Path := Process.ExecutablePath;
+    if CompareText(Copy(Path, 1, Length(Dir)), Dir) <> 0 then continue;
+    Result := Result + 1;
+    if Kill then
+    begin
+      Pid := Process.ProcessId;
+      Log('Ending ' + Path + ' (process ' + IntToStr(Pid) + ')');
+      Process.Terminate(0);
+    end;
+  end;
+end;
+
+procedure EndMcp(Dir: String);
+var
+  Waited: Integer;
+begin
+  Dir := AddBackslash(Dir);
+  try
+    if McpPass(Dir, True) = 0 then exit;
+    for Waited := 1 to 40 do
+    begin
+      Sleep(250);
+      if McpPass(Dir, False) = 0 then exit;
+    end;
+    Log('@MCP@ is still running');
+  except
+    Log('Could not end @MCP@: ' + GetExceptionMessage);
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  EndMcp(ExpandConstant('{app}'));
 end;
 
 var
@@ -599,7 +653,11 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if CurUninstallStep = usUninstall then RemoveChosenData();
+  if CurUninstallStep = usUninstall then
+  begin
+    EndMcp(ExpandConstant('{app}'));
+    RemoveChosenData();
+  end;
   { Ours is the one "removed" box: the uninstall always runs silent, and Inno shows its own only when it is not. }
   if (CurUninstallStep = usDone) and UserStarted and UninstallSilent() then
     MsgBox('Mimvox was removed.', mbInformation, MB_OK);
@@ -728,8 +786,8 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "  end;",
         "end;",
         "",
-        *RUNNING_CODE.replace("@MUTEX@", APP_MUTEX).replace("@BAD@", colorref(BAD)).replace("@TEXT@", colorref(TEXT))
-        .split("\n"),
+        *RUNNING_CODE.replace("@MUTEX@", APP_MUTEX).replace("@MCP@", MCP_BINARY).replace("@BAD@", colorref(BAD))
+        .replace("@TEXT@", colorref(TEXT)).split("\n"),
         "procedure InitializeWizard;",
         "begin",
         "  { The app's palette: the header strip is smoked glass, titles in the text colour, the rest dimmer. }",
