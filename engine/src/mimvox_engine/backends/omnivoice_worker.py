@@ -13,7 +13,8 @@ Ops (wire format: ``worker_kit.py``):
   release  {}                                         -> {}
   status   {}                                         -> {"loaded","rss_gb","vram_gb"}
   zs_load, zs_convert, zs_warm, zs_release, zs_status: Seed-VC (``zsvc_worker.py``)
-Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"}, {"event":"exit","reason":"idle"}.
+Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"}, {"event":"exit","reason":"idle"}. On the CPU an op
+also sends {"id","progress":{"alive":true}} at most every 2 s while a model runs (the engine's no-progress watchdog).
 """
 import argparse
 import collections
@@ -70,6 +71,8 @@ SIDECAR_VERSION = 3
 
 _state = {"model": None, "device": None}
 _prompts = collections.OrderedDict()
+BEAT_S = 2.0
+_beat = {"at": 0.0}
 
 
 def _log(msg):
@@ -117,6 +120,14 @@ def _device():
     return want
 
 
+def _heartbeat(*_args):
+    """Progress for the engine's no-progress watchdog: on the CPU a segment may take minutes, so it has no fixed limit."""
+    now = time.monotonic()
+    if now - _beat["at"] >= BEAT_S and kit_worker.current is not None:
+        _beat["at"] = now
+        kit_worker.progress({"alive": True})
+
+
 def op_load(_req=None):
     if _state["model"] is not None:
         return {"load_s": 0.0, "device": _state["device"], "vram_gb": _vram_gb()}
@@ -131,7 +142,10 @@ def op_load(_req=None):
     _state.update(model=model, device=dev)
     _prompts.clear()
     gc.collect()
-    _trim_working_set()  # the weights passed through host RAM on their way to the GPU
+    # On the CPU the weights stay in this memory: a trim would only send them to the page file before the first step.
+    kit_worker.trim = dev != "cpu"
+    if dev != "cpu":
+        _trim_working_set()  # the weights passed through host RAM on their way to the GPU
     _log(f"loaded on {dev} in {time.time() - t0:.1f}s, VRAM in use {_vram_gb()} GB")
     return {"load_s": round(time.time() - t0, 2), "device": dev, "vram_gb": _vram_gb()}
 
@@ -201,7 +215,7 @@ def _with_whisper(use):
             if attempt == "cuda":
                 wm = whisper_half.load(whisper, "turbo", args.whisper_dir or None, "cuda")
             else:
-                wm = whisper.load_model("turbo", download_root=args.whisper_dir or None, device="cpu")
+                wm = whisper_half.load(whisper, "turbo", args.whisper_dir or None, "cpu", half=False)
             return use(wm, attempt)
         except Exception as exc:
             if attempt != "cuda" or not kit.is_vram_error(exc):
@@ -212,7 +226,8 @@ def _with_whisper(use):
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            _trim_working_set()  # Whisper's weights passed through host RAM: give those pages back now
+            if _state["device"] != "cpu" or _state["model"] is None:
+                _trim_working_set()  # Whisper's weights passed through host RAM: give those pages back now
     raise AssertionError("unreachable")
 
 
@@ -287,6 +302,7 @@ def _reference(ref, ref_text=None):
         cached = None
     if cached is None:
         t0 = time.time()
+        _heartbeat()
         segs, language = _transcribe(x, sr)
         if not segs:
             raise kit.OpError("bad_request", "the reference clip has no recognizable speech")
@@ -327,6 +343,15 @@ def _prompt(ref, ref_text=None):
     return prompt
 
 
+def _check_ram():
+    """Every step reads all the weights: once a part is paged out, each segment waits minutes on the disk."""
+    model = _state["model"]
+    msg = kit.ram_short([(p.data_ptr(), p.numel() * p.element_size()) for p in model.parameters()])
+    if msg:
+        _log(msg)
+        raise kit.OpError("no_memory", msg)
+
+
 def op_warm(req):
     t0 = time.time()
     op_load()
@@ -362,6 +387,8 @@ def op_synth(req):
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
     lang = str(req.get("lang") or "").lower() or None
     op_load()
+    if _state["device"] == "cpu":
+        _check_ram()
     prompt = _prompt(ref, req.get("ref_text"))
     if req.get("normalize", True) and lang:
         text = text_norm.normalize(text, lang)
@@ -434,6 +461,8 @@ if args.unload_after > 0:
     idle.append((args.unload_after, _idle_unload))
 if args.exit_after > 0 or kit.IDLE_EXIT_S > 0:
     idle.append((args.exit_after or kit.IDLE_EXIT_S, "exit"))
+if _device() == "cpu":
+    torch.nn.modules.module.register_module_forward_pre_hook(_heartbeat)
 kit_worker = kit.Worker("omnivoice", INP, OUT,
                         {"load": op_load, "synth": op_synth, "warm": op_warm, "inspect": op_inspect, "release": op_release,
                          "status": op_status, "ping": lambda _r: {},

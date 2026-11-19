@@ -4,6 +4,7 @@ uses the standard library only. Protocol: one JSON object per line each way; ``c
 import asyncio
 import concurrent.futures
 import json
+import mmap
 import os
 import re
 import sys
@@ -31,6 +32,13 @@ NO_VRAM = "not enough free GPU memory: close programs that use the graphics card
 NO_RAM = "not enough free memory (RAM): close other programs and try again"
 NO_COMMIT = ("not enough free memory: the graphics card has room, but Windows has no memory left to back it; close "
              "other programs and try again")
+NO_RAM_CPU = ("not enough free memory (RAM): {out:.1f} GB of the speech model are no longer in the {total:.0f} GB of RAM "
+              "({free:.1f} GB free), so speech on the processor slows to minutes per sentence; close other programs and "
+              "try again")
+# The commit cap (memguard) counts the page file: a model that works from RAM on the CPU is checked against the RAM.
+RAM_LOW_SHARE, RAM_LOW_MIN_GB, OUT_MIN_GB = 0.05, 0.5, 1.0
+PAGE = mmap.PAGESIZE
+RESIDENT_STRIDE = 16 * PAGE
 
 
 def _cuda_torch(start=False):
@@ -165,6 +173,96 @@ class _Trimmer:
         self.just_trimmed = True
 
 
+def physical_memory():
+    """(total, available) bytes of RAM, or None where they are not known."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class Status(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+                            *[(n, ctypes.c_uint64) for n in ("ullTotalPhys", "ullAvailPhys", "ullTotalPageFile",
+                                                             "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual",
+                                                             "ullAvailExtendedVirtual")]]
+
+            s = Status()
+            s.dwLength = ctypes.sizeof(s)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s)):
+                return None
+            return s.ullTotalPhys, s.ullAvailPhys
+        if sys.platform.startswith("linux"):
+            info = {}
+            with open("/proc/meminfo", encoding="ascii", errors="replace") as fh:
+                for line in fh:
+                    name, _, rest = line.partition(":")
+                    info[name] = int(rest.split()[0]) * 1024
+            return info["MemTotal"], info["MemAvailable"]
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def resident_share(ranges):
+    """Share of the pages of ``(address, length)`` ranges of this process that are in RAM (not paged out or compressed),
+    one page in RESIDENT_STRIDE // PAGE sampled; None where it cannot be read."""
+    spans = [(start - start % PAGE, start + length) for start, length in ranges if length > 0]
+    try:
+        import ctypes
+
+        if os.name == "nt":
+            class Info(ctypes.Structure):
+                _fields_ = [("VirtualAddress", ctypes.c_void_p), ("VirtualAttributes", ctypes.c_size_t)]
+
+            addrs = [a for a0, end in spans for a in range(a0, end, RESIDENT_STRIDE)]
+            if not addrs:
+                return None
+            k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
+            k32.GetCurrentProcess.restype = ctypes.c_void_p
+            psapi.QueryWorkingSetEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32]
+            buf = (Info * len(addrs))(*[Info(a, 0) for a in addrs])
+            if not psapi.QueryWorkingSetEx(k32.GetCurrentProcess(), buf, ctypes.sizeof(buf)):
+                return None
+            return sum(i.VirtualAttributes & 1 for i in buf) / len(addrs)  # bit 0: Valid
+        if sys.platform.startswith("linux"):
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.mincore.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p]
+            step, inside, total = RESIDENT_STRIDE // PAGE, 0, 0
+            for a0, end in spans:
+                vec = (ctypes.c_ubyte * ((end - a0 + PAGE - 1) // PAGE))()
+                if libc.mincore(a0, end - a0, vec) != 0:
+                    return None
+                picked = vec[::step]
+                inside += sum(v & 1 for v in picked)
+                total += len(picked)
+            return inside / total if total else None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def thrashing(total, available, out):
+    """The RAM is full and at least OUT_MIN_GB of a model that works from it is not in it."""
+    return available < _ram_low(total) and out >= OUT_MIN_GB * 2**30
+
+
+def ram_short(ranges):
+    """The message when the RAM is full and the model whose weights are ``ranges`` is partly paged out; else None."""
+    mem = physical_memory()
+    if mem is None or mem[1] >= _ram_low(mem[0]):
+        return None
+    share = resident_share(ranges)
+    if share is None:
+        return None
+    out = (1.0 - share) * sum(length for _, length in ranges)
+    if not thrashing(mem[0], mem[1], out):
+        return None
+    return NO_RAM_CPU.format(out=out / 2**30, total=mem[0] / 2**30, free=mem[1] / 2**30)
+
+
+def _ram_low(total):
+    return max(RAM_LOW_MIN_GB * 2**30, RAM_LOW_SHARE * total)
+
+
 def gpu_cleanup():
     import gc
 
@@ -215,6 +313,7 @@ class Worker:
         self._busy = 0
         self._timers = []
         self._trimmer = _Trimmer()
+        self.trim = True             # off when the working set is the model itself (weights on the CPU)
         self.loop = None
         self._finished = None
 
@@ -328,7 +427,8 @@ class Worker:
             self.send({"id": rid, "ok": False, "code": "internal", "error": f"{type(exc).__name__}: {exc}"})
         finally:
             gpu_release_cache()
-            self._trimmer.after_op()
+            if self.trim:
+                self._trimmer.after_op()
             self.current = None
             self._cancelled.discard(rid)
 
