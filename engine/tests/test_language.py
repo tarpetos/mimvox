@@ -25,13 +25,28 @@ SAMPLES = {
 }
 
 
-BE_AS_RU = pytest.mark.xfail(strict=True, raises=AssertionError,
-                             reason="ы and э count as Russian marks, but Belarusian uses them as much")
-
-
-@pytest.mark.parametrize("code", [pytest.param(c, marks=BE_AS_RU) if c == "be" else c for c in sorted(SAMPLES)])
+@pytest.mark.parametrize("code", sorted(SAMPLES))
 def test_detects_language(code):
     assert lang.detect(SAMPLES[code], among=lang.DETECTABLE) == code
+
+
+@pytest.mark.parametrize(
+    ("code", "text"),
+    [
+        ("be", "Гэта была цёплая летняя ноч. Дзеці гулялі на беразе ракі, а маці глядзела на іх з акна."),
+        ("be", "Яна не ведала, што сказаць, бо ён зноў маўчаў."),
+        ("be", "Сёння вечарам мы паедзем да бабулі, калі не будзе дажджу."),
+        ("ru", "Это был тёплый летний вечер. Дети играли на берегу реки, а мать смотрела на них из окна."),
+        ("ru", "Мы долго шли по лесу, и только к вечеру увидели огни деревни."),
+        ("ru", "Он сказал, что она ушла домой."),
+        ("uk", "Це була тепла літня ніч. Діти гралися на березі річки, а мати дивилася на них з вікна."),
+        ("uk", "Сьогодні ввечері ми поїдемо до бабусі, якщо не буде дощу."),
+        ("bg", "Това беше топла лятна нощ. Децата играеха на брега на реката, а майка им ги гледаше от прозореца."),
+        ("bg", "Тази вечер ще отидем при баба, ако не вали."),
+    ],
+)
+def test_tells_cyrillic_languages_apart(code, text):
+    assert lang.detect(text, among=lang.DETECTABLE) == code
 
 
 def test_belarusian_with_its_own_letters():
@@ -42,11 +57,10 @@ def test_belarusian_with_its_own_letters():
 TIE = "Я ведаю, што ты прыйдзеш заўтра. Ён не хацеў гэтага, але яна ўсё ж такі пайшла да яго."
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="a tie between languages is broken by set order, which changes with the hash seed")
-def test_detection_does_not_depend_on_the_hash_seed():
+@pytest.mark.parametrize("text", [TIE, "la"])
+def test_detection_does_not_depend_on_the_hash_seed(text):
     src = os.path.dirname(os.path.dirname(mimvox_engine.__file__))
-    code = f"from mimvox_engine.dataset import lang; print(lang.detect({TIE!r}, among=lang.DETECTABLE))"
+    code = f"from mimvox_engine.dataset import lang; print(lang.detect({text!r}, among=lang.DETECTABLE))"
     seen = set()
     for seed in range(4):
         env = {**os.environ, "PYTHONHASHSEED": str(seed), "PYTHONPATH": src}

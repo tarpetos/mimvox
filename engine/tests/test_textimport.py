@@ -47,12 +47,16 @@ def test_epub_repeated_heading_is_stripped_from_the_text(tmp_path, import_book):
     assert r["chapters"][0]["text"].startswith("Paragraph 0 of chapter 1")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="_strip_title drops a short first sentence that merely contains the title")
 def test_short_first_sentence_containing_the_title_is_kept(tmp_path, import_book):
     chapters = [("The Storm", ["It was the storm.", *body_paras("one")]), ("The Calm", body_paras("two"))]
     r = import_book(epub(tmp_path / "b.epub", chapters=chapters))
     assert r["chapters"][0]["text"].startswith("It was the storm.")
+
+
+def test_numbered_heading_containing_the_title_is_stripped(tmp_path, import_book):
+    chapters = [("The Storm", ["Chapter 1. The Storm", *body_paras("one")]), ("The Calm", body_paras("two"))]
+    r = import_book(epub(tmp_path / "b.epub", chapters=chapters))
+    assert r["chapters"][0]["text"].startswith("Paragraph 0 of one")
 
 
 def encryption(uri):
@@ -181,14 +185,21 @@ def test_plain_text_table_of_contents_is_dropped(tmp_path, import_book):
     assert r["chapters"][0]["text"].startswith("Body text under Chapter 1")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="the TOC run swallows the first real heading right after it: chapter 1 becomes 'Opening', "
-                          "or is dropped when shorter than OPENING_WORDS")
 @pytest.mark.parametrize("words", [40, 400])
 def test_plain_text_table_of_contents_right_before_chapter_one(tmp_path, import_book, words):
     r = import_book(text_file(tmp_path / "b.txt", TOC + plain(["Chapter 1", "Chapter 2", "Chapter 3"], words)))
     assert titles(r) == ["Chapter 1", "Chapter 2", "Chapter 3"]
+    assert r["title"] == "My Novel"
     assert r["chapters"][0]["text"].startswith("Body text under Chapter 1")
+
+
+def test_plain_text_table_of_contents_right_before_a_part_and_its_first_chapter(tmp_path, import_book):
+    toc = "My Novel\n\nContents\n\nPart 1\nChapter 1\nChapter 2\nPart 2\nChapter 3\n\n"
+    body = "Part 1\n\n" + plain(["Chapter 1", "Chapter 2"]) + "\n\nPart 2\n\n" + plain(["Chapter 3"])
+    r = import_book(text_file(tmp_path / "b.txt", toc + body))
+    assert titles(r) == ["Chapter 1", "Chapter 2", "Chapter 3"]
+    assert "Body text under Chapter 1" in r["chapters"][0]["text"]
+    assert "Contents" not in " ".join(c["text"] for c in r["chapters"])
 
 
 def test_plain_text_without_headings_is_one_chapter(tmp_path, import_book):
