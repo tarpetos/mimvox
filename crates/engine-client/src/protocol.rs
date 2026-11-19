@@ -172,9 +172,9 @@ pub struct Hello {
     /// Installed but turned off.
     #[serde(default)]
     pub components_off: Vec<String>,
-    /// Fields this client has no type for, so the `ready` line can be passed on whole.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
+    /// The `ready` data exactly as the engine sent it.
+    #[serde(skip)]
+    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

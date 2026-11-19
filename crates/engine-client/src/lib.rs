@@ -481,7 +481,8 @@ fn parse_line(line: &str) -> Result<Option<EngineMsg>, ()> {
     if let Some(name) = obj.get("event").and_then(Value::as_str) {
         let data = obj.get("data").cloned().unwrap_or(Value::Null);
         if name == "ready" {
-            let hello = serde_json::from_value(data).unwrap_or_default();
+            let mut hello: protocol::Hello = serde_json::from_value(data.clone()).unwrap_or_default();
+            hello.raw = data;
             return Ok(Some(EngineMsg::Ready(hello)));
         }
         return Ok(Some(EngineMsg::Event(protocol::Event {

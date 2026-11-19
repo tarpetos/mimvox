@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::time::{Duration, SystemTime};
 
 use axum::Json;
@@ -15,7 +15,7 @@ use tokio_util::io::ReaderStream;
 use crate::{ApiError, AppState};
 
 pub const UPLOAD_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-const NAME_MAX_CHARS: usize = 100;
+const NAME_MAX_BYTES: usize = 200;
 
 pub fn uploads_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("api").join("uploads")
@@ -41,24 +41,45 @@ pub fn prune_uploads(data_dir: &Path) {
     }
 }
 
-/// The last path component, letters, digits, `.`, `-` and `_` only, at most [`NAME_MAX_CHARS`] characters.
+/// The last path component, letters, digits, `.`, `-` and `_` only, at most [`NAME_MAX_BYTES`] bytes.
 pub fn safe_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String =
         base.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
     let cleaned = cleaned.trim_start_matches('.');
-    let cleaned = if cleaned.chars().count() > NAME_MAX_CHARS {
-        match cleaned.rsplit_once('.').filter(|(_, ext)| (1..=10).contains(&ext.chars().count())) {
-            Some((stem, ext)) => {
-                let keep = NAME_MAX_CHARS - ext.chars().count() - 1;
-                format!("{}.{ext}", stem.chars().take(keep).collect::<String>())
-            }
-            None => cleaned.chars().take(NAME_MAX_CHARS).collect(),
-        }
-    } else {
-        cleaned.to_string()
+    let cleaned = match cleaned.rsplit_once('.').filter(|(_, ext)| (1..=16).contains(&ext.len())) {
+        _ if cleaned.len() <= NAME_MAX_BYTES => cleaned.to_string(),
+        Some((stem, ext)) => format!("{}.{ext}", cut(stem, NAME_MAX_BYTES - ext.len() - 1)),
+        None => cut(cleaned, NAME_MAX_BYTES).to_string(),
     };
     if cleaned.is_empty() { "upload".to_string() } else { cleaned }
+}
+
+fn cut(s: &str, max: usize) -> &str {
+    let mut end = max.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// `path` with `.` and `..` resolved without touching the filesystem; `None` unless it is absolute, and for Windows
+/// verbatim (`\\?\`) and device (`\\.\`) paths.
+fn lexical(path: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(p) if matches!(p.kind(), Prefix::Disk(_) | Prefix::UNC(..)) => out.push(component),
+            Component::Prefix(_) => return None,
+            Component::RootDir => out.push(component),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(name) => out.push(name),
+        }
+    }
+    out.is_absolute().then_some(out)
 }
 
 pub fn content_type(path: &Path) -> &'static str {
@@ -147,19 +168,30 @@ pub async fn download(State(st): State<AppState>, Query(q): Query<DownloadQuery>
         return Err(ApiError::bad_request("path must be absolute"));
     }
     let not_found = || ApiError::new(StatusCode::NOT_FOUND, "not_found", "no such file");
-    let real = tokio::fs::canonicalize(requested).await.map_err(|_| not_found())?;
-    let mut inside = false;
-    for root in served_roots(&st.cfg.data_dir) {
-        if let Ok(root) = tokio::fs::canonicalize(&root).await {
-            inside |= real.starts_with(&root);
-        }
-    }
-    if !inside {
-        return Err(ApiError::new(
+    let forbidden = || {
+        ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
             "only files under the data folder's outputs, tmp and api/uploads are served",
-        ));
+        )
+    };
+    let roots = served_roots(&st.cfg.data_dir);
+    // Checked before any filesystem access: on Windows even resolving a UNC path connects to (and authenticates with)
+    // that host.
+    let path = lexical(requested).ok_or_else(forbidden)?;
+    let mut real_roots = Vec::new();
+    for root in &roots {
+        if let Ok(real) = tokio::fs::canonicalize(root).await {
+            real_roots.push(real);
+        }
+    }
+    let lexical_roots: Vec<PathBuf> = roots.iter().filter_map(|r| lexical(r)).collect();
+    if !lexical_roots.iter().chain(&real_roots).any(|r| path.starts_with(r)) {
+        return Err(forbidden());
+    }
+    let real = tokio::fs::canonicalize(&path).await.map_err(|_| not_found())?;
+    if !real_roots.iter().any(|r| real.starts_with(r)) {
+        return Err(forbidden());
     }
     let file = tokio::fs::File::open(&real).await.map_err(|_| not_found())?;
     let meta = file.metadata().await.map_err(ApiError::internal)?;
@@ -185,8 +217,32 @@ mod tests {
         assert_eq!(safe_name(".hidden"), "hidden");
         assert_eq!(safe_name("книга.epub"), "книга.epub");
         let long = format!("{}.flac", "a".repeat(300));
-        let cut = safe_name(&long);
-        assert_eq!(cut.chars().count(), NAME_MAX_CHARS);
-        assert!(cut.ends_with(".flac"));
+        let short = safe_name(&long);
+        assert_eq!(short.len(), NAME_MAX_BYTES);
+        assert!(short.ends_with(".flac"));
+        let cjk = safe_name(&format!("{}.mp3", "書".repeat(300)));
+        assert!(cjk.len() <= NAME_MAX_BYTES && cjk.ends_with(".mp3"), "{cjk}");
+        let no_ext = safe_name(&"ж".repeat(300));
+        assert!(no_ext.len() <= NAME_MAX_BYTES && no_ext.chars().all(|c| c == 'ж'));
+    }
+
+    #[test]
+    fn lexical_paths() {
+        let p = |s: &str| lexical(Path::new(s));
+        assert_eq!(p("relative/x"), None);
+        #[cfg(unix)]
+        {
+            assert_eq!(p("/data/outputs/../secret"), Some(PathBuf::from("/data/secret")));
+            assert_eq!(p("/data/./outputs/a.wav"), Some(PathBuf::from("/data/outputs/a.wav")));
+            assert_eq!(p("/../../etc/passwd"), Some(PathBuf::from("/etc/passwd")));
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(p(r"C:\data\outputs\..\secret"), Some(PathBuf::from(r"C:\data\secret")));
+            assert_eq!(p(r"\\?\C:\data\outputs\a.wav"), None);
+            assert_eq!(p(r"\\?\UNC\host\share\a.wav"), None);
+            assert_eq!(p(r"\\.\pipe\x"), None);
+            assert!(!p(r"\\attacker\s\x").unwrap().starts_with(r"C:\data\outputs"));
+        }
     }
 }

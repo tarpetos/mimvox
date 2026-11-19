@@ -31,7 +31,8 @@ pub use hub::{EngineEvent, EngineExit, Hub, Reply};
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8765";
 pub const DEFAULT_MAX_UPLOAD_BYTES: u64 = 2 << 30;
-const RPC_BODY_LIMIT: usize = 64 << 20;
+const RPC_BODY_LIMIT: usize = 16 << 20;
+const SPEECH_BODY_LIMIT: usize = 1 << 20;
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct ApiConfig {
@@ -71,7 +72,7 @@ pub fn router(hub: Hub, mut cfg: ApiConfig, stop: CancellationToken) -> Router {
         .route("/files", post(files::upload).get(files::download))
         .route("/v1/models", get(openai::models))
         .route("/v1/audio/voices", get(openai::voices))
-        .route("/v1/audio/speech", post(openai::speech).layer(DefaultBodyLimit::max(RPC_BODY_LIMIT)))
+        .route("/v1/audio/speech", post(openai::speech).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
@@ -103,6 +104,7 @@ pub fn status_for(code: &str) -> StatusCode {
         "not_found" => StatusCode::NOT_FOUND,
         "busy" => StatusCode::CONFLICT,
         "not_ready" => StatusCode::SERVICE_UNAVAILABLE,
+        "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -115,7 +117,8 @@ impl From<EngineError> for ApiError {
 
 impl From<JsonRejection> for ApiError {
     fn from(e: JsonRejection) -> Self {
-        Self::new(e.status(), "bad_request", e.body_text())
+        let code = if e.status() == StatusCode::PAYLOAD_TOO_LARGE { "too_large" } else { "bad_request" };
+        Self::new(e.status(), code, e.body_text())
     }
 }
 
@@ -134,14 +137,16 @@ fn is_local_host(host: &str) -> bool {
 }
 
 /// Without a token, a web page could reach a loopback server through the browser (a cross-site request, or DNS
-/// rebinding): only requests addressed to a loopback name and not sent by a remote page get in.
+/// rebinding): only requests addressed to a loopback name and not sent by a remote page get in. Browsers send no
+/// `Origin` on a plain GET (`<img>`, `<audio>`, a link) but do send `Sec-Fetch-Site`.
 fn local_request(headers: &HeaderMap) -> bool {
     let text = |h: Option<&HeaderValue>| h.map(|v| v.to_str().unwrap_or("\u{0}").to_string());
     let host_ok = text(headers.get(header::HOST)).is_none_or(|h| is_local_host(&h));
     let origin_ok = text(headers.get(header::ORIGIN)).is_none_or(|o| {
         o.split_once("://").is_some_and(|(_, rest)| is_local_host(rest.split('/').next().unwrap_or("")))
     });
-    host_ok && origin_ok
+    let fetch_ok = text(headers.get("sec-fetch-site")).is_none_or(|s| s == "same-origin" || s == "none");
+    host_ok && origin_ok && fetch_ok
 }
 
 async fn guard(State(st): State<AppState>, req: Request, next: Next) -> Response {
@@ -249,6 +254,12 @@ mod tests {
         assert!(!local_request(&h));
         h.insert(header::ORIGIN, HeaderValue::from_static("null"));
         assert!(!local_request(&h));
+        h.remove(header::ORIGIN);
+        for (site, ok) in [("cross-site", false), ("same-site", false), ("same-origin", true), ("none", true)] {
+            h.insert("sec-fetch-site", HeaderValue::from_static(site));
+            assert_eq!(local_request(&h), ok, "{site}");
+        }
+        h.remove("sec-fetch-site");
         h.remove(header::ORIGIN);
         h.insert(header::HOST, HeaderValue::from_static("rebound.evil.example:8765"));
         assert!(!local_request(&h));

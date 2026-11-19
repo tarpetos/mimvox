@@ -1564,23 +1564,25 @@ mimvox-server --show-token | token show | token new
   `Authorization: Bearer <token>`, compared in constant time; missing or wrong is 401.
 - **Bind.** Default `127.0.0.1:8765`, no token needed. `--require-token` asks for it on loopback too (creating the
   file when missing). Any other address needs an existing token (file or env) and refuses to start without one.
-  Without a token only requests whose `Host` is a loopback name and whose `Origin` (when sent) is a loopback page get
-  in (403 otherwise), so web pages cannot reach the API through the browser.
+  Without a token only requests whose `Host` is a loopback name, whose `Origin` (when sent) is a loopback page and
+  whose `Sec-Fetch-Site` (when sent) is `same-origin` or `none` get in (403 otherwise), so web pages cannot reach
+  the API through the browser. Whoever can reach it can do what the app can, including `/rpc` methods that read
+  and write files as the user.
 
 | Endpoint | |
 | --- | --- |
 | `GET /health` | `{"status":"ok","api_version","engine":<hello result>}`; 503 while the engine is down or does not answer within 10 s |
-| `POST /rpc` | `{"method","params"?}` -> the engine's `result` as is. Any method, `shutdown` included (the server then starts a fresh engine: use it after `components.set`). Body up to 64 MiB |
+| `POST /rpc` | `{"method","params"?}` -> the engine's `result` as is. Any method, `shutdown` included (the server then starts a fresh engine: use it after `components.set`). Body up to 16 MiB, and a request line to the engine (whose stdin lines end at 64 MiB) up to 32 MiB: larger is `too_large` 413 |
 | `GET /events` | Server-Sent Events: every engine event as one `data:` line, the same JSON as the engine's stdout (`{"event","job","data"}`, default SSE event type). Added by the server: `engine.exited {"code"}` (a new `ready` follows the restart) and `api.lagged {"missed"}` when a slow client fell 4096 events behind |
 | `POST /files?name=<file name>` | the raw body (streamed, not multipart) saved to `<data>/api/uploads/<uuid>-<safe name>` -> `{"path","size_bytes"}`; pass `path` to methods that take files. Over `--max-upload-mb` is 413 and nothing is kept. Uploads older than 24 h are deleted at start and after each upload |
-| `GET /files?path=<absolute path>` | the file, streamed, if it resolves (symlinks and `..` included) inside `<data>/outputs`, `<data>/tmp` or `<data>/api/uploads`: 403 outside, 400 relative or a folder, 404 missing. Voices, models and the token are never served |
-| `POST /v1/audio/speech` | OpenAI-compatible: `{"model","input","voice","response_format"?,"speed"?}` (+ `"language"`, default the voice's) -> audio bytes. `model` is ignored; `voice` is a voice id or name (case-insensitive). `response_format`: `mp3` (default), `wav`, `flac`, `opus` (Ogg), `aac` (AAC in MP4, `audio/mp4`), `pcm` (16-bit mono 44.1 kHz little-endian, not OpenAI's 24 kHz); the engine's `output_format` rules apply (`not_ready` without the encoder). `speed` is clamped to 0.8-1.3 by the engine. Runs `tts.generate`, waits for its `tts.done` event, returns the file and deletes it with `outputs.delete`; requests queue one at a time; a client that disconnects cancels the job |
+| `GET /files?path=<absolute path>` | the file, streamed, if it lies inside `<data>/outputs`, `<data>/tmp` or `<data>/api/uploads`: first checked on the path alone (`..` resolved, Windows `\\?\` and `\\.\` paths refused, a UNC path only inside a data folder on that share), so nothing outside is ever opened, then again after resolving symlinks. 403 outside, 400 relative or a folder, 404 missing. Voices, models and the token are never served |
+| `POST /v1/audio/speech` | OpenAI-compatible: `{"model","input","voice","response_format"?,"speed"?}` (+ `"language"`, default the voice's) -> audio bytes. `model` is ignored; `voice` is a voice id or name (case-insensitive). `response_format`: `mp3` (default), `wav`, `flac`, `opus` (Ogg), `aac` (AAC in MP4, `audio/mp4`), `pcm` (16-bit mono 44.1 kHz little-endian, not OpenAI's 24 kHz); the engine's `output_format` rules apply (`not_ready` without the encoder). `speed` is clamped to 0.8-1.3 by the engine; `input` is at most 4096 characters (400). Runs `tts.generate`, waits for its `tts.done` event, returns the file and deletes it with `outputs.delete`. Requests queue one at a time, and a turn lasts until its job has ended: a client that disconnects, a job past 30 minutes (`timeout` 504) or missed events cancel the job (waiting up to 30 s for its end) and delete its result |
 | `GET /v1/models` | `{"object":"list","data":[{"id":"mimvox",...}]}` |
 | `GET /v1/audio/voices` | the `voices.list` result |
 
 Errors keep the engine's body `{"code","message"}` (`/v1/*`: OpenAI's `{"error":{"message","type","code"}}`) with the
 status: `bad_request` 400, `not_found` 404, `busy` 409, `not_ready` 503, every other engine code 500; the server's own
-`unauthorized` 401, `forbidden` 403, `too_large` 413. A request whose engine exits before it answers is `internal` 500.
+`unauthorized` 401, `forbidden` 403, `too_large` 413, `timeout` 504. A request whose engine exits before it answers is `internal` 500.
 
 The same rules as the app apply: the OmniVoice weights are CC BY-NC 4.0, so speech made through the API is for
 non-commercial use only, and only your own voice or one whose owner gave explicit permission may be cloned (README,

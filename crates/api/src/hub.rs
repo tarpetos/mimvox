@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 const EVENT_CAPACITY: usize = 4096;
+/// The engine reads stdin lines of up to 64 MiB and treats a longer one as the end of its input.
+pub const MAX_REQUEST_LINE: usize = 32 << 20;
 
 /// One engine event, with the JSON line `/events` sends for it.
 #[derive(Debug)]
@@ -76,8 +78,18 @@ impl Hub {
         })
     }
 
+    /// A client that already exited is dropped (releasing its data dir lock); its exit was reported already.
     pub fn attach(&self, client: EngineClient) {
-        *lock(&self.0.engine) = Some(Arc::new(client));
+        let dead = {
+            let p = lock(&self.0.pending);
+            if p.exited.contains(&client.id()) {
+                Some(client)
+            } else {
+                *lock(&self.0.engine) = Some(Arc::new(client));
+                None
+            }
+        };
+        drop(dead);
     }
 
     pub fn take_engine(&self) -> Option<Arc<EngineClient>> {
@@ -89,6 +101,10 @@ impl Hub {
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Reply {
+        let size = method.len() + serde_json::to_string(&params).map_or(0, |s| s.len());
+        if size > MAX_REQUEST_LINE {
+            return Err(EngineError::new("too_large", format!("requests are limited to {MAX_REQUEST_LINE} bytes")));
+        }
         let client =
             lock(&self.0.engine).clone().ok_or_else(|| EngineError::new("not_ready", "the engine is not running"))?;
         let key = (client.id(), client.request(method, params));
@@ -116,7 +132,7 @@ impl Hub {
 
     fn on_msg(&self, client: u64, msg: EngineMsg) {
         match msg {
-            EngineMsg::Ready(hello) => self.emit("ready", None, serde_json::to_value(hello).unwrap_or(Value::Null)),
+            EngineMsg::Ready(hello) => self.emit("ready", None, hello.raw),
             EngineMsg::Event(ev) => self.emit(&ev.event, ev.job, ev.data),
             EngineMsg::Response { id, result } => {
                 let mut p = lock(&self.0.pending);
@@ -170,5 +186,19 @@ impl Drop for Abandon<'_> {
         if let Some(Slot::Waiting(_)) = p.slots.get(&self.key) {
             p.slots.insert(self.key, Slot::Abandoned);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn oversized_requests_never_reach_the_engine() {
+        let (hub, _exits) = Hub::new();
+        let err = hub.call("tts.generate", json!({ "text": "a".repeat(MAX_REQUEST_LINE) })).await.unwrap_err();
+        assert_eq!(err.code, "too_large");
+        let err = hub.call("hello", json!({})).await.unwrap_err();
+        assert_eq!(err.code, "not_ready");
     }
 }

@@ -269,6 +269,8 @@ async fn files_up_and_down() {
         data.join("outputs").join("..").join("secret.txt"),
         data.join("api").join("uploads").join("..").join("..").join("secret.txt"),
         setup.dir.path().join("runtime.toml"),
+        PathBuf::from("//attacker/share/x.wav"),
+        data.join("outputs").join("..").join("..").join("..").join("..").join("etc").join("passwd"),
     ];
     for p in &outside {
         assert_eq!(get(p).await.unwrap().status(), StatusCode::FORBIDDEN, "{}", p.display());
@@ -277,6 +279,24 @@ async fn files_up_and_down() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     assert_eq!(get(&data.join("outputs").join("missing.wav")).await.unwrap().status(), StatusCode::NOT_FOUND);
     assert_eq!(get(&data.join("outputs")).await.unwrap().status(), StatusCode::BAD_REQUEST);
+
+    let res =
+        client.post(server.url("/files")).query(&[("name", "書".repeat(300) + ".mp3")]).body("x").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let up: Value = res.json().await.unwrap();
+    let name = Path::new(up["path"].as_str().unwrap()).file_name().unwrap().to_str().unwrap().to_string();
+    assert!(name.len() <= 240 && name.ends_with(".mp3"), "{name}");
+
+    let rpc = reqwest::Client::new()
+        .post(server.url("/rpc"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"method":"text.analyze","params":{{"text":"{}"}}}}"#, "a".repeat(17 << 20)))
+        .send()
+        .await;
+    if let Ok(res) = rpc {
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(res.json::<Value>().await.unwrap()["code"], "too_large");
+    }
 
     #[cfg(unix)]
     {
@@ -343,6 +363,18 @@ async fn loopback_without_token_refuses_web_pages() {
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     let res = client.get(server.url("/health")).header("origin", "http://localhost:5173").send().await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    for (site, status) in [("cross-site", 403), ("same-site", 403), ("same-origin", 200), ("none", 200)] {
+        let res = client.get(server.url("/health")).header("sec-fetch-site", site).send().await.unwrap();
+        assert_eq!(res.status().as_u16(), status, "{site}");
+    }
+    let res = client
+        .get(server.url("/files"))
+        .query(&[("path", "//attacker/share/x.wav")])
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -412,7 +444,9 @@ async fn engine_restarts_after_it_exits() {
     assert_eq!(status, StatusCode::OK);
     let seen = events.until(|e| e["event"] == "ready").await;
     assert!(seen.iter().any(|e| e["event"] == "engine.exited" && e["data"]["code"] == 0));
-    assert_eq!(seen.last().unwrap()["data"]["version"], "0.1.0-fake");
+    let ready = &seen.last().unwrap()["data"];
+    assert_eq!(ready["version"], "0.1.0-fake");
+    assert!(ready.get("languages").is_none(), "ready data is passed on as the engine sent it: {ready}");
     server.wait_line("ready").await;
     let (status, _) = server.rpc("voices.list", json!({})).await;
     assert_eq!(status, StatusCode::OK);
@@ -439,4 +473,44 @@ async fn sigterm_shuts_the_engine_down() {
     assert!(status.success());
     let log = std::fs::read_to_string(setup.data().join("logs").join("engine.log")).unwrap();
     assert!(log.contains("shutdown requested"), "{log}");
+}
+
+#[tokio::test]
+async fn speech_turn_outlives_a_client_that_leaves() {
+    let setup = Setup::new();
+    let mut server = setup.start(&[], &[]).await;
+    server.wait_line("ready").await;
+    let mut events = Events::open(&server).await;
+    let long = "One. Two. Three. Four. Five. Six. Seven. Eight.";
+    let gone = reqwest::Client::builder().timeout(Duration::from_millis(700)).build().unwrap();
+    let res = gone
+        .post(server.url("/v1/audio/speech"))
+        .json(&json!({ "model": "tts-1", "input": long, "voice": "fake-voice", "response_format": "wav" }))
+        .send()
+        .await;
+    assert!(res.is_err(), "the first request should time out on the client side");
+
+    let res = reqwest::Client::new()
+        .post(server.url("/v1/audio/speech"))
+        .json(&json!({ "model": "tts-1", "input": "Hi.", "voice": "fake-voice", "response_format": "wav" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", res.text().await.unwrap());
+
+    let seen = events.until(|e| e["event"] == "tts.done").await;
+    let first = seen.iter().find(|e| e["event"] == "tts.chunk").unwrap()["job"].clone();
+    assert!(seen.iter().any(|e| e["event"] == "tts.error" && e["job"] == first && e["data"]["code"] == "cancelled"));
+    assert_ne!(seen.last().unwrap()["job"], first);
+    let ended = seen.iter().position(|e| e["event"] == "tts.error" && e["job"] == first).unwrap();
+    let next = seen.iter().position(|e| e["event"] == "tts.chunk" && e["job"] != first).unwrap();
+    assert!(ended < next, "the next job started before the abandoned one ended");
+
+    let res = reqwest::Client::new()
+        .post(server.url("/v1/audio/speech"))
+        .json(&json!({ "model": "tts-1", "input": "a".repeat(4097), "voice": "fake-voice" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }

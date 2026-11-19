@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::extract::State;
@@ -9,10 +9,15 @@ use mimvox_engine_client::protocol::EngineError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{OwnedMutexGuard, oneshot};
 
 use crate::files::content_type;
 use crate::hub::{EngineEvent, Hub};
 use crate::{ApiError, AppState};
+
+pub const MAX_INPUT_CHARS: usize = 4096;
+const SPEECH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const CANCEL_GRACE: Duration = Duration::from_secs(30);
 
 /// OpenAI's error shape: `{"error":{"message","type","code"}}`.
 pub struct OpenAiError(ApiError);
@@ -88,23 +93,6 @@ fn find_voice<'a>(voices: &'a [Value], wanted: &str) -> Option<&'a Value> {
         .or_else(|| voices.iter().find(|v| v["name"].as_str().is_some_and(|n| n.trim().eq_ignore_ascii_case(wanted))))
 }
 
-struct CancelOnDrop {
-    hub: Hub,
-    job: Option<String>,
-}
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        let (Some(job), Ok(rt)) = (self.job.take(), tokio::runtime::Handle::try_current()) else {
-            return;
-        };
-        let hub = self.hub.clone();
-        rt.spawn(async move {
-            let _ = hub.call("tts.cancel", json!({ "job": job })).await;
-        });
-    }
-}
-
 fn job_error(ev: &EngineEvent) -> ApiError {
     let code = ev.data["code"].as_str().unwrap_or("internal");
     let message = ev.data["message"].as_str().unwrap_or("speech failed");
@@ -124,6 +112,9 @@ pub async fn speech(
     })?;
     if req.input.trim().is_empty() {
         return Err(ApiError::bad_request("input is empty").into());
+    }
+    if req.input.chars().count() > MAX_INPUT_CHARS {
+        return Err(ApiError::bad_request(format!("input is limited to {MAX_INPUT_CHARS} characters")).into());
     }
     let wanted = match &req.voice {
         Value::String(s) => s.clone(),
@@ -153,44 +144,94 @@ pub async fn speech(
     }
 
     // One generation at a time in the engine: queue here instead of answering busy.
-    let _turn = st.speech.lock().await;
-    let mut events = st.hub.subscribe();
-    let started = st.hub.call("tts.generate", params).await?;
-    let job =
-        started["job"].as_str().ok_or_else(|| ApiError::internal("tts.generate answered without a job"))?.to_string();
-    let mut cancel = CancelOnDrop { hub: st.hub.clone(), job: Some(job.clone()) };
-    let done: Arc<EngineEvent> = loop {
-        match events.recv().await {
-            Ok(ev) if ev.event == "engine.exited" => {
-                return Err(ApiError::internal("the engine stopped while speaking").into());
-            }
-            Ok(ev) if ev.job.as_deref() == Some(job.as_str()) => match ev.event.as_str() {
-                "tts.done" => break ev,
-                "tts.error" | "job.error" => return Err(job_error(&ev).into()),
-                _ => {}
-            },
-            Ok(_) | Err(RecvError::Lagged(_)) => {}
-            Err(RecvError::Closed) => return Err(ApiError::internal("the engine went away").into()),
-        }
-    };
-    cancel.job = None;
+    let turn = st.speech.clone().lock_owned().await;
+    let (tx, rx) = oneshot::channel();
+    tokio::spawn(run_job(st.hub.clone(), params, format, turn, tx));
+    let (audio, saved) = rx.await.map_err(|_| ApiError::internal("the speech task ended early"))??;
 
-    let path = done.data["path"].as_str().unwrap_or_default().to_string();
-    let audio = tokio::fs::read(&path).await.map_err(ApiError::internal)?;
-    let mut delete = json!({ "path": path });
-    if let Some(play) = done.data["path_play"].as_str().filter(|p| *p != path) {
-        delete["path_play"] = json!(play);
-    }
-    // The result was only made for this response; a failed delete leaves it in the app's Results.
-    let _ = st.hub.call("outputs.delete", delete).await;
-
-    let saved = done.data["format"].as_str().unwrap_or(format);
     if response_format == "pcm" && saved == "wav" {
         let samples = wav_samples(&audio).ok_or_else(|| ApiError::internal("the engine's WAV has no data chunk"))?;
         return Ok(([(header::CONTENT_TYPE, "audio/pcm")], samples.to_vec()).into_response());
     }
     let ctype = content_type(std::path::Path::new(&format!("x.{saved}")));
     Ok(([(header::CONTENT_TYPE, ctype)], audio).into_response())
+}
+
+type JobResult = Result<(Vec<u8>, String), ApiError>;
+
+/// Holds the speech turn until the job has ended, also when the client left, so the next request never meets a
+/// running job; a job given up on is cancelled and its output deleted.
+async fn run_job(
+    hub: Hub,
+    params: Value,
+    format: &str,
+    _turn: OwnedMutexGuard<()>,
+    mut tx: oneshot::Sender<JobResult>,
+) {
+    let mut events = hub.subscribe();
+    let job = match hub.call("tts.generate", params).await {
+        Ok(started) => match started["job"].as_str() {
+            Some(job) => job.to_string(),
+            None => {
+                let _ = tx.send(Err(ApiError::internal("tts.generate answered without a job")));
+                return;
+            }
+        },
+        Err(e) => {
+            let _ = tx.send(Err(e.into()));
+            return;
+        }
+    };
+
+    let timer = tokio::time::sleep(SPEECH_TIMEOUT);
+    tokio::pin!(timer);
+    let mut gave_up: Option<ApiError> = None;
+    let outcome: Result<Value, ApiError> = loop {
+        let give_up = tokio::select! {
+            _ = tx.closed(), if gave_up.is_none() => Some(ApiError::internal("the client went away")),
+            _ = &mut timer => match gave_up.take() {
+                Some(e) => break Err(e),
+                None => Some(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "timeout", "speech took too long")),
+            },
+            received = events.recv() => match received {
+                Ok(ev) if ev.event == "engine.exited" => break Err(ApiError::internal("the engine stopped while speaking")),
+                Ok(ev) if ev.job.as_deref() == Some(job.as_str()) => match ev.event.as_str() {
+                    "tts.done" => break Ok(ev.data.clone()),
+                    "tts.error" | "job.error" => break Err(gave_up.take().unwrap_or_else(|| job_error(&ev))),
+                    _ => None,
+                },
+                Ok(_) => None,
+                // Job ids restart with the engine: after a gap this job's end may be gone, so stop waiting for it.
+                Err(RecvError::Lagged(_)) if gave_up.is_none() => Some(ApiError::internal("missed engine events")),
+                Err(RecvError::Lagged(_)) => None,
+                Err(RecvError::Closed) => break Err(ApiError::internal("the engine went away")),
+            },
+        };
+        if let Some(e) = give_up {
+            gave_up = Some(e);
+            let _ = hub.call("tts.cancel", json!({ "job": job })).await;
+            timer.as_mut().reset(tokio::time::Instant::now() + CANCEL_GRACE);
+        }
+    };
+
+    let result = match outcome {
+        Ok(done) => {
+            let path = done["path"].as_str().unwrap_or_default().to_string();
+            let audio = match gave_up {
+                Some(e) => Err(e),
+                None => tokio::fs::read(&path).await.map_err(ApiError::internal),
+            };
+            let mut delete = json!({ "path": path });
+            if let Some(play) = done["path_play"].as_str().filter(|p| *p != path) {
+                delete["path_play"] = json!(play);
+            }
+            // The result was only made for this response; a failed delete leaves it in the app's Results.
+            let _ = hub.call("outputs.delete", delete).await;
+            audio.map(|a| (a, done["format"].as_str().unwrap_or(format).to_string()))
+        }
+        Err(e) => Err(e),
+    };
+    let _ = tx.send(result);
 }
 
 #[cfg(test)]
