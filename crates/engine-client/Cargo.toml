@@ -11,3 +11,11 @@ serde.workspace = true
 serde_json.workspace = true
 toml = "0.8"
 dirs = "6"
+
+[target.'cfg(unix)'.dependencies]
+# Hands the data dir lock to the engine (see spawn_with in src/lib.rs).
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# A job object that ends the engine with its client (see spawn_with in src/lib.rs).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

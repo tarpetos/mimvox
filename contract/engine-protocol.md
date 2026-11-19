@@ -229,7 +229,7 @@ the quick check, and only then delete the old directory.
 <data>/books/<book_id>/segments/<NNN>.json   # each segment's text and speech times in a finished chapter's file (see Output files)
 <data>/outputs/books/<book title>/<NN> - <chapter title>.<ext>  # one file per chapter (+ <book title>.m4b with "m4b")
 <data>/tmp/                                  # scratch (job chunks, training logs), wiped at every engine start
-<data>/engine.lock                           # OS file lock held by the app or mimvox-server while its engine runs (client side)
+<data>/engine.lock                           # OS file lock held by the app or mimvox-server while its engine runs (and by the engine on Unix)
 <data>/api/token                             # HTTP API token, user-only (see HTTP API)
 <data>/api/uploads/<uuid>-<name>             # files sent to POST /files, deleted after 24 h
 ```
@@ -1563,7 +1563,9 @@ mimvox serve [the same arguments]
   `shutdown` and exit. On Unix the engine runs in its own process group, so a terminal's Ctrl+C reaches only the server.
 - **One engine per data dir.** Whoever starts an engine (the app or the server) holds an OS lock on
   `<data>/engine.lock` while it runs; a second one fails with "another Mimvox engine ... is already running". The app
-  shows that as the engine's stop reason.
+  shows that as the engine's stop reason. A client that dies first (killed) does not free it early: on Unix the engine
+  inherits the lock (`flock`) and holds it until it exits; on Windows the engine runs in a job object that ends it with
+  its client.
 - **Token.** 32 random bytes, URL-safe base64 without padding, in `<data>/api/token` (mode 0600 on Unix; on
   Windows the per-user data folder's ACL). `MIMVOX_API_TOKEN` overrides the file. `token new` writes a new
   one, `token show` / `--show-token` print it (creating it when missing). Clients send
