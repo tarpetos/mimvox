@@ -251,8 +251,8 @@ def _pick_warm_voice(data: config.DataDir) -> tuple[str | None, str | None]:
 
 async def load_models(ctx: Context) -> None:
     """The RVC worker starts only when a trained voice is warmed or used: a voice without a model never pays for it
-    (6.5 GB of commit, 3 GB of RAM). ``tts`` stays ``loading`` through the warm-up, which is skipped on the CPU: there
-    it takes minutes, and a request sent meanwhile would wait behind it."""
+    (6.5 GB of commit, 3 GB of RAM). The ``models`` event says ``ready`` after the warm-up, which is skipped on the
+    CPU: there it takes minutes, and a request sent meanwhile would wait behind it."""
     data = config.data_dir(ctx)
     errors: dict[str, str] = {}
     worker = rvc.get(ctx.runtime)

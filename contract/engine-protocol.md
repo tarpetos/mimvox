@@ -270,8 +270,9 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 - `device.name` is read from `nvidia-smi` for CUDA on NVIDIA (`"NVIDIA GPU"` when that fails), from runtime.toml for
   AMD (`"AMD GPU"` when it is missing), `"Apple Silicon GPU"` for MPS and
   `"CPU"` for CPU. `vram_gb` is the total VRAM rounded to 0.1 and is `0.0` for MPS and CPU.
-- `models`: `loading` until the model is loaded and warmed up (no warm-up on the CPU), `missing` when it could not be
-  loaded, `no_memory` (with `tts_message`) when the CPU has too little RAM for it; as in the `models` event.
+- `models`: `loading` until the model is loaded, `missing` when it could not be loaded, `no_memory` (with
+  `tts_message`) when the CPU has too little RAM for it. The `models` event says `ready` only after the warm-up (none
+  on the CPU); a request sent during the warm-up is accepted and waits behind it (a few seconds on a GPU).
 - `translators`: the Redub translation models installed, best first: `nllb-1.3b` (NLLB-200 distilled 1.3B, "better")
   and/or `nllb-600m` (NLLB-200 distilled 600M, "faster"); `[]` when none is. Read at engine start (setup runs while the
   app is closed). See [Translation](#redubtranscribe--redubcancel).

@@ -381,14 +381,14 @@ def test_cpu_with_too_little_ram_loads_nothing_and_says_why(monkeypatch, caplog)
     assert info.value.code == "no_memory"
 
 
-def test_enough_ram_on_the_cpu_loads_but_stays_loading_for_the_caller(monkeypatch):
+def test_enough_ram_on_the_cpu_loads(monkeypatch):
     _installed(monkeypatch)
     monkeypatch.setattr(worker_kit, "physical_memory", lambda: (32 * GB, 20 * GB))
     b = omnivoice.OmniVoiceBackend()
     b._client = StubClient()
     asyncio.run(b.load({"device": {"backend": "cpu"}}))
     assert b._client.calls == [("load", omnivoice.LOAD_TIMEOUT_S, None)]
-    assert b.status() == "loading" and b.status_message() is None
+    assert b.status() == "ready" and b.status_message() is None
 
 
 @needs_ram_figure
@@ -438,25 +438,7 @@ class FakeCtx:
         self.events.append((event, dict(data)))
 
 
-def _start_up(tmp_path, monkeypatch, device="cuda", load=None, synth=None):
-    """``tts.load_models`` over a stub backend: the ``models`` events and the statuses seen by each warm-up synth."""
-    b = omnivoice.OmniVoiceBackend()
-    seen = []
-
-    async def fake_load(runtime):
-        b.last_load = {"device": device}
-        if load is not None:
-            load(b)
-
-    async def fake_synth(text, lang, ref, params):
-        seen.append(tts.models_status())
-        with pytest.raises(EngineError, match="still loading"):
-            tts.check_backend_ready(b)
-        if synth is not None:
-            raise synth
-        return params.out_path
-
-    b.load, b.synthesize = fake_load, fake_synth
+def _patch_start_up(tmp_path, monkeypatch, b):
     monkeypatch.setattr(tts, "OMNIVOICE", b)
     monkeypatch.setattr(backends, "all_backends", lambda: [b])
     monkeypatch.setattr(tts, "_pick_warm_voice", lambda data: (str(tmp_path / "reference.wav"), None))
@@ -464,14 +446,82 @@ def _start_up(tmp_path, monkeypatch, device="cuda", load=None, synth=None):
     monkeypatch.setattr(tts, "_SETTLED", None)
     ctx = FakeCtx(tmp_path / "data")
     config.data_dir(ctx).ensure()
+    return ctx
+
+
+def _models_events(ctx):
+    return [data for event, data in ctx.events if event == "models"]
+
+
+def _start_up(tmp_path, monkeypatch, device="cuda", load=None, synth=None):
+    """``tts.load_models`` over a stub backend: the ``models`` events, and the last one sent before each warm-up synth."""
+    b = omnivoice.OmniVoiceBackend()
+    ctx = _patch_start_up(tmp_path, monkeypatch, b)
+    seen = []
+
+    async def fake_load(runtime):
+        b._status, b.last_load = "ready", {"device": device}
+        if load is not None:
+            load(b)
+
+    async def fake_synth(text, lang, ref, params):
+        seen.append(_models_events(ctx)[-1])
+        tts.check_backend_ready(b)  # a request is accepted meanwhile
+        if synth is not None:
+            raise synth
+        return params.out_path
+
+    b.load, b.synthesize = fake_load, fake_synth
     asyncio.run(tts.load_models(ctx))
-    return [data for event, data in ctx.events if event == "models"], seen
+    return _models_events(ctx), seen
 
 
-def test_the_gpu_warms_up_while_tts_is_still_loading(tmp_path, monkeypatch):
+def test_the_gpu_warms_up_before_the_models_event_says_ready(tmp_path, monkeypatch):
     events, seen = _start_up(tmp_path, monkeypatch, "cuda")
     assert seen == [{"tts": "loading", "rvc": "loading"}]
     assert events == [{"tts": "loading", "rvc": "loading"}, {"tts": "ready", "rvc": "missing"}]
+
+
+class GatedClient:
+    """One call at a time, as in the worker; the first one waits for ``gate``."""
+
+    def __init__(self):
+        self.lock, self.gate, self.texts = asyncio.Lock(), asyncio.Event(), []
+
+    async def call(self, op, params=None, progress=None, timeout=None, start=True, retry=True, stall=None):
+        if op == "load":
+            return {"device": "cuda", "load_s": 0.0}
+        async with self.lock:
+            if not self.texts:
+                await self.gate.wait()
+            self.texts.append(params["text"])
+            return {"out": params["out"], "duration_s": 1.0}
+
+
+def test_a_request_during_the_gpu_warm_up_waits_behind_it_and_speaks(tmp_path, monkeypatch):
+    _installed(monkeypatch)
+    b = omnivoice.OmniVoiceBackend()
+    ctx = _patch_start_up(tmp_path, monkeypatch, b)
+    ctx.runtime = {"device": {"backend": "cuda"}}
+    b._client = client = GatedClient()
+    out = str(tmp_path / "request.wav")
+
+    async def main():
+        start = asyncio.ensure_future(tts.load_models(ctx))
+        while not client.lock.locked():
+            await asyncio.sleep(0.01)
+        tts.check_backend_ready(b)
+        request = asyncio.ensure_future(b.synthesize("Hello there.", "en", str(tmp_path / "reference.wav"),
+                                                     SynthParams(out_path=out, reference_text="hello")))
+        await asyncio.sleep(0.05)
+        waiting = not request.done()
+        client.gate.set()
+        return waiting, await request, await start
+
+    waiting, path, _ = asyncio.run(main())
+    assert waiting and path == out
+    assert client.texts == [tts._WARM_TEXT["en"], "Hello there."]
+    assert _models_events(ctx)[-1] == {"tts": "ready", "rvc": "missing"}
 
 
 def test_the_cpu_skips_the_start_up_warm_up(tmp_path, monkeypatch):

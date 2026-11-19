@@ -115,8 +115,8 @@ class OmniVoiceBackend(TtsBackend):
         return self._client
 
     async def load(self, runtime: dict[str, Any]) -> None:
-        """Leaves the status ``loading`` once loaded (the caller warms it up and sets ``ready``), else ``missing``
-        or ``no_memory`` (speech on the CPU of a computer with too little RAM: nothing is loaded)."""
+        """``ready``, ``missing`` or ``no_memory`` (speech on the CPU of a computer with too little RAM: nothing is
+        loaded)."""
         if not installed(runtime):
             self._status = "missing"
             log.warning("OmniVoice is not installed (venv %s, model %s); run setup", omnivoice_python(runtime),
@@ -146,7 +146,8 @@ class OmniVoiceBackend(TtsBackend):
             else:
                 log.error("OmniVoice failed to load: %s", exc)
             return
-        log.info("OmniVoice loaded: %s", self.last_load)
+        self._status = "ready"
+        log.info("OmniVoice ready: %s", self.last_load)
 
     def _refuse(self, message: str) -> None:
         self._status, self._no_memory = "no_memory", message
