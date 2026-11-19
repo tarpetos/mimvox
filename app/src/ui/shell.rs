@@ -292,7 +292,7 @@ pub fn audio_unavailable(s: &AppState) -> String {
 pub const NOT_INSTALLED: &str = "The speech engine is not installed yet.";
 
 pub fn restart_engine(s: &mut AppState) {
-    if let Some(mut old) = s.engine.take() {
+    if let Some(old) = super::api::detach(s) {
         let _ = guard(|| old.shutdown());
     }
     if !super::onboarding::runtime_toml_path().is_file() {
@@ -313,10 +313,9 @@ pub fn restart_engine(s: &mut AppState) {
     };
     s.shell.data_dir = cfg.data_dir.clone();
     s.record.data_dir = cfg.data_dir.clone();
-    let sink: crate::engine::EngineSink =
-        std::sync::Arc::new(|client, msg| super::events::post(move |s| on_engine_msg(s, client, msg)));
+    let sink = super::api::engine_sink(s);
     match guard(|| EngineClient::spawn(&cfg, sink)) {
-        Ok(Ok(c)) => s.engine = Some(c),
+        Ok(Ok(c)) => super::api::attach(s, c),
         Ok(Err(e)) => s.shell.engine = EngineStatus::Stopped { code: None, detail: format!("{e:#}") },
         Err(_) => s.shell.engine = EngineStatus::Unavailable { reason: "This build has no engine client yet.".into() },
     }
@@ -405,6 +404,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     changed |= ensure_warm(s);
     changed |= super::playbar::settle(s, tx);
     changed |= super::update::settle(s, tx);
+    changed |= super::api::settle(s);
 
     let before = s.shell.toasts.len();
     s.shell.toasts.retain(|t| t.expires > now);
@@ -444,8 +444,8 @@ fn clock_origin(s: &AppState) -> Option<f64> {
     }
 }
 
-fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
-    if s.engine.as_ref().map(EngineClient::id) != Some(client) {
+pub fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
+    if s.engine.as_ref().map(|e| e.id()) != Some(client) {
         return;
     }
     on_engine(s, &m);
@@ -640,6 +640,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     overlays.extend(super::relocate::overlay(s, &p));
     overlays.extend(super::update::overlay(s, &p));
     overlays.extend(super::modules::overlay(s, &p));
+    overlays.extend(super::settings::overlay(s, &p));
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
     overlays.extend(super::book::voice_overlay(s, p));
@@ -753,7 +754,8 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
         .center_y()
         .window_drag()
         .child(engine_pill(s, p, fit.tight))
-        .child(voice_pill(s, p));
+        .child(voice_pill(s, p))
+        .child(icon_button(p, "settings-open", &icons::SLIDERS, "Settings", super::settings::open));
     col()
         .key("header")
         .w_full()

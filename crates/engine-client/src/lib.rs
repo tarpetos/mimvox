@@ -436,7 +436,17 @@ impl EngineClient {
     /// Returns the request id at once; the answer arrives as `EngineMsg::Response` (an `internal` error when stdin
     /// cannot be written).
     pub fn request(&self, method: &str, params: serde_json::Value) -> u64 {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.reserve_id();
+        self.request_with_id(id, method, params);
+        id
+    }
+
+    /// An id for [`EngineClient::request_with_id`], so a caller can expect its answer before the request is sent.
+    pub fn reserve_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn request_with_id(&self, id: u64, method: &str, params: serde_json::Value) {
         let line = serde_json::json!({ "id": id.to_string(), "method": method, "params": params }).to_string();
         if let Err(e) = self.write_line(&line) {
             (self.sink)(
@@ -447,7 +457,6 @@ impl EngineClient {
                 },
             );
         }
-        id
     }
 
     pub fn send(&self, req: protocol::Request) -> u64 {
@@ -482,7 +491,7 @@ impl EngineClient {
     }
 
     /// Blocks up to [`SHUTDOWN_GRACE`] for the engine to exit, then kills it.
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         if self.shut_down.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -612,7 +621,9 @@ while not (data / "release").exists():
         let path = std::env::var_os("PATH").unwrap_or_default();
         std::env::split_paths(&path)
             .flat_map(|d| ["python3", "python", "python.exe"].map(|n| d.join(n)))
-            .find(|p| p.is_file())
+            // The first one that starts: on Windows PATH can list a Store alias that does not.
+            .filter(|p| p.is_file())
+            .find(|p| Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success()))
             .expect("python3 on PATH")
     }
 

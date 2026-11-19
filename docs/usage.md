@@ -201,6 +201,8 @@ updates** asks for the newest version at once, even one you skipped. **Release p
 - **Voice pill** at the far right: the active voice. Open it to switch voices, see whether each one is *Trained* or
   *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice** (the Record start page, set to make a
   new voice).
+- **Settings** (the sliders button at the far right): the app's settings, in folded sections. For now one:
+  [the local API](#settings-the-local-api).
 - **Dropping files** anywhere on the window works on every screen. Recordings dropped on Record's start page, on Speak
   or on Train are somebody's voice: a dialog asks whether they are **a new voice** or **more recordings of the active
   one** (see [Use recordings you already have](#use-recordings-you-already-have)). While a reading is open on Record
@@ -240,6 +242,32 @@ stays, so **Play** starts it again; close the bar when you are done.
 While Speak is still generating (see [Streaming playback](#streaming-playback)) the bar shows the part that has
 arrived so far (the total ends in *…*), and seeking is off until the whole text is ready. When generation finishes, the
 bar shows the finished result and seeking works.
+
+### Settings: the local API
+
+The **API** section lets scripts and other programs on your computer (or your local network) use Mimvox over HTTP while
+the app is open: generate speech, list voices, call any engine method. It is off by default and stops when the app
+closes. The app serves it with its own engine, so what the app does and what the API asks share one engine and wait
+for each other (a second generation while one runs is refused as busy).
+
+- **Turn on API**: the first time, a short notice asks you to confirm: clone only your own voice or one whose owner
+  gave you permission, the speech model's weights are for non-commercial use only (CC BY-NC 4.0), and anyone who can
+  reach the address can use your voices and read and write files through the API.
+- **Address**: **This computer only (127.0.0.1)** or **Local network** (every network interface), and the **Port**
+  (8765 by default; press Enter or **Apply**). When it runs, the section says *Listening on http://…*; a port another
+  program holds or a failed start says so instead.
+- **Token**: hidden until you press **Show**. **Copy** puts it on the clipboard (left out of clipboard histories and
+  cleared after two minutes). **New token** asks first: programs that use the current one stop working. It is the
+  same token as `mimvox-server`'s, in `api/token` in your data folder; when `MIMVOX_API_TOKEN` is set, that one is
+  used and shown instead.
+- **Require token**: off, programs on this computer get in without it (web pages never do); on, every request needs
+  it. The local network always needs it, so the switch stays on there.
+
+Changes apply at once: the API restarts on the new address without restarting the engine. Use it as an
+OpenAI-compatible speech server with the base URL `http://127.0.0.1:8765/v1` and the token as the API key
+(`Authorization: Bearer <token>`); all endpoints are in
+[the engine protocol](../contract/engine-protocol.md#http-api). If `mimvox-server` already runs on the same data
+folder, the app's engine cannot start and the API cannot either: stop the server, then press **Retry**.
 
 ---
 
@@ -1036,7 +1064,9 @@ Everything the app makes lives in one folder (the one you chose during setup; se
   logs/engine.log                the engine log
   tmp/                           scratch files, emptied at every engine start (tmp/setup: setup's own)
   cache/uv/                      the Python package cache setup installs from (safe to delete; a move leaves it behind)
-  settings.json                  your app settings (microphone, last choices, "Save as" format, "Remove background music")
+  settings.json                  your app settings (microphone, last choices, "Save as" format, "Remove background music",
+                                 the API section)
+  api/token, api/uploads/        the local API's token and the files sent to it (uploads go after 24 hours)
   runtime/, runtime.toml         the installed engine and models (about 30 GB)
 ```
 

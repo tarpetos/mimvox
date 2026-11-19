@@ -167,7 +167,7 @@ async fn serve(cli: Cli, data_dir: PathBuf) -> anyhow::Result<()> {
 
 fn stop_engine(engine: Arc<EngineClient>) {
     match Arc::try_unwrap(engine) {
-        Ok(mut engine) => engine.shutdown(),
+        Ok(engine) => engine.shutdown(),
         // A request is being written right now; the last owner's drop finishes the shutdown.
         Err(shared) => shared.request_shutdown(),
     }

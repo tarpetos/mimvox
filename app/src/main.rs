@@ -154,7 +154,8 @@ fn main() {
     }
     app.run();
     ui::setuprun::stop_on_exit();
-    if let Some(mut engine) = ui::train::take_closing_engine() {
+    ui::api::stop_on_exit();
+    if let Some(engine) = ui::train::take_closing_engine() {
         engine.shutdown();
     }
     // Only after the app and the engine are gone.

@@ -254,16 +254,17 @@ pub fn on_close(s: &mut AppState, tx: &mut Tx) {
 /// Only asks the engine to exit: waiting here froze the window and Windows painted it white; `main` waits instead.
 fn quit_now(s: &mut AppState, tx: &mut Tx) {
     super::stats::write();
-    if let Some(c) = s.engine.take() {
+    if let Some(c) = super::api::detach(s) {
         c.request_shutdown();
         *CLOSING_ENGINE.lock().unwrap_or_else(|e| e.into_inner()) = Some(c);
     }
     tx.quit();
 }
 
-static CLOSING_ENGINE: std::sync::Mutex<Option<crate::engine::EngineClient>> = std::sync::Mutex::new(None);
+static CLOSING_ENGINE: std::sync::Mutex<Option<std::sync::Arc<crate::engine::EngineClient>>> =
+    std::sync::Mutex::new(None);
 
-pub fn take_closing_engine() -> Option<crate::engine::EngineClient> {
+pub fn take_closing_engine() -> Option<std::sync::Arc<crate::engine::EngineClient>> {
     CLOSING_ENGINE.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
