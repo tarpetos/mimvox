@@ -79,7 +79,7 @@ fn is_resources_root(dir: &Path) -> bool {
 }
 
 /// The folder that holds `engine/`, `presets/`, `tools/`, `contract/`; the layouts must match `app/Packager.toml`.
-pub(crate) fn find_resources() -> Option<PathBuf> {
+pub fn find_resources() -> Option<PathBuf> {
     if let Some(p) = env_path("MIMVOX_RESOURCES") {
         return Some(p);
     }
@@ -102,8 +102,17 @@ pub(crate) fn find_resources() -> Option<PathBuf> {
 
 impl EngineConfig {
     pub fn discover() -> anyhow::Result<Self> {
-        let data_dir =
-            default_data_dir().ok_or_else(|| anyhow!("cannot determine the data directory; set MIMVOX_DATA"))?;
+        Self::discover_in(None)
+    }
+
+    /// [`EngineConfig::discover`] with `data_dir` in place of the usual data directory lookup when given.
+    pub fn discover_in(data_dir: Option<PathBuf>) -> anyhow::Result<Self> {
+        let data_dir = match data_dir {
+            Some(dir) => dir,
+            None => {
+                default_data_dir().ok_or_else(|| anyhow!("cannot determine the data directory; set MIMVOX_DATA"))?
+            }
+        };
 
         let runtime_toml = match env_path("MIMVOX_RUNTIME") {
             Some(p) => p,
@@ -197,6 +206,31 @@ fn push_tail(tail: &StderrTail, line: String) {
     t.push_back(line);
 }
 
+/// Locked while an engine runs on a data dir, so the app and mimvox-server never run two engines on it.
+pub const LOCK_FILE: &str = "engine.lock";
+
+fn lock_data_dir(data_dir: &Path) -> anyhow::Result<Option<File>> {
+    let Ok(file) = fs::OpenOptions::new().create(true).write(true).truncate(false).open(data_dir.join(LOCK_FILE))
+    else {
+        return Ok(None);
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(fs::TryLockError::WouldBlock) => Err(anyhow!(
+            "another Mimvox engine (the app or mimvox-server) is already running on {}",
+            data_dir.display()
+        )),
+        // A filesystem without locks: run unguarded rather than not at all.
+        Err(fs::TryLockError::Error(_)) => Ok(None),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpawnOptions {
+    /// Unix: a process group of its own, so a terminal's Ctrl+C reaches only the client, which then shuts it down.
+    pub own_process_group: bool,
+}
+
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(2500);
 /// How long the exit report waits for the last stderr lines after the process is gone.
 const STDERR_FLUSH: Duration = Duration::from_millis(300);
@@ -212,10 +246,15 @@ pub struct EngineClient {
     stderr_tail: StderrTail,
     log_path: PathBuf,
     shut_down: AtomicBool,
+    _lock: Option<File>,
 }
 
 impl EngineClient {
     pub fn spawn(cfg: &EngineConfig, sink: EngineSink) -> anyhow::Result<Self> {
+        Self::spawn_with(cfg, sink, SpawnOptions::default())
+    }
+
+    pub fn spawn_with(cfg: &EngineConfig, sink: EngineSink, opts: SpawnOptions) -> anyhow::Result<Self> {
         static NEXT_CLIENT: AtomicU64 = AtomicU64::new(1);
         let client_id = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
         let python = read_engine_python(&cfg.runtime_toml)?;
@@ -227,6 +266,7 @@ impl EngineClient {
         }
         fs::create_dir_all(&cfg.data_dir)
             .with_context(|| format!("cannot create data dir {}", cfg.data_dir.display()))?;
+        let lock = lock_data_dir(&cfg.data_dir)?;
 
         let mut pythonpath = OsString::from(&cfg.engine_src);
         if let Some(existing) = std::env::var_os("PYTHONPATH").filter(|v| !v.is_empty()) {
@@ -266,6 +306,13 @@ impl EngineClient {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
+        #[cfg(unix)]
+        if opts.own_process_group {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        #[cfg(not(unix))]
+        let _ = opts;
 
         let mut child = cmd.spawn().with_context(|| format!("cannot start the engine with {}", python.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("engine stdin unavailable"))?;
@@ -342,6 +389,7 @@ impl EngineClient {
             stderr_tail,
             log_path,
             shut_down: AtomicBool::new(false),
+            _lock: lock,
         })
     }
 
@@ -459,4 +507,22 @@ fn parse_line(line: &str) -> Result<Option<EngineMsg>, ()> {
         Ok(obj.get("result").cloned().unwrap_or(Value::Null))
     };
     Ok(Some(EngineMsg::Response { id, result }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_lock_per_data_dir() {
+        let dir = std::env::temp_dir().join(format!("mimvox-lock-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let first = lock_data_dir(&dir).unwrap();
+        assert!(first.is_some());
+        let second = lock_data_dir(&dir).unwrap_err().to_string();
+        assert!(second.contains("already running"), "{second}");
+        drop(first);
+        assert!(lock_data_dir(&dir).unwrap().is_some());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

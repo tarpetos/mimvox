@@ -24,9 +24,9 @@
 #   Linux AppImage   $APPDIR/usr/lib/<binary>/                        (binary: $APPDIR/usr/bin/<binary>)
 #   macOS .app/.dmg  <App>.app/Contents/Resources/                     (binary: <App>.app/Contents/MacOS/<binary>)
 #   Windows NSIS/MSI <install dir>\                                    (binary: <install dir>\<binary>.exe)
-#   dev checkout     <repo root>                                       (binary: <repo>/app/target/{debug,release}/)
+#   dev checkout     <repo root>                                       (binary: <repo>/target/{debug,release}/)
 #
-# EngineConfig::discover() (app/src/engine/mod.rs) should resolve <RES> in THIS order, first hit wins; a candidate is
+# EngineConfig::discover() (crates/engine-client/src/lib.rs) should resolve <RES> in THIS order, first hit wins; a candidate is
 # valid when <candidate>/engine/src/mimvox_engine exists:
 #   1. Environment override: MIMVOX_RESOURCES = <RES>   (MIMVOX_ENGINE_SRC overrides only engine/src)
 #   2. Next to the executable (installed app); with exe_dir = dirname(realpath(current_exe())):
@@ -59,7 +59,8 @@ category = "Music"
 # the macOS universal binary.
 out-dir = "../dist"
 binaries-dir = "target/release"
-binaries = [{ path = "mimvox", main = true }]
+# mimvox-server: the HTTP API without the window (crates/server), next to the app binary.
+binaries = [{ path = "mimvox", main = true }, { path = "mimvox-server" }]
 
 icons = [
     "../tools/release/icons/icon_32x32.png",

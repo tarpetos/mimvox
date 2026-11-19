@@ -204,8 +204,10 @@ rather than being bundled; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ## Project layout
 
 ```
-app/                   Rust desktop app (Rune UI, microphone and playback, engine client)
-  src/engine/          engine process client and protocol types
+app/                   Rust desktop app (Rune UI, microphone and playback)
+crates/engine-client/  engine process client and protocol types (shared by the app and the server)
+crates/api/            local HTTP API over the engine protocol
+crates/server/         mimvox-server: the HTTP API without the window
   src/audio/           capture and playback (cpal, hound)
   src/ui/              screens: onboarding, record, train, voices, speak (with its Book mode, book.rs), redub
 engine/                Python engine (mimvox_engine), runs in the engine virtualenv

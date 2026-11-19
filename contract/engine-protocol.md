@@ -4,7 +4,7 @@ The desktop app (`app/`, Rust) starts the ML engine (`engine/`, Python) as a chi
 **stdin/stdout, one JSON object per line (UTF-8, `\n`-terminated)**. The engine writes logs only to **stderr**.
 Audio is never sent inline: both sides exchange **absolute file paths** (WAV, mono, 16-bit PCM unless stated).
 
-This file is the single source of truth. Rust types live in `app/src/engine/protocol.rs`, Python handlers in
+This file is the single source of truth. Rust types live in `crates/engine-client/src/protocol.rs`, Python handlers in
 `engine/src/mimvox_engine/`. Change this file first, then both sides.
 
 ## Process
@@ -229,6 +229,9 @@ the quick check, and only then delete the old directory.
 <data>/books/<book_id>/segments/<NNN>.json   # each segment's text and speech times in a finished chapter's file (see Output files)
 <data>/outputs/books/<book title>/<NN> - <chapter title>.<ext>  # one file per chapter (+ <book title>.m4b with "m4b")
 <data>/tmp/                                  # scratch (job chunks, training logs), wiped at every engine start
+<data>/engine.lock                           # OS file lock held by the app or mimvox-server while its engine runs (client side)
+<data>/api/token                             # HTTP API token, user-only (see HTTP API)
+<data>/api/uploads/<uuid>-<name>             # files sent to POST /files, deleted after 24 h
 ```
 
 Voice ids are `[a-z0-9][a-z0-9_-]*`, made from the name (`Anna` -> `anna`, a second one `anna-2`). Names in another
@@ -1535,3 +1538,50 @@ mix 0.6 s, save (MP3) 1.5 s, mux 1.7 s for the 196 MB file. The video stream of 
 source's (same MD5, 3582 frames, 12.84 Mb/s). Voice left in the background (a second separation pass over it):
 -65.6 LUFS, about 49 dB under the original voice (-16.1 LUFS); background -35.9 LUFS. No ducking was found in that
 video (none applied).
+
+## HTTP API
+
+The engine protocol over HTTP, for scripts and other programs. Rust: `crates/api` (a library, so the app can host it
+later) and `crates/server` (`mimvox-server`, a console binary next to `mimvox` in the installers). Off by default:
+nothing listens unless `mimvox-server` runs.
+
+```
+mimvox-server [--bind 127.0.0.1:8765] [--data-dir DIR] [--require-token] [--max-upload-mb 2048]
+mimvox-server --show-token | token show | token new
+```
+
+- **Engine.** The data dir and runtime are found as the app finds them (`MIMVOX_DATA`, `location.toml`, default;
+  `MIMVOX_RUNTIME`, `MIMVOX_ENGINE_SRC`, `MIMVOX_RESOURCES`), `--data-dir` overrides the first. The server starts
+  the engine at once and starts it again 1 s after it exits (an exit right after `shutdown` included); three crashes
+  in a row, each within 30 s of its start, stop the server. Ctrl+C, SIGTERM, SIGHUP (Windows: Ctrl+C, closing the console) send
+  `shutdown` and exit. On Unix the engine runs in its own process group, so a terminal's Ctrl+C reaches only the server.
+- **One engine per data dir.** Whoever starts an engine (the app or the server) holds an OS lock on
+  `<data>/engine.lock` while it runs; a second one fails with "another Mimvox engine ... is already running". The app
+  shows that as the engine's stop reason.
+- **Token.** 32 random bytes, URL-safe base64 without padding, in `<data>/api/token` (mode 0600 on Unix; on
+  Windows the per-user data folder's ACL). `MIMVOX_API_TOKEN` overrides the file. `token new` writes a new
+  one, `token show` / `--show-token` print it (creating it when missing). Clients send
+  `Authorization: Bearer <token>`, compared in constant time; missing or wrong is 401.
+- **Bind.** Default `127.0.0.1:8765`, no token needed. `--require-token` asks for it on loopback too (creating the
+  file when missing). Any other address needs an existing token (file or env) and refuses to start without one.
+  Without a token only requests whose `Host` is a loopback name and whose `Origin` (when sent) is a loopback page get
+  in (403 otherwise), so web pages cannot reach the API through the browser.
+
+| Endpoint | |
+| --- | --- |
+| `GET /health` | `{"status":"ok","api_version","engine":<hello result>}`; 503 while the engine is down or does not answer within 10 s |
+| `POST /rpc` | `{"method","params"?}` -> the engine's `result` as is. Any method, `shutdown` included (the server then starts a fresh engine: use it after `components.set`). Body up to 64 MiB |
+| `GET /events` | Server-Sent Events: every engine event as one `data:` line, the same JSON as the engine's stdout (`{"event","job","data"}`, default SSE event type). Added by the server: `engine.exited {"code"}` (a new `ready` follows the restart) and `api.lagged {"missed"}` when a slow client fell 4096 events behind |
+| `POST /files?name=<file name>` | the raw body (streamed, not multipart) saved to `<data>/api/uploads/<uuid>-<safe name>` -> `{"path","size_bytes"}`; pass `path` to methods that take files. Over `--max-upload-mb` is 413 and nothing is kept. Uploads older than 24 h are deleted at start and after each upload |
+| `GET /files?path=<absolute path>` | the file, streamed, if it resolves (symlinks and `..` included) inside `<data>/outputs`, `<data>/tmp` or `<data>/api/uploads`: 403 outside, 400 relative or a folder, 404 missing. Voices, models and the token are never served |
+| `POST /v1/audio/speech` | OpenAI-compatible: `{"model","input","voice","response_format"?,"speed"?}` (+ `"language"`, default the voice's) -> audio bytes. `model` is ignored; `voice` is a voice id or name (case-insensitive). `response_format`: `mp3` (default), `wav`, `flac`, `opus` (Ogg), `aac` (AAC in MP4, `audio/mp4`), `pcm` (16-bit mono 44.1 kHz little-endian, not OpenAI's 24 kHz); the engine's `output_format` rules apply (`not_ready` without the encoder). `speed` is clamped to 0.8-1.3 by the engine. Runs `tts.generate`, waits for its `tts.done` event, returns the file and deletes it with `outputs.delete`; requests queue one at a time; a client that disconnects cancels the job |
+| `GET /v1/models` | `{"object":"list","data":[{"id":"mimvox",...}]}` |
+| `GET /v1/audio/voices` | the `voices.list` result |
+
+Errors keep the engine's body `{"code","message"}` (`/v1/*`: OpenAI's `{"error":{"message","type","code"}}`) with the
+status: `bad_request` 400, `not_found` 404, `busy` 409, `not_ready` 503, every other engine code 500; the server's own
+`unauthorized` 401, `forbidden` 403, `too_large` 413. A request whose engine exits before it answers is `internal` 500.
+
+The same rules as the app apply: the OmniVoice weights are CC BY-NC 4.0, so speech made through the API is for
+non-commercial use only, and only your own voice or one whose owner gave explicit permission may be cloned (README,
+DISCLAIMER.md).

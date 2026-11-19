@@ -172,6 +172,9 @@ pub struct Hello {
     /// Installed but turned off.
     #[serde(default)]
     pub components_off: Vec<String>,
+    /// Fields this client has no type for, so the `ready` line can be passed on whole.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -868,6 +871,7 @@ impl NativeVoice {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(v: &str) -> NativeVoice {
         match v {
             "male" => Self::Male,

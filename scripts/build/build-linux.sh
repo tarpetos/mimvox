@@ -3,7 +3,7 @@
 # Run it from anywhere:  ./scripts/build/build-linux.sh
 #
 #   --formats appimage,deb   which installers to build (default: both; comma separated)
-#   --skip-compile           reuse app/target/release (only re-stage resources and re-package)
+#   --skip-compile           reuse target/release (only re-stage resources and re-package)
 #
 # Output: dist/mimvox_<version>_amd64.deb and dist/*.AppImage.
 # Env: CARGO_PACKAGER_VERSION, CARGO_BUILD_JOBS (default 6), CARGO_TARGET_DIR.
@@ -11,6 +11,7 @@ set -euo pipefail
 
 PACKAGER_VERSION="${CARGO_PACKAGER_VERSION:-0.11.8}"
 BIN_NAME="mimvox"
+SERVER_BIN="mimvox-server"
 # a full Rust + wgpu build is memory hungry
 JOBS="${CARGO_BUILD_JOBS:-6}"
 export CARGO_BUILD_JOBS="$JOBS"
@@ -21,7 +22,7 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 REPO_ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
 APP_DIR="$REPO_ROOT/app"
 DIST_DIR="$REPO_ROOT/dist"
-TARGET_DIR="${CARGO_TARGET_DIR:-$APP_DIR/target}"
+TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 cd "$APP_DIR"
 
 FORMATS="appimage,deb"
@@ -82,19 +83,21 @@ uv run --no-project python "$REPO_ROOT/scripts/build/stage_resources.py" --uv "$
 
 if [ "$SKIP_COMPILE" = "0" ]; then
     echo "[build-linux] Compiling the release binary..." >&2
-    "${LOCK[@]}" cargo build --release --locked -j "$JOBS"
+    "${LOCK[@]}" cargo build --release --locked -j "$JOBS" -p mimvox -p mimvox-server
 fi
-if [ ! -x "$TARGET_DIR/release/$BIN_NAME" ]; then
-    echo "Release binary not found: $TARGET_DIR/release/$BIN_NAME" >&2
-    exit 1
-fi
+for bin in "$BIN_NAME" "$SERVER_BIN"; do
+    if [ ! -x "$TARGET_DIR/release/$bin" ]; then
+        echo "Release binary not found: $TARGET_DIR/release/$bin" >&2
+        exit 1
+    fi
+done
 
 # cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
 # --binaries-dir points elsewhere, so a build into another CARGO_TARGET_DIR is copied there first.
 RELEASE_DIR="$TARGET_DIR/release"
 if [ "$(realpath "$RELEASE_DIR")" != "$(realpath -m "$APP_DIR/target/release")" ]; then
     mkdir -p "$APP_DIR/target/release"
-    cp -f "$RELEASE_DIR/$BIN_NAME" "$APP_DIR/target/release/$BIN_NAME"
+    cp -f "$RELEASE_DIR/$BIN_NAME" "$RELEASE_DIR/$SERVER_BIN" "$APP_DIR/target/release/"
     RELEASE_DIR="$APP_DIR/target/release"
 fi
 

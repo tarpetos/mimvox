@@ -1,0 +1,442 @@
+//! Runs mimvox-server against app/examples/fake_engine.py.
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use reqwest::StatusCode;
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc;
+
+const WAIT: Duration = Duration::from_secs(20);
+
+fn python() -> PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .flat_map(|d| ["python3", "python", "python.exe"].map(|n| d.join(n)))
+        .find(|p| p.is_file())
+        .expect("python3 on PATH")
+}
+
+fn fake_engine_src() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/examples/fake_engine_src")
+}
+
+struct Setup {
+    dir: tempfile::TempDir,
+}
+
+impl Setup {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        let python = python().display().to_string().replace('\\', "/");
+        std::fs::write(dir.path().join("runtime.toml"), format!("[python]\nengine = \"{python}\"\n")).unwrap();
+        Self { dir }
+    }
+
+    fn data(&self) -> PathBuf {
+        self.dir.path().join("data")
+    }
+
+    fn command(&self, args: &[&str], env: &[(&str, &str)]) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mimvox-server"));
+        cmd.arg("--data-dir")
+            .arg(self.data())
+            .args(args)
+            .env("MIMVOX_RUNTIME", self.dir.path().join("runtime.toml"))
+            .env("MIMVOX_ENGINE_SRC", fake_engine_src())
+            .env_remove("MIMVOX_API_TOKEN")
+            .env_remove("MIMVOX_DATA")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd
+    }
+
+    async fn start(&self, args: &[&str], env: &[(&str, &str)]) -> Server {
+        let mut args = args.to_vec();
+        if !args.contains(&"--bind") {
+            args.extend(["--bind", "127.0.0.1:0"]);
+        }
+        let mut child = self.command(&args, env).spawn().unwrap();
+        let (tx, mut lines) = mpsc::unbounded_channel();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr.next_line().await {
+                eprintln!("[server] {line}");
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let base = tokio::time::timeout(WAIT, async {
+            while let Some(line) = lines.recv().await {
+                if let Some(rest) = line.split("listening on ").nth(1) {
+                    return rest.split(' ').next().unwrap().to_string();
+                }
+            }
+            panic!("the server ended before it listened");
+        })
+        .await
+        .expect("the server did not start listening");
+        Server { child, base, lines }
+    }
+
+    /// Runs the binary to its end: (exit success, stdout, stderr).
+    async fn run(&self, args: &[&str], env: &[(&str, &str)]) -> (bool, String, String) {
+        let out = tokio::time::timeout(WAIT, self.command(args, env).output()).await.unwrap().unwrap();
+        (out.status.success(), String::from_utf8_lossy(&out.stdout).into(), String::from_utf8_lossy(&out.stderr).into())
+    }
+}
+
+struct Server {
+    child: Child,
+    base: String,
+    lines: mpsc::UnboundedReceiver<String>,
+}
+
+impl Server {
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base)
+    }
+
+    async fn rpc(&self, method: &str, params: Value) -> (StatusCode, Value) {
+        let res = reqwest::Client::new()
+            .post(self.url("/rpc"))
+            .json(&json!({ "method": method, "params": params }))
+            .send()
+            .await
+            .unwrap();
+        (res.status(), res.json().await.unwrap())
+    }
+
+    async fn wait_line(&mut self, needle: &str) {
+        tokio::time::timeout(WAIT, async {
+            while let Some(line) = self.lines.recv().await {
+                if line.contains(needle) {
+                    return;
+                }
+            }
+            panic!("the server ended before printing {needle:?}");
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no {needle:?} from the server"));
+    }
+}
+
+/// Reads `GET /events` as JSON events.
+struct Events {
+    res: reqwest::Response,
+    buf: String,
+}
+
+impl Events {
+    async fn open(server: &Server) -> Self {
+        let res = reqwest::get(server.url("/events")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
+        Self { res, buf: String::new() }
+    }
+
+    async fn next(&mut self) -> Value {
+        loop {
+            if let Some(end) = self.buf.find("\n\n") {
+                let block: String = self.buf.drain(..end + 2).collect();
+                let data: Vec<&str> =
+                    block.lines().filter_map(|l| l.strip_prefix("data:")).map(str::trim_start).collect();
+                if !data.is_empty() {
+                    return serde_json::from_str(&data.join("\n")).unwrap();
+                }
+                continue;
+            }
+            let chunk = tokio::time::timeout(WAIT, self.res.chunk())
+                .await
+                .expect("no event in time")
+                .unwrap()
+                .expect("stream ended");
+            self.buf.push_str(&String::from_utf8_lossy(&chunk));
+        }
+    }
+
+    async fn until(&mut self, pred: impl Fn(&Value) -> bool) -> Vec<Value> {
+        let mut seen = Vec::new();
+        loop {
+            let ev = self.next().await;
+            let hit = pred(&ev);
+            seen.push(ev);
+            if hit {
+                return seen;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn health_and_rpc() {
+    let setup = Setup::new();
+    let server = setup.start(&[], &[]).await;
+
+    let health: Value = reqwest::get(server.url("/health")).await.unwrap().json().await.unwrap();
+    assert_eq!(health["status"], "ok");
+    assert_eq!(health["engine"]["version"], "0.1.0-fake");
+
+    let (status, body) = server.rpc("voices.list", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["voices"][0]["id"], "fake-voice");
+
+    let (status, body) = server.rpc("no.such.method", json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+    assert!(body["message"].as_str().unwrap().contains("no.such.method"));
+
+    let (status, body) = server.rpc("tts.generate", json!({ "voice_id": "nobody", "text": "Hi." })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+
+    let res = reqwest::Client::new()
+        .post(server.url("/rpc"))
+        .header("content-type", "application/json")
+        .body("{not json")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(res.json::<Value>().await.unwrap()["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn events_reach_every_subscriber() {
+    let setup = Setup::new();
+    let server = setup.start(&[], &[]).await;
+    let (mut a, mut b) = (Events::open(&server).await, Events::open(&server).await);
+
+    let (status, started) = server.rpc("tts.generate", json!({ "voice_id": "fake-voice", "text": "One. Two." })).await;
+    assert_eq!(status, StatusCode::OK);
+    let job = started["job"].as_str().unwrap().to_string();
+    for events in [&mut a, &mut b] {
+        let seen = events.until(|e| e["event"] == "tts.done" && e["job"] == job.as_str()).await;
+        let chunks = seen.iter().filter(|e| e["event"] == "tts.chunk" && e["job"] == job.as_str()).count();
+        assert_eq!(chunks, 2);
+        assert!(seen.last().unwrap()["data"]["path"].as_str().unwrap().ends_with(".wav"));
+    }
+}
+
+#[tokio::test]
+async fn files_up_and_down() {
+    let setup = Setup::new();
+    let server = setup.start(&["--max-upload-mb", "1"], &[]).await;
+    let client = reqwest::Client::new();
+    let data = std::fs::canonicalize(setup.data()).unwrap();
+
+    let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let res = client.post(server.url("/files?name=../../my%20take.wav")).body(payload.clone()).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let up: Value = res.json().await.unwrap();
+    let path = PathBuf::from(up["path"].as_str().unwrap());
+    assert_eq!(up["size_bytes"], 200_000);
+    assert_eq!(std::fs::canonicalize(path.parent().unwrap()).unwrap(), data.join("api").join("uploads"));
+    assert!(path.file_name().unwrap().to_str().unwrap().ends_with("-my_take.wav"));
+
+    let get = |p: &Path| client.get(server.url("/files")).query(&[("path", p.to_str().unwrap())]).send();
+    let res = get(&path).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "audio/wav");
+    assert_eq!(res.bytes().await.unwrap().as_ref(), payload.as_slice());
+
+    // Refused while the body is still being sent: the client may see the connection close before the 413.
+    // A client of its own: the server closes those connections, which a pooled client would reuse.
+    let oversize = reqwest::Client::new();
+    let declared = oversize.post(server.url("/files?name=big.bin")).body(vec![0u8; 1_500_000]).send().await;
+    let streamed = futures_util::stream::iter((0..30).map(|_| Ok::<_, std::io::Error>(vec![0u8; 50_000])));
+    let chunked =
+        oversize.post(server.url("/files?name=big.bin")).body(reqwest::Body::wrap_stream(streamed)).send().await;
+    for res in [declared, chunked].into_iter().flatten() {
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    assert_eq!(std::fs::read_dir(data.join("api").join("uploads")).unwrap().count(), 1);
+
+    std::fs::write(data.join("secret.txt"), "no").unwrap();
+    std::fs::create_dir_all(data.join("outputs")).unwrap();
+    let outside = [
+        data.join("secret.txt"),
+        data.join("outputs").join("..").join("secret.txt"),
+        data.join("api").join("uploads").join("..").join("..").join("secret.txt"),
+        setup.dir.path().join("runtime.toml"),
+    ];
+    for p in &outside {
+        assert_eq!(get(p).await.unwrap().status(), StatusCode::FORBIDDEN, "{}", p.display());
+    }
+    let res = client.get(server.url("/files")).query(&[("path", "outputs/x.wav")]).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(get(&data.join("outputs").join("missing.wav")).await.unwrap().status(), StatusCode::NOT_FOUND);
+    assert_eq!(get(&data.join("outputs")).await.unwrap().status(), StatusCode::BAD_REQUEST);
+
+    #[cfg(unix)]
+    {
+        let link = data.join("outputs").join("escape.txt");
+        std::os::unix::fs::symlink(data.join("secret.txt"), &link).unwrap();
+        assert_eq!(get(&link).await.unwrap().status(), StatusCode::FORBIDDEN);
+    }
+}
+
+#[tokio::test]
+async fn auth() {
+    let setup = Setup::new();
+    let server = setup.start(&["--require-token"], &[("MIMVOX_API_TOKEN", "s3cret-token")]).await;
+    let client = reqwest::Client::new();
+    let health = |auth: Option<&str>| {
+        let mut req = client.get(server.url("/health"));
+        if let Some(a) = auth {
+            req = req.header("authorization", a);
+        }
+        req.send()
+    };
+    let res = health(None).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(res.headers()["www-authenticate"], "Bearer");
+    assert_eq!(res.json::<Value>().await.unwrap()["code"], "unauthorized");
+    assert_eq!(health(Some("Bearer wrong")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(health(Some("s3cret-token")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(health(Some("Bearer s3cret-token")).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn token_file_and_cli() {
+    let setup = Setup::new();
+    let (ok, token, _) = setup.run(&["token", "new"], &[]).await;
+    assert!(ok);
+    let token = token.trim().to_string();
+    assert_eq!(token.len(), 43);
+    let file = setup.data().join("api").join("token");
+    assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), token);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    let (ok, shown, _) = setup.run(&["--show-token"], &[]).await;
+    assert!(ok);
+    assert_eq!(shown.trim(), token);
+    let (_, shown, _) = setup.run(&["token", "show"], &[("MIMVOX_API_TOKEN", "from-env")]).await;
+    assert_eq!(shown.trim(), "from-env");
+
+    let server = setup.start(&["--require-token"], &[]).await;
+    let res = reqwest::Client::new().get(server.url("/health")).bearer_auth(&token).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn loopback_without_token_refuses_web_pages() {
+    let setup = Setup::new();
+    let server = setup.start(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let res = client.get(server.url("/health")).header("origin", "https://evil.example").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let res = client.get(server.url("/health")).header("host", "rebound.evil.example:8765").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let res = client.get(server.url("/health")).header("origin", "http://localhost:5173").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn non_loopback_needs_a_token() {
+    let setup = Setup::new();
+    let (ok, _, err) = setup.run(&["--bind", "0.0.0.0:0"], &[]).await;
+    assert!(!ok);
+    assert!(err.contains("refusing to listen on 0.0.0.0:0 without a token"), "{err}");
+
+    let server = setup.start(&["--bind", "0.0.0.0:0"], &[("MIMVOX_API_TOKEN", "lan-token")]).await;
+    let port = server.base.rsplit(':').next().unwrap().to_string();
+    let url = format!("http://127.0.0.1:{port}/health");
+    let client = reqwest::Client::new();
+    assert_eq!(client.get(&url).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(client.get(&url).bearer_auth("lan-token").send().await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn openai_speech() {
+    let setup = Setup::new();
+    let server = setup.start(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let speech = |body: Value| client.post(server.url("/v1/audio/speech")).json(&body).send();
+
+    let res = speech(
+        json!({ "model": "tts-1", "input": "Hello there. Bye now.", "voice": "fake voice", "response_format": "wav" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "audio/wav");
+    let wav = res.bytes().await.unwrap();
+    assert_eq!(&wav[..4], b"RIFF");
+
+    let res = speech(json!({ "model": "tts-1", "input": "Hi.", "voice": "fake-voice", "response_format": "pcm" }))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "audio/pcm");
+    let pcm = res.bytes().await.unwrap();
+    assert!(pcm.len() > 1000 && &pcm[..4] != b"RIFF");
+
+    let res = speech(json!({ "model": "tts-1", "input": "Hi.", "voice": "nobody" })).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let err: Value = res.json().await.unwrap();
+    assert_eq!(err["error"]["type"], "invalid_request_error");
+    assert_eq!(err["error"]["code"], "not_found");
+
+    let res = speech(json!({ "model": "tts-1", "input": "Hi.", "voice": "fake-voice", "response_format": "midi" }))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let models: Value = client.get(server.url("/v1/models")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(models["data"][0]["id"], "mimvox");
+    let voices: Value = client.get(server.url("/v1/audio/voices")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(voices["voices"][0]["name"], "Fake voice");
+}
+
+#[tokio::test]
+async fn engine_restarts_after_it_exits() {
+    let setup = Setup::new();
+    let mut server = setup.start(&[], &[]).await;
+    server.wait_line("ready").await;
+    let mut events = Events::open(&server).await;
+    let (status, _) = server.rpc("shutdown", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let seen = events.until(|e| e["event"] == "ready").await;
+    assert!(seen.iter().any(|e| e["event"] == "engine.exited" && e["data"]["code"] == 0));
+    assert_eq!(seen.last().unwrap()["data"]["version"], "0.1.0-fake");
+    server.wait_line("ready").await;
+    let (status, _) = server.rpc("voices.list", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn one_engine_per_data_folder() {
+    let setup = Setup::new();
+    let _first = setup.start(&[], &[]).await;
+    let (ok, _, err) = setup.run(&["--bind", "127.0.0.1:0"], &[]).await;
+    assert!(!ok);
+    assert!(err.contains("already running"), "{err}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_shuts_the_engine_down() {
+    let setup = Setup::new();
+    let mut server = setup.start(&[], &[]).await;
+    server.wait_line("ready").await;
+    let pid = server.child.id().unwrap().to_string();
+    assert!(std::process::Command::new("kill").args(["-TERM", &pid]).status().unwrap().success());
+    let status = tokio::time::timeout(WAIT, server.child.wait()).await.unwrap().unwrap();
+    assert!(status.success());
+    let log = std::fs::read_to_string(setup.data().join("logs").join("engine.log")).unwrap();
+    assert!(log.contains("shutdown requested"), "{log}");
+}

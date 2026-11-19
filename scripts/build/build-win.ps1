@@ -3,7 +3,7 @@
 #
 #   -Format setup|msi|both  installer type (default: setup). setup = per-user setup .exe, no admin rights needed;
 #                           msi = WiX package through cargo-packager.
-#   -SkipCompile            reuse app\target\release (only re-stage resources and re-package)
+#   -SkipCompile            reuse target\release (only re-stage resources and re-package)
 #
 # Output: dist\mimvox_<version>_<x64|arm64>-setup.exe and/or dist\*.msi. With $env:CARGO_PACKAGER_SIGN_PRIVATE_KEY
 # (and _PASSWORD) set, each installer also gets the .sig the app's updater checks.
@@ -21,6 +21,7 @@ $ErrorActionPreference = "Stop"
 
 $packagerVersion = if ($env:CARGO_PACKAGER_VERSION) { $env:CARGO_PACKAGER_VERSION } else { "0.11.8" }
 $binName = "mimvox"
+$serverBin = "mimvox-server"
 # a full Rust + wgpu build is memory hungry
 $jobs = if ($env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS } else { "6" }
 $env:CARGO_BUILD_JOBS = $jobs
@@ -28,7 +29,7 @@ $env:CARGO_BUILD_JOBS = $jobs
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $appDir = Join-Path $repoRoot "app"
 $distDir = Join-Path $repoRoot "dist"
-$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $appDir "target" }
+$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoRoot "target" }
 Set-Location -LiteralPath $appDir
 
 function Require-Command($name, $hint) {
@@ -87,13 +88,15 @@ Check-Exit "Staging resources"
 
 if (-not $SkipCompile) {
     Write-Host "[build-win] Compiling the release binary..."
-    cargo build --release --locked -j $jobs
+    cargo build --release --locked -j $jobs -p mimvox -p mimvox-server
     Check-Exit "cargo build"
 }
 $releaseDir = Join-Path $targetDir "release"
-if (-not (Test-Path (Join-Path $releaseDir "$binName.exe"))) {
-    Write-Host "Release binary not found: $releaseDir\$binName.exe"
-    exit 1
+foreach ($bin in @($binName, $serverBin)) {
+    if (-not (Test-Path (Join-Path $releaseDir "$bin.exe"))) {
+        Write-Host "Release binary not found: $releaseDir\$bin.exe"
+        exit 1
+    }
 }
 
 # cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
@@ -101,7 +104,9 @@ if (-not (Test-Path (Join-Path $releaseDir "$binName.exe"))) {
 $appRelease = Join-Path $appDir "target\release"
 if ((Resolve-Path $releaseDir).Path -ne (Join-Path (Resolve-Path $appDir).Path "target\release")) {
     New-Item -ItemType Directory -Force -Path $appRelease | Out-Null
-    Copy-Item -Force (Join-Path $releaseDir "$binName.exe") (Join-Path $appRelease "$binName.exe")
+    foreach ($bin in @($binName, $serverBin)) {
+        Copy-Item -Force (Join-Path $releaseDir "$bin.exe") (Join-Path $appRelease "$bin.exe")
+    }
     $releaseDir = $appRelease
 }
 
@@ -113,6 +118,7 @@ if ($Format -ne "msi") {
     if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Copy-Item (Join-Path $releaseDir "$binName.exe") $stage
+    Copy-Item (Join-Path $releaseDir "$serverBin.exe") $stage
     Copy-Item -Recurse -Force (Join-Path $appDir "target\bundle-resources\*") $stage
     $innoCache = if ($env:MIMVOX_INNO_CACHE) { $env:MIMVOX_INNO_CACHE } else { Join-Path $appDir "target\inno" }
     Write-Host "[build-win] Building the setup .exe (Inno Setup)..."
