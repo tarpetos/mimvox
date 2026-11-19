@@ -67,6 +67,32 @@ fn keep_appimage_fds_to_self() {
     }
 }
 
+/// `mimvox serve ...`: the mimvox-server next to this binary, with the remaining arguments. An AppImage starts only its
+/// main binary, so this is how the bundled server is reached.
+fn serve(args: impl Iterator<Item = std::ffi::OsString>) -> ! {
+    let exe = std::env::current_exe().ok();
+    // macOS reports a symlink's own path; Windows' canonical form would be a \\?\ path.
+    #[cfg(unix)]
+    let exe = exe.map(|p| p.canonicalize().unwrap_or(p));
+    let dir = exe.and_then(|p| p.parent().map(std::path::Path::to_path_buf)).unwrap_or_default();
+    let server = dir.join(format!("mimvox-server{}", std::env::consts::EXE_SUFFIX));
+    if !server.is_file() {
+        eprintln!("mimvox: {} not found", server.display());
+        std::process::exit(2);
+    }
+    let mut cmd = std::process::Command::new(&server);
+    cmd.args(args);
+    #[cfg(unix)]
+    let err = std::os::unix::process::CommandExt::exec(&mut cmd);
+    #[cfg(not(unix))]
+    let err = match cmd.status() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(e) => e,
+    };
+    eprintln!("mimvox: cannot start {}: {err}", server.display());
+    std::process::exit(126);
+}
+
 const APP_ID: &str = "io.github.tarpetos.mimvox";
 /// The installer and uninstaller wait while it is held (scripts/build/inno.py, APP_MUTEX).
 #[cfg(windows)]
@@ -82,6 +108,11 @@ fn hold_app_mutex() {
 
 fn main() {
     leave_appimage_env();
+    let mut args = std::env::args_os().skip(1).peekable();
+    // Before the AppImage fds turn close-on-exec: the server, run in this process's place, keeps the image mounted.
+    if args.next_if(|a| a == "serve").is_some() {
+        serve(args);
+    }
     #[cfg(target_os = "linux")]
     keep_appimage_fds_to_self();
     // Headless runs (snapshots, scripted recordings) may run beside the app.

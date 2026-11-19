@@ -1548,7 +1548,13 @@ nothing listens unless `mimvox-server` runs.
 ```
 mimvox-server [--bind 127.0.0.1:8765] [--data-dir DIR] [--require-token] [--max-upload-mb 2048]
 mimvox-server --show-token | token show | token new
+mimvox serve [the same arguments]
 ```
+
+- **`mimvox serve`.** The app binary runs the `mimvox-server` next to it with the rest of its arguments (on Unix in
+  its place, so signals and the exit code are the server's), for the Linux AppImage, which starts only its main binary:
+  `./Mimvox.AppImage serve`. No window, no single-instance check. A missing server is an error (exit 2). Windows:
+  `mimvox.exe` is a window program without a console, so run `mimvox-server.exe` from the same folder instead.
 
 - **Engine.** The data dir and runtime are found as the app finds them (`MIMVOX_DATA`, `location.toml`, default;
   `MIMVOX_RUNTIME`, `MIMVOX_ENGINE_SRC`, `MIMVOX_RESOURCES`), `--data-dir` overrides the first. The server starts
