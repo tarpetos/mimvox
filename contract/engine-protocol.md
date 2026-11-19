@@ -1611,3 +1611,68 @@ status: `bad_request` 400, `not_found` 404, `busy` 409, `not_ready` 503, every o
 The same rules as the app apply: the OmniVoice weights are CC BY-NC 4.0, so speech made through the API is for
 non-commercial use only, and only your own voice or one whose owner gave explicit permission may be cloned (README,
 DISCLAIMER.md).
+
+## MCP server
+
+`mimvox-mcp` (`crates/mcp`, a console binary next to `mimvox-server` in every installer) is a
+[Model Context Protocol](https://modelcontextprotocol.io) server built on the official Rust SDK (`rmcp`). It is only a
+client of the HTTP API above: it never starts or touches an engine, so it works against the app's API or
+`mimvox-server`, on this computer or another one on the network.
+
+```
+mimvox-mcp [--url http://127.0.0.1:8765] [--token-file FILE] [--http ADDR [--http-allow-remote]]
+mimvox mcp [the same arguments]
+```
+
+- **Transports.** stdio by default (one JSON-RPC message per line; logs go to stderr). `--http ADDR` serves streamable
+  HTTP on `http://ADDR/mcp` instead (`ADDR` is `host:port`, or a port alone for `127.0.0.1:port`); an address other than
+  loopback is refused without `--http-allow-remote`, since that endpoint has no authentication of its own and uses the
+  API's token. Without `--http-allow-remote` only loopback `Host` headers are served.
+- **`mimvox mcp`** runs the `mimvox-mcp` next to the app binary as `mimvox serve` runs the server (on Unix in its
+  place): `./Mimvox.AppImage mcp`. Windows: run `mimvox-mcp.exe` from the install folder.
+- **API address**: `--url`, else `MIMVOX_URL`, else `http://127.0.0.1:8765` (plain HTTP; a path prefix is kept).
+- **Token**: `MIMVOX_API_TOKEN`, else the file named by `--token-file`, else, only when the URL is loopback, the
+  server's own `<data>/api/token` when it exists (the data folder found as the app finds it: `MIMVOX_DATA`,
+  `location.toml`, the default). Sent as `Authorization: Bearer` with every request; none is needed on loopback
+  unless the API requires one.
+- **Events.** It keeps one `GET /events` stream open for its whole run (reconnecting 1-10 s after it drops) and records
+  every job's latest progress event and its end event (`*.done`, `redub.transcript`, `*.paused`, `*.error`), so a
+  wait can start after the job did. `engine.exited` ends every running job with `internal`; `ready` forgets them
+  (job ids start again with a new engine).
+
+### Tools
+
+| Tool | Arguments | What it does |
+| --- | --- | --- |
+| `engine_call` | `method`, `params`? | `POST /rpc`: any engine method, the result as is (full coverage of this document) |
+| `list_voices` | | `voices.list` |
+| `speak` | `text`, `voice`?, `language`?, `format`?, `speed`?, `include_audio`?, `timeout_s`? | `tts.generate` in the voice (id or name, case-insensitive; default the first voice), `language` defaulting to the voice's; waits for `tts.done` (600 s by default, then answers `running` with the job); returns the path, a `mimvox://file/` link and, up to 4 MB, the audio as MCP audio content. The result stays in `outputs`. Cancelling the call cancels the job |
+| `import_text` | `path`, `language`?, `include_text`? | `text.import`; chapter texts are left out unless `include_text` |
+| `start_book` | `path` or `chapters`, `chapter_indexes`?, `title`?, `voice`?, `language`?, `format`?, `m4b`?, `read_titles`?, `speed`?, `expressiveness`?, `quality`? | `text.import` of `path` (or the given chapters), then `book.start`; answers its `id` and `job` |
+| `book_status` | `id`? | `book.get` (without the texts), or `book.list` without `id` |
+| `pause_book` / `resume_book` | `id` | `book.pause` / `book.resume` |
+| `job_status` | `job` | the job's latest known state: `running`, `done`, `paused`, `error` (or `unknown`), its last progress data and its end data |
+| `wait_job` | `job`, `timeout_s`? | waits for the job's end event (300 s by default, at most 3600; then `running` with `timed_out`) |
+| `upload_file` | `local_path` | `POST /files` (streamed): the path on the API's machine |
+| `download_file` | `path`, `dest`?, `overwrite`? | `GET /files` (streamed) to `dest` (a file or folder; default the Downloads folder) |
+
+- **Progress.** When a `speak` or `wait_job` call carries a `progressToken`, each progress event of its job becomes a
+  `notifications/progress`: `pct` / `percent` out of 100 (`train.progress`, `book.progress`, `redub.progress`,
+  `voices.media.progress`), or the chunk count out of `segments` (`tts.chunk`), with the event name and stage as the
+  message. Values only increase.
+- **Errors** are tool results with `isError`: the text `<code>: <message>` and `structuredContent`
+  `{"error":{"code","message","http_status"}}`, the code being the engine's (`bad_request`, `not_found`, `busy`, ...),
+  the API's (`unauthorized` with how to give the token, `forbidden`, `too_large`, `timeout`) or the client's own:
+  `unreachable` ("turn on the API in Mimvox Settings, or run `mimvox serve`"), `timeout`, `exists` (`download_file`
+  would replace a file). A job that ended with an error makes `speak` and `wait_job` answer that error.
+- Paths in arguments and answers are on the API's machine. With a remote API, `upload_file` a local file before
+  passing it to a method, and `download_file` the results.
+
+### Resources
+
+- `resources/list`: the latest 100 saved results (`outputs.list`), one resource per audio file and per video,
+  `mimvox://file/<absolute path, percent-encoded>` with the MIME type and a description (kind, voice, length, text).
+- Template `mimvox://file/{path}`: any file `GET /files` serves. `resources/read` returns it (base64 `blob`; text for
+  `.txt`, `.srt`, `.vtt`, `.json`) up to 32 MB; larger files are refused with a hint to use `download_file`.
+
+The consent and licence rules of the API apply unchanged.

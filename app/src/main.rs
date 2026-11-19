@@ -67,20 +67,20 @@ fn keep_appimage_fds_to_self() {
     }
 }
 
-/// `mimvox serve ...`: the mimvox-server next to this binary, with the remaining arguments. An AppImage starts only its
-/// main binary, so this is how the bundled server is reached.
-fn serve(args: impl Iterator<Item = std::ffi::OsString>) -> ! {
+/// `mimvox serve ...` / `mimvox mcp ...`: the mimvox-server / mimvox-mcp next to this binary, with the remaining
+/// arguments. An AppImage starts only its main binary, so this is how the bundled ones are reached.
+fn run_sibling(name: &str, args: impl Iterator<Item = std::ffi::OsString>) -> ! {
     let exe = std::env::current_exe().ok();
     // macOS reports a symlink's own path; Windows' canonical form would be a \\?\ path.
     #[cfg(unix)]
     let exe = exe.map(|p| p.canonicalize().unwrap_or(p));
     let dir = exe.and_then(|p| p.parent().map(std::path::Path::to_path_buf)).unwrap_or_default();
-    let server = dir.join(format!("mimvox-server{}", std::env::consts::EXE_SUFFIX));
-    if !server.is_file() {
-        eprintln!("mimvox: {} not found", server.display());
+    let bin = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    if !bin.is_file() {
+        eprintln!("mimvox: {} not found", bin.display());
         std::process::exit(2);
     }
-    let mut cmd = std::process::Command::new(&server);
+    let mut cmd = std::process::Command::new(&bin);
     cmd.args(args);
     #[cfg(unix)]
     let err = std::os::unix::process::CommandExt::exec(&mut cmd);
@@ -89,7 +89,7 @@ fn serve(args: impl Iterator<Item = std::ffi::OsString>) -> ! {
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),
         Err(e) => e,
     };
-    eprintln!("mimvox: cannot start {}: {err}", server.display());
+    eprintln!("mimvox: cannot start {}: {err}", bin.display());
     std::process::exit(126);
 }
 
@@ -98,9 +98,12 @@ const APP_ID: &str = "io.github.tarpetos.mimvox";
 fn main() {
     leave_appimage_env();
     let mut args = std::env::args_os().skip(1).peekable();
-    // Before the AppImage fds turn close-on-exec: the server, run in this process's place, keeps the image mounted.
+    // Before the AppImage fds turn close-on-exec: the program run in this process's place keeps the image mounted.
     if args.next_if(|a| a == "serve").is_some() {
-        serve(args);
+        run_sibling("mimvox-server", args);
+    }
+    if args.next_if(|a| a == "mcp").is_some() {
+        run_sibling("mimvox-mcp", args);
     }
     #[cfg(target_os = "linux")]
     keep_appimage_fds_to_self();

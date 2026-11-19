@@ -227,6 +227,16 @@ The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth
 | `rubato` (resampling to 24 kHz for OpenAI's `pcm`) | MIT OR Apache-2.0 |
 | `subtle` (constant-time token comparison) | BSD-3-Clause |
 
+### Direct Rust dependencies of `mimvox-mcp` (`crates/mcp`)
+
+| Crate | Licence (crates.io) |
+| --- | --- |
+| `rmcp` (the official Model Context Protocol Rust SDK, with `rmcp-macros`) | Apache-2.0 (older contributions MIT, see its LICENSE) |
+| `schemars` (JSON schemas of the tools) | MIT |
+| `reqwest` (HTTP client of the API) | MIT OR Apache-2.0 |
+| `axum`, `tokio`, `tokio-util` | MIT |
+| `clap`, `futures-util`, `base64`, `dirs`, `serde`, `serde_json`, `anyhow` | MIT OR Apache-2.0 |
+
 All transitive Rust dependencies are listed in `Cargo.lock`. Generate the complete licence list of a release build
 with `cargo about` (or `cargo license`) and check it before distributing binaries.
 

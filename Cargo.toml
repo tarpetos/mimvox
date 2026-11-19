@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["app", "crates/engine-client", "crates/api", "crates/server"]
+members = ["app", "crates/engine-client", "crates/api", "crates/server", "crates/mcp"]
 exclude = ["app/vendor"]
 
 [workspace.dependencies]

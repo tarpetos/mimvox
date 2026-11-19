@@ -59,8 +59,8 @@ category = "Music"
 # the macOS universal binary.
 out-dir = "../dist"
 binaries-dir = "target/release"
-# mimvox-server: the HTTP API without the window (crates/server), next to the app binary.
-binaries = [{ path = "mimvox", main = true }, { path = "mimvox-server" }]
+# mimvox-server: the HTTP API without the window (crates/server); mimvox-mcp: the MCP server over it (crates/mcp).
+binaries = [{ path = "mimvox", main = true }, { path = "mimvox-server" }, { path = "mimvox-mcp" }]
 
 icons = [
     "../tools/release/icons/icon_32x32.png",
