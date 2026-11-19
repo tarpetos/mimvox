@@ -104,7 +104,7 @@ fn run() -> anyhow::Result<()> {
     let sink: engine::EngineSink = std::sync::Arc::new(move |_, msg| {
         let _ = tx.send(msg);
     });
-    let mut engine = EngineClient::spawn(&cfg, sink)?;
+    let engine = EngineClient::spawn(&cfg, sink)?;
     println!("engine log: {}", engine.log_path().display());
 
     let player = if args.no_play {

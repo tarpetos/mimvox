@@ -143,7 +143,7 @@ fn run(s: &mut AppState) {
         }
     };
     // Stop the engine first: it holds files in the data folder open.
-    if let Some(mut old) = s.engine.take() {
+    if let Some(old) = super::api::detach(s) {
         let _ = shell::guard(|| old.shutdown());
     }
     s.shell.engine = EngineStatus::Starting { since: shell::clock_now(s) };

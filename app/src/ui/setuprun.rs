@@ -249,7 +249,7 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, dat
     }
     *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()) = false;
     // Setup may update the engine's environment, and Windows refuses to replace files a running engine holds open.
-    if let Some(mut old) = s.engine.take() {
+    if let Some(old) = super::api::detach(s) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| old.shutdown()));
         s.shell.engine = super::shell::EngineStatus::Stopped { code: None, detail: "Stopped while setup runs.".into() };
     }

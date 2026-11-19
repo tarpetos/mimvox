@@ -1,3 +1,4 @@
+pub mod api;
 pub mod book;
 pub mod caption;
 pub mod components;
@@ -15,6 +16,7 @@ pub mod refmedia;
 pub mod relocate;
 #[cfg(windows)]
 pub mod seekstrip;
+pub mod settings;
 pub mod setuprun;
 pub mod shell;
 pub mod speak;
@@ -106,6 +108,7 @@ pub fn all_scenes() -> &'static [Scene] {
         all.extend_from_slice(book::scenes());
         all.extend_from_slice(modules::scenes());
         all.extend_from_slice(update::scenes());
+        all.extend_from_slice(settings::scenes());
         all
     })
 }

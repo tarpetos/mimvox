@@ -1541,9 +1541,9 @@ video (none applied).
 
 ## HTTP API
 
-The engine protocol over HTTP, for scripts and other programs. Rust: `crates/api` (a library, so the app can host it
-later) and `crates/server` (`mimvox-server`, a console binary next to `mimvox` in the installers). Off by default:
-nothing listens unless `mimvox-server` runs.
+The engine protocol over HTTP, for scripts and other programs. Rust: `crates/api` (a library: the routes, the token,
+and `host`, which the app serves it with) and `crates/server` (`mimvox-server`, a console binary next to `mimvox`
+in the installers). Off by default: nothing listens unless `mimvox-server` runs or the app's API setting is on.
 
 ```
 mimvox-server [--bind 127.0.0.1:8765] [--data-dir DIR] [--require-token] [--max-upload-mb 2048]
@@ -1556,6 +1556,19 @@ mimvox serve [the same arguments]
   `./Mimvox.AppImage serve`. No window, no single-instance check. A missing server is an error (exit 2). Windows:
   `mimvox.exe` is a window program without a console, so run `mimvox-server.exe` from the same folder instead.
 
+- **In the app.** Settings, **API** (saved as `"api": {"on","lan","port","require_token","notice_seen"}` in
+  `settings.json`): off by default; the first turn-on shows a notice (own or permitted voices only, CC BY-NC weights,
+  whoever reaches the address can use the voices and files) to confirm. The app serves the API in-process with its
+  own engine, never a second one: every engine message goes to the API's hub first (answers to the API's requests,
+  events to `/events`), then to the UI as before; requests from both share the engine's ids, and each side takes only
+  the answers to its own. The hub follows the app's engine (restarts included); `engine.exited` reaches `/events`,
+  but the app does not start the engine again by itself (`shutdown` through `/rpc` stops it until **Retry**).
+  Address: `127.0.0.1` or the local network (`0.0.0.0`), port 8765 by default. **Require token** asks for it on
+  loopback; the local network always does. The token is the server's (`<data>/api/token`, created when first needed;
+  `MIMVOX_API_TOKEN` wins and is shown as such; **New token** writes a new file). A change of address, port, token
+  or token requirement restarts the listener (the old one closes before the new one binds; open `/events` streams
+  end), never the engine. A port in use or a failed bind is shown; the API stops with the app. When the engine cannot
+  start because another engine holds the data dir (`mimvox-server`), the API does not start either and says why.
 - **Engine.** The data dir and runtime are found as the app finds them (`MIMVOX_DATA`, `location.toml`, default;
   `MIMVOX_RUNTIME`, `MIMVOX_ENGINE_SRC`, `MIMVOX_RESOURCES`), `--data-dir` overrides the first. The server starts
   the engine at once and starts it again 1 s after it exits (an exit right after `shutdown` included); three crashes

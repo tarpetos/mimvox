@@ -2,6 +2,7 @@
 
 mod ffmpeg;
 mod files;
+pub mod host;
 mod hub;
 mod openai;
 pub mod token;

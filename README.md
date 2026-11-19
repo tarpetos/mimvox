@@ -206,7 +206,7 @@ rather than being bundled; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ```
 app/                   Rust desktop app (Rune UI, microphone and playback)
 crates/engine-client/  engine process client and protocol types (shared by the app and the server)
-crates/api/            local HTTP API over the engine protocol
+crates/api/            local HTTP API over the engine protocol (the app serves it from Settings, or mimvox-server)
 crates/server/         mimvox-server: the HTTP API without the window
   src/audio/           capture and playback (cpal, hound)
   src/ui/              screens: onboarding, record, train, voices, speak (with its Book mode, book.rs), redub

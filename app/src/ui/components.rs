@@ -80,6 +80,11 @@ pub mod icons {
     );
     stroke_icon!(POWER, "power", r#"<path d="M8 2.2V7.4M4.7 4.3A5 5 0 1 0 11.3 4.3"/>"#);
     stroke_icon!(
+        SLIDERS,
+        "sliders",
+        r#"<path d="M2.5 5H4.2M7.8 5H13.5M2.5 11H8.2M11.8 11H13.5"/><circle cx="6" cy="5" r="1.8"/><circle cx="10" cy="11" r="1.8"/>"#
+    );
+    stroke_icon!(
         VOLUME,
         "volume",
         r#"<path d="M2.6 6.2H5L8.2 3.4V12.6L5 9.8H2.6Z" stroke-width="1.3"/><path d="M10.4 5.8A3.2 3.2 0 0 1 10.4 10.2M12.2 4A5.6 5.6 0 0 1 12.2 12"/>"#
@@ -288,6 +293,7 @@ pub enum ButtonSize {
 }
 
 type Handler = Rc<dyn Fn(&mut AppState)>;
+type TxHandler = Rc<dyn Fn(&mut AppState, &mut rune::Tx)>;
 type ValueHandler = Rc<dyn Fn(&mut AppState, f32)>;
 
 pub struct Button {
@@ -300,6 +306,7 @@ pub struct Button {
     help: Option<String>,
     grow: bool,
     on_press: Option<Handler>,
+    on_press_tx: Option<TxHandler>,
 }
 
 impl Button {
@@ -314,6 +321,7 @@ impl Button {
             help: None,
             grow: false,
             on_press: None,
+            on_press_tx: None,
         }
     }
     pub fn primary(mut self) -> Self {
@@ -365,6 +373,11 @@ impl Button {
     }
     pub fn on_press(mut self, f: impl Fn(&mut AppState) + 'static) -> Self {
         self.on_press = Some(Rc::new(f));
+        self
+    }
+    /// For a press that needs the frame's `Tx` (the clipboard).
+    pub fn on_press_tx(mut self, f: impl Fn(&mut AppState, &mut rune::Tx) + 'static) -> Self {
+        self.on_press_tx = Some(Rc::new(f));
         self
     }
 
@@ -425,8 +438,11 @@ impl Button {
         if let Some(t) = self.help {
             b = b.help(t);
         }
-        match (self.disabled, self.on_press) {
-            (false, Some(f)) => b.focusable(true).on_press(move |s: &mut AppState| f(s)),
+        match (self.disabled, self.on_press, self.on_press_tx) {
+            (false, Some(f), _) => b.focusable(true).on_press(move |s: &mut AppState| f(s)),
+            (false, None, Some(f)) => {
+                b.focusable(true).on_press_tx(move |s: &mut AppState, tx: &mut rune::Tx| f(s, tx))
+            }
             _ => b.disabled(self.disabled).opacity(if self.disabled { 0.42 } else { 1.0 }),
         }
     }
@@ -864,6 +880,42 @@ pub fn level_meter(p: Palette, level: f32, peak: Option<f32>) -> El {
             .motion(motion::SNAP)
     });
     row().w_full().h(14.0).gap(3.0).children(seg)
+}
+
+/// An on/off switch; `label` is its accessible name. Disabled, it keeps showing its state.
+pub fn switch(
+    p: Palette,
+    key: &str,
+    label: &str,
+    on: bool,
+    enabled: bool,
+    on_toggle: impl Fn(&mut AppState) + 'static,
+) -> El {
+    let (w, h, k) = (38.0, 22.0, 16.0);
+    let knob = el()
+        .key(format!("{key}-knob"))
+        .size(k, k)
+        .radius(k / 2.0)
+        .absolute(if on { w - k - 3.0 } else { 3.0 }, (h - k) / 2.0 - 1.0)
+        .fill(if on { p.on_accent } else { p.text_dim })
+        .motion(motion::UI)
+        .inert();
+    let track = el()
+        .key(key.to_owned())
+        .role("switch")
+        .label(label.to_owned())
+        .checked(on)
+        .size(w, h)
+        .radius(h / 2.0)
+        .fill(if on { p.accent } else { p.well })
+        .border(1.0, if on { p.accent.alpha(0.6) } else { p.rim_top.alpha(0.5) })
+        .motion(motion::UI)
+        .child(knob);
+    if enabled {
+        track.focusable(true).cursor(rune::Cursor::Pointer).on_press(on_toggle)
+    } else {
+        track.disabled(true).opacity(0.5)
+    }
 }
 
 pub fn badge(p: Palette, label: &str, tone: Tone) -> El {

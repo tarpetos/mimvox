@@ -1,6 +1,8 @@
 //! Root application state. `engine` and `player` stay `None` when they cannot start: use the guarded helpers
 //! (`ui::shell::request`, `ui::playbar::play`, `ui::shell::stop_audio`) rather than touching them directly.
 
+use std::sync::Arc;
+
 use crate::audio::Player;
 use crate::engine::EngineClient;
 use crate::ui::{
@@ -42,7 +44,8 @@ impl Screen {
 pub struct AppState {
     pub screen: Screen,
     pub shell: ShellState,
-    pub engine: Option<EngineClient>,
+    /// Shared with the API's hub (`ui::api`).
+    pub engine: Option<Arc<EngineClient>>,
     /// `None` when no output device is available.
     pub player: Option<Player>,
     pub onboarding: OnboardingState,
@@ -61,6 +64,8 @@ pub struct AppState {
     pub update: crate::ui::update::UpdateState,
     pub setup: crate::ui::setuprun::SetupRunState,
     pub modules: crate::ui::modules::ModulesState,
+    pub settings: crate::ui::settings::SettingsState,
+    pub api: crate::ui::api::ApiState,
 }
 
 impl Default for AppState {
@@ -99,6 +104,8 @@ impl Default for AppState {
             update: Default::default(),
             setup: Default::default(),
             modules: Default::default(),
+            settings: Default::default(),
+            api: Default::default(),
         }
     }
 }
