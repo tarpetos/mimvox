@@ -205,6 +205,7 @@ the quick check, and only then delete the old directory.
 <data>/tmp/play/<name>.wav                   # playback WAV of a result saved in another format than wav (the app plays WAV
                                              #  only; same name as the saved file; written with the result or by
                                              #  outputs.play; gone at the next engine start)
+<data>/tmp/covers/<hash>.<ext>               # cover images of imported documents (text.import meta.cover)
 <data>/runtime/models/whisper/               # Whisper turbo (large-v3-turbo.pt, 1.6 GB), fetched by setup (else on the first Redub)
 <data>/runtime/models/nllb-200-distilled-600M/  # NLLB-200 translation model (2.5 GB), fetched by setup with `hf download`; never auto-downloaded
 <data>/runtime/models/nllb-200-distilled-1.3B/  # optional better translation model (fp16 model.safetensors, 2.7 GB; a 5.5 GB fp32
@@ -1036,7 +1037,8 @@ only shows it.
 ### `text.import` (read a document)
 `{"path":"<absolute path>","language"?:"auto"|"<code>"}` ->
 `{"path","name","format","format_label","title","encoding","language","language_detected","words","chars","est_s",
-"chapters":[{"title","text","words","chars","est_s"}],"parts":null|{"how","chapters":[...]},"warnings":["..."]}`
+"chapters":[{"title","text","words","chars","est_s"}],"parts":null|{"how","chapters":[...]},"warnings":["..."],
+"meta":{"authors":["..."],"description","language_tag","date","cover":null|{"path","media_type"}}}`
 - Formats (by extension): `.txt` (any encoding: a BOM, else strict UTF-8, else BOM-less UTF-16, else cp1251 or cp1252
   by which gives plausible letters; `encoding` names the one used), `.md`/`.markdown`, `.html`/`.htm`/`.xhtml`,
   `.epub`, `.docx`, `.odt`, `.rtf`, `.fb2` (and `.fb2.zip`), `.pdf` (the text layer only), `.srt`, `.vtt`. Read with the
@@ -1067,6 +1069,22 @@ only shows it.
   chapter title is not repeated at the start of its text. Subtitles lose their numbers, timestamps and tags.
 - `language`: detected from a sample of the text when omitted or `auto` (as `text.analyze`); `est_s` is the reading
   time at that language's pace (145 words a minute in English) at speed 1.0.
+- `meta`: what the file says about itself, never guessed from the text. A missing or damaged field is `[]` / `null`,
+  never an error. EPUB (OPF `<metadata>`): `authors` the `dc:creator`s in order, without duplicates; when roles are
+  given (`opf:role`, or a `role` meta refining the creator) only those with role `aut` or none, unless that leaves
+  none. `description` the `dc:description` as plain text (HTML tags removed, whitespace collapsed). `language_tag` the
+  first `dc:language` as written (BCP 47; `language` stays the detected or given code). `date` a `dc:date` as
+  written: event `publication` first, then one without an event, then `original-publication`, then others; never
+  `modification`. Cover: the manifest item with `properties="cover-image"`, else the item `<meta name="cover"
+  content="<item id>">` names, else the first image item whose id or file name contains "cover". FB2 (`title-info`):
+  `author` (first, middle and last name, else nickname), `annotation`, `lang`, `date` (its text, else `value`),
+  `coverpage`. DOCX (`docProps/core.xml`): `dc:creator` (split at `;`), `dc:description`, `dc:language`. ODT
+  (`meta.xml`): `meta:initial-creator`, else `dc:creator`; `dc:description`, `dc:language`. Other formats: empty;
+  `date` only for EPUB and FB2.
+- `meta.cover`: a JPEG, PNG, GIF or WebP image (told by its bytes, not the declared type) of at most 20 MB, written
+  to `<data>/tmp/covers/<first 32 hex digits of its SHA-256>.<jpg|png|gif|webp>` (an existing file is reused; gone at
+  the next engine start, so copy it to keep it); `media_type` `image/jpeg` | `image/png` | `image/gif` |
+  `image/webp`. `null` for no cover, an SVG or another type, a larger image, or when it cannot be written.
 - Errors: `bad_request` (relative path, a folder, an unsupported extension, an unreadable or damaged file, no text,
   a file over 300 MB, a **scanned PDF without a text layer**: "This PDF has no text layer (it is a scanned image) ..."),
   `not_ready` (pypdf missing). DRM-protected EPUBs and PDFs with a user password are `bad_request` with that reason.

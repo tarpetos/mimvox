@@ -1,26 +1,29 @@
 """Book import (``text.import``): a title and chapters of paragraphs from a text file of any supported format."""
 from __future__ import annotations
 
+import base64
 import codecs
+import hashlib
 import html
 import itertools
 import logging
 import os
 import posixpath
 import re
+import tempfile
 import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from html.entities import html5 as _HTML5
 from html.parser import HTMLParser
 from typing import Any
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from urllib.parse import unquote
 from xml.etree import ElementTree as ET
 
 from .dataset import lang
 from .dataset.text import WPM, count_words, est_seconds
-from . import autoparts
+from . import autoparts, config
 from .registry import EngineError, method
 
 log = logging.getLogger("mimvox.textimport")
@@ -39,6 +42,8 @@ MAX_MEMBER = 512 * 1024 * 1024     # zip bombs
 OPENING_WORDS = 150
 PART_WORDS = 60
 SAMPLE_CHARS = 20_000
+MAX_COVER = 20 * 1024 * 1024
+COVERS_DIR = "covers"       # <data>/tmp/covers: wiped at engine start
 
 
 @dataclass
@@ -50,12 +55,22 @@ class _Ch:
 
 
 @dataclass
+class _Meta:
+    authors: list[str] = field(default_factory=list)
+    description: str | None = None
+    language_tag: str | None = None
+    date: str | None = None
+    cover: tuple[bytes, str] | None = None
+
+
+@dataclass
 class _Book:
     title: str = ""
     chapters: list[_Ch] = field(default_factory=list)
     preamble: list[str] = field(default_factory=list)
     encoding: str | None = None
     warnings: list[str] = field(default_factory=list)
+    meta: _Meta = field(default_factory=_Meta)
 
 
 Block = tuple[str, int, str]       # ("h", level, text) | ("p", 0, text)
@@ -844,6 +859,106 @@ def _zip_names(zf: zipfile.ZipFile) -> dict[str, str]:
     return out
 
 
+def _child(elem: ET.Element, name: str) -> ET.Element | None:
+    return next((c for c in elem if _local(c.tag) == name), None)
+
+
+def _plain_of(elem: ET.Element | None) -> str | None:
+    if elem is None:
+        return None
+    text = " ".join(elem.itertext()) if len(elem) else (elem.text or "")
+    if re.search(r"</?[A-Za-z][^<>]*>", text):
+        text = " ".join(t for _, _, t in _html_blocks(text).blocks)
+    return _clean(text) or None
+
+
+def _names(text: str) -> list[str]:
+    return list(dict.fromkeys(n for n in (_clean(x) for x in text.split(";")) if n))
+
+
+_COVER_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
+
+
+def _cover(data: bytes | None) -> tuple[bytes, str] | None:
+    if not data or len(data) > MAX_COVER:
+        return None
+    if data.startswith(b"\xff\xd8\xff"):
+        return data, "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return data, "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return data, "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return data, "image/webp"
+    return None
+
+
+def _doc_meta(root: ET.Element, *creators: str) -> _Meta:
+    creator = next((t for t in (_text_of(_find(root, n)) for n in creators) if t), "")
+    return _Meta(authors=_names(creator), description=_plain_of(_find(root, "description")),
+                 language_tag=_text_of(_find(root, "language")) or None)
+
+
+def _epub_meta(meta: _Meta, opf: ET.Element, manifest: dict[str, tuple[str, str, str]],
+               read: Callable[[str], bytes | None]) -> None:
+    md = _find(opf, "metadata")
+    if md is None:
+        return
+    refined: dict[str, dict[str, str]] = {}
+    for m in _all(md, "meta"):
+        target, prop = m.get("refines", "").lstrip("#"), m.get("property", "")
+        if target and prop:
+            refined.setdefault(target, {}).setdefault(prop, _text_of(m))
+    creators: dict[str, str] = {}
+    for c in _all(md, "creator"):
+        name = _text_of(c)
+        if name and name not in creators:
+            creators[name] = (_attr(c, "role") or refined.get(c.get("id", ""), {}).get("role", "")).strip().lower()
+    meta.authors = [n for n, role in creators.items() if role in ("", "aut")] or list(creators)
+    meta.description = _plain_of(_find(md, "description"))
+    meta.language_tag = _text_of(_find(md, "language")) or None
+    rank = {"publication": 0, "": 1, "original-publication": 2}
+    dates = sorted((rank.get(e, 3), i, t) for i, d in enumerate(_all(md, "date"))
+                   if (t := _text_of(d)) and (e := _attr(d, "event").strip().lower()) != "modification")
+    meta.date = dates[0][2] if dates else None
+    cover_id = next((m.get("content", "") for m in _all(md, "meta") if m.get("name", "").lower() == "cover"), "")
+    candidates = (
+        next((p for p, _, props in manifest.values() if "cover-image" in props.split()), ""),
+        manifest.get(cover_id, ("",))[0],
+        next((p for i, (p, mt, _) in manifest.items()
+              if mt.startswith("image/") and "cover" in f"{i} {posixpath.basename(p)}".lower()), ""),
+    )
+    for p in dict.fromkeys(c for c in candidates if c):
+        if (cover := _cover(read(p))) is not None:
+            meta.cover = cover
+            break
+
+
+def _fb2_meta(meta: _Meta, root: ET.Element) -> None:
+    info = _find(root, "description", "title-info")
+    if info is None:
+        return
+    for a in (c for c in info if _local(c.tag) == "author"):
+        name = " ".join(t for t in (_text_of(_child(a, k)) for k in ("first-name", "middle-name", "last-name")) if t)
+        name = name or _text_of(_child(a, "nickname"))
+        if name and name not in meta.authors:
+            meta.authors.append(name)
+    annotation = _child(info, "annotation")
+    if annotation is not None:
+        paras: list[str] = []
+        _fb2_paras(list(annotation), paras)
+        meta.description = " ".join(paras) or None
+    meta.language_tag = _text_of(_child(info, "lang")) or None
+    date = _child(info, "date")
+    if date is not None:
+        meta.date = _text_of(date) or date.get("value") or None
+    image = _find(info, "coverpage", "image")
+    ref = _attr(image, "href").lstrip("#") if image is not None else ""
+    binary = next((b for b in root if _local(b.tag) == "binary" and b.get("id") == ref), None) if ref else None
+    if binary is not None and len(binary.text or "") <= MAX_COVER * 2:
+        meta.cover = _cover(base64.b64decode(binary.text or ""))
+
+
 @dataclass
 class _TocNode:
     title: str
@@ -955,6 +1070,10 @@ def _epub_book(path: str) -> _Book:
             real = names.get(name.lower()) or names.get(unquote(name).lower())
             return _read_member(zf, real) if real else None
 
+        def cover_bytes(name: str) -> bytes | None:
+            real = names.get(name.lower())
+            return zf.read(real) if real and zf.getinfo(real).file_size <= MAX_COVER else None
+
         enc = get("META-INF/encryption.xml")
         if enc:
             refs = [_attr(c, "URI") for c in _all(_xml(enc), "CipherReference")]
@@ -975,6 +1094,10 @@ def _epub_book(path: str) -> _Book:
         for item in _all(opf, "item"):
             manifest[item.get("id", "")] = (_resolve(base, item.get("href", ""))[0], item.get("media-type", ""),
                                             item.get("properties", ""))
+        try:
+            _epub_meta(book.meta, opf, manifest, cover_bytes)
+        except Exception:                                   # noqa: BLE001  (metadata never fails the import)
+            log.warning("EPUB metadata not read from %s", path, exc_info=True)
         spine_el = _find(opf, "spine")
         spine: list[str] = []
         nav_path = next((p for p, _, props in manifest.values() if "nav" in props.split()), "")
@@ -1076,7 +1199,9 @@ def _docx_book(path: str) -> _Book:
                 styles[sid] = ((name_el.get(f"{_W}val", "") if name_el is not None else "").lower(), lvl,
                                based.get(f"{_W}val", "") if based is not None else "")
         if "docprops/core.xml" in names:
-            book.title = _text_of(_find(_xml(_read_member(zf, names["docprops/core.xml"])), "title"))
+            core = _xml(_read_member(zf, names["docprops/core.xml"]))
+            book.title = _text_of(_find(core, "title"))
+            book.meta = _doc_meta(core, "creator")
 
     def style_level(sid: str) -> int | None:
         for _ in range(6):
@@ -1164,7 +1289,9 @@ def _odt_book(path: str) -> _Book:
             raise EngineError("bad_request", "This is not an OpenDocument text file (content.xml is missing).")
         content = _xml(_read_member(zf, names["content.xml"]))
         if "meta.xml" in names:
-            book.title = _text_of(_find(_xml(_read_member(zf, names["meta.xml"])), "meta", "title"))
+            meta_xml = _xml(_read_member(zf, names["meta.xml"]))
+            book.title = _text_of(_find(meta_xml, "meta", "title"))
+            book.meta = _doc_meta(meta_xml, "initial-creator", "creator")
         styles_root = _xml(_read_member(zf, names["styles.xml"])) if "styles.xml" in names else None
     parents: dict[str, str] = {}
     for root in (content, styles_root):
@@ -1287,6 +1414,10 @@ def _fb2_book(path: str) -> _Book:
             data = f.read()
     root = _xml(data)
     book.title = _text_of(_find(root, "description", "title-info", "book-title"))
+    try:
+        _fb2_meta(book.meta, root)
+    except Exception:                                       # noqa: BLE001  (metadata never fails the import)
+        log.warning("FB2 metadata not read from %s", path, exc_info=True)
     bodies = [b for b in root if _local(b.tag) == "body"]
     main = [b for b in bodies if not b.get("name")] or bodies[:1]
 
@@ -1856,7 +1987,7 @@ def extract(path: str) -> dict[str, Any]:
     if not chapters:
         raise EngineError("bad_request", "No readable text was found in this file.")
     return {"format": fmt, "format_label": label, "title": title, "chapters": chapters, "encoding": book.encoding,
-            "warnings": book.warnings}
+            "warnings": book.warnings, "meta": book.meta}
 
 
 def _sample(chapters: list[dict[str, str]]) -> str:
@@ -1866,6 +1997,26 @@ def _sample(chapters: list[dict[str, str]]) -> str:
     n, size = 10, SAMPLE_CHARS // 10
     step = (len(text) - size) // (n - 1)
     return " ".join(text[i * step:i * step + size] for i in range(n))
+
+
+def _save_cover(ctx: Any, cover: tuple[bytes, str] | None) -> dict[str, str] | None:
+    if cover is None:
+        return None
+    data, media_type = cover
+    folder = os.path.join(config.data_dir(ctx).tmp, COVERS_DIR)
+    path = os.path.join(folder, hashlib.sha256(data).hexdigest()[:32] + _COVER_EXT[media_type])
+    try:
+        if not os.path.isfile(path):
+            os.makedirs(folder, exist_ok=True)
+            fd, part = tempfile.mkstemp(suffix=".part", dir=folder)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.replace(part, path)
+    except OSError as exc:
+        if not os.path.isfile(path):
+            log.warning("the cover was not saved: %s", exc)
+            return None
+    return {"path": path, "media_type": media_type}
 
 
 @method("text.import")
@@ -1910,8 +2061,11 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         parts = {"how": suggested["how"], "chapters": [
             {"title": c["title"], "text": c["text"], "words": (w := count_words(c["text"])), "chars": len(c["text"]),
              "est_s": est_seconds(w, wpm)} for c in suggested["chapters"]]}
+    meta: _Meta = book["meta"]
     return {"path": path, "name": os.path.basename(path), "format": book["format"],
             "format_label": book["format_label"], "title": book["title"], "encoding": book["encoding"],
             "language": code, "language_detected": detected, "words": words,
             "chars": sum(c["chars"] for c in out_chapters), "est_s": est_seconds(words, wpm),
-            "chapters": out_chapters, "parts": parts, "warnings": book["warnings"]}
+            "chapters": out_chapters, "parts": parts, "warnings": book["warnings"],
+            "meta": {"authors": meta.authors, "description": meta.description, "language_tag": meta.language_tag,
+                     "date": meta.date, "cover": _save_cover(ctx, meta.cover)}}
