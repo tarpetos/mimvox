@@ -136,6 +136,10 @@ def _segs_path(data: config.DataDir, book_id: str, k: int) -> str:
     return os.path.join(_work(data, book_id), f"{k + 1:03d}.segments.json")
 
 
+def _timing_path(data: config.DataDir, book_id: str, k: int) -> str:
+    return os.path.join(book_dir(data, book_id), "segments", f"{k + 1:03d}.json")
+
+
 # Cyrillic and Greek letters typed in place of Latin ones in Roman numerals ("РОЗДІЛ І" for "РОЗДІЛ I").
 _ROMAN_LOOKALIKE = str.maketrans("\u0456\u0445\u0441\u043c\u03b9\u03c7\u03bc", "ixcmixm")
 _ROMAN = re.compile(r"m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})")
@@ -236,7 +240,8 @@ def _chapter_rows(book: dict[str, Any], state: dict[str, Any]) -> list[dict[str,
         rows.append({"index": i, "title": c.get("title"), "words": c.get("words"), "chars": c.get("chars"),
                      "status": cs.get("status") or "waiting", "segment": int(cs.get("segment") or 0),
                      "segments": int(cs.get("segments") or 0), "audio_s": round(audio, 2), "elapsed_s": round(el, 1),
-                     "rtf": round(el / audio, 3) if audio > 0 else None, "path": cs.get("path")})
+                     "rtf": round(el / audio, 3) if audio > 0 else None, "path": cs.get("path"),
+                     "segments_path": cs.get("segments_path")})
     return rows
 
 
@@ -445,10 +450,12 @@ async def book_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _drop_partial(data: config.DataDir, bid: str, state: dict[str, Any], status: str) -> None:
-    for cs in state.get("chapters") or []:
+    for k, cs in enumerate(state.get("chapters") or []):
         if cs.get("status") != "done":
             cs.clear()
             cs.update(_new_chapter_state())
+            with contextlib.suppress(OSError):
+                os.remove(_timing_path(data, bid, k))
     shutil.rmtree(_work(data, bid), ignore_errors=True)
     os.makedirs(_work(data, bid), exist_ok=True)
     state["status"] = status
@@ -538,7 +545,7 @@ def _reread(data: config.DataDir, bid: str, book: dict[str, Any], state: dict[st
             cs = state["chapters"][k]
             state["audio_s"] = max(0.0, float(state.get("audio_s") or 0.0) - float(cs.get("audio_s") or 0.0))
             state["elapsed_s"] = max(0.0, float(state.get("elapsed_s") or 0.0) - float(cs.get("elapsed_s") or 0.0))
-            old = [cs.get("path"), _pcm_path(data, bid, k), _segs_path(data, bid, k),
+            old = [cs.get("path"), _pcm_path(data, bid, k), _segs_path(data, bid, k), _timing_path(data, bid, k),
                    os.path.join(book_dir(data, bid), "stats", f"{k + 1:03d}.json")]
             for path in filter(None, old):
                 with contextlib.suppress(OSError):
@@ -618,8 +625,9 @@ def _prepare_chapter_locked(data: config.DataDir, bid: str, k: int, book: dict[s
         cs.update(_new_chapter_state())
         cs["status"] = "partial"
         cs["segments"] = len(segs)
-        with contextlib.suppress(OSError):
-            os.remove(_pcm_path(data, bid, k))
+        for p in (_pcm_path(data, bid, k), _timing_path(data, bid, k)):
+            with contextlib.suppress(OSError):
+                os.remove(p)
     pcm = _pcm_path(data, bid, k)
     keep = int(cs.get("bytes") or 0)
     if os.path.exists(pcm) or keep:
@@ -727,15 +735,52 @@ def _finish_chapter(data: config.DataDir, bid: str, book: dict[str, Any], state:
             os.replace(wav, path)
     with _LOCK:
         cs = state["chapters"][k]
+        stats = cs.pop("stats", [])
+        title = book["chapters"][k]["title"]
+        duration_s = round(size / BYTES_PER_S, 3)
         os.makedirs(os.path.join(book_dir(data, bid), "stats"), exist_ok=True)
         _write_json(os.path.join(book_dir(data, bid), "stats", f"{k + 1:03d}.json"),
-                    {"title": book["chapters"][k]["title"], "level": level, "segments": cs.pop("stats", [])})
-        cs.update({"status": "done", "path": path, "duration_s": round(size / BYTES_PER_S, 3), "level": level})
+                    {"title": title, "level": level, "segments": stats})
+        saved = _read_json(_segs_path(data, bid, k)) or {}
+        timed = timeline(saved.get("segments") or [], stats, duration_s, title)
+        timing = None
+        if timed is None:
+            log.warning("book %s chapter %d: segment records incomplete, no segment timing", bid, k + 1)
+        else:
+            timing = _timing_path(data, bid, k)
+            os.makedirs(os.path.dirname(timing), exist_ok=True)
+            _write_json(timing, {"chapter": k, "title": title, "path": path, "duration_s": duration_s,
+                                 "segments": timed})
+        cs.update({"status": "done", "path": path, "duration_s": duration_s, "level": level,
+                   "segments_path": timing})
         _save_state(data, bid, state)
     for p in (pcm, _segs_path(data, bid, k)):
         with contextlib.suppress(OSError):
             os.remove(p)
     return path
+
+
+def timeline(segs: list[Any], stats: list[dict[str, Any]], duration_s: float,
+             title: str | None = None) -> list[dict[str, Any]] | None:
+    """Each segment's speech in the chapter file, from ``_commit``'s layout: LEAD_MS of silence, then per segment its
+    trimmed audio (starting at its stat's ``at``, ``dur`` long) and the gap after it. None when a stat is missing."""
+    by_i = {m.get("i"): m for m in stats}
+    if not segs or any(i not in by_i or by_i[i].get("at") is None for i in range(len(segs))):
+        return None
+    kinds = [str(s[2]) for s in segs]
+    n_title = kinds.index("title") + 1 if "title" in kinds else 0
+    out = []
+    for i, s in enumerate(segs):
+        m = by_i[i]
+        start = float(m["at"])
+        row: dict[str, Any] = {"text": str(s[0]), "start": round(start, 3),
+                               "end": round(min(start + float(m.get("dur") or 0.0), duration_s), 3)}
+        if i < n_title:
+            row["kind"] = "title"
+            if n_title == 1 and title:
+                row["text"] = title
+        out.append(row)
+    return out
 
 
 def _ffmeta(s: str) -> str:
@@ -957,7 +1002,8 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
                     log.info("book %s chapter %d done: %.1fs of audio in %.1fs (RTF %.2f), level %s", bid, k + 1,
                              audio, el, el / audio if audio else 0.0, cs.get("level"))
                     ctx.emit("book.chapter", {"id": bid, "index": k, "title": book["chapters"][k]["title"],
-                                              "path": out, "duration_s": cs.get("duration_s"), "audio_s": audio,
+                                              "path": out, "segments_path": cs.get("segments_path"),
+                                              "duration_s": cs.get("duration_s"), "audio_s": audio,
                                               "elapsed_s": round(el, 1), "rtf": round(el / audio, 3) if audio else None,
                                               "level": cs.get("level"), **_totals(book, state)}, job=job)
                     last_at[0] = time.time()

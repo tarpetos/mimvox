@@ -225,6 +225,7 @@ the quick check, and only then delete the old directory.
 <data>/books/<book_id>/work/<NNN>.pcm         # the chapter being read: 16-bit mono 44.1 kHz PCM, appended per segment
 <data>/books/<book_id>/work/<NNN>.segments.json  # that chapter's segments, fixed when it starts
 <data>/books/<book_id>/stats/<NNN>.json      # per-segment measures of a finished chapter (loudness, pitch, pauses, retries)
+<data>/books/<book_id>/segments/<NNN>.json   # each segment's text and speech times in a finished chapter's file (see Output files)
 <data>/outputs/books/<book title>/<NN> - <chapter title>.<ext>  # one file per chapter (+ <book title>.m4b with "m4b")
 <data>/tmp/                                  # scratch (job chunks, training logs), wiped at every engine start
 ```
@@ -1108,15 +1109,16 @@ only shows it.
   "percent","audio_s","elapsed_s","rtf","eta_s","est_audio_s","chars","chars_done"}`. A book recorded as running whose
   job is not running in this engine (the app or engine closed mid-book) is reported `paused` with `interrupted: true`.
 - `book.get {"id","text"?:false}` -> a summary plus `"settings"` and `"chapter_list":[{"index","title","words","chars",
-  "status":"waiting|partial|done","segment","segments","audio_s","elapsed_s","rtf","path"}]` (`text: true` adds each
-  chapter's text).
-- `book.delete {"id"}` -> `{}`: forgets the project (its texts and progress); the files in `outputs/books` stay. `busy`
-  while it is being read.
+  "status":"waiting|partial|done","segment","segments","audio_s","elapsed_s","rtf","path","segments_path"}]`
+  (`text: true` adds each chapter's text; `segments_path` is the chapter's segment timing file, null until it is done
+  and for chapters finished before the engine wrote one).
+- `book.delete {"id"}` -> `{}`: forgets the project (its texts, progress and segment timing); the files in
+  `outputs/books` stay. `busy` while it is being read.
 - `book.reread {"id","voice_id"?,"chapters"?:[index, ...]}` -> like `book.get`: reads the listed chapters again (all of
   them when `chapters` is left out; `[]` for none), with `voice_id` from now on when given (`not_found` for a voice
-  without a reference). Each listed chapter's file, progress and audio are dropped, and so is the M4B. The book is
-  then `paused` (`new` when nothing is made), or stays `done` when every chapter is still made; `book.resume` reads
-  on. `busy` while it is being read.
+  without a reference). Each listed chapter's file, segment timing, progress and audio are dropped, and so is the M4B.
+  The book is then `paused` (`new` when nothing is made), or stays `done` when every chapter is still made;
+  `book.resume` reads on. `busy` while it is being read.
 - `book.play {"id","index"}` -> `{"path","path_play"}`: a WAV to play a finished chapter with (the chapter file itself
   for WAV, else a decoded copy in `<data>/tmp/play/book-<id>-<NNN>.wav`, gone at the next engine start). `not_found`
   for a chapter that is not finished.
@@ -1129,8 +1131,9 @@ only shows it.
   measured pace (null until the first segment), `est_audio_s` the whole book's length extrapolated. `stage: "m4b"` while
   the M4B is made, about once a second with `stage_pct` (0-100) and `stage_eta_s`; `stage: "memory"` when the computer ran short of RAM or VRAM: reading goes on from the same sentence
   after `retry_in_s` (20 s, 60 s, 180 s, 300 s; the count starts again once a segment is made), and only then fails.
-- `book.chapter {"id","index","title","path","duration_s","audio_s","elapsed_s","rtf","level":{"lufs_in","gain_db",
-  "peak_dbfs"}, ...totals}`: a chapter file is finished (`rtf` of that chapter alone).
+- `book.chapter {"id","index","title","path","segments_path","duration_s","audio_s","elapsed_s","rtf",
+  "level":{"lufs_in","gain_db","peak_dbfs"}, ...totals}`: a chapter file is finished (`rtf` of that chapter alone;
+  `segments_path` its segment timing file, see Output files, null when the segment records were incomplete).
 - `book.done {"id","folder","m4b","m4b_requested","chapters","retries","session_elapsed_s","session_audio_s", ...totals,
   ...accent and reference fields}`; `book.paused {summary}`; `book.error {"id","code","message"}` (`cancelled` after
   `book.cancel`). The slot is free when the end event arrives.
@@ -1163,17 +1166,27 @@ The pipeline is `tts.generate`'s (backend, native accent and its converter, RVC)
   `state.json` records the next segment and the PCM length that goes with it (written atomically). A resume cuts the
   PCM back to the recorded length, so a segment written but not recorded is dropped and made again: no gap and no
   repeat. A chapter's segments are fixed in `work/<NNN>.segments.json` when it starts, so a resume continues the same
-  cut. Nothing of a chapter is held in memory; the finished chapter file is written from the PCM in blocks, then the
-  work files go.
+  cut. Nothing of a chapter is held in memory; the finished chapter file is written from the PCM in blocks, then
+  `stats/<NNN>.json` and `segments/<NNN>.json`, then the work files go. A chapter that starts again (`book.reread`,
+  `book.cancel` of an unfinished one) loses its `segments/<NNN>.json`.
 - `<data>/books/<id>/book.json`: `{"id","title","source","format","created","folder","settings":{...},"words",
   "chapters":[{"title","text","words","file","chars"}]}`; `state.json`: `{"status","current","audio_s","elapsed_s",
-  "chapters":[{"status","segment","segments","bytes","chars_done","audio_s","elapsed_s","path","duration_s","level"}],
+  "chapters":[{"status","segment","segments","bytes","chars_done","audio_s","elapsed_s","path","duration_s","level",
+  "segments_path"}],
   "m4b","error","updated"}`.
 
 ### Output files
 `<data>/outputs/books/<book title>/<NN> - <chapter title>.<ext>` (`NN` from 01, three digits past 99 chapters; names
 keep any letters, lose `<>:"/\|?*` and control characters, at most 80 / 60 characters; a folder name already used by
 another book gets ` (2)`, ...), plus `<book title>.m4b` with `m4b`.
+
+Segment timing (for subtitles), kept in the project, not the output folder: `<data>/books/<id>/segments/<NNN>.json`
+`{"chapter","title","path","duration_s","segments":[{"text","start","end","kind"?:"title"}]}`, written atomically when
+the chapter is finished. `path` is the chapter file the times are in, `duration_s` its length; one entry per segment in
+order. `start` / `end` (seconds, 3 decimals) bound the segment's trimmed speech (with its 30 / 60 ms margins), the
+pause after it excluded: the first starts at 1.6 s. `text` is the segment as cut (typography normalized as in
+Narration; numbers are spelled out only inside the speech backend, so they stay as written). The chapter title's
+segments, when read, have `kind: "title"`; a title read as one segment has the chapter title as its `text`.
 
 **App side (Speak, Book mode):** the Text / Book switch at the top right of Speak's left panel. Book mode shows the
 file (name, format, detected language, encoding), the totals (chapters, words, about how long the audio is and how long
