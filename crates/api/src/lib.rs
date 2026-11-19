@@ -138,7 +138,7 @@ pub fn status_for(code: &str) -> StatusCode {
         "bad_request" => StatusCode::BAD_REQUEST,
         "not_found" => StatusCode::NOT_FOUND,
         "busy" => StatusCode::CONFLICT,
-        "not_ready" => StatusCode::SERVICE_UNAVAILABLE,
+        "not_ready" | "no_memory" => StatusCode::SERVICE_UNAVAILABLE,
         "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -306,6 +306,7 @@ mod tests {
         assert_eq!(status_for("not_found"), StatusCode::NOT_FOUND);
         assert_eq!(status_for("busy"), StatusCode::CONFLICT);
         assert_eq!(status_for("not_ready"), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status_for("no_memory"), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(status_for("cancelled"), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

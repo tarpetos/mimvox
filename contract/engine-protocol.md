@@ -42,7 +42,8 @@ This file is the single source of truth. Rust types live in `crates/engine-clien
   omnivoice worker timed out in synth" / "made no progress for 600 s in synth").
 - **`shutdown` / stdin EOF.** The engine answers `shutdown` with `{}`, lets requests in flight answer (up to 10 s),
   stops a running training's Applio process tree (Windows: `taskkill /T`; the run stays resumable as an interrupted
-  one), cancels the remaining jobs, stops the workers (`quit`, exit awaited, killed after 5 s) and exits. A request
+  one), cancels the remaining jobs, stops the workers (`quit`, exit awaited, killed after 5 s) and exits. From the start of
+  the shutdown a worker that exits is not started again: a request it was running fails instead of being retried. A request
   still running at that point answers `cancelled`. No child process outlives it.
 
 Command line helper (no running engine needed, prints the `voices.import` result as JSON):
@@ -63,8 +64,10 @@ Command line helper (no running engine needed, prints the `voices.import` result
 
 Requests may be sent while others run. Long work (`tts.generate`, `train.start`) answers at once with a `job` id
 (`job-1`, `job-2`, ...) and then reports through events carrying that `job`. Events without a job have `"job":null`.
-Error codes: `bad_request`, `not_found`, `busy`, `not_ready`, `paused`, `cancelled`, `internal`. An unknown method is
-`not_found`; a malformed line is `bad_request`. As a last resort a job that crashes without reporting itself emits
+Error codes: `bad_request`, `not_found`, `busy`, `not_ready`, `paused`, `cancelled`, `no_memory`, `internal`. An unknown
+method is `not_found`; a malformed line is `bad_request`. `no_memory`: the computer has too little RAM free for the step,
+or too little in all for speech on the processor ([RAM on the CPU](#speech-model-and-languages-omnivoice)); the message
+says which. A client that does not know a code shows the message. As a last resort a job that crashes without reporting itself emits
 `job.error {"code":"internal","message"}`.
 
 ### Events that are not tied to a request
@@ -733,8 +736,8 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
   whole sentences; RVC rmvpe, protect 0.33, pitch 0.
 - Events, in order: `tts.chunk {"index","path","duration_s","segments","ready_s","rtf"}` (one per segment, final audio
   at 44.1 kHz, already includes the pause after it, play at once), then `tts.done {"path","path_play","format",
-  "duration_s","elapsed_s"}` (see [Saved results](#saved-results-output_format)), or `tts.error {"code","message"}` (`cancelled` after `tts.cancel`; the slot is free again when the
-  event arrives). `ready_s` is the wall time from the start of the job to this chunk; `rtf` is the wall time since the
+  "duration_s","elapsed_s"}` (see [Saved results](#saved-results-output_format)), or `tts.error {"code","message"}` (`cancelled` after `tts.cancel`; `no_memory` when the RAM is too small or full,
+  see [RAM on the CPU](#speech-model-and-languages-omnivoice); the slot is free again when the event arrives). `ready_s` is the wall time from the start of the job to this chunk; `rtf` is the wall time since the
   previous chunk (or the start) divided by this chunk's speech seconds, so `rtf < 1` means generation is faster than
   playback. Chunk files live in `<data>/tmp/<job>/` and are deleted after an hour.
 
@@ -902,13 +905,24 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
   a cold load included. On the CPU (`backend = "cpu"`, or no usable GPU at load) it has no fixed limit: the worker sends
   `progress` at most every 2 s while a model runs (OmniVoice, its audio tokenizer, Whisper), and only 600 s without
   one end the call. A short segment takes minutes there (see [performance](../docs/performance.md#speech-on-the-processor-cpu)).
-- **RAM on the CPU**: every decoding step reads all the fp32 weights (about 3 GB), so the worker does not trim its
-  working set after loading or after Whisper as it does on a GPU (there those pages only carried the weights to the
-  card). Before each segment on the CPU the worker checks the RAM: when the available physical memory is below 5 % of
-  it (at least 0.5 GB) and at least 1 GB of the weights is not in RAM (one page in 16 sampled; Windows: not in the
-  working set, so compressed or in the page file; Linux: `mincore`), `synth` fails with `no_memory` and "not
-  enough free memory (RAM): ... close other programs and try again". A Book then shows `stage: "memory"` and
-  retries; `tts.generate` ends with `tts.error` `internal` and that message.
+- **RAM on the CPU**: every decoding step reads all the fp32 weights, so the worker does not trim its working set
+  after loading or after Whisper as it does on a GPU (there those pages only carried the weights to the card). The
+  weights are about 3 GB, but the worker holds more (measured on Windows): 5.0 GB of private memory after loading,
+  6.4 GB after a segment and 7.45 GB while Whisper (fp32, about 3.8 GB) transcribes a new reference (Linux: 7.1 GB in
+  RAM at that peak). Speech on the
+  CPU therefore needs a computer with 12 GB of RAM or more. Before every model pass on the CPU (`warm`, `synth` and
+  `inspect` before they load anything, the reference transcription, the voice-clone prompt and each segment's
+  decoding) the worker checks the RAM, the same way each time:
+  - less than 11 GB of RAM in all (the worker plus about 3.5 GB for the system, the engine and the app;
+    `MIMVOX_CPU_RAM_NEED_GB` changes it): `no_memory` with "not enough memory (RAM) for speech on the processor: it
+    needs a computer with at least 11 GB of RAM and this one has 7.4 GB, ...". This does not depend on what else
+    runs, so every request on such a computer gets the same answer at once instead of swapping for minutes.
+  - the available physical memory below 5 % of it (at least 0.5 GB) and at least 1 GB of the weights not in RAM (one
+    page in 16 sampled; Windows: not in the working set, so compressed or in the page file; Linux: `mincore`):
+    `no_memory` with "not enough free memory (RAM): ... close other programs and try again".
+
+  A Book then shows `stage: "memory"` and retries; `tts.generate` ends with `tts.error` `no_memory` and that
+  message. On a GPU or MPS neither check runs.
 
 ### Native accent (`accent`)
 
@@ -1222,7 +1236,7 @@ fields as tts.generate}`
   `segments_path` its segment timing file, see Output files, null when the segment records were incomplete).
 - `book.done {"id","folder","m4b","m4b_requested","chapters","retries","session_elapsed_s","session_audio_s", ...totals,
   ...accent and reference fields}`; `book.paused {summary}`; `book.error {"id","code","message"}` (`cancelled` after
-  `book.cancel`). The slot is free when the end event arrives.
+  `book.cancel`; `no_memory` when the retries of the `memory` stage did not help). The slot is free when the end event arrives.
 
 ### Narration (how a book sounds)
 The pipeline is `tts.generate`'s (backend, native accent and its converter, RVC), with these differences
@@ -1676,7 +1690,7 @@ mimvox serve [the same arguments]
 | `GET /v1/audio/voices` | the `voices.list` result |
 
 Errors keep the engine's body `{"code","message"}` (`/v1/*`: OpenAI's `{"error":{"message","type","code"}}`) with the
-status: `bad_request` 400, `not_found` 404, `busy` 409, `not_ready` 503, every other engine code 500; the server's own
+status: `bad_request` 400, `not_found` 404, `busy` 409, `not_ready` 503, `no_memory` 503, every other engine code 500; the server's own
 `unauthorized` 401, `forbidden` 403, `too_large` 413, `timeout` 504. A request whose engine exits before it answers is `internal` 500.
 
 The same rules as the app apply: the OmniVoice weights are CC BY-NC 4.0, so speech made through the API is for

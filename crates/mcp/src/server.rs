@@ -54,7 +54,7 @@ book.pause, book.cancel, book.list, book.get, book.delete, book.reread, book.pla
 redub.transcribe, redub.dub, redub.render, redub.cancel; shutdown. Parameters and results are documented in \
 contract/engine-protocol.md of the Mimvox repository. Methods that answer {job} run in the background: follow them \
 with wait_job or job_status. Errors carry the engine's code (bad_request, not_found, busy, not_ready, paused, \
-cancelled, internal).";
+cancelled, no_memory, internal).";
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]

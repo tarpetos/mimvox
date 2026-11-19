@@ -1560,6 +1560,12 @@ mod text_tests {
     use super::*;
 
     #[test]
+    fn a_code_without_its_own_text_shows_the_engine_message() {
+        let msg = "not enough memory (RAM) for speech on the processor: it needs a computer with at least 11 GB";
+        assert_eq!(friendly_error("no_memory", msg), msg);
+    }
+
+    #[test]
     fn text_comes_back_after_a_restart() {
         let dir = std::env::temp_dir().join(format!("mimvox-speak-text-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

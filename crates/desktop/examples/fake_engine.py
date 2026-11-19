@@ -59,6 +59,10 @@ def tts_job(data_dir, job, params):
     os.makedirs(tmp, exist_ok=True)
     started = time.time()
     total = 0.0
+    failure = os.environ.get("MIMVOX_FAKE_TTS_ERROR")
+    if failure:
+        send({"event": "tts.error", "job": job, "data": {"code": failure, "message": f"fake {failure}"}})
+        return
     for i, seg in enumerate(segments):
         time.sleep(0.4)  # pretend to synthesise
         if job in CANCELLED:

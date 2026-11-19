@@ -167,7 +167,7 @@ class OmniVoiceBackend(TtsBackend):
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
         except WorkerError as exc:
-            code = exc.code if exc.code in ("bad_request", "not_found") else "internal"
+            code = exc.code if exc.code in ("bad_request", "not_found", "no_memory") else "internal"
             raise EngineError(code, f"OmniVoice: {exc.message}") from exc
         except WorkerDied as exc:
             raise EngineError("internal", f"the OmniVoice worker stopped: {exc}") from exc
@@ -185,7 +185,9 @@ class OmniVoiceBackend(TtsBackend):
                                     **self.limits())
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "warm-up cancelled") from exc
-        except (WorkerError, WorkerDied) as exc:
+        except WorkerError as exc:
+            raise EngineError("no_memory" if exc.code == "no_memory" else "internal", f"OmniVoice: {exc}") from exc
+        except WorkerDied as exc:
             raise EngineError("internal", f"OmniVoice: {exc}") from exc
         self._mark_warm(ref)
 
