@@ -206,6 +206,19 @@ fn push_tail(tail: &StderrTail, line: String) {
     t.push_back(line);
 }
 
+/// The installer and the uninstaller wait while it exists (scripts/build/inno.py, APP_MUTEX).
+#[cfg(windows)]
+pub const APP_MUTEX: &str = "Local\\Mimvox-running";
+
+/// Holds [`APP_MUTEX`] until the process exits: the app and mimvox-server both keep installed files in use.
+#[cfg(windows)]
+pub fn hold_app_mutex() {
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = APP_MUTEX.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a NUL-terminated name; the handle is never closed, so the mutex lives as long as the process.
+    let _ = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+}
+
 /// Locked while an engine runs on a data dir, so the app and mimvox-server never run two engines on it.
 pub const LOCK_FILE: &str = "engine.lock";
 

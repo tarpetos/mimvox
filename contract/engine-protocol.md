@@ -1566,6 +1566,9 @@ mimvox serve [the same arguments]
   shows that as the engine's stop reason. A client that dies first (killed) does not free it early: on Unix the engine
   inherits the lock (`flock`) and holds it until it exits; on Windows the engine runs in a job object that ends it with
   its client.
+- **Updates (Windows).** The server holds the app's named mutex (`Local\Mimvox-running`) for its whole run, so the
+  installer and the uninstaller ask to close it (a silent update waits 30 s, then stops) instead of failing on files
+  in use.
 - **Token.** 32 random bytes, URL-safe base64 without padding, in `<data>/api/token` (mode 0600 on Unix; on
   Windows the per-user data folder's ACL). `MIMVOX_API_TOKEN` overrides the file. `token new` writes a new
   one, `token show` / `--show-token` print it (creating it when missing). Clients send
