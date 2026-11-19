@@ -193,11 +193,12 @@ pub async fn download(State(st): State<AppState>, Query(q): Query<DownloadQuery>
     if !real_roots.iter().any(|r| real.starts_with(r)) {
         return Err(forbidden());
     }
-    let file = tokio::fs::File::open(&real).await.map_err(|_| not_found())?;
-    let meta = file.metadata().await.map_err(ApiError::internal)?;
+    // Before opening: Windows cannot open a folder as a file.
+    let meta = tokio::fs::metadata(&real).await.map_err(|_| not_found())?;
     if !meta.is_file() {
         return Err(ApiError::bad_request("not a file"));
     }
+    let file = tokio::fs::File::open(&real).await.map_err(|_| not_found())?;
     let headers =
         [(header::CONTENT_TYPE, content_type(&real).to_string()), (header::CONTENT_LENGTH, meta.len().to_string())];
     Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())

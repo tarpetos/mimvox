@@ -229,6 +229,10 @@ def _chapters_from_blocks(blocks: list[Block], max_level: int = 3) -> tuple[list
     return chapters, preamble, title
 
 
+def _is_sentence(s: str) -> bool:
+    return s.rstrip(" \"'»”’)")[-1:] in (".", "!", "?", "…")
+
+
 def _strip_title(title: str, paras: list[str]) -> list[str]:
     key = _key(title)
     if not key:
@@ -241,7 +245,8 @@ def _strip_title(title: str, paras: list[str]) -> list[str]:
             continue
         if len(pk.split()) > 15:
             break
-        if pk == key or f" {pk} " in f" {key} " or (f" {key} " in f" {pk} " and len(pk.split()) <= 12):
+        if pk == key or f" {pk} " in f" {key} " or (f" {key} " in f" {pk} " and len(pk.split()) <= 12
+                                                     and (_heading_match(paras[i]) or not _is_sentence(paras[i]))):
             i += 1
             dropped += 1
         else:
@@ -446,6 +451,10 @@ def _find_headings(lines: list[str], wrapped: bool) -> list[tuple[int, int, str,
     return out if len(out) >= 2 else []
 
 
+def _same_heading(a: str, b: str) -> bool:
+    return a == b or a.startswith(b + " ") or b.startswith(a + " ")
+
+
 def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) -> list[tuple[int, int, str, bool]]:
     """Blanks ``lines`` of each table of contents (3+ headings with almost no text between them)."""
     small = [count_words(" ".join(lines[heads[k][1]:heads[k + 1][0]])) < 20 for k in range(len(heads) - 1)]
@@ -459,6 +468,11 @@ def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) ->
         while m < len(small) and small[m]:
             m += 1
         if m - k + 1 >= 3:
+            keys = [_key(h[2]) for h in heads[k:m + 1]]
+            # the headings right after a contents list repeat its first entries and are not part of it
+            size = next((j for j in range(1, len(keys))
+                         if all(_same_heading(a, b) for a, b in zip(keys[j:], keys))), len(keys))
+            last = k + size - 1
             first = heads[k][0]
             for i in range(first - 1, max(-1, first - 12), -1):    # its "Contents" header and untitled entries
                 s = lines[i].strip()
@@ -467,9 +481,9 @@ def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) ->
                 if _key(s) in _TOC_NAMES:
                     first = i
                     break
-            for i in range(first, heads[m][1]):
+            for i in range(first, heads[last][1]):
                 lines[i] = ""
-            for i in range(k, m + 1):
+            for i in range(k, last + 1):
                 keep[i] = False
         k = m + 1
     return [h for h, ok in zip(heads, keep) if ok]
@@ -922,9 +936,13 @@ def _epub_meta(meta: _Meta, opf: ET.Element, manifest: dict[str, tuple[str, str,
                    if (t := _text_of(d)) and (e := _attr(d, "event").strip().lower()) != "modification")
     meta.date = dates[0][2] if dates else None
     cover_id = next((m.get("content", "") for m in _all(md, "meta") if m.get("name", "").lower() == "cover"), "")
+    cover_href = posixpath.normpath(unquote(cover_id)).lstrip("/") if cover_id else ""
     candidates = (
         next((p for p, _, props in manifest.values() if "cover-image" in props.split()), ""),
         manifest.get(cover_id, ("",))[0],
+        # some EPUB 2 files name the image's href instead of its manifest id
+        next((p for p, mt, _ in manifest.values()
+              if cover_href and mt.startswith("image/") and (p == cover_href or p.endswith("/" + cover_href))), ""),
         next((p for i, (p, mt, _) in manifest.items()
               if mt.startswith("image/") and "cover" in f"{i} {posixpath.basename(p)}".lower()), ""),
     )
