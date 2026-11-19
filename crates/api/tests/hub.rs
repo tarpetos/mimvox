@@ -11,7 +11,12 @@ fn python() -> PathBuf {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
         .flat_map(|d| ["python3", "python", "python.exe"].map(|n| d.join(n)))
-        .find(|p| p.is_file())
+        // The first one that starts, as the tests write it: on Windows PATH can list a Store alias that does not.
+        .filter(|p| p.is_file())
+        .find(|p| {
+            let p = p.display().to_string().replace('\\', "/");
+            std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success())
+        })
         .expect("python3 on PATH")
 }
 

@@ -223,7 +223,8 @@ The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth
 | Crate | Licence (crates.io) |
 | --- | --- |
 | `axum`, `tokio`, `tokio-util` | MIT |
-| `futures-util`, `clap`, `base64`, `getrandom`, `uuid` | MIT OR Apache-2.0 |
+| `futures-util`, `clap`, `base64`, `getrandom`, `uuid`, `toml` | MIT OR Apache-2.0 |
+| `rubato` (resampling to 24 kHz for OpenAI's `pcm`) | MIT OR Apache-2.0 |
 | `subtle` (constant-time token comparison) | BSD-3-Clause |
 
 All transitive Rust dependencies are listed in `Cargo.lock`. Generate the complete licence list of a release build
