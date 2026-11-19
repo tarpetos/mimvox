@@ -447,7 +447,9 @@ class _Voice:
             raise EngineError("bad_request", f"no voice model speaks {lang!r}")
         try:
             tts.check_backend_ready(backend)
-        except EngineError:
+        except EngineError as exc:
+            if exc.code == "no_memory":
+                raise
             raise EngineError("not_ready", "the speech model is not ready (loading, or the GPU is in use by a "
                                            "training)") from None
         if self.trained and self.index_rate > 0:

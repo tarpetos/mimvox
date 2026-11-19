@@ -118,6 +118,8 @@ pub struct ShellState {
     /// `None` until the engine says.
     pub components: Option<Vec<String>>,
     pub components_off: Vec<String>,
+    /// Why speech cannot run while `tts` is `no_memory`.
+    pub tts_message: Option<String>,
     pub active_voice: Option<String>,
     pub voice_menu_open: bool,
     /// Headless previews only (`caption::scenes`); `None` in the real app.
@@ -191,6 +193,7 @@ impl Default for ShellState {
             zero_shot_vc: false,
             components: None,
             components_off: Vec::new(),
+            tts_message: None,
             active_voice: None,
             voice_menu_open: false,
             caption_preview: None,
@@ -472,6 +475,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 tts: Some(hello.models.tts.as_str().to_owned()),
                 rvc: Some(hello.models.rvc.as_str().to_owned()),
             };
+            s.shell.tts_message = hello.models.tts_message.clone();
             if !hello.languages.is_empty() {
                 s.shell.languages = hello.languages.clone();
             }
@@ -498,6 +502,9 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
         EngineMsg::Event(ev) if ev.event == "models" => {
             let get = |k: &str| ev.data.get(k).and_then(Value::as_str).map(str::to_owned);
             let (new_tts, new_rvc) = (get("tts"), get("rvc"));
+            if new_tts.is_some() {
+                s.shell.tts_message = get("tts_message");
+            }
             if let EngineStatus::Ready { tts, rvc, .. } = &mut s.shell.engine {
                 let was_ready = tts.as_deref() == Some("ready") && rvc.as_deref() == Some("ready");
                 if new_tts.is_some() {
@@ -914,7 +921,9 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
             // RVC is "missing" by design when voice training is not installed.
             let rvc_needed = super::setuprun::has(s, "training");
             let missing = tts.as_deref() == Some("missing") || (rvc_needed && rvc.as_deref() == Some("missing"));
-            if missing {
+            if tts.as_deref() == Some("no_memory") {
+                (Tone::Danger, "Not enough memory".to_owned(), false, false)
+            } else if missing {
                 (Tone::Danger, "Models missing".to_owned(), false, false)
             } else if paused {
                 (Tone::Neutral, "Training · speech paused".to_owned(), false, false)
@@ -950,7 +959,7 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
     .motion(motion::UI)
     .child(status_dot(p, tone, pulse))
     .children((!tight).then(|| text(label.clone()).font(ty::LABEL).color(p.text).a11y_hidden()));
-    pill = pill.help(engine_help(&s.shell.engine, super::setuprun::has(s, "training")));
+    pill = pill.help(engine_help(&s.shell.engine, super::setuprun::has(s, "training"), s.shell.tts_message.as_deref()));
     if retry {
         pill = pill.hover(p.glass_hover).focusable(true).on_press(|s: &mut AppState| restart_engine(s)).child(icon_el(
             &icons::REFRESH,
@@ -963,12 +972,13 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
     pill
 }
 
-fn engine_help(engine: &EngineStatus, training: bool) -> String {
+fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>) -> String {
     let model = |m: &Option<String>| match m.as_deref() {
         Some("ready") => "ready".to_owned(),
         Some("loading") => "loading…".to_owned(),
         Some("paused") => "paused while a voice trains".to_owned(),
         Some("missing") => "not installed".to_owned(),
+        Some("no_memory") => "not enough memory (RAM)".to_owned(),
         Some(other) => other.to_owned(),
         None => "not loaded yet".to_owned(),
     };
@@ -979,7 +989,10 @@ fn engine_help(engine: &EngineStatus, training: bool) -> String {
         EngineStatus::Ready { device, tts, rvc } => {
             let any = |want: &str| [tts, rvc].iter().any(|m| m.as_deref() == Some(want));
             let missing = tts.as_deref() == Some("missing") || (training && rvc.as_deref() == Some("missing"));
-            let summary = if missing {
+            let no_memory = tts.as_deref() == Some("no_memory");
+            let summary = if no_memory {
+                "Speech cannot run on this computer: it has too little memory (RAM) for the speech model on the processor."
+            } else if missing {
                 "Some models are not installed: run setup again."
             } else if any("paused") {
                 "A voice is training: the speech models are paused so training has the GPU. They come back when training ends or pauses."
@@ -989,6 +1002,9 @@ fn engine_help(engine: &EngineStatus, training: bool) -> String {
                 "Ready: the speech models are loaded."
             };
             let mut t = summary.to_owned();
+            if let Some(why) = tts_message.filter(|_| no_memory) {
+                t.push_str(&format!("\n{}", sentence(why)));
+            }
             if let Some(d) = device {
                 t.push_str(&format!("\nDevice: {d}"));
             }
@@ -1014,6 +1030,16 @@ fn engine_help(engine: &EngineStatus, training: bool) -> String {
         }
         EngineStatus::Unavailable { reason } => format!("The engine cannot run: {reason}"),
     }
+}
+
+/// An engine message (lower case, no full stop) as a sentence.
+fn sentence(message: &str) -> String {
+    let mut chars = message.trim().chars();
+    let mut out: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
 }
 
 fn voice_pill(s: &AppState, p: Palette) -> El {
@@ -1164,4 +1190,28 @@ fn engine_banner(s: &AppState, p: Palette) -> Option<El> {
             Button::new("Retry").small().icon(&icons::REFRESH).key("banner-retry").on_press(restart_engine).build(p),
         );
     Some(el().w_full().px(16.0).child(glass_card(p).w_full().child(row_)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::protocol::Event;
+
+    const WHY: &str = "not enough memory (RAM) for speech on the processor: it needs 11 GB";
+
+    #[test]
+    fn too_little_ram_is_explained_instead_of_ready() {
+        let mut s = AppState::default();
+        s.shell.engine = EngineStatus::Ready { device: Some("CPU".into()), tts: Some("loading".into()), rvc: None };
+        let models = json!({"tts": "no_memory", "rvc": "ready", "tts_message": WHY});
+        on_engine(&mut s, &EngineMsg::Event(Event { event: "models".into(), job: None, data: models }));
+        assert_eq!(s.shell.tts_message.as_deref(), Some(WHY));
+        let help = engine_help(&s.shell.engine, true, s.shell.tts_message.as_deref());
+        assert!(help.starts_with("Speech cannot run on this computer"), "{help}");
+        assert!(help.contains("\nNot enough memory (RAM) for speech on the processor: it needs 11 GB.\n"), "{help}");
+        assert!(help.ends_with("Speech model: not enough memory (RAM)\nVoice conversion: ready"), "{help}");
+        let ready = json!({"tts": "ready", "rvc": "ready"});
+        on_engine(&mut s, &EngineMsg::Event(Event { event: "models".into(), job: None, data: ready }));
+        assert_eq!(s.shell.tts_message, None);
+    }
 }

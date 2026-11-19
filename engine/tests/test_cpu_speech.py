@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import mmap
 import os
 import sys
@@ -7,7 +8,7 @@ import textwrap
 import numpy as np
 import pytest
 import soundfile as sf
-from mimvox_engine import aio, book, speech, worker_kit
+from mimvox_engine import aio, backends, book, config, speech, tts, worker_kit
 from mimvox_engine.backends import SynthParams, omnivoice
 from mimvox_engine.registry import EngineError
 from mimvox_engine.workerproc import WorkerClient, WorkerDied, WorkerError
@@ -139,7 +140,7 @@ class StubClient:
         self.calls.append((op, timeout, stall))
         if self.error is not None:
             raise self.error
-        return {"out": params["out"], "duration_s": 1.0}
+        return {"out": (params or {}).get("out"), "duration_s": 1.0}
 
 
 def _backend(device, loaded=None, error=None):
@@ -281,7 +282,9 @@ STUB_OMNIVOICE = textwrap.dedent("""
 
         @classmethod
         def from_pretrained(cls, path, device_map=None, dtype=None):
+            import time
             open(os.environ["FAKE_LOADED"], "w").close()
+            time.sleep(float(os.environ.get("FAKE_LOAD_S", "0")))
             return cls()
 
         def parameters(self):
@@ -298,8 +301,8 @@ LAUNCH = "import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = sys.arg
          "run_name='__main__')"
 
 
-def _omnivoice_worker(tmp_path, device, need_gb, ops):
-    """The real OmniVoice worker script over stub torch and omnivoice modules: the result or the error code per op."""
+def _stub_worker(tmp_path, device, need_gb, load_s=0.0, gpu=None):
+    """A client of the real OmniVoice worker script over stub torch and omnivoice modules, and the params of an op."""
     stubs = tmp_path / "stubs"
     (stubs / "torch").mkdir(parents=True, exist_ok=True)
     (stubs / "omnivoice").mkdir(exist_ok=True)
@@ -308,14 +311,19 @@ def _omnivoice_worker(tmp_path, device, need_gb, ops):
     ref = tmp_path / "reference.wav"
     sf.write(str(ref), np.zeros(24000, dtype=np.float32), 24000)
     env = dict(os.environ, MIMVOX_OMNIVOICE_FAST="0", MIMVOX_CPU_RAM_NEED_GB=str(need_gb),
-               FAKE_CUDA="1" if device == "cuda" else "0", FAKE_LOADED=str(tmp_path / "loaded"))
+               FAKE_CUDA="1" if (device == "cuda" if gpu is None else gpu) else "0", FAKE_LOADED=str(tmp_path / "loaded"), FAKE_LOAD_S=str(load_s))
     argv = [sys.executable, "-c", LAUNCH, str(stubs), omnivoice.WORKER, "--model-dir", str(tmp_path / "model"),
             "--device", device]
     params = {"ref": str(ref), "ref_text": "hello", "text": "Hello there.", "out": str(tmp_path / "out.wav"),
               "normalize": False}
+    return WorkerClient("omnivoice", argv, env, start_timeout=60.0), params
+
+
+def _omnivoice_worker(tmp_path, device, need_gb, ops):
+    """The result or the error code per op."""
 
     async def main():
-        client = WorkerClient("omnivoice", argv, env, start_timeout=60.0)
+        client, params = _stub_worker(tmp_path, device, need_gb)
         answers = []
         try:
             for op in ops:
@@ -335,17 +343,251 @@ needs_ram_figure = pytest.mark.skipif(worker_kit.physical_memory() is None, reas
 
 @needs_ram_figure
 def test_cpu_refuses_every_pass_up_front_on_a_computer_with_too_little_ram(tmp_path):
-    assert _omnivoice_worker(tmp_path, "cpu", 10**6, ["warm", "synth", "inspect"]) == [("no_memory", True)] * 3
+    assert _omnivoice_worker(tmp_path, "cpu", 10**6, ["load", "warm", "synth", "inspect"]) == [("no_memory", True)] * 4
     assert not (tmp_path / "loaded").exists()   # refused before the model was loaded
 
 
 @needs_ram_figure
 def test_cpu_speaks_when_the_ram_is_enough(tmp_path):
-    warm, synth = _omnivoice_worker(tmp_path, "cpu", 0, ["warm", "synth"])
-    assert "elapsed_s" in warm and synth["out"] == str(tmp_path / "out.wav")
+    load, warm, synth = _omnivoice_worker(tmp_path, "cpu", 0, ["load", "warm", "synth"])
+    assert load["device"] == "cpu" and "elapsed_s" in warm and synth["out"] == str(tmp_path / "out.wav")
 
 
 @needs_ram_figure
 def test_the_gpu_skips_the_ram_check(tmp_path):
     (synth,) = _omnivoice_worker(tmp_path, "cuda", 10**6, ["synth"])
     assert synth["out"] == str(tmp_path / "out.wav")
+
+
+def _installed(monkeypatch):
+    monkeypatch.setattr(omnivoice, "installed", lambda runtime: True)
+
+
+def test_cpu_with_too_little_ram_loads_nothing_and_says_why(monkeypatch, caplog):
+    _installed(monkeypatch)
+    monkeypatch.setattr(worker_kit, "physical_memory", lambda: (8 * GB, 5 * GB))
+    b = omnivoice.OmniVoiceBackend()
+    monkeypatch.setattr(b, "_ensure_client", lambda runtime: pytest.fail("no worker on such a computer"))
+    with caplog.at_level(logging.INFO):
+        asyncio.run(b.load({"device": {"backend": "cpu"}}))
+    msg = worker_kit.NO_RAM_CPU_TOTAL.format(need=omnivoice.CPU_RAM_NEED_GB, total=8.0)
+    assert b.status() == "no_memory" and b.status_message() == msg
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    with pytest.raises(EngineError) as info:
+        tts.check_backend_ready(b)
+    assert (info.value.code, info.value.message) == ("no_memory", msg)
+    with pytest.raises(EngineError) as info:
+        asyncio.run(b.synthesize("Hi.", "en", "ref.wav", SynthParams(out_path="out.wav")))
+    assert info.value.code == "no_memory"
+
+
+def test_enough_ram_on_the_cpu_loads(monkeypatch):
+    _installed(monkeypatch)
+    monkeypatch.setattr(worker_kit, "physical_memory", lambda: (32 * GB, 20 * GB))
+    b = omnivoice.OmniVoiceBackend()
+    b._client = StubClient()
+    asyncio.run(b.load({"device": {"backend": "cpu"}}))
+    assert b._client.calls == [("load", omnivoice.LOAD_TIMEOUT_S, None)]
+    assert b.status() == "ready" and b.status_message() is None
+
+
+@needs_ram_figure
+def test_a_worker_on_the_cpu_refuses_to_load_and_ends(tmp_path, monkeypatch):
+    _installed(monkeypatch)
+
+    async def main():
+        b = omnivoice.OmniVoiceBackend()
+        b._client, _ = _stub_worker(tmp_path, "cuda", 10**6, gpu=False)  # asked for a GPU, found none
+        try:
+            await b.load({"device": {"backend": "cuda"}})
+            return b.status(), b.status_message(), b._client.alive()
+        finally:
+            await b._client.close()
+
+    status, msg, alive = asyncio.run(main())
+    assert status == "no_memory" and "for speech on the processor" in msg and not alive
+    assert not (tmp_path / "loaded").exists()
+
+
+@needs_ram_figure
+def test_stopping_while_the_model_loads_is_not_an_error(tmp_path, monkeypatch, caplog):
+    _installed(monkeypatch)
+
+    async def main():
+        b = omnivoice.OmniVoiceBackend()
+        b._client, _ = _stub_worker(tmp_path, "cpu", 0, load_s=30.0)
+        loading = asyncio.ensure_future(b.load({"device": {"backend": "cpu"}}))
+        while not (tmp_path / "loaded").exists():
+            await asyncio.sleep(0.05)
+        monkeypatch.setattr(aio, "_closing", [True])
+        await b._client.close()
+        await loading
+        return b.status()
+
+    with caplog.at_level(logging.INFO, logger="mimvox.omnivoice"):
+        assert asyncio.run(main()) == "missing"
+    assert [r.levelname for r in caplog.records if r.name == "mimvox.omnivoice"] == ["INFO"]
+    assert "stopped while loading" in caplog.records[-1].getMessage()
+
+
+class FakeCtx:
+    def __init__(self, root):
+        self.data_dir, self.runtime, self.events = str(root), {}, []
+
+    def emit(self, event, data, job=None):
+        self.events.append((event, dict(data)))
+
+
+def _patch_start_up(tmp_path, monkeypatch, b):
+    monkeypatch.setattr(tts, "OMNIVOICE", b)
+    monkeypatch.setattr(backends, "all_backends", lambda: [b])
+    monkeypatch.setattr(tts, "_pick_warm_voice", lambda data: (str(tmp_path / "reference.wav"), None))
+    monkeypatch.setattr(tts, "_prewarm_redub", lambda: None)
+    monkeypatch.setattr(tts, "_SETTLED", None)
+    ctx = FakeCtx(tmp_path / "data")
+    config.data_dir(ctx).ensure()
+    return ctx
+
+
+def _models_events(ctx):
+    return [data for event, data in ctx.events if event == "models"]
+
+
+def _start_up(tmp_path, monkeypatch, device="cuda", load=None, synth=None):
+    """``tts.load_models`` over a stub backend: the ``models`` events, and the last one sent before each warm-up synth."""
+    b = omnivoice.OmniVoiceBackend()
+    ctx = _patch_start_up(tmp_path, monkeypatch, b)
+    seen = []
+
+    async def fake_load(runtime):
+        b._status, b.last_load = "ready", {"device": device}
+        if load is not None:
+            load(b)
+
+    async def fake_synth(text, lang, ref, params):
+        seen.append(_models_events(ctx)[-1])
+        tts.check_backend_ready(b)  # a request is accepted meanwhile
+        if synth is not None:
+            raise synth
+        return params.out_path
+
+    b.load, b.synthesize = fake_load, fake_synth
+    asyncio.run(tts.load_models(ctx))
+    return _models_events(ctx), seen
+
+
+def test_the_gpu_warms_up_before_the_models_event_says_ready(tmp_path, monkeypatch):
+    events, seen = _start_up(tmp_path, monkeypatch, "cuda")
+    assert seen == [{"tts": "loading", "rvc": "loading"}]
+    assert events == [{"tts": "loading", "rvc": "loading"}, {"tts": "ready", "rvc": "missing"}]
+
+
+class GatedClient:
+    """One call at a time, as in the worker; the first one waits for ``gate``."""
+
+    def __init__(self):
+        self.lock, self.gate, self.texts = asyncio.Lock(), asyncio.Event(), []
+
+    async def call(self, op, params=None, progress=None, timeout=None, start=True, retry=True, stall=None):
+        if op == "load":
+            return {"device": "cuda", "load_s": 0.0}
+        async with self.lock:
+            if not self.texts:
+                await self.gate.wait()
+            self.texts.append(params["text"])
+            return {"out": params["out"], "duration_s": 1.0}
+
+
+def test_a_request_during_the_gpu_warm_up_waits_behind_it_and_speaks(tmp_path, monkeypatch):
+    _installed(monkeypatch)
+    b = omnivoice.OmniVoiceBackend()
+    ctx = _patch_start_up(tmp_path, monkeypatch, b)
+    ctx.runtime = {"device": {"backend": "cuda"}}
+    b._client = client = GatedClient()
+    out = str(tmp_path / "request.wav")
+
+    async def main():
+        start = asyncio.ensure_future(tts.load_models(ctx))
+        while not client.lock.locked():
+            await asyncio.sleep(0.01)
+        tts.check_backend_ready(b)
+        request = asyncio.ensure_future(b.synthesize("Hello there.", "en", str(tmp_path / "reference.wav"),
+                                                     SynthParams(out_path=out, reference_text="hello")))
+        await asyncio.sleep(0.05)
+        waiting = not request.done()
+        client.gate.set()
+        return waiting, await request, await start
+
+    waiting, path, _ = asyncio.run(main())
+    assert waiting and path == out
+    assert client.texts == [tts._WARM_TEXT["en"], "Hello there."]
+    assert _models_events(ctx)[-1] == {"tts": "ready", "rvc": "missing"}
+
+
+def test_the_cpu_skips_the_start_up_warm_up(tmp_path, monkeypatch):
+    events, seen = _start_up(tmp_path, monkeypatch, "cpu")
+    assert seen == [] and events[-1]["tts"] == "ready"
+
+
+def test_too_little_ram_is_reported_in_the_models_event(tmp_path, monkeypatch):
+    events, seen = _start_up(tmp_path, monkeypatch, "cpu", load=lambda b: b._refuse("too little RAM"))
+    assert seen == []
+    assert events[-1] == {"tts": "no_memory", "rvc": "missing", "tts_message": "too little RAM"}
+
+
+def test_a_refused_start_up_warm_up_is_one_warning(tmp_path, monkeypatch, caplog):
+    with caplog.at_level(logging.WARNING, logger="mimvox.tts"):
+        events, _ = _start_up(tmp_path, monkeypatch, "cuda", synth=EngineError("no_memory", "not enough free memory"))
+    assert events[-1]["tts"] == "ready"
+    warm = [r for r in caplog.records if "warm-up" in r.getMessage()]
+    assert [(r.levelname, r.exc_info) for r in warm] == [("WARNING", None)]
+    assert warm[0].getMessage().endswith(": not enough free memory")
+
+
+def test_shutdown_during_start_up_reports_nothing(tmp_path, monkeypatch, caplog):
+    def stop(b):
+        monkeypatch.setattr(aio, "_closing", [True])
+        b._status = "missing"
+
+    with caplog.at_level(logging.WARNING):
+        events, seen = _start_up(tmp_path, monkeypatch, "cuda", load=stop)
+    assert events == [{"tts": "loading", "rvc": "loading"}] and seen == [] and not caplog.records
+
+
+def _voice_warm(tmp_path, monkeypatch, device, synth_error=None):
+    b = omnivoice.OmniVoiceBackend()
+    b._status, b.last_load = "ready", {"device": device}
+    calls = []
+
+    async def fake_synth(text, lang, ref, params):
+        calls.append("synth")
+        if synth_error is not None:
+            raise synth_error
+        return params.out_path
+
+    async def fake_warm(ref, lang="en", reference_text=None):
+        calls.append("warm")
+
+    async def fake_inspect(ref, detect=True):
+        return None
+
+    b.synthesize, b.warm, b.inspect = fake_synth, fake_warm, fake_inspect
+    monkeypatch.setattr(tts, "OMNIVOICE", b)
+    ctx = FakeCtx(tmp_path / "data")
+    data = config.data_dir(ctx)
+    data.ensure()
+    ref = tmp_path / "reference.wav"
+    asyncio.run(tts._warm(ctx, data, "v", str(ref), "en", None, "", ""))
+    return calls, ctx.events
+
+
+def test_a_refused_voice_warm_up_sends_the_plain_message(tmp_path, monkeypatch, caplog):
+    with caplog.at_level(logging.INFO, logger="mimvox.tts"):
+        calls, events = _voice_warm(tmp_path, monkeypatch, "cuda", EngineError("no_memory", "not enough free memory"))
+    assert events == [("voice.warm", {"id": "v", "ok": False, "message": "not enough free memory"})]
+    assert [(r.levelname, r.exc_info) for r in caplog.records] == [("WARNING", None)]
+
+
+def test_a_voice_warm_up_on_the_cpu_builds_only_the_prompt(tmp_path, monkeypatch):
+    calls, events = _voice_warm(tmp_path, monkeypatch, "cpu")
+    assert calls == ["warm"] and events[0][1]["ok"] is True

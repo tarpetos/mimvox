@@ -134,6 +134,7 @@ def _heartbeat(*_args):
 def op_load(_req=None):
     if _state["model"] is not None:
         return {"load_s": 0.0, "device": _state["device"], "vram_gb": _vram_gb()}
+    _check_ram()
     from omnivoice import OmniVoice
 
     t0 = time.time()

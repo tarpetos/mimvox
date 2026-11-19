@@ -8,7 +8,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from .. import config
+from .. import aio, config, worker_kit
 from ..registry import EngineError
 from ..workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 from . import SynthParams, TtsBackend
@@ -39,6 +39,7 @@ LOAD_TIMEOUT_S = 300.0
 # On the CPU a segment took 190-213 s and a first reference transcription 125 s on an 8 GB laptop: no fixed limit, the
 # worker reports each model pass and only a silence this long ends it.
 CPU_STALL_S = 600.0
+CPU_RAM_NEED_GB = float(os.environ.get("MIMVOX_CPU_RAM_NEED_GB", "11"))  # the worker's own check reads the same
 
 # Languages with at least ~100 h of OmniVoice training data (its docs/languages.md): quality drops below that.
 LANGS: dict[str, str] = {
@@ -87,9 +88,13 @@ class OmniVoiceBackend(TtsBackend):
         self._warm: OrderedDict[tuple, None] = OrderedDict()
         self.unload_after_s = unload_after_s
         self.last_load: dict[str, Any] = {}
+        self._no_memory = ""
 
     def status(self) -> str:
         return self._status
+
+    def status_message(self) -> str | None:
+        return self._no_memory if self._status == "no_memory" else None
 
     def set_status(self, status: str) -> None:
         self._status = status
@@ -110,21 +115,43 @@ class OmniVoiceBackend(TtsBackend):
         return self._client
 
     async def load(self, runtime: dict[str, Any]) -> None:
+        """``ready``, ``missing`` or ``no_memory`` (speech on the CPU of a computer with too little RAM: nothing is
+        loaded)."""
         if not installed(runtime):
             self._status = "missing"
             log.warning("OmniVoice is not installed (venv %s, model %s); run setup", omnivoice_python(runtime),
                         omnivoice_model_dir(runtime))
             return
         self._status = "loading"
+        if config.backend(runtime) == "cpu":
+            too_small = worker_kit.ram_too_small(CPU_RAM_NEED_GB)
+            if too_small:
+                self._refuse(too_small)
+                return
         client = self._ensure_client(runtime)
         try:
             self.last_load = await client.call("load", timeout=LOAD_TIMEOUT_S)
-        except (WorkerError, WorkerDied, WorkerCancelled) as exc:
+        except WorkerError as exc:
+            if exc.code == "no_memory" and exc.permanent:  # no usable GPU after all, and too little RAM for the CPU
+                self._refuse(exc.message)
+                await client.stop()
+                return
             self._status = "missing"
             log.error("OmniVoice failed to load: %s", exc)
             return
+        except (WorkerDied, WorkerCancelled) as exc:
+            self._status = "missing"
+            if aio.closing():
+                log.info("OmniVoice stopped while loading: the engine is shutting down")
+            else:
+                log.error("OmniVoice failed to load: %s", exc)
+            return
         self._status = "ready"
         log.info("OmniVoice ready: %s", self.last_load)
+
+    def _refuse(self, message: str) -> None:
+        self._status, self._no_memory = "no_memory", message
+        log.warning("OmniVoice not loaded: %s", message)
 
     async def release(self) -> None:
         """Ending the worker frees its VRAM and host RAM at once."""
@@ -149,6 +176,8 @@ class OmniVoiceBackend(TtsBackend):
         model_lang = LANGS.get(lang)
         if model_lang is None:
             raise EngineError("bad_request", f"OmniVoice does not speak {lang!r}")
+        if self._status == "no_memory":
+            raise EngineError("no_memory", self._no_memory)
         if self._client is None or self._status in ("missing", "paused"):
             raise EngineError("not_ready", "the OmniVoice speech model is not loaded")
         ref = reference if params.reference_text else reference_for(reference, lang)

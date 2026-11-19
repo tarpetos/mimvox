@@ -29,6 +29,10 @@ class TtsBackend(abc.ABC):
     def status(self) -> str:
         return "ready"
 
+    def status_message(self) -> str | None:
+        """Why the backend cannot speak, where ``status()`` alone does not say it."""
+        return None
+
     def available(self) -> bool:
         """The main backend always; an optional one only while ready, so its languages fall through otherwise."""
         return True

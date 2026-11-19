@@ -178,8 +178,10 @@ first segment (16 steps took 40-75 s there, 32 steps 77 s, the transcription 24 
 or more, 16 GB to keep other programs open**. On the 8 GB laptop one request passed the old check and ran 558 s while
 others were refused: that check looks at the free RAM and the weights' residency at one moment only, and both change
 by the second (Whisper's 3.8 GB coming and going, a fresh load with all its pages in). Now every model pass first compares the RAM in all with 11 GB
-(`MIMVOX_CPU_RAM_NEED_GB`), which does not change from one request to the next, so below it every request gets
-`no_memory` at once, the warm-up at start included; the momentary check still runs above it.
+(`MIMVOX_CPU_RAM_NEED_GB`), which does not change from one request to the next, so below it the engine does not load
+the model at all (the worker held 3.6 GB until its idle exit otherwise), `models` reports `tts: no_memory` and every
+request gets `no_memory` at once; the momentary check still runs above it. There is no warm-up at start on the CPU (it
+took 321 s with the threshold lowered, and a request sent meanwhile waited behind it).
 
 - **The working set is the model.** The worker used to trim its working set after loading and after Whisper, which on a
   GPU gives back pages that only carried the weights to the card. On the CPU they are the weights, read in full at

@@ -20,7 +20,9 @@ This file is the single source of truth. Rust types live in `crates/engine-clien
   overrides it (the folder that holds the `<lang>` folders).
 - On start the engine prints exactly one line `{"event":"ready","job":null,"data":{...hello result...}}` once it can
   answer requests. Models load in the background (about 20-30 s from a cold start, including a warm-up); `models` in the
-  `ready` data is `loading` for both until the `models` event says otherwise.
+  `ready` data is `loading` for both until the `models` event says otherwise. On the CPU there is no warm-up at start
+  (one sentence takes minutes there, and a request sent meanwhile would wait behind it): `tts` is `ready` once the
+  model is loaded, and the first generation transcribes the voice's clip and builds its prompt itself.
 - The engine exits when stdin closes or on `shutdown`. Stdout carries the protocol only; logs go to stderr.
 - Requests are handled concurrently; replies may arrive in any order, match them by `id`.
 - **Process model (event-driven).** The engine runs on one asyncio event loop; nothing in the engine or its workers
@@ -75,10 +77,14 @@ says which. A client that does not know a code shows the message. As a last reso
 | Event | Data | When |
 | --- | --- | --- |
 | `ready` | the `hello` result | once, at start |
-| `models` | `{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"}` | every time a model state changes (start-up, training hand-over, reload) |
+| `models` | `{"tts":"ready|loading|paused|missing|no_memory","rvc":"ready|loading|paused|missing","tts_message"?}` | every time a model state changes (start-up, training hand-over, reload) |
 | `voice.warm` | `{"id","ok":true,"elapsed_s","reference_language"}` or `{"id","ok":false,"message"}` | a `voices.warm` finished (`reference_language`: see [Reference language](#reference-language)) |
 
 `paused` means the models were unloaded on purpose while a voice trains (the GPU and host RAM are handed to Applio); `tts.generate` and redub answer `not_ready` until both are `ready` again after `train.done`/`train.error`.
+`tts: no_memory` means speech runs on the CPU of a computer with too little RAM in all ([RAM on the CPU](#speech-model-and-languages-omnivoice)):
+the speech model is not loaded at all, `tts_message` (only then) says why in plain words, and every request that
+speaks (`tts.generate`, `voices.warm`, books, Redub respeak) answers `no_memory` with that message. It does not change
+until the engine starts again; the app shows "Not enough memory" with the message, not "Ready".
 
 | `redub.prepared` | `{"ok":true,"device":"cuda|cpu","model":"turbo","elapsed_s"}` or `{"ok":false,"message"}` | a `redub.prepare` finished |
 
@@ -250,7 +256,7 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 
 ### `hello` -> engine info
 `{}` -> `{"version":"0.1.0","device":{"backend":"cuda|mps|cpu","name":"NVIDIA GeForce RTX 4070","vram_gb":12.0,"vendor":"nvidia"},
-"models":{"tts":"ready|loading|paused|missing","rvc":"ready|loading|paused|missing"},
+"models":{"tts":"ready|loading|paused|missing|no_memory","rvc":"ready|loading|paused|missing","tts_message"?},
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
 "native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"],"zero_shot_vc":true,
 "components":["speech","training","translation","better_translation","native_accent","music_removal","ukrainian"],
@@ -264,7 +270,9 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 - `device.name` is read from `nvidia-smi` for CUDA on NVIDIA (`"NVIDIA GPU"` when that fails), from runtime.toml for
   AMD (`"AMD GPU"` when it is missing), `"Apple Silicon GPU"` for MPS and
   `"CPU"` for CPU. `vram_gb` is the total VRAM rounded to 0.1 and is `0.0` for MPS and CPU.
-- `models`: `loading` until the model is loaded and warmed up, `missing` when it could not be loaded.
+- `models`: `loading` until the model is loaded, `missing` when it could not be loaded, `no_memory` (with
+  `tts_message`) when the CPU has too little RAM for it. The `models` event says `ready` only after the warm-up (none
+  on the CPU); a request sent during the warm-up is accepted and waits behind it (a few seconds on a GPU).
 - `translators`: the Redub translation models installed, best first: `nllb-1.3b` (NLLB-200 distilled 1.3B, "better")
   and/or `nllb-600m` (NLLB-200 distilled 600M, "faster"); `[]` when none is. Read at engine start (setup runs while the
   app is closed). See [Translation](#redubtranscribe--redubcancel).
@@ -366,8 +374,12 @@ of an older sidecar whose transcript the script fallback cannot place):
 it computes the speaker conditioning of the voice's `reference.wav` and, for a trained voice, loads its RVC model
 and index, in the background (5-22 s, depending on what is already loaded; the first chunk of the next `tts.generate`
 then takes about 5 s instead of about 26 s) and ends with the `voice.warm` event. Call it again after the models have
-reloaded (the `models` event shows `ready` again after a training), because the reload drops the warm state. `busy` means a generation is running (it warms the voice itself). Errors: `not_found` (voice, or
-no `reference.wav` yet), `not_ready` (speech model not loaded or handed over to training).
+reloaded (the `models` event shows `ready` again after a training), because the reload drops the warm state. `busy` means a generation is running (it warms the voice itself). On the CPU it
+only transcribes the clip (the first time) and builds the voice prompt, which the first generation needs anyway: no
+warm-up sentence and no RVC model load, each of which takes minutes there and would hold up a generation sent meanwhile.
+A warm-up that fails ends with `{"ok":false,"message"}`, the message in plain words (e.g. the `no_memory` one).
+Errors: `not_found` (voice, or no `reference.wav` yet), `not_ready` (speech model not loaded or handed over to
+training), `no_memory` (`tts` is `no_memory`).
 
 ### Reference clip (`voices.reference_candidates` / `voices.set_reference`)
 The speech model copies the tempo and manner of `reference.wav`, so a slow or halting clip makes the cloned voice slow.
@@ -910,13 +922,16 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
   weights are about 3 GB, but the worker holds more (measured on Windows): 5.0 GB of private memory after loading,
   6.4 GB after a segment and 7.45 GB while Whisper (fp32, about 3.8 GB) transcribes a new reference (Linux: 7.1 GB in
   RAM at that peak). Speech on the
-  CPU therefore needs a computer with 12 GB of RAM or more. Before every model pass on the CPU (`warm`, `synth` and
-  `inspect` before they load anything, the reference transcription, the voice-clone prompt and each segment's
-  decoding) the worker checks the RAM, the same way each time:
+  CPU therefore needs a computer with 12 GB of RAM or more. Before every model pass on the CPU (`load`, `warm`,
+  `synth` and `inspect` before they load anything, the reference transcription, the voice-clone prompt and each
+  segment's decoding) the worker checks the RAM, the same way each time:
   - less than 11 GB of RAM in all (the worker plus about 3.5 GB for the system, the engine and the app;
     `MIMVOX_CPU_RAM_NEED_GB` changes it): `no_memory` with "not enough memory (RAM) for speech on the processor: it
     needs a computer with at least 11 GB of RAM and this one has 7.4 GB, ...". This does not depend on what else
-    runs, so every request on such a computer gets the same answer at once instead of swapping for minutes.
+    runs, so every request on such a computer gets the same answer at once instead of swapping for minutes. The
+    engine makes the same check at start-up when `backend = "cpu"`, before it starts the worker, and the worker's
+    `load` makes it when no GPU turned out to be usable: either way nothing is loaded and `models` reports
+    `tts: no_memory` with this message as `tts_message`.
   - the available physical memory below 5 % of it (at least 0.5 GB) and at least 1 GB of the weights not in RAM (one
     page in 16 sampled; Windows: not in the working set, so compressed or in the page file; Linux: `mincore`):
     `no_memory` with "not enough free memory (RAM): ... close other programs and try again".

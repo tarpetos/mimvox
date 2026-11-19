@@ -41,7 +41,11 @@ _SETTLED: asyncio.Event | None = None  # set while no model is "loading"
 
 
 def models_status() -> dict[str, str]:
-    return {"tts": OMNIVOICE.status(), "rvc": _RVC_STATUS[0]}
+    snap = {"tts": OMNIVOICE.status(), "rvc": _RVC_STATUS[0]}
+    why = OMNIVOICE.status_message()
+    if why:
+        snap["tts_message"] = why
+    return snap
 
 
 def _settled() -> asyncio.Event:
@@ -247,7 +251,8 @@ def _pick_warm_voice(data: config.DataDir) -> tuple[str | None, str | None]:
 
 async def load_models(ctx: Context) -> None:
     """The RVC worker starts only when a trained voice is warmed or used: a voice without a model never pays for it
-    (6.5 GB of commit, 3 GB of RAM)."""
+    (6.5 GB of commit, 3 GB of RAM). The ``models`` event says ``ready`` after the warm-up, which is skipped on the
+    CPU: there it takes minutes, and a request sent meanwhile would wait behind it."""
     data = config.data_dir(ctx)
     errors: dict[str, str] = {}
     worker = rvc.get(ctx.runtime)
@@ -258,6 +263,8 @@ async def load_models(ctx: Context) -> None:
             await OMNIVOICE.load(ctx.runtime)
             if OMNIVOICE.status() == "missing":
                 errors["tts"] = "OmniVoice is not installed or failed to load (see the log); run setup"
+            elif OMNIVOICE.status() == "no_memory":
+                errors["tts"] = OMNIVOICE.status_message() or "not enough memory (RAM)"
         except Exception as exc:  # noqa: BLE001
             log.exception("the speech model failed to load")
             errors["tts"] = f"{type(exc).__name__}: {exc}"
@@ -276,35 +283,39 @@ async def load_models(ctx: Context) -> None:
 
     t0 = time.time()
     await asyncio.gather(do_tts(), do_rvc(), do_others())
-    warm_dir = os.path.join(data.tmp, "_warm")
-    await aio.run_io(os.makedirs, warm_dir, exist_ok=True)
-    trained_voice: str | None = None
-    try:
-        if "tts" not in errors:
-            ref, trained_voice = await aio.run_io(_pick_warm_voice, data)
-            if ref is not None:  # without any voice there is nothing to clone yet: the first generation warms up
-                t1 = time.time()
-                lang = await aio.run_io(_voice_language, data, trained_voice) if trained_voice else "en"
-                await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), lang, ref,
-                                           SynthParams(out_path=os.path.join(warm_dir, "warm_tts.wav"), first=True))
-                log.info("speech model warm-up %.1fs", time.time() - t1)
-            _set_status(ctx, tts="ready")
-        else:
-            _set_status(ctx, tts="missing")
-        if "rvc" not in errors and worker is not None:
-            _set_status(ctx, rvc="ready")
-        else:
-            _set_status(ctx, rvc="missing")
-    except Exception:  # noqa: BLE001
-        log.exception("warm-up failed")
-        _set_status(ctx, tts="missing" if "tts" in errors else "ready",
-                    rvc="ready" if "rvc" not in errors and worker is not None else "missing")
-    finally:
-        await aio.run_io(shutil.rmtree, warm_dir, ignore_errors=True)
+    if aio.closing():
+        log.info("model loading stopped: the engine is shutting down")
+        return
+    tts_state = "ready" if "tts" not in errors else "no_memory" if OMNIVOICE.status() == "no_memory" else "missing"
+    if tts_state == "ready" and not OMNIVOICE.on_cpu():
+        await _warm_up(data)
+    if aio.closing():
+        return
+    _set_status(ctx, tts=tts_state, rvc="ready" if "rvc" not in errors and worker is not None else "missing")
     log.info("models ready in %.1fs: %s", time.time() - t0, models_status())
     if errors:
         log.warning("model start-up problems: %s", errors)
     aio.spawn(aio.run_io(_prewarm_redub), name="redub-prewarm")
+
+
+async def _warm_up(data: config.DataDir) -> None:
+    warm_dir = os.path.join(data.tmp, "_warm")
+    try:
+        ref, trained_voice = await aio.run_io(_pick_warm_voice, data)
+        if ref is None:  # without any voice there is nothing to clone yet: the first generation warms up
+            return
+        await aio.run_io(os.makedirs, warm_dir, exist_ok=True)
+        t1 = time.time()
+        lang = await aio.run_io(_voice_language, data, trained_voice) if trained_voice else "en"
+        await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), lang, ref,
+                                   SynthParams(out_path=os.path.join(warm_dir, "warm_tts.wav"), first=True))
+        log.info("speech model warm-up %.1fs", time.time() - t1)
+    except EngineError as exc:
+        log.warning("speech model warm-up skipped: %s", exc.message)
+    except Exception:  # noqa: BLE001
+        log.exception("speech model warm-up failed")
+    finally:
+        await aio.run_io(shutil.rmtree, warm_dir, ignore_errors=True)
 
 
 def _prewarm_redub() -> None:
@@ -366,6 +377,8 @@ def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str,
 
 def check_backend_ready(backend: backends.TtsBackend) -> None:
     state = backend.status()
+    if state == "no_memory":
+        raise EngineError("no_memory", backend.status_message() or "not enough memory (RAM) for speech")
     if state != "ready":
         raise EngineError("not_ready", "the speech model is still loading" if state == "loading"
                           else "speech is paused while a voice trains" if state == "paused"
@@ -642,10 +655,9 @@ async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     has_ref, has_pth = await aio.run_io(lambda: (os.path.isfile(ref), os.path.isfile(pth)))
     if not has_ref:
         raise EngineError("not_found", "this voice has no recording yet (reference.wav is missing)")
-    if models_status()["tts"] != "ready":
-        raise EngineError("not_ready", "the speech model is not ready")
+    check_backend_ready(OMNIVOICE)
     worker = rvc.get(ctx.runtime) if has_pth else None
-    if worker is not None and models_status()["rvc"] != "ready":
+    if worker is not None and (models_status()["rvc"] != "ready" or OMNIVOICE.on_cpu()):
         worker = None
     zs_worker = await aio.run_io(zsvc.get, ctx.runtime, data.root) if requested == "native-us" else None
     choice = accent.choose(requested, native_voice, accent.NATIVE_LANG, worker is not None, 1.0, zs_worker is not None)
@@ -675,12 +687,16 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
     warm_dir = os.path.join(data.tmp, f"_warm_{vid}")
     try:
         await aio.run_io(os.makedirs, warm_dir, exist_ok=True)
-        # The shortest real inference: builds the voice-clone prompt (and, the first time for a clip, its transcript).
-        src = await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), lang if lang in OMNIVOICE.languages
-                                         else "en", ref, SynthParams(out_path=os.path.join(warm_dir, "in.wav"),
-                                                                     first=True))
-        if worker is not None:  # load the voice's RVC model and index too (about 16 s cold, 1.7 s warm)
-            await worker.convert(src, os.path.join(warm_dir, "out.wav"), pth, idx, 1.0)
+        speak_lang = lang if lang in OMNIVOICE.languages else "en"
+        if OMNIVOICE.on_cpu():  # a sentence takes minutes there: only the prompt, which the first generation needs too
+            await OMNIVOICE.warm(ref, speak_lang)
+        else:
+            # The shortest real inference: builds the voice-clone prompt (and, the first time for a clip, its
+            # transcript).
+            src = await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), speak_lang, ref,
+                                             SynthParams(out_path=os.path.join(warm_dir, "in.wav"), first=True))
+            if worker is not None:  # load the voice's RVC model and index too (about 16 s cold, 1.7 s warm)
+                await worker.convert(src, os.path.join(warm_dir, "out.wav"), pth, idx, 1.0)
         if lang == "uk" and HOLOS.available():  # Ukrainian with exact stress: the voice's style vector (~0.2 s)
             await HOLOS.warm(ref)
         if choice is not None and choice.accent == "native-us":
@@ -699,6 +715,9 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
                                 "reference_language": reflang.norm(ref_lang)})
     except asyncio.CancelledError:
         ctx.emit("voice.warm", {"id": vid, "ok": False, "message": "cancelled"})
+    except EngineError as exc:
+        log.warning("warm-up of voice %s refused: %s", vid, exc.message)
+        ctx.emit("voice.warm", {"id": vid, "ok": False, "message": exc.message})
     except Exception as exc:  # noqa: BLE001
         log.exception("warm-up of voice %s failed", vid)
         ctx.emit("voice.warm", {"id": vid, "ok": False, "message": f"{type(exc).__name__}: {exc}"})
