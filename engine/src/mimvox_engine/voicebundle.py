@@ -85,7 +85,7 @@ def export_voice(data: config.DataDir, voice_id: str, dest: Any) -> dict[str, An
                             out.write(chunk)
                             size += len(chunk)
                 files.append({"path": name, "bytes": size, "sha256": h.hexdigest()})
-            manifest = _canonical({"format": FORMAT, "version": VERSION, "engine": __version__, "id": voice_id,
+            manifest = _canonical({"format": FORMAT, "version": VERSION, "id": voice_id,
                                    "name": meta.get("name", voice_id), "files": files})
             zf.writestr(_zipinfo(MANIFEST, len(manifest)), manifest)
         digest = _sha256_file(part)
@@ -95,7 +95,7 @@ def export_voice(data: config.DataDir, voice_id: str, dest: Any) -> dict[str, An
         if os.path.exists(part):
             os.remove(part)
         raise
-    return {"path": path, "sha256": digest, "bytes": os.path.getsize(path), "files": files}
+    return {"path": path, "sha256": digest, "bytes": os.path.getsize(path), "files": files, "engine": __version__}
 
 
 def _bad(message: str) -> EngineError:

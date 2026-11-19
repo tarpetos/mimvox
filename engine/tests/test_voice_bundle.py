@@ -93,6 +93,7 @@ def test_export_holds_what_speaks_and_nothing_else(tmp_path):
         meta = json.loads(zf.read("voice.json"))
     assert manifest["format"] == "mimvox-voice" and manifest["version"] == 1 and manifest["id"] == "anna"
     assert manifest["name"] == "Anna" and manifest["files"] == res["files"]
+    assert set(manifest) == {"format", "version", "id", "name", "files"}
     assert "training_paused" not in meta
 
 
@@ -103,6 +104,16 @@ def test_two_exports_have_the_same_hash(tmp_path):
     second = export(data, dest=str(tmp_path / "out" / "copy.mimvoice"))
     assert second["path"] == str(tmp_path / "out" / "copy.mimvoice")
     assert first["sha256"] == second["sha256"] and first["bytes"] == second["bytes"]
+
+
+def test_engine_version_does_not_change_the_hash(tmp_path, monkeypatch):
+    data = make_voice(tmp_path / "a")
+    monkeypatch.setattr(voicebundle, "__version__", "0.1.0")
+    first = export(data)
+    monkeypatch.setattr(voicebundle, "__version__", "9.9.9")
+    second = export(data)
+    assert first["engine"] == "0.1.0" and second["engine"] == "9.9.9"
+    assert first["sha256"] == second["sha256"]
 
 
 def test_round_trip(tmp_path):

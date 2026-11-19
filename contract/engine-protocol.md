@@ -322,10 +322,11 @@ language, e.g. when the first texts read into a still empty voice are in another
 ### Voice bundles (`voices.export` / `voices.import` `bundle`)
 A voice bundle is one archive with what a voice needs to speak on another machine.
 
-`voices.export {"id","dest"?}` -> `{"path","sha256","bytes","files":[{"path","bytes","sha256"}]}`: writes the bundle to
+`voices.export {"id","dest"?}` -> `{"path","sha256","bytes","files":[{"path","bytes","sha256"}],"engine"}`: writes the bundle to
 `dest` (an absolute file path, replaced when it exists) or, by default, to
 `<data>/tmp/export/<id>-<sha256[:12]>.mimvoice` (so `GET /files` serves it; `<data>/tmp` is wiped at the next engine
-start). `sha256` and `bytes` are those of the archive file, `files` its voice files. Errors: `not_found` (voice),
+start). `sha256` and `bytes` are those of the archive file, `files` its voice files, `engine` the engine version (not
+in the archive). Errors: `not_found` (voice),
 `bad_request` (no `reference.wav` yet, `dest` relative or a folder).
 
 - **Contents** (paths inside the voice folder): `voice.json`, `reference.wav` and `reference.omnivoice.json`, every
@@ -333,12 +334,12 @@ start). `sha256` and `bytes` are those of the archive file, `files` its voice fi
   present except `voice.json` and `reference.wav`. Never the dataset (`dataset/`), the media pool
   (`reference_media.wav`) or training checkpoints. `voice.json` is stored without `training_run` / `training_paused`.
 - **Format**: a zip, every member stored (no compression), dated 1980-01-01 00:00:00, mode 0644, Unix; the files in
-  sorted order, then `manifest.json`: `{"format":"mimvox-voice","version":1,"engine":"<engine version>","id","name",
+  sorted order, then `manifest.json`: `{"format":"mimvox-voice","version":1,"id","name",
   "files":[{"path","bytes","sha256"}]}` (`files` as in the answer). `voice.json` and `manifest.json` are UTF-8 JSON
   with sorted keys, 2-space indent and a final newline.
-- **Hash rule**: the bundle's hash is the SHA-256 of the archive file. The same voice files (same bytes), voice id and
-  engine version give the same archive, so two exports have the same hash, whatever the files' times; exporting a
-  bundle imported under the same id gives it again.
+- **Hash rule**: the bundle's hash is the SHA-256 of the archive file. It depends only on the voice's content: the
+  same voice files (same bytes) and voice id give the same archive, whatever the files' times or the engine version;
+  exporting a bundle imported under the same id gives it again. A new bundle `version` would change it.
 
 `voices.import {"bundle","name"?}` -> `{"voice":{...as in list...}}`: `bundle` is a path on the engine's machine (an
 upload's `<data>/api/uploads/...` path too). The archive is refused (`bad_request`, nothing created) when a member
