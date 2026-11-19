@@ -1,11 +1,11 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod audio;
-mod engine;
 mod state;
 mod ui;
 mod update;
 
+use mimvox_engine_client as engine;
 use rune::{App, AppSpec, Titlebar};
 use state::AppState;
 

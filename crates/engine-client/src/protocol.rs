@@ -172,6 +172,9 @@ pub struct Hello {
     /// Installed but turned off.
     #[serde(default)]
     pub components_off: Vec<String>,
+    /// The `ready` data exactly as the engine sent it.
+    #[serde(skip)]
+    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -868,6 +871,7 @@ impl NativeVoice {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(v: &str) -> NativeVoice {
         match v {
             "male" => Self::Male,

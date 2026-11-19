@@ -218,7 +218,15 @@ The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth
 | `toml` | MIT OR Apache-2.0 |
 | `dirs` | MIT OR Apache-2.0 |
 
-All transitive Rust dependencies are listed in `app/Cargo.lock`. Generate the complete licence list of a release build
+### Direct Rust dependencies of the HTTP API and `mimvox-server` (`crates/api`, `crates/server`)
+
+| Crate | Licence (crates.io) |
+| --- | --- |
+| `axum`, `tokio`, `tokio-util` | MIT |
+| `futures-util`, `clap`, `base64`, `getrandom`, `uuid` | MIT OR Apache-2.0 |
+| `subtle` (constant-time token comparison) | BSD-3-Clause |
+
+All transitive Rust dependencies are listed in `Cargo.lock`. Generate the complete licence list of a release build
 with `cargo about` (or `cargo license`) and check it before distributing binaries.
 
 ## Fonts and icons

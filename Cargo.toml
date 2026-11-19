@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["app", "crates/engine-client", "crates/api", "crates/server"]
+exclude = ["app/vendor"]
+
+[workspace.dependencies]
+mimvox-engine-client = { path = "crates/engine-client" }
+mimvox-api = { path = "crates/api" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = "1.54"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Rune with a small patch for the caption buttons (see app/vendor/README.md): remove once upstream has an equivalent.
+[patch."https://github.com/anomalyco/rune"]
+rune = { path = "app/vendor/rune-patched" }

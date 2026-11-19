@@ -19,6 +19,7 @@ set -euo pipefail
 
 PACKAGER_VERSION="${CARGO_PACKAGER_VERSION:-0.11.8}"
 BIN_NAME="mimvox"
+SERVER_BIN="mimvox-server"
 # a full Rust + wgpu build is memory hungry
 JOBS="${CARGO_BUILD_JOBS:-6}"
 export CARGO_BUILD_JOBS="$JOBS"
@@ -27,7 +28,7 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 REPO_ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
 APP_DIR="$REPO_ROOT/app"
 DIST_DIR="$REPO_ROOT/dist"
-TARGET_DIR="${CARGO_TARGET_DIR:-$APP_DIR/target}"
+TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 cd "$APP_DIR"
 
 FORMATS="app,dmg"
@@ -102,23 +103,26 @@ if [ "$SKIP_COMPILE" = "0" ]; then
     for t in "${targets[@]}"; do
         rustup target add "$t"
         echo "[build-mac] Compiling the release binary for $t..." >&2
-        cargo build --release --locked -j "$JOBS" --target "$t"
+        cargo build --release --locked -j "$JOBS" --target "$t" -p mimvox -p mimvox-server
     done
     if [ "$UNIVERSAL" = "1" ]; then
         echo "[build-mac] Merging into a universal binary (lipo)..." >&2
         mkdir -p "$BIN_DIR"
-        lipo -create -output "$BIN_DIR/$BIN_NAME" \
-            "$TARGET_DIR/$ARM/release/$BIN_NAME" "$TARGET_DIR/$X86/release/$BIN_NAME"
+        for bin in "$BIN_NAME" "$SERVER_BIN"; do
+            lipo -create -output "$BIN_DIR/$bin" "$TARGET_DIR/$ARM/release/$bin" "$TARGET_DIR/$X86/release/$bin"
+        done
     fi
 fi
-if [ ! -x "$BIN_DIR/$BIN_NAME" ]; then
-    echo "Release binary not found: $BIN_DIR/$BIN_NAME" >&2
-    exit 1
-fi
+for bin in "$BIN_NAME" "$SERVER_BIN"; do
+    if [ ! -x "$BIN_DIR/$bin" ]; then
+        echo "Release binary not found: $BIN_DIR/$bin" >&2
+        exit 1
+    fi
+done
 # cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
 # --binaries-dir points elsewhere, so the per-target binary is copied there first.
 if [ "$(cd "$BIN_DIR" && pwd -P)" != "$(mkdir -p "$APP_DIR/target/release" && cd "$APP_DIR/target/release" && pwd -P)" ]; then
-    cp -f "$BIN_DIR/$BIN_NAME" "$APP_DIR/target/release/$BIN_NAME"
+    cp -f "$BIN_DIR/$BIN_NAME" "$BIN_DIR/$SERVER_BIN" "$APP_DIR/target/release/"
     BIN_DIR="$APP_DIR/target/release"
 fi
 

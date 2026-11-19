@@ -73,14 +73,11 @@ jobs:
 
       - name: cargo fmt
         if: steps.changes.outputs.run == 'true'
-        working-directory: app
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Rust cache
         if: steps.changes.outputs.run == 'true'
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: app
 
       - name: Linux build dependencies
         if: steps.changes.outputs.run == 'true'
@@ -91,5 +88,4 @@ jobs:
 
       - name: cargo clippy
         if: steps.changes.outputs.run == 'true'
-        working-directory: app
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings

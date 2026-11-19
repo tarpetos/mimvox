@@ -2,14 +2,13 @@
 
 #[path = "../src/audio/mod.rs"]
 mod audio;
-#[path = "../src/engine/mod.rs"]
-mod engine;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use engine::protocol::{self, EngineEvent};
 use engine::{EngineClient, EngineConfig, EngineMsg};
+use mimvox_engine_client as engine;
 
 struct Args {
     runtime: Option<PathBuf>,
