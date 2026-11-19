@@ -16,8 +16,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 ICON_PNG = REPO / "tools" / "release" / "icons" / "icon_512x512.png"
 ICON_ICO = REPO / "tools" / "release" / "icons" / "icon.ico"
-FONT_BOLD = REPO / "app" / "assets" / "fonts" / "NotoSans-Bold.ttf"
-FONT_REGULAR = REPO / "app" / "assets" / "fonts" / "NotoSans-Regular.ttf"
+FONT_BOLD = REPO / "crates" / "desktop" / "assets" / "fonts" / "NotoSans-Bold.ttf"
+FONT_REGULAR = REPO / "crates" / "desktop" / "assets" / "fonts" / "NotoSans-Regular.ttf"
 
 APP = "Mimvox"
 BINARY = "mimvox.exe"
@@ -27,7 +27,7 @@ TAGLINE = "Your voice, any text"
 # The top-level folders stage_resources.py stages: replaced whole on install, removed on uninstall.
 APP_DIRS = ("engine", "presets", "tools", "contract", "bin")
 
-# The app's dark palette (app/src/ui/theme.rs, Palette::new).
+# The app's dark palette (crates/desktop/src/ui/theme.rs, Palette::new).
 BG_TOP = "#0B131F"
 BG_BOTTOM = "#070C13"
 GLASS = "#101A28"

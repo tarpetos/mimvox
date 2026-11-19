@@ -27,7 +27,7 @@ export CARGO_BUILD_JOBS="$JOBS"
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
-APP_DIR="$REPO_ROOT/app"
+APP_DIR="$REPO_ROOT/crates/desktop"
 DIST_DIR="$REPO_ROOT/dist"
 TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 cd "$APP_DIR"
@@ -73,7 +73,8 @@ export MACOSX_DEPLOYMENT_TARGET=13.0
 cargo_version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)"
 packager_version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Packager.toml | head -n1)"
 if [ "$cargo_version" != "$packager_version" ]; then
-    echo "Version mismatch: app/Cargo.toml has $cargo_version, app/Packager.toml has $packager_version." >&2
+    echo "Version mismatch: crates/desktop/Cargo.toml has $cargo_version," \
+        "crates/desktop/Packager.toml has $packager_version." >&2
     exit 1
 fi
 
@@ -120,15 +121,15 @@ for bin in "$BIN_NAME" "$SERVER_BIN" "$MCP_BIN"; do
         exit 1
     fi
 done
-# cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
-# --binaries-dir points elsewhere, so the per-target binary is copied there first.
+# cargo-packager resolves the binary through Packager.toml's binaries-dir (crates/desktop/target/release) even
+# when --binaries-dir points elsewhere, so the per-target binary is copied there first.
 if [ "$(cd "$BIN_DIR" && pwd -P)" != "$(mkdir -p "$APP_DIR/target/release" && cd "$APP_DIR/target/release" && pwd -P)" ]; then
     cp -f "$BIN_DIR/$BIN_NAME" "$BIN_DIR/$SERVER_BIN" "$BIN_DIR/$MCP_BIN" "$APP_DIR/target/release/"
     BIN_DIR="$APP_DIR/target/release"
 fi
 
 # Optional signing: cargo-packager takes the identity from the config only, so write a throw-away copy of
-# Packager.toml (it must sit in app/ because paths in it are relative to its folder).
+# Packager.toml (it must sit in crates/desktop/ because paths in it are relative to its folder).
 # Without an identity the app is signed ad hoc ("-"): an unsigned (linker-signed) app does not bind its Info.plist or
 # entitlements, and macOS then never offers it microphone access, so recordings come out silent.
 CONFIG="Packager.signed.tmp.toml"

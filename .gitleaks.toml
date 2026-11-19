@@ -13,6 +13,6 @@ paths = [
     '''^runtime/''',
     '''^data/''',
     '''^dist/''',
-    '''^app/target/''',
+    '''^crates/desktop/target/''',
     '''(^|/)Cargo\.lock$''',
 ]

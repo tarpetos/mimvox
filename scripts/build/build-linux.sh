@@ -21,7 +21,7 @@ if command -v flock >/dev/null 2>&1; then LOCK=(flock /tmp/mimvox-cargo.lock); f
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
-APP_DIR="$REPO_ROOT/app"
+APP_DIR="$REPO_ROOT/crates/desktop"
 DIST_DIR="$REPO_ROOT/dist"
 TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 cd "$APP_DIR"
@@ -65,7 +65,8 @@ fi
 cargo_version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)"
 packager_version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Packager.toml | head -n1)"
 if [ "$cargo_version" != "$packager_version" ]; then
-    echo "Version mismatch: app/Cargo.toml has $cargo_version, app/Packager.toml has $packager_version." >&2
+    echo "Version mismatch: crates/desktop/Cargo.toml has $cargo_version," \
+        "crates/desktop/Packager.toml has $packager_version." >&2
     exit 1
 fi
 
@@ -93,8 +94,8 @@ for bin in "$BIN_NAME" "$SERVER_BIN" "$MCP_BIN"; do
     fi
 done
 
-# cargo-packager resolves the binary through Packager.toml's binaries-dir ("target/release", relative to app/) even when
-# --binaries-dir points elsewhere, so a build into another CARGO_TARGET_DIR is copied there first.
+# cargo-packager resolves the binary through Packager.toml's binaries-dir (crates/desktop/target/release) even
+# when --binaries-dir points elsewhere, so a build into another CARGO_TARGET_DIR is copied there first.
 RELEASE_DIR="$TARGET_DIR/release"
 if [ "$(realpath "$RELEASE_DIR")" != "$(realpath -m "$APP_DIR/target/release")" ]; then
     mkdir -p "$APP_DIR/target/release"

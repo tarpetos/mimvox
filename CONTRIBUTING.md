@@ -36,7 +36,7 @@ Pull requests run the title check, the linters (`.github/workflows/lint.yml`) an
 
 ```
 uvx ruff@0.17.5 check .
-cd app && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 cd engine && uv run --group test pytest
 ```
 

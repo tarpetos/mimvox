@@ -2060,6 +2060,9 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
                 raise EngineError("bad_request", f"Unknown language {raw!r}: use a language code such as \"en\" or "
                                                  f"\"uk\", or \"auto\".") from e
             code = base
+    split = params.get("split")
+    if split not in (None, "auto"):
+        raise EngineError("bad_request", "'split' must be \"auto\" or left out")
     book = extract(path)
     chapters = book["chapters"]
     if detected:
@@ -2071,14 +2074,16 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         words = count_words(ch["text"])
         out_chapters.append({"title": ch["title"], "text": ch["text"], "words": words, "chars": len(ch["text"]),
                              "est_s": est_seconds(words, wpm)})
-    words = sum(c["words"] for c in out_chapters)
-    # only a suggestion: the app applies it on request
+    # only a suggestion unless split is "auto": the app applies it on request
     parts = None
     suggested = autoparts.suggest(chapters, code)
     if suggested:
         parts = {"how": suggested["how"], "chapters": [
             {"title": c["title"], "text": c["text"], "words": (w := count_words(c["text"])), "chars": len(c["text"]),
              "est_s": est_seconds(w, wpm)} for c in suggested["chapters"]]}
+    if split == "auto" and parts is not None:
+        out_chapters, parts = parts["chapters"], None
+    words = sum(c["words"] for c in out_chapters)
     meta: _Meta = book["meta"]
     return {"path": path, "name": os.path.basename(path), "format": book["format"],
             "format_label": book["format_label"], "title": book["title"], "encoding": book["encoding"],
