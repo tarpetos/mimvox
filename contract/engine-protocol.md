@@ -192,6 +192,8 @@ the quick check, and only then delete the old directory.
                                              #  and "media": the media pool (files, best windows), see Reference from media
 <data>/voices/<voice_id>/reference_media.wav # optional media pool (voices.reference_from_media): many media files of the speaker,
                                              #  cleaned and joined (mono 16-bit 44.1 kHz, at most 20 min); not a dataset part, never trained on
+<data>/tmp/export/<voice_id>-<sha256[:12]>.mimvoice  # voices.export's default archive (a voice bundle)
+<data>/tmp/import/<random>/                  # a voice bundle being unpacked by voices.import (moved to voices/ when verified)
 <data>/tmp/refcand/<voice_id>/               # preview WAVs of voices.reference_candidates (rewritten on every call)
 <data>/voices/<voice_id>/rvc/model.pth       # trained or imported RVC model
 <data>/voices/<voice_id>/rvc/model.index
@@ -314,6 +316,42 @@ language, e.g. when the first texts read into a still empty voice are in another
   `..._<N>e_...` file name when present and `"imported":true` in `voice.json`.
 - Needs at least a `reference_path` or a `dataset_dir`; `rvc_index` needs `rvc_model`. Errors: `bad_request`,
   `not_found` (a path is missing). On any failure the half-made voice is removed again.
+- `{"bundle","name"?}` imports a voice bundle instead (see [Voice bundles](#voice-bundles-voicesexport--voicesimport-bundle)); `bundle`
+  cannot be combined with the four paths above.
+
+### Voice bundles (`voices.export` / `voices.import` `bundle`)
+A voice bundle is one archive with what a voice needs to speak on another machine.
+
+`voices.export {"id","dest"?}` -> `{"path","sha256","bytes","files":[{"path","bytes","sha256"}],"engine"}`: writes the bundle to
+`dest` (an absolute file path, replaced when it exists) or, by default, to
+`<data>/tmp/export/<id>-<sha256[:12]>.mimvoice` (so `GET /files` serves it; `<data>/tmp` is wiped at the next engine
+start). `sha256` and `bytes` are those of the archive file, `files` its voice files, `engine` the engine version (not
+in the archive). Errors: `not_found` (voice),
+`bad_request` (no `id`, no `reference.wav` yet, `dest` relative or a folder, a file over the import limits below).
+
+- **Contents** (paths inside the voice folder): `voice.json`, `reference.wav` and `reference.omnivoice.json`, every
+  `reference_<lang>.wav` and `reference_<lang>.omnivoice.json`, `rvc/model.pth` and `rvc/model.index`; each only when
+  present except `voice.json` and `reference.wav`, a sidecar only while it is valid for its clip. Never the dataset
+  (`dataset/`), the media pool (`reference_media.wav`) or training checkpoints. `voice.json` is stored without `training_run` / `training_paused`.
+- **Format**: a zip, every member stored (no compression), dated 1980-01-01 00:00:00, mode 0644, Unix; the files in
+  sorted order, then `manifest.json`: `{"format":"mimvox-voice","version":1,"id","name",
+  "files":[{"path","bytes","sha256"}]}` (`files` as in the answer). `voice.json` and `manifest.json` are UTF-8 JSON
+  with sorted keys, 2-space indent and a final newline.
+- **Hash rule**: the bundle's hash is the SHA-256 of the archive file. It depends only on the voice's content: the
+  same voice files (same bytes) and voice id give the same archive, whatever the files' times or the engine version;
+  exporting a bundle imported under the same id gives it again. A new bundle `version` would change it.
+
+`voices.import {"bundle","name"?}` -> `{"voice":{...as in list...}}`: `bundle` is a path on the engine's machine (an
+upload's `<data>/api/uploads/...` path too). The archive is refused (`bad_request`, nothing created) when a member
+name is absolute, has `..`, `.`, `\`, `:` or an empty part, is not one of the contents above, is there twice, is
+larger than 1 MiB (`.json`) or 2 GiB (others, 4 GiB together); when `manifest.json` is missing, of another format or a
+newer `version`, lists other files than the archive holds, or lacks `voice.json` / `reference.wav`; when a member's
+size or SHA-256 differs from the manifest; or when `voice.json` is unusable or a sidecar names an impossible time. The
+voice keeps the bundle's `id` when no voice has it, else gets a new one made from the name as in `voices.create`;
+`name` renames it. Sidecars are kept and each clip gets the modification time its sidecar names, so they usually stay
+valid; on a filesystem with coarser times (NTFS: 100 ns) the clip's transcript and language may be worked out again on
+first use. The voice has no dataset; it is `trained` when the bundle has `rvc/model.pth`.
+Errors: `bad_request`, `not_found` (no such file).
 
 ### `voices.warm`
 `{"id"}` -> `{"warming":true}` | `{"warming":false,"reason":"already_warm|busy"}`. Call it when the user selects a voice.
