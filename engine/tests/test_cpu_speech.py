@@ -1,16 +1,19 @@
 import asyncio
 import mmap
+import os
 import sys
 import textwrap
 
+import numpy as np
 import pytest
-from mimvox_engine import book, worker_kit
+import soundfile as sf
+from mimvox_engine import aio, book, speech, worker_kit
 from mimvox_engine.backends import SynthParams, omnivoice
 from mimvox_engine.registry import EngineError
-from mimvox_engine.workerproc import WorkerClient, WorkerError
+from mimvox_engine.workerproc import WorkerClient, WorkerDied, WorkerError
 
 FAKE_WORKER = textwrap.dedent("""
-    import json, sys, time
+    import json, os, sys, time
     print(json.dumps({"event": "ready"}), flush=True)
     for line in iter(sys.stdin.readline, ""):
         req = json.loads(line)
@@ -18,6 +21,9 @@ FAKE_WORKER = textwrap.dedent("""
             break
         if req.get("op") == "cancel":
             continue
+        if req.get("exit_once") and not os.path.exists(req["exit_once"]):
+            open(req["exit_once"], "w").close()
+            sys.exit(0)
         for _ in range(req.get("beats", 0)):
             time.sleep(req["every"])
             print(json.dumps({"id": req["id"], "progress": {"alive": True}}), flush=True)
@@ -169,4 +175,177 @@ def test_a_thrashing_cpu_worker_is_short_of_memory_for_a_book(tmp_path):
     b = _backend("cpu", error=WorkerError("no_memory", msg))
     with pytest.raises(EngineError, match="not enough free memory") as info:
         _synth(b, tmp_path)
+    assert info.value.code == "no_memory"
     assert book._short_of_memory(info.value)
+
+
+def test_too_little_ram_in_all_is_not_worth_a_book_retry(tmp_path):
+    msg = worker_kit.NO_RAM_CPU_TOTAL.format(need=11, total=7.4)
+    b = _backend("cpu", error=WorkerError("no_memory", msg, permanent=True))
+    with pytest.raises(EngineError) as info:
+        _synth(b, tmp_path)
+    assert info.value.code == "no_memory" and info.value.message == f"OmniVoice: {msg}"
+    assert not book._short_of_memory(info.value)
+
+
+def test_no_memory_keeps_its_code_from_warm_and_the_speech_worker(tmp_path):
+    b = _backend("cpu", error=WorkerError("no_memory", "not enough memory (RAM)"))
+    with pytest.raises(EngineError) as info:
+        asyncio.run(b.warm(str(tmp_path / "reference.wav"), reference_text="hello"))
+    assert info.value.code == "no_memory"
+    b = _backend("cpu", error=WorkerError("internal", "boom"))
+    with pytest.raises(EngineError) as info:
+        asyncio.run(b.warm(str(tmp_path / "reference.wav"), reference_text="hello"))
+    assert info.value.code == "internal"
+    assert speech.SpeechError("no_memory", "full").engine_error().code == "no_memory"
+    assert speech.SpeechError("weird", "x").engine_error().code == "internal"
+
+
+def test_ram_too_small(monkeypatch):
+    monkeypatch.setattr(worker_kit, "physical_memory", lambda: (int(7.4 * GB), 2 * GB))
+    msg = worker_kit.ram_too_small(11)
+    assert msg is not None and "at least 11 GB of RAM and this one has 7.4 GB" in msg
+    monkeypatch.setattr(worker_kit, "physical_memory", lambda: (int(11.7 * GB), 0))
+    assert worker_kit.ram_too_small(11) is None   # a full 12 GB computer is the other check's business
+    monkeypatch.setattr(worker_kit, "physical_memory", lambda: None)
+    assert worker_kit.ram_too_small(11) is None
+
+
+def test_a_worker_that_dies_is_retried_once(tmp_path):
+    async def body(client):
+        res = await client.call("synth", {"exit_once": str(tmp_path / "died")})
+        return res, client.alive()
+
+    assert _run(tmp_path, body) == ({"op": "synth"}, True)
+
+
+def test_no_retry_or_restart_while_the_engine_shuts_down(tmp_path, monkeypatch):
+    starts = []
+
+    async def body(client):
+        spawn = client._spawn
+
+        async def counted():
+            starts.append(1)
+            await spawn()
+
+        client._spawn = counted
+        await client.call("ping", {})
+        monkeypatch.setattr(aio, "_closing", [True])
+        with pytest.raises(WorkerDied, match="exited"):
+            await client.call("synth", {"exit_once": str(tmp_path / "died")})
+        with pytest.raises(WorkerDied, match="shutting down"):
+            await client.call("synth", {})
+        return client.alive()
+
+    assert _run(tmp_path, body) is False
+    assert len(starts) == 1
+
+
+STUB_TORCH = textwrap.dedent("""
+    import os, types
+    float16, float32 = "float16", "float32"
+    _CUDA = os.environ.get("FAKE_CUDA") == "1"
+
+    class _Cuda:
+        def is_available(self):
+            return _CUDA
+
+        def is_initialized(self):
+            return _CUDA
+
+        def mem_get_info(self):
+            return 8 << 30, 12 << 30
+
+        def memory_reserved(self):
+            return 0
+
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    cuda = _Cuda()
+    backends = types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False))
+    nn = types.SimpleNamespace(modules=types.SimpleNamespace(module=types.SimpleNamespace(
+        register_module_forward_pre_hook=lambda hook: None)))
+
+    def from_numpy(x):
+        return x
+""")
+
+STUB_OMNIVOICE = textwrap.dedent("""
+    import os
+    import numpy as np
+
+    class OmniVoice:
+        sampling_rate = 24000
+
+        @classmethod
+        def from_pretrained(cls, path, device_map=None, dtype=None):
+            open(os.environ["FAKE_LOADED"], "w").close()
+            return cls()
+
+        def parameters(self):
+            return []
+
+        def create_voice_clone_prompt(self, audio, ref_text=None):
+            return "prompt"
+
+        def generate(self, **kw):
+            return [np.zeros(2400, dtype=np.float32)]
+""")
+
+LAUNCH = "import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], " \
+         "run_name='__main__')"
+
+
+def _omnivoice_worker(tmp_path, device, need_gb, ops):
+    """The real OmniVoice worker script over stub torch and omnivoice modules: the result or the error code per op."""
+    stubs = tmp_path / "stubs"
+    (stubs / "torch").mkdir(parents=True, exist_ok=True)
+    (stubs / "omnivoice").mkdir(exist_ok=True)
+    (stubs / "torch" / "__init__.py").write_text(STUB_TORCH, encoding="utf-8")
+    (stubs / "omnivoice" / "__init__.py").write_text(STUB_OMNIVOICE, encoding="utf-8")
+    ref = tmp_path / "reference.wav"
+    sf.write(str(ref), np.zeros(24000, dtype=np.float32), 24000)
+    env = dict(os.environ, MIMVOX_OMNIVOICE_FAST="0", MIMVOX_CPU_RAM_NEED_GB=str(need_gb),
+               FAKE_CUDA="1" if device == "cuda" else "0", FAKE_LOADED=str(tmp_path / "loaded"))
+    argv = [sys.executable, "-c", LAUNCH, str(stubs), omnivoice.WORKER, "--model-dir", str(tmp_path / "model"),
+            "--device", device]
+    params = {"ref": str(ref), "ref_text": "hello", "text": "Hello there.", "out": str(tmp_path / "out.wav"),
+              "normalize": False}
+
+    async def main():
+        client = WorkerClient("omnivoice", argv, env, start_timeout=60.0)
+        answers = []
+        try:
+            for op in ops:
+                try:
+                    answers.append(await client.call(op, params, timeout=60.0, retry=False))
+                except WorkerError as exc:
+                    answers.append((exc.code, exc.permanent))
+        finally:
+            await client.close()
+        return answers
+
+    return asyncio.run(main())
+
+
+needs_ram_figure = pytest.mark.skipif(worker_kit.physical_memory() is None, reason="RAM size not known here")
+
+
+@needs_ram_figure
+def test_cpu_refuses_every_pass_up_front_on_a_computer_with_too_little_ram(tmp_path):
+    assert _omnivoice_worker(tmp_path, "cpu", 10**6, ["warm", "synth", "inspect"]) == [("no_memory", True)] * 3
+    assert not (tmp_path / "loaded").exists()   # refused before the model was loaded
+
+
+@needs_ram_figure
+def test_cpu_speaks_when_the_ram_is_enough(tmp_path):
+    warm, synth = _omnivoice_worker(tmp_path, "cpu", 0, ["warm", "synth"])
+    assert "elapsed_s" in warm and synth["out"] == str(tmp_path / "out.wav")
+
+
+@needs_ram_figure
+def test_the_gpu_skips_the_ram_check(tmp_path):
+    (synth,) = _omnivoice_worker(tmp_path, "cuda", 10**6, ["synth"])
+    assert synth["out"] == str(tmp_path / "out.wav")

@@ -35,8 +35,8 @@ class SpeechError(Exception):
         self.message = message
 
     def engine_error(self) -> EngineError:
-        code = {"model_missing": "not_ready", "bad_request": "bad_request"}.get(self.code, "internal")
-        return EngineError(code, self.message)
+        code = {"model_missing": "not_ready", "bad_request": "bad_request", "no_memory": "no_memory"}
+        return EngineError(code.get(self.code, "internal"), self.message)
 
 
 Progress = Callable[[str, float], None]

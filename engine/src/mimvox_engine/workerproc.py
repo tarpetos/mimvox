@@ -24,10 +24,11 @@ class WorkerDied(Exception):
 
 
 class WorkerError(Exception):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, permanent: bool = False) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.permanent = permanent
 
 
 class WorkerCancelled(Exception):
@@ -97,14 +98,15 @@ class WorkerClient:
     async def call(self, op: str, params: dict[str, Any] | None = None, progress: Progress | None = None,
                    timeout: float | None = None, start: bool = True, retry: bool = True,
                    stall: float | None = None) -> dict[str, Any]:
-        """A worker that dies under the request is restarted and the request retried once (``retry``).
+        """A worker that dies under the request is restarted and the request retried once (``retry``), but not while the
+        engine shuts down.
         ``start=False``: answer ``{}`` without starting a process when none is running. ``stall``: the request
         also fails after that many seconds without a progress message from the worker (``timeout`` None: no cap)."""
         try:
             return await self._call_once(op, params, progress, timeout, start, stall)
         except WorkerDied as exc:
             self.last_error = str(exc)
-            if not retry:
+            if not retry or aio.closing():
                 raise
             log.warning("%s worker died under %s (%s); retrying once", self.name, op, exc)
         except WorkerError as exc:
@@ -154,6 +156,8 @@ class WorkerClient:
                     if not req.start:
                         req.done.set_result({})
                         continue
+                    if aio.closing():
+                        raise WorkerDied(f"the engine is shutting down: the {self.name} worker is not started again")
                     await self._spawn()
                 await self._exchange(req)
             except Exception as exc:  # noqa: BLE001 - the error belongs to this request
@@ -259,7 +263,8 @@ class WorkerClient:
         elif msg.get("code") == "cancelled":
             req.done.set_exception(WorkerCancelled())
         else:
-            req.done.set_exception(WorkerError(str(msg.get("code") or "internal"), str(msg.get("error") or "failed")))
+            req.done.set_exception(WorkerError(str(msg.get("code") or "internal"), str(msg.get("error") or "failed"),
+                                               bool(msg.get("permanent"))))
 
     def _write(self, obj: dict[str, Any]) -> None:
         proc = self._proc

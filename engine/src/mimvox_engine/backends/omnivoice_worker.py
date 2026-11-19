@@ -68,6 +68,9 @@ REF_CUT_MIN_S, REF_CUT_MAX_S, REF_CUT_TARGET_S = 7.0, REF_MAX_S, 10.0
 # fp16 Whisper turbo: 1.6 GB of weights plus decoding; on the CPU otherwise (10-20 s per clip).
 WHISPER_NEED_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))
 SIDECAR_VERSION = 3
+# Measured in fp32: the worker peaked at 7.45 GB (Windows) and 7.1 GB (Linux) with Whisper loaded; the system, the engine
+# and the app need about 3.5 GB beside it.
+CPU_RAM_NEED_GB = float(os.environ.get("MIMVOX_CPU_RAM_NEED_GB", "11"))
 
 _state = {"model": None, "device": None}
 _prompts = collections.OrderedDict()
@@ -192,6 +195,10 @@ def _load_mono(path):
     return x.mean(1), sr
 
 
+def _on_cpu():
+    return (_state["device"] or _device()) == "cpu"
+
+
 def _whisper_device():
     if (_state["device"] or _device()) != "cuda":  # `inspect` runs without the TTS model
         return "cpu"
@@ -208,6 +215,7 @@ def _with_whisper(use):
     """Whisper turbo loaded for this call only; retried on the CPU when the GPU runs out of memory midway."""
     import whisper
 
+    _check_ram()
     dev = _whisper_device()
     for attempt in (dev, "cpu") if dev == "cuda" else ("cpu",):
         wm = None
@@ -336,6 +344,7 @@ def _prompt(ref, ref_text=None):
         return _prompts[key]
     wav, sr, text = _reference(ref, ref_text)
     kit_worker.check_cancel()
+    _check_ram()
     prompt = _state["model"].create_voice_clone_prompt((torch.from_numpy(wav), sr), ref_text=text)
     _prompts[key] = prompt
     while len(_prompts) > max(1, args.prompt_cache):
@@ -344,16 +353,22 @@ def _prompt(ref, ref_text=None):
 
 
 def _check_ram():
-    """Every step reads all the weights: once a part is paged out, each segment waits minutes on the disk."""
+    """On the CPU, before every model pass. Every step reads all the weights: on a computer whose RAM cannot hold the
+    worker, or once a part of them is paged out, each segment waits minutes on the disk."""
+    if not _on_cpu():
+        return
     model = _state["model"]
-    msg = kit.ram_short([(p.data_ptr(), p.numel() * p.element_size()) for p in model.parameters()])
+    too_small = kit.ram_too_small(CPU_RAM_NEED_GB)
+    msg = too_small or (model is not None and kit.ram_short(
+        [(p.data_ptr(), p.numel() * p.element_size()) for p in model.parameters()]))
     if msg:
         _log(msg)
-        raise kit.OpError("no_memory", msg)
+        raise kit.OpError("no_memory", msg, permanent=bool(too_small))
 
 
 def op_warm(req):
     t0 = time.time()
+    _check_ram()
     op_load()
     _prompt(req["ref"], req.get("ref_text"))
     return {"elapsed_s": round(time.time() - t0, 2)}
@@ -363,6 +378,7 @@ def op_inspect(req):
     ref = req.get("ref")
     if not ref or not os.path.isfile(ref):
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
+    _check_ram()
     t0 = time.time()
     _reference(ref)
     side = os.path.splitext(ref)[0] + ".omnivoice.json"
@@ -386,9 +402,8 @@ def op_synth(req):
     if not os.path.isfile(ref):
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
     lang = str(req.get("lang") or "").lower() or None
+    _check_ram()
     op_load()
-    if _state["device"] == "cpu":
-        _check_ram()
     prompt = _prompt(ref, req.get("ref_text"))
     if req.get("normalize", True) and lang:
         text = text_norm.normalize(text, lang)
@@ -401,6 +416,7 @@ def op_synth(req):
         kw["duration"] = float(req["duration"])
     elif req.get("speed") and abs(float(req["speed"]) - 1.0) > 1e-3:
         kw["speed"] = float(req["speed"])
+    _check_ram()
     t0 = time.time()
     audio = _generate(text=text, language=req.get("model_lang") or lang, voice_clone_prompt=prompt, **kw)[0]
     gen_s = time.time() - t0

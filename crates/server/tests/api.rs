@@ -508,6 +508,19 @@ async fn openai_speech() {
 }
 
 #[tokio::test]
+async fn speech_short_of_memory_is_503() {
+    let setup = Setup::new();
+    let server = setup.start(&[], &[("MIMVOX_FAKE_TTS_ERROR", "no_memory")]).await;
+    let body = json!({ "model": "tts-1", "input": "Hi.", "voice": "fake-voice", "response_format": "wav" });
+    let res = reqwest::Client::new().post(server.url("/v1/audio/speech")).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let err: Value = res.json().await.unwrap();
+    assert_eq!(err["error"]["code"], "no_memory");
+    assert_eq!(err["error"]["type"], "server_error");
+    assert_eq!(err["error"]["message"], "fake no_memory");
+}
+
+#[tokio::test]
 async fn aac_needs_ffmpeg() {
     let setup = Setup::new();
     let empty = tempfile::tempdir().unwrap();

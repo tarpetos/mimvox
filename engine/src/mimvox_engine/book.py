@@ -1164,11 +1164,15 @@ async def _run(ctx: Context, job: str, data: config.DataDir, bid: str, v: _Voice
 
 
 def _short_of_memory(exc: BaseException | None) -> bool:
+    """Worth waiting for: not when the worker says retrying cannot help (too little RAM in all)."""
+    chain = []
     while exc is not None:
-        if isinstance(exc, (MemoryError, WorkerDied)) or getattr(exc, "code", None) in ("no_memory", "no_vram"):
-            return True
+        chain.append(exc)
         exc = exc.__cause__
-    return False
+    if any(getattr(e, "permanent", False) for e in chain):
+        return False
+    return any(isinstance(e, (MemoryError, WorkerDied)) or getattr(e, "code", None) in ("no_memory", "no_vram")
+               for e in chain)
 
 
 async def _failed(data: config.DataDir, bid: str, state: dict[str, Any] | None, code: str, message: str) -> None:

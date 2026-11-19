@@ -17,9 +17,12 @@ class Cancelled(Exception):
 
 
 class OpError(Exception):
-    def __init__(self, code, message):
+    """``permanent``: trying again later cannot help (a computer with too little RAM in all)."""
+
+    def __init__(self, code, message, permanent=False):
         super().__init__(message)
         self.code = code
+        self.permanent = permanent
 
 
 # On Windows the NVIDIA "CUDA sysmem fallback" (default since driver 536.40) moves an allocation that does not fit
@@ -35,6 +38,9 @@ NO_COMMIT = ("not enough free memory: the graphics card has room, but Windows ha
 NO_RAM_CPU = ("not enough free memory (RAM): {out:.1f} GB of the speech model are no longer in the {total:.0f} GB of RAM "
               "({free:.1f} GB free), so speech on the processor slows to minutes per sentence; close other programs and "
               "try again")
+NO_RAM_CPU_TOTAL = ("not enough memory (RAM) for speech on the processor: it needs a computer with at least {need:.0f} GB "
+                    "of RAM and this one has {total:.1f} GB, so the speech model would be swapped out to the disk and "
+                    "take minutes per sentence; use a graphics card or a computer with more RAM")
 # The commit cap (memguard) counts the page file: a model that works from RAM on the CPU is checked against the RAM.
 RAM_LOW_SHARE, RAM_LOW_MIN_GB, OUT_MIN_GB = 0.05, 0.5, 1.0
 PAGE = mmap.PAGESIZE
@@ -259,6 +265,14 @@ def ram_short(ranges):
     return NO_RAM_CPU.format(out=out / 2**30, total=mem[0] / 2**30, free=mem[1] / 2**30)
 
 
+def ram_too_small(need_gb):
+    """The message when this computer has less RAM than ``need_gb`` in all; else None (also where it is not known)."""
+    mem = physical_memory()
+    if mem is None or mem[0] >= need_gb * 2**30:
+        return None
+    return NO_RAM_CPU_TOTAL.format(need=need_gb, total=mem[0] / 2**30)
+
+
 def _ram_low(total):
     return max(RAM_LOW_MIN_GB * 2**30, RAM_LOW_SHARE * total)
 
@@ -412,7 +426,8 @@ class Worker:
         except Cancelled:
             self.send({"id": rid, "ok": False, "code": "cancelled", "error": "cancelled"})
         except OpError as exc:
-            self.send({"id": rid, "ok": False, "code": exc.code, "error": str(exc)})
+            self.send({"id": rid, "ok": False, "code": exc.code, "error": str(exc),
+                       **({"permanent": True} if exc.permanent else {})})
         except MemoryError:
             gpu_cleanup()
             self.log(f"op {req.get('op')} ran out of RAM: {traceback.format_exc()}")

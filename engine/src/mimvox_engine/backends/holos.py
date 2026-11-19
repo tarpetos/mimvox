@@ -112,7 +112,7 @@ class HolosBackend(TtsBackend):
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
         except WorkerError as exc:
-            code = exc.code if exc.code in ("bad_request", "not_found") else "internal"
+            code = exc.code if exc.code in ("bad_request", "not_found", "no_memory") else "internal"
             raise EngineError(code, f"HolosTTS: {exc.message}") from exc
         except WorkerDied as exc:
             raise EngineError("internal", f"the HolosTTS worker stopped: {exc}") from exc

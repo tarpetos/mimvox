@@ -161,8 +161,25 @@ The machine was shared: one 16-step run took 157 s instead of about 40 s and is 
 On an 8 GB laptop (Ryzen 5 3550H, 4 cores) a short segment took 190-213 s and the first transcription 125 s; the worker
 held 6.4 GB of private memory, Windows compressed 5.4 GB, no RAM was available and it paged about 1750 pages/s. A fixed
 300 s limit per call stopped the first segment of a new voice and any segment past it, so on the CPU the engine only
-stops a call after 600 s without progress from the worker, and the worker checks the RAM before each segment
+stops a call after 600 s without progress from the worker, and the worker checks the RAM before every model pass
 (protocol: "RAM on the CPU"; reading which of the 3.0 GB of weights are in RAM takes 55 ms).
+
+**RAM needed.** The weights are about 3 GB, but the worker holds more than twice that:
+
+| Where | After loading | After a segment | Whisper transcribing a new reference |
+| --- | --- | --- | --- |
+| 8 GB laptop, Windows 11 (private memory) | | 6.4 GB | 7.45 GB |
+| Developer PC, Windows 11, 32 GB (private / in RAM) | 5.0 / 3.7 GB | 12.1 / 6.4 GB after three segments | |
+| WSL2 (Linux) on that PC, 15 GB, torch 2.8 CPU (in RAM) | 0.66 GB | 3.6-5.0 GB; 5.9 GB with two references | 7.1 GB peak |
+
+On Linux the weights are mapped from the checkpoint and read in on first use, so loading costs almost nothing until the
+first segment (16 steps took 40-75 s there, 32 steps 77 s, the transcription 24 s). Either way the worker needs about
+7.5 GB at its peak, and Windows, the engine and the app about 3.5 GB beside it: **speech on the CPU needs 12 GB of RAM
+or more, 16 GB to keep other programs open**. On the 8 GB laptop one request passed the old check and ran 558 s while
+others were refused: that check looks at the free RAM and the weights' residency at one moment only, and both change
+by the second (Whisper's 3.8 GB coming and going, a fresh load with all its pages in). Now every model pass first compares the RAM in all with 11 GB
+(`MIMVOX_CPU_RAM_NEED_GB`), which does not change from one request to the next, so below it every request gets
+`no_memory` at once, the warm-up at start included; the momentary check still runs above it.
 
 - **The working set is the model.** The worker used to trim its working set after loading and after Whisper, which on a
   GPU gives back pages that only carried the weights to the card. On the CPU they are the weights, read in full at
@@ -445,4 +462,5 @@ the clearest symptom), which is why the app does not use them.
   the converter take turns instead of overlapping. 8 GB or more is
   recommended and 12 GB was used in testing.
 - Without a GPU the speech model works from RAM: the worker holds 5 GB after loading and 7-12 GB of committed memory
-  while speaking (see [Speech on the processor](#speech-on-the-processor-cpu)); an 8 GB laptop ran out of RAM.
+  while speaking (see [Speech on the processor](#speech-on-the-processor-cpu)); an 8 GB laptop ran out of RAM. Speech
+  on the CPU needs 12 GB of RAM or more (16 GB recommended); below 11 GB the engine refuses it with `no_memory`.
