@@ -30,6 +30,18 @@ Opening a pull request means you agree to these terms.
 - The app must stay usable for its purpose only: cloning your own voice, or a voice you have explicit permission for
   (see [DISCLAIMER.md](DISCLAIMER.md)).
 
+## Checks
+
+Pull requests run these (`.github/workflows/lint.yml`); run them locally before pushing:
+
+```
+uvx ruff@0.17.5 check .
+cd app && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+```
+
+`uvx ruff@0.17.5 check --fix .` and `cargo fmt` fix most findings. Ruff's rules are in `ruff.toml`, rustfmt's in
+`rustfmt.toml`.
+
 ## Comments
 
 Code explains itself through names, types and structure. A comment is the exception, written only when it is
