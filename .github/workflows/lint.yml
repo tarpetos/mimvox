@@ -2,8 +2,6 @@ name: Lint
 
 on:
   pull_request:
-  push:
-    branches: [master]
 
 permissions:
   contents: read
@@ -33,7 +31,7 @@ jobs:
         env:
           PATTERN: '\.py$|(^|/)(ruff\.toml|pyproject\.toml)$|^\.github/workflows/lint\.yml$'
         run: |
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] || git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
+          if git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No Python changes."
@@ -61,7 +59,7 @@ jobs:
         env:
           PATTERN: '^app/|^crates/|(^|/)(Cargo\.toml|Cargo\.lock|rustfmt\.toml)$|^\.github/workflows/lint\.yml$'
         run: |
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] || git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
+          if git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No Rust changes."
