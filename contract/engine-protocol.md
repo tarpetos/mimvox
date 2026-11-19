@@ -1,7 +1,7 @@
 # Engine protocol (app <-> engine)
 
-The desktop app (`app/`, Rust) starts the ML engine (`engine/`, Python) as a child process and talks to it over
-**stdin/stdout, one JSON object per line (UTF-8, `\n`-terminated)**. The engine writes logs only to **stderr**.
+The desktop app (`crates/desktop/`, Rust) starts the ML engine (`engine/`, Python) as a child process and talks to it
+over **stdin/stdout, one JSON object per line (UTF-8, `\n`-terminated)**. The engine writes logs only to **stderr**.
 Audio is never sent inline: both sides exchange **absolute file paths** (WAV, mono, 16-bit PCM unless stated).
 
 This file is the single source of truth. Rust types live in `crates/engine-client/src/protocol.rs`, Python handlers in

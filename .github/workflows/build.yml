@@ -114,9 +114,9 @@ jobs:
       - name: Check the tag matches the app version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' app/Cargo.toml | head -n1)"
+          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' crates/desktop/Cargo.toml | head -n1)"
           if [ "$tag" != "$version" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match app/Cargo.toml version $version"
+            echo "::error::Tag $GITHUB_REF_NAME does not match crates/desktop/Cargo.toml version $version"
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"

@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The integration tests run app/examples/fake_engine.py with the first Python 3 on PATH.
+      # The integration tests run crates/desktop/examples/fake_engine.py with the first Python 3 on PATH.
       - name: Python
         run: python3 --version || python --version
 

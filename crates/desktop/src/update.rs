@@ -23,7 +23,7 @@ pub enum Kind {
 }
 
 pub fn kind() -> Kind {
-    if crate::engine::find_resources().is_some_and(|r| r.join("app").join("Cargo.toml").is_file()) {
+    if crate::engine::find_resources().is_some_and(|r| r.join("crates").join("desktop").join("Cargo.toml").is_file()) {
         return Kind::Never;
     }
     if cfg!(target_os = "linux") {

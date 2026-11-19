@@ -80,7 +80,7 @@ flowchart LR
 - **The app never blocks and never polls.** A reader thread hands every engine line to the UI thread as an event
   (Rune's `AppHandle::update_if` wakes the event loop); audio callbacks, file dialogs and subprocess readers do the
   same, and the few clocks (toast expiry, a running job's elapsed time) are timer deadlines (`Tx::wake_at`). An idle
-  window draws nothing and wakes for nothing (`app/src/ui/events.rs`).
+  window draws nothing and wakes for nothing (`crates/desktop/src/ui/events.rs`).
 
 ## Engine internals (event-driven)
 

@@ -161,7 +161,7 @@ SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
 LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 34
 # "speech" is always installed; the rest are chosen in the app (or --components / --add) and recorded in runtime.toml.
-# Sizes on disk in GB, also in COMPONENTS in app/src/ui/setuprun.rs.
+# Sizes on disk in GB, also in COMPONENTS in crates/desktop/src/ui/setuprun.rs.
 COMPONENTS = {
     "speech": 12.6,             # engine venv + OmniVoice (11) + Whisper turbo (1.6): Speak, Book, Redub's Re-speak
     "training": APPLIO_GB,      # Applio/RVC: Train, voice match for trained voices, Redub's Convert voice
@@ -907,7 +907,7 @@ class Setup:
         return (int(match.group(1)), int(match.group(2))) if match else None
 
     def _rust(self) -> None:
-        if not (self.root / "app" / "Cargo.toml").is_file():
+        if not (self.root / "crates" / "desktop" / "Cargo.toml").is_file():
             return  # an installed app (no sources to build): Rust is not needed
         if self._cargo():
             version = self._rust_version()
@@ -1522,11 +1522,11 @@ class Setup:
         return []
 
     def ready_lines(self) -> list[str]:
-        binary = self.root / "app" / "target" / "release" / (BIN_NAME + (".exe" if self.plat == "windows" else ""))
+        binary = self.root / "target" / "release" / (BIN_NAME + (".exe" if self.plat == "windows" else ""))
         lines = ["Start the app with:"]
         if self.data_dir != default_data_dir(self.plat).resolve():
             lines.insert(0, f"The app finds the data directory {self.data_dir} through {location_file(self.plat)}.")
-        app = self.root / "app"
+        app = self.root / "crates" / "desktop"
         if not (app / "Cargo.toml").is_file():
             return [*lines[:-1], "Go back to the Mimvox window: it notices the finished setup by itself."]
         if binary.exists():
