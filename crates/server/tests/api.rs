@@ -16,7 +16,12 @@ fn python() -> PathBuf {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
         .flat_map(|d| ["python3", "python", "python.exe"].map(|n| d.join(n)))
-        .find(|p| p.is_file())
+        // The first one that starts, as the tests write it: on Windows PATH can list a Store alias that does not.
+        .filter(|p| p.is_file())
+        .find(|p| {
+            let p = p.display().to_string().replace('\\', "/");
+            std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success())
+        })
         .expect("python3 on PATH")
 }
 
@@ -97,6 +102,8 @@ impl Setup {
 }
 
 struct Server {
+    // Held for kill_on_drop; only the Unix SIGTERM test reads it.
+    #[cfg_attr(not(unix), allow(dead_code))]
     child: Child,
     base: String,
     lines: mpsc::UnboundedReceiver<String>,
@@ -233,7 +240,7 @@ async fn files_up_and_down() {
     let setup = Setup::new();
     let server = setup.start(&["--max-upload-mb", "1"], &[]).await;
     let client = reqwest::Client::new();
-    let data = std::fs::canonicalize(setup.data()).unwrap();
+    let data = setup.data();
 
     let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
     let res = client.post(server.url("/files?name=../../my%20take.wav")).body(payload.clone()).send().await.unwrap();
@@ -241,7 +248,8 @@ async fn files_up_and_down() {
     let up: Value = res.json().await.unwrap();
     let path = PathBuf::from(up["path"].as_str().unwrap());
     assert_eq!(up["size_bytes"], 200_000);
-    assert_eq!(std::fs::canonicalize(path.parent().unwrap()).unwrap(), data.join("api").join("uploads"));
+    let uploads = std::fs::canonicalize(data.join("api").join("uploads")).unwrap();
+    assert_eq!(std::fs::canonicalize(path.parent().unwrap()).unwrap(), uploads);
     assert!(path.file_name().unwrap().to_str().unwrap().ends_with("-my_take.wav"));
 
     let get = |p: &Path| client.get(server.url("/files")).query(&[("path", p.to_str().unwrap())]).send();
