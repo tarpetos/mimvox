@@ -222,3 +222,37 @@ def test_bad_requests(tmp_path, import_book):
     (tmp_path / "empty.txt").write_text("   \n\n  ")
     with pytest.raises(EngineError, match="No readable text"):
         import_book(tmp_path / "empty.txt")
+
+
+def long_book(n_words=9000):
+    words = ["river", "garden", "window", "morning", "letter", "harbour", "candle", "winter", "station", "orchard"]
+    paras, total, i = [], 0, 0
+    while total < n_words:
+        s = " ".join(words[(i + k) % len(words)] for k in range(12))
+        paras.append(f"The {s} went on. Then {s} stopped.")
+        total += 28
+        i += 1
+    return "\n\n".join(paras)
+
+
+def test_split_auto_applies_the_suggested_parts(tmp_path, import_book):
+    path = text_file(tmp_path / "long.txt", long_book())
+    plain = import_book(path)
+    assert len(plain["chapters"]) == 1 and plain["parts"] is not None
+    split = import_book(path, split="auto")
+    assert split["parts"] is None
+    assert split["chapters"] == plain["parts"]["chapters"] and len(split["chapters"]) > 1
+    assert split["words"] == sum(c["words"] for c in split["chapters"])
+
+
+def test_split_auto_leaves_a_short_book_alone(tmp_path, import_book):
+    path = text_file(tmp_path / "b.txt", plain(["Chapter 1", "Chapter 2"]))
+    plain_r, split = import_book(path), import_book(path, split="auto")
+    assert plain_r["parts"] is None and split["parts"] is None
+    assert split["chapters"] == plain_r["chapters"]
+
+
+def test_split_must_be_auto(tmp_path, import_book):
+    with pytest.raises(EngineError) as e:
+        import_book(text_file(tmp_path / "b.txt", "Some text."), split="yes")
+    assert e.value.code == "bad_request"
