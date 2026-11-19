@@ -37,6 +37,7 @@ Pull requests run the linters (`.github/workflows/lint.yml`) and the tests (`.gi
 ```
 uvx ruff@0.17.5 check .
 cd app && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cd engine && uv run --group test pytest
 ```
 
 `uvx ruff@0.17.5 check --fix .` and `cargo fmt` fix most findings. Ruff's rules are in `ruff.toml`, rustfmt's in

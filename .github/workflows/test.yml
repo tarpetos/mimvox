@@ -52,3 +52,44 @@ jobs:
       - name: cargo test
         if: steps.changes.outputs.run == 'true'
         run: cargo test --workspace
+
+  python:
+    name: Python tests (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: Linux }
+          - { os: windows-latest, name: Windows }
+          - { os: macos-latest, name: macOS }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Changes
+        id: changes
+        env:
+          PATTERN: '^engine/.*\.py$|^engine/(pyproject\.toml|uv\.lock)$|^\.github/workflows/test\.yml$'
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -qE "$PATTERN"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No engine changes."
+          fi
+
+      - name: uv
+        if: steps.changes.outputs.run == 'true'
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: pytest
+        if: steps.changes.outputs.run == 'true'
+        working-directory: engine
+        env:
+          UV_PYTHON: "3.11"
+        run: uv run --group test pytest
