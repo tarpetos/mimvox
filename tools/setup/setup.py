@@ -20,7 +20,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 APP_DIR_NAME = "mimvox"
 
@@ -139,6 +139,7 @@ DEMUCS_SHA256 = "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd781
 ENGINE_DIR = "engine"
 UV_PYTHON_DIR = "python"   # <runtime>/python, also in move_runtime.fix_venv_paths and crates/desktop/src/ui/setuprun.rs
 ENGINE_PYTHON = "3.11"
+PIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;@]+$")   # a `uv pip freeze` line of a registry package
 ENGINE_TORCH = ("torch==2.8.0", "torchaudio==2.8.0")
 # pypdf (BSD-3-Clause, pure Python): PDF books; every other book format is read with the standard library.
 ENGINE_PACKAGES = ("omnivoice==0.2.1", "openai-whisper==20250625", "num2words==0.5.14", "sentencepiece", "g2p_en==2.1.0",
@@ -146,6 +147,10 @@ ENGINE_PACKAGES = ("omnivoice==0.2.1", "openai-whisper==20250625", "num2words==0
 # --no-deps: its Stanza dependency (and the ~500 MB of models Stanza downloads) is only needed for the context mode,
 # which is not used; the dictionary-only mode works offline.
 ENGINE_NO_DEPS = ("ukrainian-word-stress==2.1.0",)
+NLTK_DIR = "nltk_data"   # in the engine venv
+# g2p_en's import looks for the first two (else downloads them); NLTK 3.9+ tags with the third.
+NLTK_PACKAGES = (("corpora", "cmudict"), ("taggers", "averaged_perceptron_tagger"),
+                 ("taggers", "averaged_perceptron_tagger_eng"))
 OMNIVOICE_REPO = "k2-fsa/OmniVoice"
 OMNIVOICE_DIR = "omnivoice"   # <runtime>/models/omnivoice
 OMNIVOICE_REQUIRED = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json",
@@ -351,6 +356,50 @@ def volumes(plat: str) -> list[tuple[str, float]]:
 
 def venv_python(venv: Path, plat: str) -> Path:
     return venv / ("Scripts/python.exe" if plat == "windows" else "bin/python")
+
+
+def venv_home(venv: Path) -> Path | None:
+    """pyvenv.cfg ``home``: the folder of the Python the venv was made from."""
+    try:
+        lines = (venv / "pyvenv.cfg").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "home":
+            return Path(value.strip())
+    return None
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    c, p = os.path.normcase(str(child)), os.path.normcase(str(parent)).rstrip("\\/")
+    return c == p or c.startswith(p + os.sep)
+
+
+def swap_venv(venv: Path, new: Path) -> None:
+    old = venv.with_name(venv.name + ".old")
+    if old.exists():
+        _rmtree(old)
+    os.rename(venv, old)
+    try:
+        os.rename(new, venv)
+    except OSError:
+        os.rename(old, venv)
+        raise
+    restore_swapped(venv)
+
+
+def restore_swapped(venv: Path) -> None:
+    """Puts the old venv back after an interrupted swap_venv, then deletes the leftovers."""
+    old, new = venv.with_name(venv.name + ".old"), venv.with_name(venv.name + ".new")
+    try:
+        if old.exists() and not venv.exists():
+            os.rename(old, venv)
+        for leftover in (old, new):
+            if leftover.exists():
+                _rmtree(leftover)
+    except OSError as error:
+        warn(f"Could not clean up next to {venv} ({error}); the next setup run tries again.")
 
 
 def toml_str(value: object) -> str:
@@ -1062,27 +1111,100 @@ class Setup:
             return [*args, "--torch-backend", "cpu"]
         return args
 
-    def _venv_ready(self, repo: Path, commit: str) -> bool:
-        stamp = self._stamp(repo / ".venv")
-        py = venv_python(repo / ".venv", self.plat)
-        return py.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == self._stamp_value(commit)
+    def _stamped(self, venv: Path, value: str) -> bool:
+        stamp = self._stamp(venv)
+        return venv_python(venv, self.plat).exists() and stamp.is_file() \
+            and stamp.read_text(encoding="utf-8").strip() == value
 
-    def applio_venv(self) -> None:
-        if self._venv_ready(self.applio, APPLIO_COMMIT):
-            say("Applio environment: ready.")
-            return
-        venv = self.applio / ".venv"
+    def _new_venv(self, version: str, venv: Path, *extra: str) -> list[str]:
+        return self.uv("venv", "--python", version, "--managed-python", "--allow-existing", *extra, venv)
+
+    def on_runtime_python(self, venv: Path) -> bool:
+        """Whether the venv's base Python (pyvenv.cfg ``home``) is one of <runtime>/python; runtimes set up before
+        those were there use uv's default folder, which deleting the data folder leaves behind."""
+        home = venv_home(venv)
+        return home is None or _inside(home.resolve(), self.python_dir.resolve())
+
+    def _venv_step(self, label: str, venv: Path, version: str, stamp_value: str,
+                   install: Callable[[Path, Sequence[str]], bool], cwd: Path) -> None:
+        """Ready, made again on a Python in <runtime>/python (see _rebuild), or installed in place."""
+        restore_swapped(venv)
         py = venv_python(venv, self.plat)
+        stamped = self._stamped(venv, stamp_value)
+        if py.exists() and not self.on_runtime_python(venv):
+            self._rebuild(label, venv, version, stamp_value, stamped, install, cwd)
+            return
+        if stamped:
+            say(f"{label}: ready.")
+            return
         if not py.exists():
-            say(f"Applio environment: creating the Python {APPLIO_PYTHON} venv...")
-            self.must(self.uv("venv", "--python", APPLIO_PYTHON, "--allow-existing", venv), "Creating the Applio venv",
-                      cwd=self.applio)
+            say(f"{label}: creating the Python {version} venv...")
+            venv.parent.mkdir(parents=True, exist_ok=True)
+            self.must(self._new_venv(version, venv), f"{label}: creating the venv", cwd=cwd)
+        if install(py, []):
+            self._stamp(venv).write_text(stamp_value, encoding="utf-8")
+
+    def _rebuild(self, label: str, venv: Path, version: str, stamp_value: str, keep: bool,
+                 install: Callable[[Path, Sequence[str]], bool], cwd: Path) -> None:
+        """Builds the venv again next to it, from the cache first (``keep``: pinned to the packages it has), and swaps
+        it in only once that worked: the old venv stays otherwise."""
+        pins = self._frozen(venv) if keep else []
+        constraints = self.temp_dir() / f"{venv.parent.name}-constraints.txt"
+        constraints.write_text("".join(f"{line}\n" for line in pins), encoding="utf-8")
+        say(f"{label}: made from {venv_home(venv)}, outside {self.python_dir}; making it again from a Python there"
+            f"{', with the same packages' if pins else ''}...")
+        new = venv.with_name(venv.name + ".new")
+        for extra in (["--offline"], []):
+            if new.exists():
+                _rmtree(new)
+            try:
+                built = self.run(self._new_venv(version, new, "--relocatable", *extra), cwd=cwd) == 0 \
+                    and install(venv_python(new, self.plat), [*extra, "-c", str(constraints)] if pins else extra)
+            except SetupError:
+                built = False
+            if built:
+                break
+            if extra:
+                say(f"{label}: not everything is in the cache ({self.data_dir / 'cache' / 'uv'}); downloading the rest...")
+        else:
+            if new.exists():
+                _rmtree(new)
+            if not keep:
+                raise SetupError(f"{label}: making it again on a Python in {self.python_dir} failed.")
+            warn(f"{label}: could not be made again on a Python in {self.python_dir}; the old environment is kept and "
+                 "still works (the next setup run tries again).")
+            return
+        if pins:
+            now = {line.split("==")[0] for line in self._frozen(new)}
+            dropped = [line for line in pins if line.split("==")[0] not in now]
+            if dropped:
+                say(f"{label}: no longer installed: {', '.join(dropped)}.")
+        self._stamp(new).write_text(stamp_value, encoding="utf-8")
+        try:
+            swap_venv(venv, new)
+        except OSError as error:
+            if new.exists():
+                _rmtree(new)
+            raise SetupError(f"{label}: the new environment could not replace the old one ({error}); the old one is "
+                             "kept. Close Mimvox and run setup again.") from None
+        say(f"{label}: ready, on {venv_home(venv)}.")
+
+    def _frozen(self, venv: Path) -> list[str]:
+        """Its registry packages, as ``name==version`` lines."""
+        out = self.read(self.uv("pip", "freeze", "--python", venv_python(venv, self.plat)), cwd=self.runtime)
+        return [line for line in out.splitlines() if PIN.match(line)]
+
+    def _applio_install(self, py: Path, extra: Sequence[str]) -> bool:
         note = self._build_note()
         say(f"Applio environment: installing requirements (torch 2.11{' ' + note if note else ''})...")
-        command = self.uv("pip", "install", "--python", py, "-r", "requirements.txt")
+        command = self.uv("pip", "install", "--python", py, "-r", "requirements.txt", *extra)
         command += self._torch_args(APPLIO_ROCM_INDEX)
         self.must(command, "Installing the Applio requirements", cwd=self.applio)
-        self._stamp(venv).write_text(self._stamp_value(APPLIO_COMMIT), encoding="utf-8")
+        return True
+
+    def applio_venv(self) -> None:
+        self._venv_step("Applio environment", self.applio / ".venv", APPLIO_PYTHON, self._stamp_value(APPLIO_COMMIT),
+                        self._applio_install, self.applio)
 
     def _has(self, repo: Path, files: Sequence[str]) -> bool:
         return all((repo / f).is_file() and (repo / f).stat().st_size > 0 for f in files)
@@ -1207,8 +1329,7 @@ class Setup:
         self.ensure_repo("Seed-VC", SEEDVC_URL, SEEDVC_COMMIT, self.seed_vc)
         if self.quiet([py, "-I", "-c", "import munch, einops"], cwd=self.runtime) != 0:
             say("Zero-shot voice converter: adding munch and einops to the engine environment...")
-            self.must(self.uv("pip", "install", "--python", py, *SEEDVC_PACKAGES),
-                      "Installing the zero-shot voice converter's packages", cwd=self.runtime)
+            self._seedvc_install(py, [])
         if self.skip_models:
             return
         for sub, repo, rev, files in SEEDVC_MODELS:
@@ -1232,59 +1353,68 @@ class Setup:
             raise SetupError("The zero-shot voice converter is incomplete; run this again.")
         say("Zero-shot voice converter (Seed-VC): ready.")
 
+    def _engine_install(self, py: Path, extra: Sequence[str]) -> bool:
+        """False when only the Ukrainian stress dictionary is missing."""
+        note = self._build_note()
+        say(f"Engine environment: installing torch 2.8{f' ({note})' if note else ''}, OmniVoice, Whisper...")
+        command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *ENGINE_PACKAGES, *extra)
+        command += self._torch_args(ENGINE_ROCM_INDEX)
+        self.must(command, "Installing the engine environment", cwd=self.runtime)
+        if self.run(self.uv("pip", "install", "--python", py, "--no-deps", *ENGINE_NO_DEPS, *extra), cwd=self.runtime) != 0:
+            warn("The Ukrainian stress dictionary could not be installed (the next setup run tries again); Ukrainian "
+                 "speech works without automatic stress.")
+            return False
+        return True
+
+    def _seedvc_install(self, py: Path, extra: Sequence[str]) -> None:
+        self.must(self.uv("pip", "install", "--python", py, *SEEDVC_PACKAGES, *extra),
+                  "Installing the zero-shot voice converter's packages", cwd=self.runtime)
+
     def engine_env(self) -> None:
         stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {' '.join(ENGINE_NO_DEPS)} "
                        f"{self.gpu.build} {self.plat}")
-        stamp = self._stamp(self.engine_venv)
+
+        def install(py: Path, extra: Sequence[str]) -> bool:
+            done = self._engine_install(py, extra)
+            if self.zero_shot_vc and py != self.engine_python():  # a rebuild: keep Seed-VC's packages too
+                self._seedvc_install(py, extra)
+            return done
+
+        self._venv_step("Engine environment", self.engine_venv, ENGINE_PYTHON, stamp_value, install, self.runtime)
+        self.nltk_data()
+
+    def nltk_data(self) -> None:
+        """g2p_en's NLTK data into <venv>/nltk_data, which NLTK searches (sys.prefix) on every OS. Its import fetches
+        the data only when NLTK finds none, also in the shared %APPDATA%\\nltk_data or ~/nltk_data."""
+        target = self.engine_venv / NLTK_DIR
+        missing = [name for kind, name in NLTK_PACKAGES
+                   if not any((target / kind / f).exists() for f in (name, f"{name}.zip"))]
         py = self.engine_python()
-        if py.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
-            say("Engine environment: ready.")
+        if not missing or not py.exists():
             return
-        if not py.exists():
-            say(f"Engine environment: creating the Python {ENGINE_PYTHON} venv...")
-            self.engine_venv.parent.mkdir(parents=True, exist_ok=True)
-            self.must(self.uv("venv", "--python", ENGINE_PYTHON, "--allow-existing", self.engine_venv),
-                      "Creating the engine venv", cwd=self.runtime)
-        note = self._build_note()
-        say(f"Engine environment: installing torch 2.8{f' ({note})' if note else ''}, OmniVoice, Whisper...")
-        command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *ENGINE_PACKAGES)
-        command += self._torch_args(ENGINE_ROCM_INDEX)
-        self.must(command, "Installing the engine environment", cwd=self.runtime)
-        stress = self.uv("pip", "install", "--python", py, "--no-deps", *ENGINE_NO_DEPS)
-        stress_ok = self.run(stress, cwd=self.runtime) == 0
-        if not stress_ok:
-            warn("The Ukrainian stress dictionary could not be installed (the next setup run tries again); Ukrainian "
-                 "speech works without automatic stress.")
-        # g2p_en fetches its NLTK data (CMUdict, tagger; a few MB) on first import: do it now, not in the app. NLTK
-        # also searches <venv>/nltk_data (sys.prefix) on every OS, so the engine finds it there without NLTK_DATA.
-        nltk_data = self.engine_venv / "nltk_data"
-        nltk_data.mkdir(exist_ok=True)
-        if self.run([py, "-I", "-c", "import g2p_en"], cwd=self.runtime, extra_env={"NLTK_DATA": str(nltk_data)}) != 0:
-            warn("g2p_en could not fetch its NLTK data; the recording-text analysis falls back to a simpler method.")
-        if stress_ok:
-            stamp.write_text(stamp_value, encoding="utf-8")
+        say(f"Engine environment: downloading NLTK's {', '.join(missing)} (a few MB) to {target}...")
+        script = ("import sys, nltk\n"
+                  "ok = [nltk.download(name, download_dir=sys.argv[1], quiet=True) for name in sys.argv[2:]]\n"
+                  "sys.exit(0 if all(ok) else 1)")
+        if self.run([py, "-I", "-c", script, target, *missing], cwd=self.runtime) != 0:
+            warn("NLTK's data could not be downloaded (the next setup run tries again); until then the recording-text "
+                 "analysis uses NLTK data found elsewhere or a simpler method.")
 
     def holos_env(self) -> None:
         stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(HOLOS_PACKAGES)} {' '.join(HOLOS_NO_DEPS)} "
                        f"{self.gpu.build} {self.plat}")
-        stamp = self._stamp(self.holos_venv)
-        py = self.holos_python()
-        if py.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
-            say("Ukrainian speech environment: ready.")
-            return
-        if not py.exists():
-            say(f"Ukrainian speech environment: creating the Python {HOLOS_PYTHON} venv...")
-            self.holos_venv.parent.mkdir(parents=True, exist_ok=True)
-            self.must(self.uv("venv", "--python", HOLOS_PYTHON, "--allow-existing", self.holos_venv),
-                      "Creating the Ukrainian speech venv", cwd=self.runtime)
+        self._venv_step("Ukrainian speech environment", self.holos_venv, HOLOS_PYTHON, stamp_value,
+                        self._holos_install, self.runtime)
+
+    def _holos_install(self, py: Path, extra: Sequence[str]) -> bool:
         note = self._build_note()
         say(f"Ukrainian speech environment: installing torch 2.8{f' ({note})' if note else ''}, HolosTTS, Stanza...")
-        command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *HOLOS_PACKAGES)
+        command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *HOLOS_PACKAGES, *extra)
         command += self._torch_args(ENGINE_ROCM_INDEX)
         self.must(command, "Installing the Ukrainian speech environment", cwd=self.runtime)
-        self.must(self.uv("pip", "install", "--python", py, "--no-deps", *HOLOS_NO_DEPS),
+        self.must(self.uv("pip", "install", "--python", py, "--no-deps", *HOLOS_NO_DEPS, *extra),
                   "Installing the Ukrainian stress dictionary", cwd=self.runtime)
-        stamp.write_text(stamp_value, encoding="utf-8")
+        return True
 
     def holos_models_step(self) -> None:
         py = self.holos_python()

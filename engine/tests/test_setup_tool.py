@@ -113,18 +113,136 @@ def test_uv_pythons_go_into_the_runtime(tmp_path, monkeypatch):
     assert s.env()["UV_PYTHON_INSTALL_DIR"] == str(s.runtime / "python")
 
 
-def test_nltk_data_goes_into_the_engine_venv(tmp_path, monkeypatch):
+class FakeUv:
+    """``uv venv`` makes a venv on a Python in <runtime>/python; ``fail`` makes the commands it matches fail."""
+
+    def __init__(self, s):
+        self.s, self.calls, self.fail = s, [], lambda argv: False
+        self.freeze = {}
+
+    def run(self, command, cwd=None, extra_env=None):
+        argv = [str(part) for part in command]
+        self.calls.append(argv)
+        if self.fail(argv):
+            return 1
+        if argv[1:2] == ["venv"]:
+            venv = Path(argv[-1])
+            venv_python = setup.venv_python(venv, self.s.plat)
+            venv_python.parent.mkdir(parents=True, exist_ok=True)
+            venv_python.write_bytes(b"")
+            home = self.s.python_dir / "cpython-3.11-linux-x86_64-gnu" / "bin"
+            (venv / "pyvenv.cfg").write_text(f"home = {home}\n", encoding="utf-8")
+        return 0
+
+    def read(self, command, cwd=None):
+        return self.freeze.get(Path(str(command[command.index("--python") + 1])).parents[1].name, "")
+
+    def venv_calls(self):
+        return [argv for argv in self.calls if argv[1:2] == ["venv"]]
+
+
+@pytest.fixture
+def fake_uv(tmp_path, monkeypatch):
     s = make(tmp_path / "data")
-    s.engine_python().parent.mkdir(parents=True)
-    s.engine_python().write_bytes(b"")
-    calls = []
-    monkeypatch.setattr(setup.Setup, "must", lambda self, command, what, cwd=None, extra_env=None: None)
-    monkeypatch.setattr(setup.Setup, "run",
-                        lambda self, command, cwd=None, extra_env=None: calls.append((command, extra_env)) or 0)
+    uv = FakeUv(s)
+    monkeypatch.setattr(setup.Setup, "run", lambda self, command, cwd=None, extra_env=None: uv.run(command))
+    monkeypatch.setattr(setup.Setup, "read", lambda self, command, cwd=None: uv.read(command))
     s.engine_env()
-    env = next(extra for command, extra in calls if "import g2p_en" in command)
-    assert env["NLTK_DATA"] == str(s.engine_venv / "nltk_data")
-    assert (s.engine_venv / "nltk_data").is_dir()
+    uv.calls.clear()
+    return s, uv
+
+
+def old_python(s, tmp_path):
+    """The engine venv as setup made it before <runtime>/python: from uv's default folder (%APPDATA%\\uv\\python)."""
+    home = tmp_path / "Roaming" / "uv" / "python" / "cpython-3.11-windows-x86_64-none"
+    (s.engine_venv / "pyvenv.cfg").write_text(f"home = {home}\nversion_info = 3.11\n", encoding="utf-8")
+    (s.engine_venv / "old-file").write_bytes(b"")
+    return home
+
+
+def test_which_venvs_are_on_a_python_in_the_runtime(tmp_path, fake_uv):
+    s, _uv = fake_uv
+    assert s.on_runtime_python(s.engine_venv)
+    old_python(s, tmp_path)
+    assert not s.on_runtime_python(s.engine_venv)
+    assert s.on_runtime_python(tmp_path / "no-venv")
+
+
+def test_a_ready_venv_in_the_runtime_is_left_alone(fake_uv, capsys):
+    s, uv = fake_uv
+    s.engine_env()
+    assert uv.venv_calls() == []
+    assert "Engine environment: ready." in capsys.readouterr().out
+
+
+def test_a_venv_from_outside_the_runtime_is_made_again_with_its_packages(tmp_path, fake_uv, capsys):
+    s, uv = fake_uv
+    old_python(s, tmp_path)
+    uv.freeze[".venv"] = "torch==2.8.0+cpu\nomnivoice==0.2.1\nipa-uk @ https://example.com/a.zip\nold-thing==1.0\n"
+    uv.freeze[".venv.new"] = "torch==2.8.0+cpu\nomnivoice==0.2.1\n"
+    s.engine_env()
+    (venv_call,) = uv.venv_calls()
+    assert {"--offline", "--relocatable", "--managed-python"} <= set(venv_call)
+    install = next(argv for argv in uv.calls if argv[1:3] == ["pip", "install"])
+    assert "--offline" in install
+    pins = Path(install[install.index("-c") + 1]).read_text(encoding="utf-8").split()
+    assert pins == ["torch==2.8.0+cpu", "omnivoice==0.2.1", "old-thing==1.0"]
+    assert s.on_runtime_python(s.engine_venv)
+    assert not (s.engine_venv / "old-file").exists()
+    assert (s.engine_venv / ".mimvox-setup-ok").is_file()
+    assert sorted(p.name for p in s.engine_venv.parent.iterdir()) == [".venv"]
+    assert "no longer installed: old-thing==1.0" in capsys.readouterr().out
+    uv.calls.clear()
+    s.engine_env()
+    assert uv.venv_calls() == []
+
+
+def test_a_rebuild_downloads_what_the_cache_lacks(tmp_path, fake_uv):
+    s, uv = fake_uv
+    old_python(s, tmp_path)
+    uv.fail = lambda argv: "--offline" in argv and argv[1:3] == ["pip", "install"]
+    s.engine_env()
+    first, second = uv.venv_calls()
+    assert "--offline" in first
+    assert "--offline" not in second
+    assert s.on_runtime_python(s.engine_venv)
+
+
+def test_a_failed_rebuild_keeps_the_old_venv(tmp_path, fake_uv, capsys):
+    s, uv = fake_uv
+    home = old_python(s, tmp_path)
+    uv.fail = lambda argv: argv[1:3] == ["pip", "install"]
+    s.engine_env()
+    assert setup.venv_home(s.engine_venv) == home
+    assert (s.engine_venv / "old-file").exists()
+    assert (s.engine_venv / ".mimvox-setup-ok").is_file()
+    assert sorted(p.name for p in s.engine_venv.parent.iterdir()) == [".venv"]
+    assert "the old environment is kept" in capsys.readouterr().out
+
+
+def test_an_interrupted_swap_puts_the_old_venv_back(tmp_path, fake_uv):
+    s, _uv = fake_uv
+    old_python(s, tmp_path)
+    s.engine_venv.rename(s.engine_venv.with_name(".venv.old"))
+    s.engine_venv.with_name(".venv.new").mkdir()
+    setup.restore_swapped(s.engine_venv)
+    assert (s.engine_venv / "old-file").exists()
+    assert sorted(p.name for p in s.engine_venv.parent.iterdir()) == [".venv"]
+
+
+def test_nltk_data_goes_into_the_engine_venv(fake_uv):
+    s, uv = fake_uv
+    target = s.engine_venv / "nltk_data"
+    s.engine_env()
+    (download,) = [argv for argv in uv.calls if "download_dir" in " ".join(argv)]
+    assert download[download.index("-c") + 2] == str(target)
+    assert download[download.index("-c") + 3:] == [name for _kind, name in setup.NLTK_PACKAGES]
+    for kind, name in setup.NLTK_PACKAGES:
+        (target / kind).mkdir(parents=True, exist_ok=True)
+        (target / kind / f"{name}.zip").write_bytes(b"")
+    uv.calls.clear()
+    s.engine_env()
+    assert not [argv for argv in uv.calls if "download_dir" in " ".join(argv)]
 
 
 def _link(target, link):
