@@ -1,4 +1,4 @@
-//! Runs mimvox-server against app/examples/fake_engine.py.
+//! Runs mimvox-server against crates/desktop/examples/fake_engine.py.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -26,7 +26,7 @@ fn python() -> PathBuf {
 }
 
 fn fake_engine_src() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/examples/fake_engine_src")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../desktop/examples/fake_engine_src")
 }
 
 struct Setup {

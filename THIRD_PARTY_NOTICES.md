@@ -207,7 +207,7 @@ The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth
   layout and others, see its `Cargo.lock`) come with it under their own licences, mostly MIT and Apache-2.0
   (**verify** with `cargo about` or `cargo deny` before a release).
 
-### Direct Rust dependencies (from `app/Cargo.toml`)
+### Direct Rust dependencies (from `crates/desktop/Cargo.toml`)
 
 | Crate | Licence (crates.io) |
 | --- | --- |
@@ -246,8 +246,8 @@ The app icon is made for this project (`tools/release/`).
 
 ### Noto Sans (SIL Open Font License 1.1)
 
-- Files: `NotoSans-Regular.ttf` and `NotoSans-Bold.ttf` in `app/assets/fonts/`, with the licence text in
-  `app/assets/fonts/OFL.txt`. From the Noto project.
+- Files: `NotoSans-Regular.ttf` and `NotoSans-Bold.ttf` in `crates/desktop/assets/fonts/`, with the licence text in
+  `crates/desktop/assets/fonts/OFL.txt`. From the Noto project.
 - Copyright 2022 The Noto Project Authors (<https://github.com/notofonts/latin-greek-cyrillic>).
 - Licence: **SIL Open Font License, Version 1.1** (<https://scripts.sil.org/OFL>). The fonts are bundled unmodified
   with the app; the licence allows that, including in commercial products, as long as the fonts are not sold on their

@@ -4,7 +4,7 @@
 
 A copy of `crates/rune` from `github.com/anomalyco/rune` at the pinned rev
 `a7cea1692a8ce68b1b63c46688c493bb94a8456d` (only `src/`, `assets/` and the two `.dxbc` shaders), wired in with
-`[patch."https://github.com/anomalyco/rune"]` in `app/Cargo.toml`. Its `Cargo.toml` is the upstream one with the
+`[patch."https://github.com/anomalyco/rune"]` in the root `Cargo.toml`. Its `Cargo.toml` is the upstream one with the
 workspace inheritance inlined, the sibling crates (`rune-motion`, `rune-staging`, `rune-taffy`, `procwatch`) taken
 from the same git rev, and the examples, tests and dev-dependencies dropped. Nothing else differs except the patches
 below. To go back to plain upstream, delete the `[patch]` section and this directory.

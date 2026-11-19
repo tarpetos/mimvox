@@ -1,4 +1,4 @@
-//! Hub against app/examples/fake_engine.py.
+//! Hub against crates/desktop/examples/fake_engine.py.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -27,7 +27,7 @@ fn config() -> EngineConfig {
     std::fs::write(dir.join("runtime.toml"), format!("[python]\nengine = \"{python}\"\n")).unwrap();
     EngineConfig {
         runtime_toml: dir.join("runtime.toml"),
-        engine_src: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/examples/fake_engine_src"),
+        engine_src: Path::new(env!("CARGO_MANIFEST_DIR")).join("../desktop/examples/fake_engine_src"),
         data_dir: dir.join("data"),
     }
 }

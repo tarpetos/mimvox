@@ -1,5 +1,5 @@
 # Rust
-/app/target/
+/crates/desktop/target/
 target/
 # Python
 __pycache__/

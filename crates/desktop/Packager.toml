@@ -2,13 +2,13 @@
 # Driven by scripts/build/build-{linux.sh,mac.sh,win.ps1}; do not call `cargo packager` by hand unless you also pass
 # --binaries-dir and --out-dir (the scripts do). Docs: https://docs.crabnebula.dev/packager/
 #
-# Paths below are relative to THIS file's folder (app/): cargo-packager switches to it before packaging.
+# Paths below are relative to THIS file's folder (crates/desktop/): cargo-packager switches to it before packaging.
 #
 # ---------------------------------------------------------------------------------------------------------------
 # BUNDLED RESOURCES AND HOW THE APP FINDS THEM AT RUNTIME
 # ---------------------------------------------------------------------------------------------------------------
 # The installer carries the release binary plus the folder staged by scripts/build/stage_resources.py
-# (app/target/bundle-resources/), which holds exactly:
+# (crates/desktop/target/bundle-resources/), which holds exactly:
 #
 #     engine/src/mimvox_engine/   Python engine (run with the engine venv interpreter, PYTHONPATH=<res>/engine/src)
 #     presets/                        guided reading presets
@@ -34,7 +34,7 @@
 #        b. <exe_dir>/../Resources                      macOS
 #        c. <exe_dir>/../lib/mimvox        Linux deb + AppImage
 #        d. <exe_dir>/resources                         portable/unzipped layouts
-#   3. Repo checkout (development): walk up from exe_dir (target/release -> target -> app -> repo root) and from the
+#   3. Repo checkout (development): walk up from exe_dir (target/release -> target -> repo root) and from the
 #      compile-time env!("CARGO_MANIFEST_DIR")/.. and take the first ancestor that contains engine/src/mimvox_engine
 #      and contract/.
 # Mutable data never goes into <RES> (read-only on most installs): it lives in the per-user data dir
@@ -43,7 +43,7 @@
 
 name = "mimvox"
 product-name = "Mimvox"
-version = "0.4.3" # keep equal to app/Cargo.toml (the build scripts check it)
+version = "0.4.3" # keep equal to crates/desktop/Cargo.toml (the build scripts check it)
 identifier = "io.github.tarpetos.mimvox"
 description = "Clone your own voice and speak any text with it"
 long-description = """\
@@ -57,19 +57,19 @@ category = "Music"
 
 # Overridden by the build scripts (--out-dir / --binaries-dir) so they also work with CARGO_TARGET_DIR and
 # the macOS universal binary.
-out-dir = "../dist"
+out-dir = "../../dist"
 binaries-dir = "target/release"
 # mimvox-server: the HTTP API without the window (crates/server); mimvox-mcp: the MCP server over it (crates/mcp).
 binaries = [{ path = "mimvox", main = true }, { path = "mimvox-server" }, { path = "mimvox-mcp" }]
 
 icons = [
-    "../tools/release/icons/icon_32x32.png",
-    "../tools/release/icons/icon_64x64.png",
-    "../tools/release/icons/icon_128x128.png",
-    "../tools/release/icons/icon_256x256.png",
-    "../tools/release/icons/icon_512x512.png",
-    "../tools/release/icons/icon.ico",
-    "../tools/release/icons/icon.icns",
+    "../../tools/release/icons/icon_32x32.png",
+    "../../tools/release/icons/icon_64x64.png",
+    "../../tools/release/icons/icon_128x128.png",
+    "../../tools/release/icons/icon_256x256.png",
+    "../../tools/release/icons/icon_512x512.png",
+    "../../tools/release/icons/icon.ico",
+    "../../tools/release/icons/icon.icns",
 ]
 
 # target = "" copies the staged folder's contents into the resources root, so the layout above holds.

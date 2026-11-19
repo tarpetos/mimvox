@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Stage the runtime resources the installers bundle into app/target/bundle-resources/ (the layout the app looks for
-at runtime, see app/Packager.toml)."""
+"""Stage the runtime resources the installers bundle into crates/desktop/target/bundle-resources/ (the layout the app
+looks for at runtime, see crates/desktop/Packager.toml)."""
 from __future__ import annotations
 
 import argparse
@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-STAGE = REPO / "app" / "target" / "bundle-resources"
+STAGE = REPO / "crates" / "desktop" / "target" / "bundle-resources"
 
 REQUIRED_DIRS = ["engine/src", "presets", "tools/setup", "contract"]
 OPTIONAL_FILES = ["DISCLAIMER.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "LICENSE.md"]
@@ -61,7 +61,7 @@ def stage_uv(targets: list[str]) -> None:
     out = out_dir / name
     if any("linux" in t for t in targets):
         # The AppImage tool (linuxdeploy) rewrites every ELF file in the AppDir and breaks the static uv, so Linux
-        # gets it gzipped; the app unpacks it on first use (app/src/ui/setuprun.rs, uv_path).
+        # gets it gzipped; the app unpacks it on first use (crates/desktop/src/ui/setuprun.rs, uv_path).
         import gzip  # noqa: PLC0415
         packed = out_dir / "uv.gz"
         packed.write_bytes(gzip.compress(uv_binary(targets[0]), compresslevel=9))

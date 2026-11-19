@@ -18,7 +18,7 @@
 *.js text eol=lf
 *.jsonl text eol=lf
 # Rune's shaders are hashed byte for byte to pick the precompiled DX12 / Metal bytecode
-# (app/vendor/rune-patched/src/render/dxbc.rs): a CRLF checkout (core.autocrlf=true, also GitHub's Windows
+# (crates/desktop/vendor/rune-patched/src/render/dxbc.rs): a CRLF checkout (core.autocrlf=true, also GitHub's Windows
 # runners) changes the hash, and the app then compiles the shaders with FXC on every start (12 s instead of 0.3 s).
 *.wgsl text eol=lf
 

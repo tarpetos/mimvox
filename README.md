@@ -176,7 +176,7 @@ For working on Mimvox itself:
 git clone https://github.com/tarpetos/mimvox.git
 cd mimvox
 ./setup.sh          # Linux and macOS (.\setup.cmd on Windows)
-cd app && cargo run --release
+cd crates/desktop && cargo run --release
 ```
 
 The setup script also installs the toolchains the app is built with (Rust, a C/C++ compiler), builds the two Python
@@ -194,7 +194,7 @@ troubleshooting.
 
 Installers for the desktop app are made by the scripts in `scripts/build/`, one per operating system (the files are
 named `build-*.sh` and `build-*.ps1`); the output goes to `dist/`. Read the header of each script for its options.
-The packaging configuration is `app/Packager.toml`, the icons are in `tools/release/icons/`.
+The packaging configuration is `crates/desktop/Packager.toml`, the icons are in `tools/release/icons/`.
 
 The models are large and carry their own licences, so they are downloaded by setup on each user's computer
 rather than being bundled; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -204,13 +204,13 @@ rather than being bundled; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ## Project layout
 
 ```
-app/                   Rust desktop app (Rune UI, microphone and playback)
+crates/desktop/        Rust desktop app, the mimvox binary (Rune UI, microphone and playback)
+  src/audio/           capture and playback (cpal, hound)
+  src/ui/              screens: onboarding, record, train, voices, speak (with its Book mode, book.rs), redub
 crates/engine-client/  engine process client and protocol types (shared by the app and the server)
 crates/api/            local HTTP API over the engine protocol (the app serves it from Settings, or mimvox-server)
 crates/server/         mimvox-server: the HTTP API without the window
 crates/mcp/            mimvox-mcp: an MCP server for AI assistants, a client of the HTTP API
-  src/audio/           capture and playback (cpal, hound)
-  src/ui/              screens: onboarding, record, train, voices, speak (with its Book mode, book.rs), redub
 engine/                Python engine (mimvox_engine), runs in the engine virtualenv
   src/mimvox_engine/
     server.py          JSON-lines server

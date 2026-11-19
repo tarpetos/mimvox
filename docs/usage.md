@@ -126,7 +126,7 @@ app is built with (Rust, a C/C++ compiler, the system packages on Linux) and ask
 ```bash
 ./setup.sh          # Linux and macOS
 .\setup.cmd         # Windows
-cd app && cargo run --release
+cd crates/desktop && cargo run --release
 ```
 
 The script installs `uv` if it is missing, then runs `tools/setup/setup.py` (the same program the app runs). Useful

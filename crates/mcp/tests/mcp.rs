@@ -1,4 +1,5 @@
-//! Runs mimvox-mcp over stdio and streamable HTTP against the API hosted in-process on app/examples/fake_engine.py.
+//! Runs mimvox-mcp over stdio and streamable HTTP against the API hosted in-process on
+//! crates/desktop/examples/fake_engine.py.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -68,7 +69,7 @@ async fn api(token: Option<&str>) -> Api {
     std::fs::write(dir.path().join("runtime.toml"), format!("[python]\nengine = \"{python}\"\n")).unwrap();
     let cfg = EngineConfig {
         runtime_toml: dir.path().join("runtime.toml"),
-        engine_src: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/examples/fake_engine_src"),
+        engine_src: Path::new(env!("CARGO_MANIFEST_DIR")).join("../desktop/examples/fake_engine_src"),
         data_dir: data.clone(),
     };
     let (hub, _exits) = Hub::new();
