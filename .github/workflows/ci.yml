@@ -1,6 +1,6 @@
 name: CI
 
-# One workflow for every pull request check. A title edit re-runs only the title check.
+# Entry point for every pull request check: lint.yml and test.yml run from here. A title edit re-runs only the title check.
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
@@ -11,10 +11,6 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}-${{ github.event.action == 'edited' && 'title' || 'code' }}
   cancel-in-progress: true
-
-env:
-  RUFF_VERSION: "0.17.5"
-  CARGO_TERM_COLOR: always
 
 jobs:
   title:
@@ -55,123 +51,22 @@ jobs:
           files=$(git diff --name-only HEAD^1 HEAD)
           echo "$files"
           check() { if grep -qE "$2" <<< "$files"; then echo "$1=true" >> "$GITHUB_OUTPUT"; fi; }
-          check python '\.py$|(^|/)(ruff\.toml|pyproject\.toml)$|^\.github/workflows/ci\.yml$'
-          check engine '^engine/.*\.py$|^engine/(pyproject\.toml|uv\.lock)$|^\.github/workflows/ci\.yml$'
-          check rust '^app/|^crates/|(^|/)(Cargo\.toml|Cargo\.lock|rustfmt\.toml)$|^\.github/workflows/ci\.yml$'
+          check python '\.py$|(^|/)(ruff\.toml|pyproject\.toml)$|^\.github/workflows/(ci|lint)\.yml$'
+          check engine '^engine/.*\.py$|^engine/(pyproject\.toml|uv\.lock)$|^\.github/workflows/(ci|test)\.yml$'
+          check rust '^app/|^crates/|(^|/)(Cargo\.toml|Cargo\.lock|rustfmt\.toml)$|^\.github/workflows/(ci|lint|test)\.yml$'
 
-  lint-python:
-    name: Lint Python
+  lint:
+    name: Lint
     needs: changes
-    if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
+    uses: ./.github/workflows/lint.yml
+    with:
+      python: ${{ needs.changes.outputs.python == 'true' }}
+      rust: ${{ needs.changes.outputs.rust == 'true' }}
 
-      - uses: astral-sh/setup-uv@v10.3.3
-
-      - name: ruff check
-        run: uvx "ruff@$RUFF_VERSION" check --output-format github .
-
-  lint-rust:
-    name: Lint Rust (${{ matrix.name }})
+  test:
+    name: Tests
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: Linux, os: ubuntu-latest }
-          - { name: Windows, os: windows-latest }
-          - { name: macOS, os: macos-latest }
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: cargo fmt
-        if: runner.os == 'Linux'
-        run: cargo fmt --all --check
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
-            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev
-
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-  test-rust:
-    name: Test Rust (${{ matrix.name }})
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: Linux, os: ubuntu-latest }
-          - { name: Windows, os: windows-latest }
-          - { name: macOS, os: macos-latest }
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-
-      # The integration tests run app/examples/fake_engine.py with the first Python 3 on PATH.
-      - name: Python
-        run: python3 --version || python --version
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
-            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev
-
-      - name: cargo test
-        run: cargo test --workspace
-
-  test-python:
-    name: Test Python (${{ matrix.name }})
-    needs: changes
-    if: needs.changes.outputs.engine == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: Linux, os: ubuntu-latest }
-          - { name: Windows, os: windows-latest }
-          - { name: macOS, os: macos-latest }
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: astral-sh/setup-uv@v10.3.3
-
-      - name: pytest
-        working-directory: engine
-        env:
-          UV_PYTHON: "3.11"
-        run: uv run --group test pytest
+    uses: ./.github/workflows/test.yml
+    with:
+      rust: ${{ needs.changes.outputs.rust == 'true' }}
+      engine: ${{ needs.changes.outputs.engine == 'true' }}

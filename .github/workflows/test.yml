@@ -1,0 +1,80 @@
+name: Tests
+
+on:
+  workflow_call:
+    inputs:
+      rust:
+        type: boolean
+        default: false
+      engine:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.name }})
+    if: inputs.rust
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      # The integration tests run app/examples/fake_engine.py with the first Python 3 on PATH.
+      - name: Python
+        run: python3 --version || python --version
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  python:
+    name: Python (${{ matrix.name }})
+    if: inputs.engine
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+
+      - name: pytest
+        working-directory: engine
+        env:
+          UV_PYTHON: "3.11"
+        run: uv run --group test pytest

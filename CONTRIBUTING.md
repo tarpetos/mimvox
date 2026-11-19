@@ -32,7 +32,7 @@ Opening a pull request means you agree to these terms.
 
 ## Checks
 
-Pull requests run the title check, the linters and the tests (`.github/workflows/ci.yml`); run them locally before pushing:
+Pull requests run the title check, the linters (`.github/workflows/lint.yml`) and the tests (`.github/workflows/test.yml`), all started from `.github/workflows/ci.yml`; run them locally before pushing:
 
 ```
 uvx ruff@0.17.5 check .
