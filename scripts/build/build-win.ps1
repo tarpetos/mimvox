@@ -22,6 +22,7 @@ $ErrorActionPreference = "Stop"
 $packagerVersion = if ($env:CARGO_PACKAGER_VERSION) { $env:CARGO_PACKAGER_VERSION } else { "0.11.8" }
 $binName = "mimvox"
 $serverBin = "mimvox-server"
+$mcpBin = "mimvox-mcp"
 # a full Rust + wgpu build is memory hungry
 $jobs = if ($env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS } else { "6" }
 $env:CARGO_BUILD_JOBS = $jobs
@@ -88,11 +89,11 @@ Check-Exit "Staging resources"
 
 if (-not $SkipCompile) {
     Write-Host "[build-win] Compiling the release binary..."
-    cargo build --release --locked -j $jobs -p mimvox -p mimvox-server
+    cargo build --release --locked -j $jobs -p mimvox -p mimvox-server -p mimvox-mcp
     Check-Exit "cargo build"
 }
 $releaseDir = Join-Path $targetDir "release"
-foreach ($bin in @($binName, $serverBin)) {
+foreach ($bin in @($binName, $serverBin, $mcpBin)) {
     if (-not (Test-Path (Join-Path $releaseDir "$bin.exe"))) {
         Write-Host "Release binary not found: $releaseDir\$bin.exe"
         exit 1
@@ -104,7 +105,7 @@ foreach ($bin in @($binName, $serverBin)) {
 $appRelease = Join-Path $appDir "target\release"
 if ((Resolve-Path $releaseDir).Path -ne (Join-Path (Resolve-Path $appDir).Path "target\release")) {
     New-Item -ItemType Directory -Force -Path $appRelease | Out-Null
-    foreach ($bin in @($binName, $serverBin)) {
+    foreach ($bin in @($binName, $serverBin, $mcpBin)) {
         Copy-Item -Force (Join-Path $releaseDir "$bin.exe") (Join-Path $appRelease "$bin.exe")
     }
     $releaseDir = $appRelease
@@ -119,6 +120,7 @@ if ($Format -ne "msi") {
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Copy-Item (Join-Path $releaseDir "$binName.exe") $stage
     Copy-Item (Join-Path $releaseDir "$serverBin.exe") $stage
+    Copy-Item (Join-Path $releaseDir "$mcpBin.exe") $stage
     Copy-Item -Recurse -Force (Join-Path $appDir "target\bundle-resources\*") $stage
     $innoCache = if ($env:MIMVOX_INNO_CACHE) { $env:MIMVOX_INNO_CACHE } else { Join-Path $appDir "target\inno" }
     Write-Host "[build-win] Building the setup .exe (Inno Setup)..."

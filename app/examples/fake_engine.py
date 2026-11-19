@@ -16,6 +16,7 @@ import wave
 OUT_LOCK = threading.Lock()
 CANCELLED = set()
 JOB_COUNTER = [0]
+BOOKS = {}
 VOICES = [
     {"id": "fake-voice", "name": "Fake voice", "created": "2026-01-01T00:00:00Z", "preset": "standard",
      "dataset_minutes": 6.4, "parts": 5, "trained": True, "trained_epochs": 300}
@@ -76,6 +77,62 @@ def tts_job(data_dir, job, params):
                                                     "duration_s": total, "elapsed_s": time.time() - started}})
 
 
+def next_job():
+    JOB_COUNTER[0] += 1
+    return "job%d" % JOB_COUNTER[0]
+
+
+def import_text(path):
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    chapters, title = [], None
+    for line in lines:
+        if line.startswith("Chapter "):
+            chapters.append({"title": line.strip(), "text": ""})
+        elif chapters:
+            chapters[-1]["text"] = (chapters[-1]["text"] + "\n" + line).strip()
+        elif line.strip() and title is None:
+            title = line.strip()
+    for c in chapters:
+        c["words"] = len(c["text"].split())
+    return {"path": path, "name": os.path.basename(path), "format": "txt", "title": title, "language": "en",
+            "words": sum(c["words"] for c in chapters), "chapters": chapters, "parts": None, "warnings": [],
+            "meta": {"authors": [], "description": None, "language_tag": None, "date": None, "cover": None}}
+
+
+def book_summary(book):
+    done = sum(1 for c in book["chapters"] if c.get("done"))
+    return {"id": book["id"], "title": book["title"], "status": book["status"], "job": book.get("job"),
+            "chapters": len(book["chapters"]), "chapters_done": done,
+            "percent": 100.0 * done / len(book["chapters"])}
+
+
+def book_job(book, job):
+    n = len(book["chapters"])
+    for k, chapter in enumerate(book["chapters"]):
+        if chapter.get("done"):
+            continue
+        time.sleep(0.4)  # pretend to read the chapter
+        if book.get("pause"):
+            book["status"], book["pause"] = "paused", False
+            send({"event": "book.paused", "job": job, "data": book_summary(book)})
+            return
+        chapter["done"] = True
+        summary = book_summary(book)
+        send({"event": "book.progress", "job": job,
+              "data": {"id": book["id"], "chapter": k, "chapters": n, "percent": summary["percent"]}})
+        send({"event": "book.chapter", "job": job, "data": {"id": book["id"], "index": k, "title": chapter["title"]}})
+    book["status"] = "done"
+    send({"event": "book.done", "job": job, "data": {"id": book["id"], "folder": book["folder"], "chapters": n}})
+
+
+def start_book(data_dir, book):
+    job = next_job()
+    book["status"], book["job"] = "running", job
+    threading.Thread(target=book_job, args=(book, job), daemon=True).start()
+    return {"id": book["id"], "job": job, "folder": book["folder"], "chapters": len(book["chapters"])}
+
+
 def handle(data_dir, req):
     rid, method, params = req.get("id"), req.get("method"), req.get("params") or {}
     try:
@@ -99,13 +156,42 @@ def handle(data_dir, req):
         elif method == "tts.generate":
             if not any(v["id"] == params.get("voice_id") for v in VOICES):
                 raise KeyError("voice")
-            JOB_COUNTER[0] += 1
-            job = "job%d" % JOB_COUNTER[0]
+            job = next_job()
             threading.Thread(target=tts_job, args=(data_dir, job, params), daemon=True).start()
             result = {"job": job}
         elif method == "tts.cancel":
             CANCELLED.add(params.get("job"))
             result = {}
+        elif method == "outputs.list":
+            out = os.path.join(data_dir, "outputs")
+            names = sorted(os.listdir(out), reverse=True) if os.path.isdir(out) else []
+            result = {"results": [{"id": os.path.splitext(n)[0], "kind": "speak", "name": n,
+                                   "path": os.path.abspath(os.path.join(out, n)), "duration_s": 1.0,
+                                   "voice_name": "Fake voice", "text": "Hello there."}
+                                  for n in names if n.endswith(".wav")], "more": False}
+        elif method == "text.import":
+            result = import_text(params["path"])
+        elif method == "book.start":
+            if not any(v["id"] == params.get("voice_id") for v in VOICES):
+                raise KeyError("voice")
+            book_id = "book%d" % (len(BOOKS) + 1)
+            book = {"id": book_id, "title": params["title"], "params": params,
+                    "chapters": [dict(c) for c in params["chapters"]],
+                    "folder": os.path.abspath(os.path.join(data_dir, "outputs", "books", params["title"]))}
+            BOOKS[book_id] = book
+            result = start_book(data_dir, book)
+        elif method == "book.pause":
+            BOOKS[params["id"]]["pause"] = True
+            result = {}
+        elif method == "book.resume":
+            result = start_book(data_dir, BOOKS[params["id"]])
+        elif method == "book.get":
+            book = BOOKS[params["id"]]
+            result = {**book_summary(book), "settings": book["params"],
+                      "chapter_list": [{"index": i, "title": c["title"], "status": "done" if c.get("done") else "waiting"}
+                                       for i, c in enumerate(book["chapters"])]}
+        elif method == "book.list":
+            result = {"books": [book_summary(b) for b in BOOKS.values()]}
         elif method == "shutdown":
             send({"id": rid, "result": {}})
             log("shutdown requested")

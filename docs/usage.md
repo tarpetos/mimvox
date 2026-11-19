@@ -269,6 +269,85 @@ OpenAI-compatible speech server with the base URL `http://127.0.0.1:8765/v1` and
 [the engine protocol](../contract/engine-protocol.md#http-api). If `mimvox-server` already runs on the same data
 folder, the app's engine cannot start and the API cannot either: stop the server, then press **Retry**.
 
+### Use Mimvox from Claude and other AI assistants (MCP)
+
+`mimvox-mcp` lets an AI assistant that speaks the Model Context Protocol (Claude Desktop, Claude Code and others) use
+Mimvox: list your voices, speak text and get the audio back, read a document as an audiobook, follow long jobs, and
+call any engine method. It only talks to the local API, so **turn on the API** above first (or run `mimvox serve`
+without the window). Consent and licence as everywhere: only your own voice or one you have permission for, and
+non-commercial use only.
+
+It is installed next to the app:
+
+| System | `mimvox-mcp` |
+| --- | --- |
+| Windows | `C:\Users\<you>\AppData\Local\Programs\Mimvox\mimvox-mcp.exe` (the install folder you chose) |
+| macOS | `/Applications/Mimvox.app/Contents/MacOS/mimvox-mcp` |
+| Linux `.deb` | `/usr/bin/mimvox-mcp` |
+| Linux AppImage | the AppImage itself with the argument `mcp`: `/path/to/Mimvox.AppImage mcp` |
+
+**Claude Desktop**: Settings, Developer, **Edit Config** opens `claude_desktop_config.json`; add Mimvox under
+`mcpServers` and restart Claude Desktop. Windows:
+
+```json
+{
+  "mcpServers": {
+    "mimvox": {
+      "command": "C:\\Users\\<you>\\AppData\\Local\\Programs\\Mimvox\\mimvox-mcp.exe"
+    }
+  }
+}
+```
+
+macOS:
+
+```json
+{
+  "mcpServers": {
+    "mimvox": {
+      "command": "/Applications/Mimvox.app/Contents/MacOS/mimvox-mcp"
+    }
+  }
+}
+```
+
+Linux (`.deb`; for the AppImage use its path as `command` and `"args": ["mcp"]`):
+
+```json
+{
+  "mcpServers": {
+    "mimvox": {
+      "command": "/usr/bin/mimvox-mcp"
+    }
+  }
+}
+```
+
+**Claude Code**:
+
+```
+claude mcp add mimvox -- "C:\Users\<you>\AppData\Local\Programs\Mimvox\mimvox-mcp.exe"
+claude mcp add mimvox -- /Applications/Mimvox.app/Contents/MacOS/mimvox-mcp
+claude mcp add mimvox -- /usr/bin/mimvox-mcp
+claude mcp add mimvox -- /path/to/Mimvox.AppImage mcp
+```
+
+(add `--scope user` to have it in every project). Then ask, for example, "List my Mimvox voices" or "Read this
+paragraph in my voice and save it as MP3".
+
+- **Token.** On this computer `mimvox-mcp` finds the API's token by itself (`api/token` in your data folder), so
+  **Require token** may be on. For another address, or a token kept elsewhere, give it as an environment variable:
+  `"env": { "MIMVOX_API_TOKEN": "<token>" }` in the JSON above, or `-e MIMVOX_API_TOKEN=<token>` before `--` with
+  `claude mcp add`.
+- **Another computer.** Turn on **Local network** on the computer that runs Mimvox and point `mimvox-mcp` at it with
+  `--url http://<its address>:8765` (in `args`) or `MIMVOX_URL`, plus the token. Files then live on that computer: the
+  assistant uploads yours with `upload_file` and fetches results with `download_file`.
+- **Over HTTP.** `mimvox-mcp --http 8766` serves MCP at `http://127.0.0.1:8766/mcp` instead of stdio, for clients
+  that connect to a URL (`claude mcp add --transport http mimvox http://127.0.0.1:8766/mcp`).
+- When the API is off, every tool answers "cannot reach the Mimvox API ... Turn on the API in Mimvox Settings, or run
+  `mimvox serve`". The tools, flags and resources are listed in
+  [the engine protocol](../contract/engine-protocol.md#mcp-server).
+
 ---
 
 ## 3. Record
