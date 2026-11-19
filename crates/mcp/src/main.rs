@@ -121,7 +121,7 @@ async fn serve_http(server: Mimvox, addr: SocketAddr, allow_remote: bool) -> any
     eprintln!("mimvox-mcp: MCP over HTTP at http://{}/mcp", listener.local_addr()?);
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            mimvox_api::shutdown_signal().await;
             stop.cancel();
         })
         .await?;

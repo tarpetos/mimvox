@@ -70,7 +70,11 @@ impl Setup {
         if !args.contains(&"--bind") {
             args.extend(["--bind", "127.0.0.1:0"]);
         }
-        let mut child = self.command(&args, env).spawn().unwrap();
+        self.spawn(self.command(&args, env)).await
+    }
+
+    async fn spawn(&self, mut cmd: Command) -> Server {
+        let mut child = cmd.spawn().unwrap();
         let (tx, mut lines) = mpsc::unbounded_channel();
         let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
         tokio::spawn(async move {
@@ -102,8 +106,6 @@ impl Setup {
 }
 
 struct Server {
-    // Held for kill_on_drop; only the Unix SIGTERM test reads it.
-    #[cfg_attr(not(unix), allow(dead_code))]
     child: Child,
     base: String,
     lines: mpsc::UnboundedReceiver<String>,
@@ -503,6 +505,32 @@ async fn sigterm_shuts_the_engine_down() {
     assert!(status.success());
     let log = std::fs::read_to_string(setup.data().join("logs").join("engine.log")).unwrap();
     assert!(log.contains("shutdown requested"), "{log}");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn ctrl_break_shuts_the_engine_down() {
+    use windows_sys::Win32::System::Console::{AllocConsole, CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    // The event reaches only processes on the sender's console, which the server inherits; this fails harmlessly
+    // when the test already has one.
+    // SAFETY: no arguments; it only gives this process a console.
+    unsafe { AllocConsole() };
+    let setup = Setup::new();
+    let mut cmd = setup.command(&["--bind", "127.0.0.1:0"], &[]);
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    let mut server = setup.spawn(cmd).await;
+    server.wait_line("ready").await;
+    let pid = server.child.id().unwrap();
+    // SAFETY: a plain Win32 call; the group is the server's own, so nothing else gets the event.
+    let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) };
+    assert_ne!(sent, 0, "GenerateConsoleCtrlEvent: {}", std::io::Error::last_os_error());
+    let status = tokio::time::timeout(WAIT, server.child.wait()).await.unwrap().unwrap();
+    assert_eq!(status.code(), Some(0));
+    let log = std::fs::read_to_string(setup.data().join("logs").join("engine.log")).unwrap();
+    assert!(log.contains("shutdown requested"), "{log}");
+    let lock = std::fs::File::open(setup.data().join("engine.lock")).unwrap();
+    assert!(lock.try_lock().is_ok(), "engine.lock is still held");
 }
 
 #[tokio::test]
