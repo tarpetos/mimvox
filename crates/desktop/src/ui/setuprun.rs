@@ -262,6 +262,10 @@ fn start_with(s: &mut AppState, args: Vec<OsString>, adding: Option<String>, dat
             if std::env::var_os("UV_CACHE_DIR").is_none() {
                 c.env("UV_CACHE_DIR", &cache);
             }
+            // The Python this runs on stays in the data folder too, next to the ones setup.py installs there.
+            if std::env::var_os("UV_PYTHON_INSTALL_DIR").is_none() {
+                c.env("UV_PYTHON_INSTALL_DIR", PathBuf::from(data_dir.trim()).join("runtime").join("python"));
+            }
             c.env("PYTHONPYCACHEPREFIX", PathBuf::from(data_dir.trim()).join("cache").join("pycache"));
         }
         c.spawn().map_err(|e| format!("Setup could not start: {e}"))
