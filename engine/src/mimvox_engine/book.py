@@ -39,6 +39,7 @@ MEMORY_RETRY_WAIT_S = (20.0, 60.0, 180.0, 300.0)
 
 _RUNNING: dict[str, str] = {}   # loop thread only
 _STOP: dict[str, str] = {}
+_STARTING: set[str] = set()  # loop thread only: refs whose book.start is under way
 # Changed on IO threads (the producer cuts the next chapter while the consumer appends to this one) and read on the
 # loop: every change and save holds this lock.
 _LOCK = threading.RLock()
@@ -226,6 +227,7 @@ def summary(data: config.DataDir, book: dict[str, Any], state: dict[str, Any]) -
            "chapters_done": sum(1 for c in chs if c.get("status") == "done"),
            "current": int(state.get("current") or 0), "folder": book.get("folder"), "m4b": state.get("m4b"),
            "output_format": (book.get("settings") or {}).get("output_format"), "words": book.get("words"),
+           "ref": book.get("ref"),
            "created": book.get("created"), "updated": state.get("updated"), "error": state.get("error")}
     out.update(_totals(book, state))
     return out
@@ -338,7 +340,7 @@ def _clean_chapters(raw: Any) -> list[dict[str, Any]]:
 
 
 def _create(data: config.DataDir, title: str, source: str | None, fmt: str | None, chapters: list[dict[str, Any]],
-            settings: dict[str, Any]) -> dict[str, Any]:
+            settings: dict[str, Any], ref: str | None = None) -> dict[str, Any]:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     base = f"{voices.slugify(title)[:32].strip('-') or 'book'}-{stamp}"
     bid, n = base, 1
@@ -357,6 +359,8 @@ def _create(data: config.DataDir, title: str, source: str | None, fmt: str | Non
         c["chars"] = _flat_chars(spoken_text(c, settings["read_titles"]))
     book = {"id": bid, "title": title, "source": source, "format": fmt, "created": time.time(), "folder": folder,
             "settings": settings, "words": sum(int(c["words"]) for c in chapters), "chapters": chapters}
+    if ref is not None:
+        book["ref"] = ref
     d = os.path.join(books_dir(data), bid)
     os.makedirs(os.path.join(d, "work"), exist_ok=True)
     _write_json(os.path.join(d, "book.json"), book)
@@ -376,9 +380,48 @@ def _folder_taken(data: config.DataDir, folder: str) -> list[bool]:
     return out
 
 
+def find_ref(data: config.DataDir, ref: str) -> str | None:
+    """The id of the oldest project whose book.json has this ref."""
+    try:
+        names = os.listdir(books_dir(data))
+    except OSError:
+        return None
+    found = []
+    for n in names:
+        b = _read_json(os.path.join(books_dir(data), n, "book.json"))
+        if b and b.get("ref") == ref and b.get("id") == n:
+            found.append((float(b.get("created") or 0.0), n))
+    return min(found)[1] if found else None
+
+
 @method("book.start")
 async def book_start(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     data = config.data_dir(ctx)
+    ref = params.get("ref")
+    if ref is None:
+        return await _start_new(ctx, data, params, None)
+    if not isinstance(ref, str) or not ref.strip():
+        raise EngineError("bad_request", "'ref' must be a non-empty string")
+    if ref in _STARTING:
+        raise EngineError("busy", "a book with this ref is being started")
+    _STARTING.add(ref)
+    try:
+        bid = await aio.run_io(find_ref, data, ref)
+        if bid is None:
+            return await _start_new(ctx, data, params, ref)
+        book, state = await aio.run_io(_load, data, bid)
+        out = {"id": bid, "folder": book["folder"], "chapters": len(book["chapters"]), "words": book.get("words"),
+               "ref": ref, "existing": True}
+        if bid in _RUNNING:
+            return {**out, "job": _RUNNING[bid], "status": "running"}
+        if state.get("status") == "done":
+            return {**out, "job": None, "status": "done"}
+        return {**out, **await _resume(ctx, data, bid, book), "status": "running"}
+    finally:
+        _STARTING.discard(ref)
+
+
+async def _start_new(ctx: Context, data: config.DataDir, params: dict[str, Any], ref: str | None) -> dict[str, Any]:
     settings = _settings(params)
     chapters = _clean_chapters(params.get("chapters"))
     title = re.sub(r"\s+", " ", str(params.get("title") or "")).strip() or "Book"
@@ -388,14 +431,15 @@ async def book_start(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     settings["output_format"] = v.out_fmt
     source = params.get("source") if isinstance(params.get("source"), str) else None
     fmt = params.get("format") if isinstance(params.get("format"), str) else None
-    book = await aio.run_io(_create, data, title, source, fmt, chapters, settings)
+    book = await aio.run_io(_create, data, title, source, fmt, chapters, settings, ref)
     try:
         job = _start(ctx, data, book["id"], v)
     except EngineError:  # another job took the slot while the project was written
         await aio.run_io(shutil.rmtree, book_dir(data, book["id"]), ignore_errors=True)
         raise
     return {"id": book["id"], "job": job, "folder": book["folder"], "chapters": len(chapters),
-            "words": book["words"], **v.choice.fields(), **v.ref_fields}
+            "words": book["words"], "ref": ref, "existing": False, "status": "running", **v.choice.fields(),
+            **v.ref_fields}
 
 
 @method("book.resume")
@@ -407,10 +451,13 @@ async def book_resume(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         raise EngineError("busy", "this book is being read already")
     if state.get("status") == "done":
         raise EngineError("bad_request", "this book is finished")
+    return {"id": bid, "folder": book["folder"], "chapters": len(book["chapters"]),
+            **await _resume(ctx, data, bid, book)}
+
+
+async def _resume(ctx: Context, data: config.DataDir, bid: str, book: dict[str, Any]) -> dict[str, Any]:
     v = await _voice(ctx, data, book["settings"])
-    job = _start(ctx, data, bid, v)
-    return {"id": bid, "job": job, "folder": book["folder"], "chapters": len(book["chapters"]),
-            **v.choice.fields(), **v.ref_fields}
+    return {"job": _start(ctx, data, bid, v), **v.choice.fields(), **v.ref_fields}
 
 
 def _start(ctx: Context, data: config.DataDir, bid: str, v: _Voice) -> str:

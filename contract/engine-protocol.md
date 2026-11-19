@@ -1098,7 +1098,8 @@ only shows it.
 ### `book.start`
 `{"title","source"?,"format"?,"chapters":[{"title","text"}],"voice_id","language"?,"expressiveness"?:0.6,
 "voice_match"?:1.0,"quality"?:"best","speed"?:1.0,"accent"?,"native_voice"?,"output_format"?:"wav","m4b"?:false,
-"read_titles"?:true}` -> `{"id","job","folder","chapters","words", ...accent and reference fields as tts.generate}`
+"read_titles"?:true,"ref"?}` -> `{"id","job","folder","chapters","words","ref","existing","status", ...accent and reference
+fields as tts.generate}`
 - Creates a book project and starts reading it at once. The voice settings mean what they mean for `tts.generate` and
   are checked the same way (`not_found`, `not_ready`, `bad_request`), before anything is written. `expressiveness`
   defaults to **0.6** for a book (a steadier narrator than Speak's 0.8); a given value is used as is. Empty chapters
@@ -1109,6 +1110,13 @@ only shows it.
 - `m4b: true`: after the last chapter, one `<title>.m4b` (AAC 96 kbps mono, a chapter mark per chapter, `genre`
   Audiobook) in the book's folder, when ffmpeg with an AAC encoder is there (else `m4b` is `null` in `book.done`).
 - `read_titles` (default true): each chapter starts with its title read aloud, then a pause.
+- `ref` (a non-empty string; `null` or left out for none): the client's own name for the project, stored in
+  `book.json` and shown in summaries. When a project with this `ref` exists (the oldest, found by scanning every
+  `book.json`), nothing is created and the request's other fields are not used or checked: a running project answers
+  with its current `job`; a finished one with `job: null` and `status: "done"` (nothing starts, no accent or reference
+  fields); any other (`paused`, interrupted, `new`, `error`, `cancelled`) is resumed as by `book.resume`. `existing`
+  is then `true` (`false` for a new project); `status` is `running` or `done`. A second `book.start` with the same
+  `ref` while the first is still answering gets `busy`.
 - `busy` while any generation runs (only one at a time). **While a book is read it holds the generation slot**:
   `tts.generate`, Redub, `voices.warm` and reference changes answer `busy` with the message "a book is being read;
   pause it (Speak, Book) to use speech, Redub or training" (training answers `busy` too). Nothing pre-empts a book.
@@ -1128,7 +1136,7 @@ only shows it.
 ### `book.list` / `book.get` / `book.delete` / `book.reread` / `book.play`
 - `book.list {}` -> `{"books":[summary, ...]}`, the most recently changed first. A summary: `{"id","title","source",
   "format","language","voice_id","status":"new|running|paused|done|error|cancelled","interrupted","job","chapters",
-  "chapters_done","current","folder","m4b","output_format","words","created","updated","error":{"code","message"}|null,
+  "chapters_done","current","folder","m4b","output_format","words","ref","created","updated","error":{"code","message"}|null,
   "percent","audio_s","elapsed_s","rtf","eta_s","est_audio_s","chars","chars_done"}`. A book recorded as running whose
   job is not running in this engine (the app or engine closed mid-book) is reported `paused` with `interrupted: true`.
 - `book.get {"id","text"?:false}` -> a summary plus `"settings"` and `"chapter_list":[{"index","title","words","chars",
@@ -1192,7 +1200,7 @@ The pipeline is `tts.generate`'s (backend, native accent and its converter, RVC)
   cut. Nothing of a chapter is held in memory; the finished chapter file is written from the PCM in blocks, then
   `stats/<NNN>.json` and `segments/<NNN>.json`, then the work files go. A chapter that starts again (`book.reread`,
   `book.cancel` of an unfinished one) loses its `segments/<NNN>.json`.
-- `<data>/books/<id>/book.json`: `{"id","title","source","format","created","folder","settings":{...},"words",
+- `<data>/books/<id>/book.json`: `{"id","title","source","format","created","folder","settings":{...},"words","ref"?,
   "chapters":[{"title","text","words","file","chars"}]}`; `state.json`: `{"status","current","audio_s","elapsed_s",
   "chapters":[{"status","segment","segments","bytes","chars_done","audio_s","elapsed_s","path","duration_s","level",
   "segments_path"}],
