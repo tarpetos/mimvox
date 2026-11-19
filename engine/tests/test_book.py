@@ -310,3 +310,119 @@ def test_timeline_needs_every_stat():
     assert book.timeline([["a", 440, "end"]], [{"i": 0, "at": 1.6, "dur": 1.0}], 3.0) == [
         {"text": "a", "start": 1.6, "end": 2.6}]
     assert book.timeline([["a", 440, "end"]], [{"i": 0, "at": 1.6, "dur": 9.0}], 3.0)[0]["end"] == 3.0
+
+
+@pytest.fixture
+def starts(monkeypatch):
+    calls = []
+
+    async def fake_voice(ctx, data, st):
+        await asyncio.sleep(0)
+        return voice()
+
+    def fake_start(ctx, data, bid, v):
+        job = f"job{len(calls) + 1}"
+        calls.append(bid)
+        book._RUNNING[bid] = job
+        return job
+
+    monkeypatch.setattr(book.tts, "speech_language", lambda params, key="language": ("en", Backend()))
+    monkeypatch.setattr(book, "_voice", fake_voice)
+    monkeypatch.setattr(book, "_start", fake_start)
+    yield calls
+    book._RUNNING.clear()
+
+
+def start(data, ref=None, n=2, **params):
+    chapters = [{"title": f"Chapter {i + 1}", "text": TEXT} for i in range(n)]
+    p = {"title": "Test Book", "voice_id": "v", "language": "en", "chapters": chapters, **params}
+    if ref is not None:
+        p["ref"] = ref
+    return asyncio.run(book.book_start(Ctx(data.root), p))
+
+
+def books(data):
+    return asyncio.run(book.book_list(Ctx(data.root), {}))["books"]
+
+
+def set_status(data, bid, status):
+    _, st = book._load(data, bid)
+    st["status"] = status
+    book._save_state(data, bid, st)
+
+
+def test_start_with_a_ref_stores_it(data, starts):
+    out = start(data, "pub-1")
+    assert out["ref"] == "pub-1" and out["existing"] is False and out["status"] == "running"
+    assert starts == [out["id"]]
+    assert read_json(os.path.join(book.book_dir(data, out["id"]), "book.json"))["ref"] == "pub-1"
+    assert [b["ref"] for b in books(data)] == ["pub-1"]
+    assert asyncio.run(book.book_get(Ctx(data.root), {"id": out["id"]}))["ref"] == "pub-1"
+
+
+def test_start_without_a_ref_always_creates(data, starts):
+    first, second = start(data), start(data)
+    assert first["id"] != second["id"] and first["ref"] is None
+    assert len(books(data)) == 2 and all(b["ref"] is None for b in books(data))
+
+
+def test_start_with_the_ref_of_a_running_book_returns_its_job(data, starts):
+    first = start(data, "pub-1")
+    again = start(data, "pub-1")
+    assert again["id"] == first["id"] and again["job"] == first["job"]
+    assert again["existing"] is True and again["status"] == "running"
+    assert starts == [first["id"]] and len(books(data)) == 1
+
+
+@pytest.mark.parametrize("status", ["paused", "new", "running", "error", "cancelled"])
+def test_start_with_the_ref_of_a_stopped_book_resumes_it(data, starts, status):
+    first = start(data, "pub-1")
+    book._RUNNING.clear()
+    set_status(data, first["id"], status)  # "running" without a job: interrupted
+    again = start(data, "pub-1", n=1)
+    assert again["id"] == first["id"] and again["existing"] is True and again["status"] == "running"
+    assert again["job"] == "job2" and starts == [first["id"], first["id"]]
+    assert again["chapters"] == 2 and again["accent"] == "own"
+    assert len(books(data)) == 1
+
+
+def test_start_with_the_ref_of_a_finished_book_starts_nothing(data, starts):
+    first = start(data, "pub-1")
+    book._RUNNING.clear()
+    set_status(data, first["id"], "done")
+    again = start(data, "pub-1")
+    assert again == {"id": first["id"], "folder": first["folder"], "chapters": 2, "words": first["words"],
+                     "ref": "pub-1", "existing": True, "job": None, "status": "done"}
+    assert starts == [first["id"]] and len(books(data)) == 1
+
+
+def test_another_ref_with_other_chapters_is_another_book(data, starts):
+    first = start(data, "pc-a", n=3)
+    book._RUNNING.clear()
+    set_status(data, first["id"], "paused")
+    taken = start(data, "pc-b", n=1)
+    assert taken["id"] != first["id"] and taken["existing"] is False and taken["chapters"] == 1
+    assert sorted((b["ref"], b["chapters"]) for b in books(data)) == [("pc-a", 3), ("pc-b", 1)]
+    book._RUNNING.clear()
+    again = start(data, "pc-a", n=1)
+    assert again["id"] == first["id"] and again["chapters"] == 3
+
+
+def test_the_same_ref_twice_at_once_starts_one_book(data, starts):
+    chapters = [{"title": "One", "text": TEXT}]
+    p = {"title": "T", "voice_id": "v", "language": "en", "chapters": chapters, "ref": "pub-1"}
+
+    async def both():
+        return await asyncio.gather(*(book.book_start(Ctx(data.root), dict(p)) for _ in range(2)),
+                                    return_exceptions=True)
+
+    a, b = asyncio.run(both())
+    assert isinstance(a, dict) and isinstance(b, book.EngineError) and b.code == "busy"
+    assert len(books(data)) == 1 and start(data, "pub-1")["id"] == a["id"]
+
+
+@pytest.mark.parametrize("ref", ["", "  ", 5, ["x"]])
+def test_a_bad_ref_is_refused(data, starts, ref):
+    with pytest.raises(book.EngineError) as e:
+        start(data, ref)
+    assert e.value.code == "bad_request" and books(data) == []
