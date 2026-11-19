@@ -136,7 +136,8 @@ options (all of them: `./setup.sh --help`):
 | --- | --- |
 | `--data-dir DIR` | Install into `DIR` without asking. |
 | `--yes` | Do not ask for confirmation (then `--data-dir` is required). |
-| `--cpu` | Set up the CPU backend even when a GPU is present. |
+| `--cpu` | Set up the CPU backend even when a GPU is present; later runs (the app's included) keep it. |
+| `--gpu` | Use the GPU again after a `--cpu` install. |
 | `--quick-check` | Verify an existing install, download nothing. |
 | `--move-to DIR` | Move an existing install to `DIR` (see below). |
 | `--better-translation no` | Leave out the better translation model (NLLB-200 1.3B); `yes` adds it also without a GPU. |
