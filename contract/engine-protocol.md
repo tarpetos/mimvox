@@ -1038,7 +1038,7 @@ after the app or the engine closed in the middle) and cancelled. The engine owns
 only shows it.
 
 ### `text.import` (read a document)
-`{"path":"<absolute path>","language"?:"auto"|"<code>"}` ->
+`{"path":"<absolute path>","language"?:"auto"|"<code>","split"?:"auto"}` ->
 `{"path","name","format","format_label","title","encoding","language","language_detected","words","chars","est_s",
 "chapters":[{"title","text","words","chars","est_s"}],"parts":null|{"how","chapters":[...]},"warnings":["..."],
 "meta":{"authors":["..."],"description","language_tag","date","cover":null|{"path","media_type"}}}`
@@ -1067,6 +1067,8 @@ only shows it.
   sentence). `how` is that rule, or `mixed`. Titles: the found titles; for a file whose text is in one chapter
   "<Part> N" in its language (`Частина`, `Part`, `Teil`, ...; just `N` for a language without one); for a long chapter
   among others its title, then "<title> (2)". `chapters` are complete (short chapters included), with `words` and `est_s`.
+- `split: "auto"`: the split is applied: `chapters` are `parts.chapters` (unchanged when there is no split, and
+  `words`, `chars`, `est_s` count them) and `parts` is `null`. Any other value is `bad_request`.
 - `text` is clean: paragraphs separated by one blank line, whitespace collapsed inside a paragraph, soft hyphens and
   zero-width characters removed, hyphenated line breaks of a PDF joined, page numbers and running headers dropped; the
   chapter title is not repeated at the start of its text. Subtitles lose their numbers, timestamps and tags.
