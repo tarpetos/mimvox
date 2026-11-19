@@ -11,3 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 toml = "0.8"
 dirs = "6"
+
+[target.'cfg(windows)'.dependencies]
+# The named mutex that tells the installer and the uninstaller Mimvox is running (see hold_app_mutex in src/lib.rs).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }

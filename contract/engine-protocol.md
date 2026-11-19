@@ -1558,6 +1558,9 @@ mimvox-server --show-token | token show | token new
 - **One engine per data dir.** Whoever starts an engine (the app or the server) holds an OS lock on
   `<data>/engine.lock` while it runs; a second one fails with "another Mimvox engine ... is already running". The app
   shows that as the engine's stop reason.
+- **Updates (Windows).** The server holds the app's named mutex (`Local\Mimvox-running`) for its whole run, so the
+  installer and the uninstaller ask to close it (a silent update waits 30 s, then stops) instead of failing on files
+  in use.
 - **Token.** 32 random bytes, URL-safe base64 without padding, in `<data>/api/token` (mode 0600 on Unix; on
   Windows the per-user data folder's ACL). `MIMVOX_API_TOKEN` overrides the file. `token new` writes a new
   one, `token show` / `--show-token` print it (creating it when missing). Clients send

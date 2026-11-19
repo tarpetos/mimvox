@@ -59,6 +59,8 @@ const RESTART_DELAY: Duration = Duration::from_secs(1);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    mimvox_engine_client::hold_app_mutex();
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

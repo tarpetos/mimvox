@@ -68,17 +68,6 @@ fn keep_appimage_fds_to_self() {
 }
 
 const APP_ID: &str = "io.github.tarpetos.mimvox";
-/// The installer and uninstaller wait while it is held (scripts/build/inno.py, APP_MUTEX).
-#[cfg(windows)]
-const APP_MUTEX: &str = "Local\\Mimvox-running";
-
-#[cfg(windows)]
-fn hold_app_mutex() {
-    use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name: Vec<u16> = APP_MUTEX.encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: a NUL-terminated name; the handle is never closed, so the mutex lives as long as the process.
-    let _ = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-}
 
 fn main() {
     leave_appimage_env();
@@ -90,7 +79,7 @@ fn main() {
             return;
         }
         #[cfg(windows)]
-        hold_app_mutex();
+        engine::hold_app_mutex();
     }
     // Before `run`, so every window opened afterwards shows it.
     let _ = rune::set_app_icon(ICON_PNG);

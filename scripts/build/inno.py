@@ -137,7 +137,7 @@ def draw_images(folder: Path) -> tuple[list[Path], list[Path]]:
     return banners, smalls
 
 
-# Must match app/src/main.rs, APP_MUTEX.
+# Must match crates/engine-client/src/lib.rs, APP_MUTEX (held by the app and by mimvox-server).
 APP_MUTEX = "Local\\Mimvox-running"
 # Inno's uninstall entry: <AppId>_is1 under the install mode's root (HKA: per user here).
 def uninstall_key(app_id: str) -> str:
@@ -168,7 +168,7 @@ procedure ShowWaitState();
 begin
   if AppRunning() then
   begin
-    WaitNotice.Caption := 'Mimvox is running. Close it to continue: this window notices by itself.';
+    WaitNotice.Caption := 'Mimvox or mimvox-server is running. Close it to continue: this window notices by itself.';
     WaitNotice.Font.Color := @BAD@;
     WaitContinue.Enabled := False;
   end
@@ -210,7 +210,7 @@ begin
     WaitNotice.Left := ScaleX(24);
     WaitNotice.Top := ScaleY(24);
     WaitNotice.Width := WaitForm.ClientWidth - ScaleX(48);
-    WaitNotice.Caption := 'Mimvox is running. Close it to continue: this window notices by itself.';
+    WaitNotice.Caption := 'Mimvox or mimvox-server is running. Close it to continue: this window notices by itself.';
     WaitNotice.AdjustHeight();
     WaitNotice.AutoSize := False;
     WaitNotice.StyleElements := WaitNotice.StyleElements - [seFont];
@@ -456,7 +456,7 @@ begin
     RunningNotice.Left := ScaleX(24);
     RunningNotice.Top := AllWarning.Top + AllWarning.Height + ScaleY(14);
     RunningNotice.Width := ChoiceForm.ClientWidth - ScaleX(48);
-    RunningNotice.Caption := 'Mimvox is running. Close it to uninstall: this window notices by itself.';
+    RunningNotice.Caption := 'Mimvox or mimvox-server is running. Close it to uninstall: this window notices by itself.';
     RunningNotice.AdjustHeight();
     RunningNotice.StyleElements := RunningNotice.StyleElements - [seFont];
     RunningNotice.Font.Color := @BAD@;
