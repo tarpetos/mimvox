@@ -3,9 +3,9 @@
 use super::widgets::*;
 use super::{RecordState, guard, meter_sink};
 use crate::audio::{self, CaptureEvent, Recorder};
-use crate::ui::events;
 use crate::state::{AppState, Screen};
 use crate::ui::components::{glass_edge, icon_el, icons};
+use crate::ui::events;
 use crate::ui::onboarding;
 use crate::ui::theme::{motion, radius, ty};
 use rune::{Align, Color, El, ScrollSpec, Side, col, el, row, text};
@@ -191,7 +191,6 @@ fn on_test_level(s: &mut AppState, seq: u64, ev: CaptureEvent) -> bool {
 }
 
 impl RecordState {
-
     /// Reads the saved choice once; headless scenes mark it read so they never touch the settings file.
     fn mic_read_settings(&mut self) {
         if self.mic.settings_read {
@@ -241,7 +240,17 @@ pub fn chip(r: &RecordState, p: Pal) -> El {
         .radius(16.0)
         .fill(if open { p.lens } else { p.glass })
         .gradient(p.glass_top, p.glass_bottom)
-        .border_gradient(1.0, p.rim_top, if warn { p.warn.alpha(0.6) } else if open { p.accent.alpha(0.4) } else { p.rim_bottom })
+        .border_gradient(
+            1.0,
+            p.rim_top,
+            if warn {
+                p.warn.alpha(0.6)
+            } else if open {
+                p.accent.alpha(0.4)
+            } else {
+                p.rim_bottom
+            },
+        )
         .shadow(3.0, 10.0, p.shadow_soft);
     let mut pill = glass_edge(p, pill);
     pill = if busy {
@@ -301,9 +310,14 @@ fn test_block(r: &RecordState, p: Pal) -> El {
         .px(12.0)
         .py(6.0)
         .gap(8.0)
-        .child(row().w_full().center_y().justify_between().child(text("Input level").font(ty::LABEL).color(p.text_dim)).child(
-            text(if ok { "Live" } else { "" }).font(ty::CAPTION).color(p.ok),
-        ))
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .justify_between()
+                .child(text("Input level").font(ty::LABEL).color(p.text_dim))
+                .child(text(if ok { "Live" } else { "" }).font(ty::CAPTION).color(p.ok)),
+        )
         .child(meter_el)
         .child(text(line).font(ty::CAPTION).color(tone).wrap().max_lines(3))
 }
@@ -313,7 +327,10 @@ pub fn overlay(r: &RecordState, p: Pal) -> Option<El> {
     if !r.mic.open || !r.mic_visible() {
         return None;
     }
-    let scrim = el().key("mic-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.record.mic_set_open(false));
+    let scrim = el()
+        .key("mic-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .on_press(|s: &mut AppState| s.record.mic_set_open(false));
 
     let default_name = r.mic.devices.first().cloned();
     let mut list = col().w_full().gap(2.0).child(device_row(
@@ -340,7 +357,13 @@ pub fn overlay(r: &RecordState, p: Pal) -> Option<El> {
     }
     let scroll = col().w_full().max_h(230.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(list);
 
-    let mut head = row().w_full().px(12.0).pt(4.0).center_y().justify_between().child(text("Microphone").font(ty::LABEL).color(p.text));
+    let mut head = row()
+        .w_full()
+        .px(12.0)
+        .pt(4.0)
+        .center_y()
+        .justify_between()
+        .child(text("Microphone").font(ty::LABEL).color(p.text));
     if r.mic.listing {
         head = head.child(text("Refreshing...").font(ty::CAPTION).color(p.text_faint));
     }

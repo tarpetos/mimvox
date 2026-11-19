@@ -8,37 +8,96 @@ use crate::ui::voices::kit;
 
 /// The engine's list (OmniVoice languages with ~100 h of training data or more): code, English, native, common.
 const BUILTIN: &[(&str, &str, &str, bool)] = &[
-    ("en", "English", "English", true), ("uk", "Ukrainian", "Українська", true), ("de", "German", "Deutsch", true),
-    ("fr", "French", "Français", true), ("es", "Spanish", "Español", true), ("pl", "Polish", "Polski", true),
-    ("ro", "Romanian", "Română", true), ("it", "Italian", "Italiano", true), ("pt", "Portuguese", "Português", true), ("cs", "Czech", "Čeština", true),
-    ("ru", "Russian", "Русский", true), ("ar", "Arabic", "العربية", false), ("as", "Assamese", "অসমীয়া", false),
-    ("ba", "Bashkir", "Башҡортса", false), ("eu", "Basque", "Euskara", false), ("be", "Belarusian", "Беларуская", false),
-    ("bn", "Bengali", "বাংলা", false), ("bs", "Bosnian", "Bosanski", false), ("bg", "Bulgarian", "Български", false),
-    ("yue", "Cantonese", "粵語", false), ("ca", "Catalan", "Català", false), ("zh", "Chinese", "中文", false),
-    ("hr", "Croatian", "Hrvatski", false), ("da", "Danish", "Dansk", false), ("nl", "Dutch", "Nederlands", false),
-    ("et", "Estonian", "Eesti", false), ("fi", "Finnish", "Suomi", false), ("gl", "Galician", "Galego", false),
-    ("ka", "Georgian", "ქართული", false), ("el", "Greek", "Ελληνικά", false), ("hi", "Hindi", "हिन्दी", false),
-    ("hu", "Hungarian", "Magyar", false), ("is", "Icelandic", "Íslenska", false), ("id", "Indonesian", "Bahasa Indonesia", false),
-    ("ja", "Japanese", "日本語", false), ("kn", "Kannada", "ಕನ್ನಡ", false), ("kk", "Kazakh", "Қазақ тілі", false),
-    ("ko", "Korean", "한국어", false), ("lv", "Latvian", "Latviešu", false), ("lt", "Lithuanian", "Lietuvių", false),
-    ("ml", "Malayalam", "മലയാളം", false), ("mt", "Maltese", "Malti", false), ("mr", "Marathi", "मराठी", false),
-    ("mn", "Mongolian", "Монгол", false), ("ne", "Nepali", "नेपाली", false), ("no", "Norwegian", "Norsk", false),
-    ("fa", "Persian", "فارسی", false), ("pa", "Punjabi", "ਪੰਜਾਬੀ", false), ("sr", "Serbian", "Српски", false),
-    ("sk", "Slovak", "Slovenčina", false), ("sl", "Slovenian", "Slovenščina", false), ("sw", "Swahili", "Kiswahili", false),
-    ("sv", "Swedish", "Svenska", false), ("ta", "Tamil", "தமிழ்", false), ("te", "Telugu", "తెలుగు", false),
-    ("th", "Thai", "ไทย", false), ("tr", "Turkish", "Türkçe", false), ("ur", "Urdu", "اردو", false),
-    ("uz", "Uzbek", "Oʻzbek", false), ("vi", "Vietnamese", "Tiếng Việt", false), ("cy", "Welsh", "Cymraeg", false),
+    ("en", "English", "English", true),
+    ("uk", "Ukrainian", "Українська", true),
+    ("de", "German", "Deutsch", true),
+    ("fr", "French", "Français", true),
+    ("es", "Spanish", "Español", true),
+    ("pl", "Polish", "Polski", true),
+    ("ro", "Romanian", "Română", true),
+    ("it", "Italian", "Italiano", true),
+    ("pt", "Portuguese", "Português", true),
+    ("cs", "Czech", "Čeština", true),
+    ("ru", "Russian", "Русский", true),
+    ("ar", "Arabic", "العربية", false),
+    ("as", "Assamese", "অসমীয়া", false),
+    ("ba", "Bashkir", "Башҡортса", false),
+    ("eu", "Basque", "Euskara", false),
+    ("be", "Belarusian", "Беларуская", false),
+    ("bn", "Bengali", "বাংলা", false),
+    ("bs", "Bosnian", "Bosanski", false),
+    ("bg", "Bulgarian", "Български", false),
+    ("yue", "Cantonese", "粵語", false),
+    ("ca", "Catalan", "Català", false),
+    ("zh", "Chinese", "中文", false),
+    ("hr", "Croatian", "Hrvatski", false),
+    ("da", "Danish", "Dansk", false),
+    ("nl", "Dutch", "Nederlands", false),
+    ("et", "Estonian", "Eesti", false),
+    ("fi", "Finnish", "Suomi", false),
+    ("gl", "Galician", "Galego", false),
+    ("ka", "Georgian", "ქართული", false),
+    ("el", "Greek", "Ελληνικά", false),
+    ("hi", "Hindi", "हिन्दी", false),
+    ("hu", "Hungarian", "Magyar", false),
+    ("is", "Icelandic", "Íslenska", false),
+    ("id", "Indonesian", "Bahasa Indonesia", false),
+    ("ja", "Japanese", "日本語", false),
+    ("kn", "Kannada", "ಕನ್ನಡ", false),
+    ("kk", "Kazakh", "Қазақ тілі", false),
+    ("ko", "Korean", "한국어", false),
+    ("lv", "Latvian", "Latviešu", false),
+    ("lt", "Lithuanian", "Lietuvių", false),
+    ("ml", "Malayalam", "മലയാളം", false),
+    ("mt", "Maltese", "Malti", false),
+    ("mr", "Marathi", "मराठी", false),
+    ("mn", "Mongolian", "Монгол", false),
+    ("ne", "Nepali", "नेपाली", false),
+    ("no", "Norwegian", "Norsk", false),
+    ("fa", "Persian", "فارسی", false),
+    ("pa", "Punjabi", "ਪੰਜਾਬੀ", false),
+    ("sr", "Serbian", "Српски", false),
+    ("sk", "Slovak", "Slovenčina", false),
+    ("sl", "Slovenian", "Slovenščina", false),
+    ("sw", "Swahili", "Kiswahili", false),
+    ("sv", "Swedish", "Svenska", false),
+    ("ta", "Tamil", "தமிழ்", false),
+    ("te", "Telugu", "తెలుగు", false),
+    ("th", "Thai", "ไทย", false),
+    ("tr", "Turkish", "Türkçe", false),
+    ("ur", "Urdu", "اردو", false),
+    ("uz", "Uzbek", "Oʻzbek", false),
+    ("vi", "Vietnamese", "Tiếng Việt", false),
+    ("cy", "Welsh", "Cymraeg", false),
 ];
 
 /// Languages Whisper may report that the speech model does not speak.
-const EXTRA_NAMES: &[(&str, &str)] = &[("he", "Hebrew"), ("ro", "Romanian"), ("ms", "Malay"), ("mk", "Macedonian"), ("hy", "Armenian"), ("az", "Azerbaijani"), ("sq", "Albanian"), ("af", "Afrikaans"), ("tl", "Tagalog")];
+const EXTRA_NAMES: &[(&str, &str)] = &[
+    ("he", "Hebrew"),
+    ("ro", "Romanian"),
+    ("ms", "Malay"),
+    ("mk", "Macedonian"),
+    ("hy", "Armenian"),
+    ("az", "Azerbaijani"),
+    ("sq", "Albanian"),
+    ("af", "Afrikaans"),
+    ("tl", "Tagalog"),
+];
 
 pub fn base(code: &str) -> String {
     code.trim().split(['-', '_']).next().unwrap_or("").to_ascii_lowercase()
 }
 
 fn builtin() -> Vec<SpeechLanguage> {
-    BUILTIN.iter().map(|(c, n, nat, common)| SpeechLanguage { code: (*c).into(), name: (*n).into(), native: (*nat).into(), common: *common }).collect()
+    BUILTIN
+        .iter()
+        .map(|(c, n, nat, common)| SpeechLanguage {
+            code: (*c).into(),
+            name: (*n).into(),
+            native: (*nat).into(),
+            common: *common,
+        })
+        .collect()
 }
 
 pub fn all(s: &AppState) -> Vec<SpeechLanguage> {
@@ -47,7 +106,11 @@ pub fn all(s: &AppState) -> Vec<SpeechLanguage> {
 
 pub fn is_spoken(s: &AppState, code: &str) -> bool {
     let b = base(code);
-    if s.shell.languages.is_empty() { BUILTIN.iter().any(|(c, ..)| *c == b) } else { s.shell.languages.iter().any(|l| l.code == b) }
+    if s.shell.languages.is_empty() {
+        BUILTIN.iter().any(|(c, ..)| *c == b)
+    } else {
+        s.shell.languages.iter().any(|l| l.code == b)
+    }
 }
 
 /// An unknown code comes back upper-case.
@@ -133,7 +196,15 @@ fn current(s: &AppState, target: Target) -> String {
 fn options(s: &AppState, target: Target) -> Vec<SpeechLanguage> {
     let mut list = all(s);
     match target {
-        Target::RedubFrom => list.insert(0, SpeechLanguage { code: "auto".into(), name: "Auto-detect".into(), native: "Auto-detect".into(), common: true }),
+        Target::RedubFrom => list.insert(
+            0,
+            SpeechLanguage {
+                code: "auto".into(),
+                name: "Auto-detect".into(),
+                native: "Auto-detect".into(),
+                common: true,
+            },
+        ),
         Target::Reference => {
             // The voice's own language already has `reference.wav`.
             let own = super::shell::active_voice(s).map(|v| v.lang().to_owned()).unwrap_or_default();
@@ -146,7 +217,9 @@ fn options(s: &AppState, target: Target) -> Vec<SpeechLanguage> {
 
 pub fn chip(p: &Palette, key: &str, label: &str, target: Target, enabled: bool) -> El {
     let k = key.to_owned();
-    dropdown_chip(*p, key, &GLOBE, label, format!("Language: {label}"), enabled, move |s: &mut AppState| open(s, target, &k))
+    dropdown_chip(*p, key, &GLOBE, label, format!("Language: {label}"), enabled, move |s: &mut AppState| {
+        open(s, target, &k)
+    })
 }
 
 fn matches(l: &SpeechLanguage, q: &str) -> bool {
@@ -157,9 +230,21 @@ fn row_el(p: &Palette, target: Target, l: &SpeechLanguage, on: bool) -> El {
     let code = l.code.clone();
     let main = display(l);
     let sub = if main == l.name || l.code == "auto" { String::new() } else { l.name.clone() };
-    row().key(format!("lang-{}", l.code)).role("button").label(l.name.clone()).checked(on).w_full().h(32.0).px(12.0).gap(10.0).center_y().radius(16.0)
+    row()
+        .key(format!("lang-{}", l.code))
+        .role("button")
+        .label(l.name.clone())
+        .checked(on)
+        .w_full()
+        .h(32.0)
+        .px(12.0)
+        .gap(10.0)
+        .center_y()
+        .radius(16.0)
         .fill(if on { p.accent.alpha(0.16) } else { Color::TRANSPARENT })
-        .hover(p.glass_hover).focusable(true).motion(motion::UI)
+        .hover(p.glass_hover)
+        .focusable(true)
+        .motion(motion::UI)
         .on_press(move |s: &mut AppState| pick(s, target, &code))
         .child(text(main).font(ty::LABEL).color(p.text).truncate().a11y_hidden())
         .child(text(sub).font(ty::CAPTION).color(p.text_faint).grow(1.0).min_w(0.0).truncate().a11y_hidden())
@@ -198,13 +283,24 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
         Target::Reference => "Add a reference for",
         Target::MediaRef => "Media reference for",
     };
-    let search = kit::submit_field(p, &s.langpick.search, "Search languages", |s: &mut AppState| &mut s.langpick.search, move |s: &mut AppState| {
-        let q = s.langpick.search.text.trim().to_lowercase();
-        if let Some(l) = options(s, target).into_iter().find(|l| matches(l, &q)) {
-            pick(s, target, &l.code);
-        }
-    });
-    let panel = col().key("lang-menu").w(330.0).padding(10.0).gap(8.0).radius(radius::PANEL + 4.0)
+    let search = kit::submit_field(
+        p,
+        &s.langpick.search,
+        "Search languages",
+        |s: &mut AppState| &mut s.langpick.search,
+        move |s: &mut AppState| {
+            let q = s.langpick.search.text.trim().to_lowercase();
+            if let Some(l) = options(s, target).into_iter().find(|l| matches(l, &q)) {
+                pick(s, target, &l.code);
+            }
+        },
+    );
+    let panel = col()
+        .key("lang-menu")
+        .w(330.0)
+        .padding(10.0)
+        .gap(8.0)
+        .radius(radius::PANEL + 4.0)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.97))
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
@@ -214,8 +310,21 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
         .transition(rune::Transition::scale(0.98))
         .child(text(title).font(ty::TITLE).color(p.text).px(4.0))
         .child(row().w_full().child(search))
-        .child(col().key("lang-list").w_full().h(330.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).child(list));
-    Some(el().key("lang-menu-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(scrim).child(glass_edge(*p, panel)))
+        .child(
+            col()
+                .key("lang-list")
+                .w_full()
+                .h(330.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .scroll_edge_fade(12.0)
+                .child(list),
+        );
+    Some(
+        el().key("lang-menu-layer")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .child(scrim)
+            .child(glass_edge(*p, panel)),
+    )
 }
 
 pub static GLOBE: rune::Icon = rune::Icon {

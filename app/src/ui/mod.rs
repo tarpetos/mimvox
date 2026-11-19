@@ -9,9 +9,9 @@ pub mod modules;
 pub mod onboarding;
 pub mod playbar;
 pub mod record;
+pub mod redub;
 pub mod refclip;
 pub mod refmedia;
-pub mod redub;
 pub mod relocate;
 #[cfg(windows)]
 pub mod seekstrip;

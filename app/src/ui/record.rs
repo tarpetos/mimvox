@@ -19,9 +19,11 @@ use std::path::PathBuf;
 use widgets::Tone;
 
 pub use fixtures::{
-    scene_language_uk, scene_own_text_uk, scene_session_uk, scene_mic_open, scene_mic_picker, scene_mic_warning, scene_notice_saved, scene_own_text, scene_picker, scene_quick_ready, scene_recording, scene_recording_loud, scene_rejected,
-    scene_saved_with_issues, scene_summary_ready, scene_import_drop, scene_import_checking, scene_import_saved,
-    scene_new_voice, scene_files_hover, scene_files_ask, scene_files_working, scene_files_done,
+    scene_files_ask, scene_files_done, scene_files_hover, scene_files_working, scene_import_checking,
+    scene_import_drop, scene_import_saved, scene_language_uk, scene_mic_open, scene_mic_picker, scene_mic_warning,
+    scene_new_voice, scene_notice_saved, scene_own_text, scene_own_text_uk, scene_picker, scene_quick_ready,
+    scene_recording, scene_recording_loud, scene_rejected, scene_saved_with_issues, scene_session_uk,
+    scene_summary_ready,
 };
 
 #[allow(dead_code)]
@@ -203,10 +205,22 @@ pub struct FilesFlow {
 pub enum FilesStage {
     #[default]
     Idle,
-    Asking { paths: Vec<PathBuf> },
-    Working { voice: String, note: String },
-    Done { voice: String, minutes: f32, level: Level, notes: Vec<String> },
-    Failed { message: String },
+    Asking {
+        paths: Vec<PathBuf>,
+    },
+    Working {
+        voice: String,
+        note: String,
+    },
+    Done {
+        voice: String,
+        minutes: f32,
+        level: Level,
+        notes: Vec<String>,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 enum Pending {
@@ -293,7 +307,10 @@ fn st<'a>(v: &'a Value, k: &str) -> &'a str {
 }
 
 fn str_list(v: &Value, k: &str) -> Vec<String> {
-    v.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()
+    v.get(k)
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default()
 }
 
 fn parse_summary(v: &Value) -> Summary {
@@ -307,7 +324,12 @@ fn parse_summary(v: &Value) -> Summary {
             .and_then(Value::as_array)
             .map(|a| {
                 a.iter()
-                    .map(|p| SummaryPart { index: f(p, "index") as u32, duration_s: f(p, "duration_s"), verdict: Verdict::parse(st(p, "verdict")), issues: str_list(p, "issues") })
+                    .map(|p| SummaryPart {
+                        index: f(p, "index") as u32,
+                        duration_s: f(p, "duration_s"),
+                        verdict: Verdict::parse(st(p, "verdict")),
+                        issues: str_list(p, "issues"),
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -340,7 +362,8 @@ impl RecordState {
         if self.voice_id.is_none() && !self.creating_voice {
             let language = self.plan.as_ref().map_or_else(|| self.lang().to_owned(), |p| p.language.clone());
             let name = self.new_voice_name.take().unwrap_or_else(|| "My voice".to_owned());
-            self.creating_voice = self.request("voices.create", json!({"name": name, "language": language}), Pending::CreateVoice);
+            self.creating_voice =
+                self.request("voices.create", json!({"name": name, "language": language}), Pending::CreateVoice);
         }
     }
 
@@ -365,7 +388,9 @@ impl RecordState {
                 self.creating_voice = false;
                 self.notice = Some(("The engine is not running".into(), Tone::Danger));
             }
-            Pending::Check { part, .. } | Pending::Add { part, .. } => self.set_take_failed(part, "The engine is not running"),
+            Pending::Check { part, .. } | Pending::Add { part, .. } => {
+                self.set_take_failed(part, "The engine is not running")
+            }
             Pending::Combine { .. } => {
                 self.importing = false;
                 self.notice = Some(("The engine is not running".into(), Tone::Danger));
@@ -408,7 +433,11 @@ impl RecordState {
         let typed = self.files.name.text.trim();
         let name = if typed.is_empty() { "My voice".to_owned() } else { typed.to_owned() };
         let language = self.lang().to_owned();
-        if self.request("voices.create", json!({ "name": name, "language": language }), Pending::FilesCreate { paths, name: name.clone() }) {
+        if self.request(
+            "voices.create",
+            json!({ "name": name, "language": language }),
+            Pending::FilesCreate { paths, name: name.clone() },
+        ) {
             self.creating_voice = true;
             self.files.stage = FilesStage::Working { voice: name, note: "Creating the voice…".into() };
         }
@@ -419,7 +448,11 @@ impl RecordState {
         if let Some(on) = super::refmedia::saved_remove_music() {
             params["remove_music"] = json!(on);
         }
-        let note = if paths.len() == 1 { "Checking and cleaning the recording…".to_owned() } else { format!("Checking and cleaning {} files…", paths.len()) };
+        let note = if paths.len() == 1 {
+            "Checking and cleaning the recording…".to_owned()
+        } else {
+            format!("Checking and cleaning {} files…", paths.len())
+        };
         if self.request("media.combine", params, Pending::FilesCombine { voice_id, name: name.clone() }) {
             self.files.stage = FilesStage::Working { voice: name, note };
         }
@@ -434,7 +467,14 @@ impl RecordState {
     pub fn choose_preset(&mut self, id: &str) {
         let Load::Ready(list) = &self.presets else { return };
         let Some(p) = list.iter().find(|p| p.id == id) else { return };
-        let plan = Plan { id: p.id.clone(), language: self.lang().to_owned(), title: p.title.clone(), target_minutes: p.target_minutes, trains_rvc: p.trains_rvc, parts: p.parts.clone() };
+        let plan = Plan {
+            id: p.id.clone(),
+            language: self.lang().to_owned(),
+            title: p.title.clone(),
+            target_minutes: p.target_minutes,
+            trains_rvc: p.trains_rvc,
+            parts: p.parts.clone(),
+        };
         self.begin(plan);
     }
 
@@ -515,7 +555,15 @@ impl RecordState {
         match guard(|| Recorder::start(self.input_device.as_deref(), Some(meter_sink(seq, on_capture)))) {
             Ok(rec) => {
                 self.notice = None;
-                self.active = Some(Active { recorder: Some(rec), seq, part: self.current, level: 0.0, peak: 0.0, elapsed_s: 0.0, clipped: false });
+                self.active = Some(Active {
+                    recorder: Some(rec),
+                    seq,
+                    part: self.current,
+                    level: 0.0,
+                    peak: 0.0,
+                    elapsed_s: 0.0,
+                    clipped: false,
+                });
             }
             Err(e) => self.notice = Some((format!("Cannot open the microphone: {e}"), widgets::Tone::Danger)),
         }
@@ -529,11 +577,21 @@ impl RecordState {
         match guard(|| rec.stop(&path)) {
             Ok(info) => {
                 if let Some(t) = self.takes.get_mut(part) {
-                    *t = Take { status: TakeStatus::Checking, duration_s: info.duration_s, path: Some(info.path.clone()), ..Take::default() };
+                    *t = Take {
+                        status: TakeStatus::Checking,
+                        duration_s: info.duration_s,
+                        path: Some(info.path.clone()),
+                        ..Take::default()
+                    };
                 }
                 let p = info.path.clone();
-                let expected = self.plan.as_ref().and_then(|pl| pl.parts.get(part)).map(|x| x.est_seconds).filter(|e| *e > 0.0);
-                if !self.request("recording.check", json!({ "path": p, "expected_s": expected }), Pending::Check { part, path: info.path }) {
+                let expected =
+                    self.plan.as_ref().and_then(|pl| pl.parts.get(part)).map(|x| x.est_seconds).filter(|e| *e > 0.0);
+                if !self.request(
+                    "recording.check",
+                    json!({ "path": p, "expected_s": expected }),
+                    Pending::Check { part, path: info.path },
+                ) {
                     self.set_take_failed(part, "The engine is not running");
                 }
             }
@@ -565,9 +623,11 @@ impl RecordState {
     fn on_combined(&mut self, part: usize, v: &Value) {
         let path = PathBuf::from(st(v, "path"));
         let used = v.get("files").and_then(Value::as_array).map_or(0, Vec::len);
-        let skipped: Vec<String> = v.get("skipped").and_then(Value::as_array).map(|a| {
-            a.iter().map(|x| format!("{} ({})", st(x, "name"), st(x, "reason"))).collect()
-        }).unwrap_or_default();
+        let skipped: Vec<String> = v
+            .get("skipped")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(|x| format!("{} ({})", st(x, "name"), st(x, "reason"))).collect())
+            .unwrap_or_default();
         if self.current != part || self.active.is_some() {
             return; // the user moved on meanwhile
         }
@@ -577,7 +637,11 @@ impl RecordState {
         let music = v.get("music_files").and_then(Value::as_u64).unwrap_or(0);
         if music > 0 {
             msg.push_str(&format!(" Background music removed from {music} of them."));
-        } else if let Some(why) = v.get("music_reason").and_then(Value::as_str).filter(|w| w.contains("not installed") || w.contains("failed")) {
+        } else if let Some(why) = v
+            .get("music_reason")
+            .and_then(Value::as_str)
+            .filter(|w| w.contains("not installed") || w.contains("failed"))
+        {
             msg.push_str(&format!(" Background music not removed: {why}."));
         }
         if !skipped.is_empty() {
@@ -644,7 +708,14 @@ impl RecordState {
     pub fn total_minutes(&self) -> f32 {
         match &self.summary {
             Some(s) => s.usable_minutes,
-            None => self.takes.iter().filter(|t| t.status == TakeStatus::Saved && t.verdict != Some(Verdict::Bad)).map(|t| t.duration_s).sum::<f32>() / 60.0,
+            None => {
+                self.takes
+                    .iter()
+                    .filter(|t| t.status == TakeStatus::Saved && t.verdict != Some(Verdict::Bad))
+                    .map(|t| t.duration_s)
+                    .sum::<f32>()
+                    / 60.0
+            }
         }
     }
 
@@ -653,7 +724,11 @@ impl RecordState {
     }
 
     fn apply_summary(&mut self, sum: Summary) {
-        let stored = |this: &Self, n: u32| this.voice_id.as_ref().map(|v| this.data_dir.join("voices").join(v).join("dataset").join(format!("part{n}.wav")));
+        let stored = |this: &Self, n: u32| {
+            this.voice_id
+                .as_ref()
+                .map(|v| this.data_dir.join("voices").join(v).join("dataset").join(format!("part{n}.wav")))
+        };
         for p in &sum.parts {
             let path = stored(self, p.index);
             if let Some(t) = (p.index as usize).checked_sub(1).and_then(|i| self.takes.get_mut(i)) {
@@ -681,8 +756,17 @@ impl RecordState {
         let mut created = None;
         match (what, result) {
             (Pending::Presets, Ok(v)) => {
-                let list = v.get("presets").cloned().and_then(|p| serde_json::from_value::<Vec<Preset>>(p).ok()).unwrap_or_default();
-                if let Some(langs) = v.get("languages").cloned().and_then(|l| serde_json::from_value::<Vec<RecLang>>(l).ok()).filter(|l| !l.is_empty()) {
+                let list = v
+                    .get("presets")
+                    .cloned()
+                    .and_then(|p| serde_json::from_value::<Vec<Preset>>(p).ok())
+                    .unwrap_or_default();
+                if let Some(langs) = v
+                    .get("languages")
+                    .cloned()
+                    .and_then(|l| serde_json::from_value::<Vec<RecLang>>(l).ok())
+                    .filter(|l| !l.is_empty())
+                {
                     self.languages = langs;
                 }
                 self.presets = Load::Ready(list);
@@ -699,44 +783,57 @@ impl RecordState {
                         self.files_combine(id.to_owned(), name, &paths);
                     }
                     None => {
-                        let why = r.as_ref().err().map_or_else(|| "no voice came back".to_owned(), |e| e.message.clone());
+                        let why =
+                            r.as_ref().err().map_or_else(|| "no voice came back".to_owned(), |e| e.message.clone());
                         self.files.stage = FilesStage::Failed { message: format!("Could not create the voice: {why}") };
                     }
                 }
             }
             (Pending::FilesCombine { voice_id, name }, Ok(v)) => {
                 let mut notes = Vec::new();
-                let skipped: Vec<String> = v.get("skipped").and_then(Value::as_array).map(|a| {
-                    a.iter().map(|x| format!("{} ({})", st(x, "name"), st(x, "reason"))).collect()
-                }).unwrap_or_default();
+                let skipped: Vec<String> = v
+                    .get("skipped")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(|x| format!("{} ({})", st(x, "name"), st(x, "reason"))).collect())
+                    .unwrap_or_default();
                 if !skipped.is_empty() {
                     notes.push(format!("Left out: {}.", skipped.join(", ")));
                 }
                 let music = v.get("music_files").and_then(Value::as_u64).unwrap_or(0);
                 if music > 0 {
-                    notes.push(format!("Background music removed from {music} file{}.", if music == 1 { "" } else { "s" }));
+                    notes.push(format!(
+                        "Background music removed from {music} file{}.",
+                        if music == 1 { "" } else { "s" }
+                    ));
                 }
                 // A part number of its own, away from the reading parts (1, 2, ...), so neither replaces the other.
-                let part = 1000 + std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() % 1_000_000);
+                let part = 1000
+                    + std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs() % 1_000_000);
                 let params = json!({ "voice_id": voice_id, "part_index": part, "path": st(v, "path") });
                 if self.request("dataset.add", params, Pending::FilesAdd { name: name.clone(), notes }) {
-                    self.files.stage = FilesStage::Working { voice: name, note: "Saving the recording in the voice…".into() };
+                    self.files.stage =
+                        FilesStage::Working { voice: name, note: "Saving the recording in the voice…".into() };
                 }
             }
             (Pending::FilesCombine { .. }, Err(e)) => {
-                self.files.stage = FilesStage::Failed { message: format!("These files could not be used: {}", e.message) };
+                self.files.stage =
+                    FilesStage::Failed { message: format!("These files could not be used: {}", e.message) };
             }
             (Pending::FilesAdd { name, mut notes }, Ok(v)) => {
                 let sum = parse_summary(v.get("summary").unwrap_or(v));
                 notes.extend(str_list(v.get("part").unwrap_or(&Value::Null), "issues"));
-                self.files.stage = FilesStage::Done { voice: name, minutes: sum.usable_minutes.max(0.0), level: sum.level, notes };
+                self.files.stage =
+                    FilesStage::Done { voice: name, minutes: sum.usable_minutes.max(0.0), level: sum.level, notes };
                 self.voices_dirty = true;
                 if self.plan.is_some() {
                     self.apply_summary(sum);
                 }
             }
             (Pending::FilesAdd { .. }, Err(e)) => {
-                self.files.stage = FilesStage::Failed { message: format!("The recording could not be saved: {}", e.message) };
+                self.files.stage =
+                    FilesStage::Failed { message: format!("The recording could not be saved: {}", e.message) };
             }
             (Pending::Analyze, Ok(v)) => {
                 self.analyzing = false;
@@ -765,7 +862,9 @@ impl RecordState {
                         self.voices_dirty = true;
                         self.refresh_summary();
                     }
-                    Err(e) => self.notice = Some((format!("Cannot create a voice: {}", e.message), widgets::Tone::Danger)),
+                    Err(e) => {
+                        self.notice = Some((format!("Cannot create a voice: {}", e.message), widgets::Tone::Danger))
+                    }
                 }
             }
             (Pending::Check { part, path }, Ok(v)) => self.on_check(part, path, v),
@@ -792,7 +891,11 @@ impl RecordState {
     fn on_check(&mut self, part: usize, path: PathBuf, v: &Value) {
         let verdict = Verdict::parse(st(v, "verdict"));
         let issues = str_list(v, "issues");
-        let duration = if f(v, "duration_s") > 0.0 { f(v, "duration_s") } else { self.takes.get(part).map_or(0.0, |t| t.duration_s) };
+        let duration = if f(v, "duration_s") > 0.0 {
+            f(v, "duration_s")
+        } else {
+            self.takes.get(part).map_or(0.0, |t| t.duration_s)
+        };
         let Some(t) = self.takes.get_mut(part) else { return };
         t.verdict = Some(verdict);
         t.issues = issues;
@@ -851,14 +954,14 @@ impl RecordState {
         }
         let (verdict, dur) = self.takes.get(part).map_or((None, 0.0), |t| (t.verdict, t.duration_s));
         if verdict == Some(Verdict::Ok) && part == self.current {
-            self.notice = Some((format!("Part {} saved ({})", part + 1, widgets::fmt_dur(dur)), widgets::Tone::Success));
+            self.notice =
+                Some((format!("Part {} saved ({})", part + 1, widgets::fmt_dur(dur)), widgets::Tone::Success));
             match self.next_open(part) {
                 Some(n) => self.current = n,
                 None => self.phase = Phase::Summary,
             }
         }
     }
-
 }
 
 /// Level events reach `apply` on the UI thread, newest only.
@@ -914,7 +1017,9 @@ pub fn import_file(s: &mut AppState) {
     s.record.importing = true;
     let exts = super::formats::import_extensions(s);
     std::thread::spawn(move || {
-        let dialog = rfd::FileDialog::new().set_title("Choose recordings for this part (several are joined into one)").add_filter("Audio and video", &exts);
+        let dialog = rfd::FileDialog::new()
+            .set_title("Choose recordings for this part (several are joined into one)")
+            .add_filter("Audio and video", &exts);
         let choice = dialog.pick_files().unwrap_or_default();
         events::post(move |s| {
             s.record.importing = false;
@@ -947,7 +1052,8 @@ pub fn choose_files(s: &mut AppState) {
     s.record.files.picking = true;
     let exts = super::formats::import_extensions(s);
     std::thread::spawn(move || {
-        let dialog = rfd::FileDialog::new().set_title("Choose recordings of one voice").add_filter("Audio and video", &exts);
+        let dialog =
+            rfd::FileDialog::new().set_title("Choose recordings of one voice").add_filter("Audio and video", &exts);
         let choice = dialog.pick_files().unwrap_or_default();
         events::post(move |s| {
             s.record.files.picking = false;
@@ -1081,7 +1187,12 @@ fn begin_in_language(s: &mut AppState, plan: Plan) {
             s.record.new_voice_name = Some(format!("{} ({})", v.name, super::lang::name(&lang)));
             s.record.begin(plan);
             s.record.notice = Some((
-                format!("Recording into a new voice for {}: “{}” keeps its {} recordings.", super::lang::name(&lang), v.name, super::lang::name(v.lang())),
+                format!(
+                    "Recording into a new voice for {}: “{}” keeps its {} recordings.",
+                    super::lang::name(&lang),
+                    v.name,
+                    super::lang::name(v.lang())
+                ),
                 Tone::Neutral,
             ));
         }
@@ -1092,14 +1203,28 @@ fn begin_in_language(s: &mut AppState, plan: Plan) {
 pub fn choose_preset(s: &mut AppState, id: &str) {
     let Load::Ready(list) = &s.record.presets else { return };
     let Some(p) = list.iter().find(|p| p.id == id) else { return };
-    let plan = Plan { id: p.id.clone(), language: s.record.lang().to_owned(), title: p.title.clone(), target_minutes: p.target_minutes, trains_rvc: p.trains_rvc, parts: p.parts.clone() };
+    let plan = Plan {
+        id: p.id.clone(),
+        language: s.record.lang().to_owned(),
+        title: p.title.clone(),
+        target_minutes: p.target_minutes,
+        trains_rvc: p.trains_rvc,
+        parts: p.parts.clone(),
+    };
     begin_in_language(s, plan);
 }
 
 pub fn record_own(s: &mut AppState) {
     let Some(a) = s.record.analysis.clone() else { return };
     let language = if a.language.is_empty() { "en".to_owned() } else { a.language.clone() };
-    let plan = Plan { id: "custom".into(), language, title: "Your own text".into(), target_minutes: a.est_minutes, trains_rvc: a.level >= Level::Trainable, parts: a.parts };
+    let plan = Plan {
+        id: "custom".into(),
+        language,
+        title: "Your own text".into(),
+        target_minutes: a.est_minutes,
+        trains_rvc: a.level >= Level::Trainable,
+        parts: a.parts,
+    };
     begin_in_language(s, plan);
 }
 
@@ -1144,7 +1269,10 @@ pub fn settle(s: &mut AppState) -> bool {
     }
     if !s.record.prefs_loaded && !s.shell.scripted() {
         s.record.prefs_loaded = true;
-        if let Some(l) = super::onboarding::setting("record_language").and_then(|v| v.as_str().map(str::to_owned)).filter(|l| !l.is_empty()) {
+        if let Some(l) = super::onboarding::setting("record_language")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|l| !l.is_empty())
+        {
             s.record.language = l;
         }
     }

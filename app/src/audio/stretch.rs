@@ -35,8 +35,21 @@ impl Stretcher {
         let frame = hop * 2;
         let tol = ((rate * 0.010).round() as usize).max(32);
         // Periodic Hann: two copies half a frame apart sum to exactly 1.
-        let window = (0..frame).map(|i| (0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / frame as f64).cos()) as f32).collect();
-        Stretcher { frame, hop, tol, window, acc: vec![0.0; frame], ready: Vec::with_capacity(frame), ready_at: 0, pos: 0.0, prev: None, flushed: false }
+        let window = (0..frame)
+            .map(|i| (0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / frame as f64).cos()) as f32)
+            .collect();
+        Stretcher {
+            frame,
+            hop,
+            tol,
+            window,
+            acc: vec![0.0; frame],
+            ready: Vec::with_capacity(frame),
+            ready_at: 0,
+            pos: 0.0,
+            prev: None,
+            flushed: false,
+        }
     }
 
     /// Start over at source sample `pos`.

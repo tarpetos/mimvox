@@ -12,8 +12,18 @@ fn parts5() -> Vec<PartText> {
     vec![
         part(1, "A quiet evening", TEXT_1, 70.0),
         part(2, "Everyday sounds", TEXT_2, 62.0),
-        part(3, "Numbers and dates", "On the third of March, twenty-four people met at nine thirty to count seventeen boxes of blue ceramic cups.", 75.0),
-        part(4, "Questions", "Why does the river bend so sharply here? Who built the bridge, and when did it first open to travellers?", 80.0),
+        part(
+            3,
+            "Numbers and dates",
+            "On the third of March, twenty-four people met at nine thirty to count seventeen boxes of blue ceramic cups.",
+            75.0,
+        ),
+        part(
+            4,
+            "Questions",
+            "Why does the river bend so sharply here? Who built the bridge, and when did it first open to travellers?",
+            80.0,
+        ),
         part(5, "Closing", "That is all for today. Thank you for listening, and take care until we speak again.", 68.0),
     ]
 }
@@ -31,7 +41,8 @@ fn presets_fixture() -> Vec<Preset> {
         Preset {
             id: "standard".into(),
             title: "Standard".into(),
-            description: "About six minutes of reading, then a short training run for a close copy of your voice.".into(),
+            description: "About six minutes of reading, then a short training run for a close copy of your voice."
+                .into(),
             target_minutes: 6.5,
             trains_rvc: true,
             parts: parts5(),
@@ -52,8 +63,13 @@ fn base(s: &mut AppState) {
     s.record.presets = Load::Ready(presets_fixture());
     s.record.voice_id = Some("demo".into());
     s.shell.active_voice = Some("demo".into());
-    s.shell.voices = vec![crate::ui::shell::VoiceInfo { id: "demo".into(), name: "My voice".into(), ..Default::default() }];
-    s.shell.set_engine(crate::ui::shell::EngineStatus::Ready { device: Some("NVIDIA GeForce RTX 4070".into()), tts: Some("ready".into()), rvc: Some("ready".into()) });
+    s.shell.voices =
+        vec![crate::ui::shell::VoiceInfo { id: "demo".into(), name: "My voice".into(), ..Default::default() }];
+    s.shell.set_engine(crate::ui::shell::EngineStatus::Ready {
+        device: Some("NVIDIA GeForce RTX 4070".into()),
+        tts: Some("ready".into()),
+        rvc: Some("ready".into()),
+    });
 }
 
 fn standard(s: &mut AppState) {
@@ -63,12 +79,31 @@ fn standard(s: &mut AppState) {
 }
 
 fn saved(d: f32, v: Verdict, issues: &[&str]) -> Take {
-    Take { status: TakeStatus::Saved, duration_s: d, verdict: Some(v), issues: issues.iter().map(|s| s.to_string()).collect(), path: Some(PathBuf::from("part.wav")), error: None, imported: None }
+    Take {
+        status: TakeStatus::Saved,
+        duration_s: d,
+        verdict: Some(v),
+        issues: issues.iter().map(|s| s.to_string()).collect(),
+        path: Some(PathBuf::from("part.wav")),
+        error: None,
+        imported: None,
+    }
 }
 
 fn summary(total: f32, parts: &[(u32, f32, Verdict)], level: Level, message: &str) -> Summary {
-    let parts = parts.iter().map(|&(index, duration_s, verdict)| SummaryPart { index, duration_s, verdict, issues: vec![] }).collect();
-    Summary { total_minutes: total, usable_minutes: total, has_reference: true, parts, level, message: message.into(), recommended_epochs: Some(300) }
+    let parts = parts
+        .iter()
+        .map(|&(index, duration_s, verdict)| SummaryPart { index, duration_s, verdict, issues: vec![] })
+        .collect();
+    Summary {
+        total_minutes: total,
+        usable_minutes: total,
+        has_reference: true,
+        parts,
+        level,
+        message: message.into(),
+        recommended_epochs: Some(300),
+    }
 }
 
 pub fn scene_picker(s: &mut AppState) {
@@ -88,18 +123,26 @@ pub fn scene_files_hover(s: &mut AppState) {
 
 pub fn scene_files_ask(s: &mut AppState) {
     base(s);
-    s.record.files_offer(vec![PathBuf::from("/home/me/interview-part-1.mp3"), PathBuf::from("/home/me/interview-part-2.mp3")], false);
+    s.record.files_offer(
+        vec![PathBuf::from("/home/me/interview-part-1.mp3"), PathBuf::from("/home/me/interview-part-2.mp3")],
+        false,
+    );
 }
 
 pub fn scene_files_working(s: &mut AppState) {
     base(s);
-    s.record.files.stage = super::FilesStage::Working { voice: "Interview part 1".into(), note: "Checking and cleaning 2 files…".into() };
+    s.record.files.stage = super::FilesStage::Working {
+        voice: "Interview part 1".into(),
+        note: "Checking and cleaning 2 files…".into(),
+    };
 }
 
 pub fn scene_files_done(s: &mut AppState) {
     base(s);
     s.record.files.stage = super::FilesStage::Done {
-        voice: "Interview part 1".into(), minutes: 4.6, level: Level::Trainable,
+        voice: "Interview part 1".into(),
+        minutes: 4.6,
+        level: Level::Trainable,
         notes: vec!["Left out: intro.mp4 (no clear speech).".into(), "Background music removed from 1 file.".into()],
     };
 }
@@ -127,7 +170,8 @@ fn uk_presets() -> Vec<Preset> {
     let mut list = presets_fixture();
     for p in &mut list {
         for (i, part) in p.parts.iter_mut().enumerate() {
-            part.title = ["Одна хвилина, один запис", "Звуки щодня", "Числа й дати", "Запитання", "На прощання"][i % 5].into();
+            part.title =
+                ["Одна хвилина, один запис", "Звуки щодня", "Числа й дати", "Запитання", "На прощання"][i % 5].into();
             part.text = UK_1.into();
         }
     }
@@ -135,10 +179,18 @@ fn uk_presets() -> Vec<Preset> {
 }
 
 fn uk_languages(s: &mut AppState) {
-    s.record.languages = [("en", "English", "English"), ("uk", "Ukrainian", "Українська"), ("de", "German", "Deutsch"), ("fr", "French", "Français"), ("es", "Spanish", "Español"), ("pl", "Polish", "Polski"), ("ro", "Romanian", "Română")]
-        .iter()
-        .map(|(c, n, nat)| RecLang { code: (*c).into(), name: (*n).into(), native: (*nat).into() })
-        .collect();
+    s.record.languages = [
+        ("en", "English", "English"),
+        ("uk", "Ukrainian", "Українська"),
+        ("de", "German", "Deutsch"),
+        ("fr", "French", "Français"),
+        ("es", "Spanish", "Español"),
+        ("pl", "Polish", "Polski"),
+        ("ro", "Romanian", "Română"),
+    ]
+    .iter()
+    .map(|(c, n, nat)| RecLang { code: (*c).into(), name: (*n).into(), native: (*nat).into() })
+    .collect();
 }
 
 pub fn scene_language_uk(s: &mut AppState) {
@@ -177,13 +229,20 @@ pub fn scene_recording(s: &mut AppState) {
     standard(s);
     s.record.current = 1;
     s.record.takes[0] = saved(68.0, Verdict::Ok, &[]);
-    s.record.summary = Some(summary(1.1, &[(1, 68.0, Verdict::Ok)], Level::ZeroShot, "Enough for a quick clone. Keep going to train."));
-    s.record.active = Some(Active { recorder: None, seq: 0, part: 1, level: 0.42, peak: 0.55, elapsed_s: 37.0, clipped: false });
+    s.record.summary = Some(summary(
+        1.1,
+        &[(1, 68.0, Verdict::Ok)],
+        Level::ZeroShot,
+        "Enough for a quick clone. Keep going to train.",
+    ));
+    s.record.active =
+        Some(Active { recorder: None, seq: 0, part: 1, level: 0.42, peak: 0.55, elapsed_s: 37.0, clipped: false });
 }
 
 pub fn scene_recording_loud(s: &mut AppState) {
     scene_recording(s);
-    s.record.active = Some(Active { recorder: None, seq: 0, part: 1, level: 0.97, peak: 1.0, elapsed_s: 12.0, clipped: true });
+    s.record.active =
+        Some(Active { recorder: None, seq: 0, part: 1, level: 0.97, peak: 1.0, elapsed_s: 12.0, clipped: true });
 }
 
 pub fn scene_saved_with_issues(s: &mut AppState) {
@@ -191,8 +250,20 @@ pub fn scene_saved_with_issues(s: &mut AppState) {
     s.record.current = 2;
     s.record.takes[0] = saved(68.0, Verdict::Ok, &[]);
     s.record.takes[1] = saved(64.0, Verdict::Ok, &[]);
-    s.record.takes[2] = saved(72.0, Verdict::Warn, &["Background noise is a bit high: close the window or move away from the fan", "A few words were slightly clipped: lower the input volume"]);
-    s.record.summary = Some(summary(3.4, &[(1, 68.0, Verdict::Ok), (2, 64.0, Verdict::Ok), (3, 72.0, Verdict::Warn)], Level::ZeroShot, "Almost there. Two more parts to reach a trainable voice."));
+    s.record.takes[2] = saved(
+        72.0,
+        Verdict::Warn,
+        &[
+            "Background noise is a bit high: close the window or move away from the fan",
+            "A few words were slightly clipped: lower the input volume",
+        ],
+    );
+    s.record.summary = Some(summary(
+        3.4,
+        &[(1, 68.0, Verdict::Ok), (2, 64.0, Verdict::Ok), (3, 72.0, Verdict::Warn)],
+        Level::ZeroShot,
+        "Almost there. Two more parts to reach a trainable voice.",
+    ));
 }
 
 pub fn scene_rejected(s: &mut AppState) {
@@ -218,7 +289,12 @@ pub fn scene_summary_ready(s: &mut AppState) {
         s.record.takes[i as usize - 1] = saved(d, if i == 3 { Verdict::Warn } else { Verdict::Ok }, &[]);
     }
     let parts: Vec<_> = durs.iter().map(|(i, d)| (*i, *d, Verdict::Ok)).collect();
-    s.record.summary = Some(summary(6.1, &parts, Level::Trainable, "Great: 6.1 minutes is enough to train a close copy of your voice (about 300 epochs, around 55 minutes)."));
+    s.record.summary = Some(summary(
+        6.1,
+        &parts,
+        Level::Trainable,
+        "Great: 6.1 minutes is enough to train a close copy of your voice (about 300 epochs, around 55 minutes).",
+    ));
     s.record.phase = Phase::Summary;
 }
 
@@ -241,7 +317,11 @@ pub fn scene_notice_saved(s: &mut AppState) {
 fn mic_devices(s: &mut AppState) {
     s.record.mic.settings_read = true;
     s.record.mic.loaded = true;
-    s.record.mic.devices = vec!["Microphone (Realtek(R) Audio)".into(), "Blue Yeti Stereo Microphone".into(), "Headset Microphone (Logi USB Headset)".into()];
+    s.record.mic.devices = vec![
+        "Microphone (Realtek(R) Audio)".into(),
+        "Blue Yeti Stereo Microphone".into(),
+        "Headset Microphone (Logi USB Headset)".into(),
+    ];
 }
 
 pub fn scene_mic_picker(s: &mut AppState) {
@@ -277,7 +357,12 @@ pub fn scene_import_checking(s: &mut AppState) {
     standard(s);
     s.record.current = 1;
     s.record.takes[0] = saved(68.0, Verdict::Ok, &[]);
-    s.record.takes[1] = Take { status: TakeStatus::Checking, path: Some(PathBuf::from("/home/me/Voice Memos/evening-reading.mp3")), imported: Some("evening-reading.mp3".into()), ..Take::default() };
+    s.record.takes[1] = Take {
+        status: TakeStatus::Checking,
+        path: Some(PathBuf::from("/home/me/Voice Memos/evening-reading.mp3")),
+        imported: Some("evening-reading.mp3".into()),
+        ..Take::default()
+    };
 }
 
 pub fn scene_import_saved(s: &mut AppState) {
@@ -287,5 +372,10 @@ pub fn scene_import_saved(s: &mut AppState) {
     let mut t = saved(61.0, Verdict::Warn, &["A little background noise: a quieter room helps"]);
     t.imported = Some("evening-reading.mp3".into());
     s.record.takes[1] = t;
-    s.record.summary = Some(summary(2.1, &[(1, 68.0, Verdict::Ok), (2, 61.0, Verdict::Warn)], Level::ZeroShot, "Enough for a quick clone. Keep going to train."));
+    s.record.summary = Some(summary(
+        2.1,
+        &[(1, 68.0, Verdict::Ok), (2, 61.0, Verdict::Warn)],
+        Level::ZeroShot,
+        "Enough for a quick clone. Keep going to train.",
+    ));
 }

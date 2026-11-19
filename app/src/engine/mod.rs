@@ -102,7 +102,8 @@ pub(crate) fn find_resources() -> Option<PathBuf> {
 
 impl EngineConfig {
     pub fn discover() -> anyhow::Result<Self> {
-        let data_dir = default_data_dir().ok_or_else(|| anyhow!("cannot determine the data directory; set MIMVOX_DATA"))?;
+        let data_dir =
+            default_data_dir().ok_or_else(|| anyhow!("cannot determine the data directory; set MIMVOX_DATA"))?;
 
         let runtime_toml = match env_path("MIMVOX_RUNTIME") {
             Some(p) => p,
@@ -152,19 +153,14 @@ struct RuntimePython {
 /// Reads `[python] engine` from runtime.toml (relative paths resolve against the file's directory).
 fn read_engine_python(runtime_toml: &Path) -> anyhow::Result<PathBuf> {
     let text = fs::read_to_string(runtime_toml).with_context(|| {
-        format!(
-            "cannot read {} (run the setup script first, or set MIMVOX_RUNTIME)",
-            runtime_toml.display()
-        )
+        format!("cannot read {} (run the setup script first, or set MIMVOX_RUNTIME)", runtime_toml.display())
     })?;
-    let parsed: RuntimeToml = toml::from_str(&text)
-        .with_context(|| format!("invalid runtime.toml at {}: expected [python] engine = \"...\"", runtime_toml.display()))?;
+    let parsed: RuntimeToml = toml::from_str(&text).with_context(|| {
+        format!("invalid runtime.toml at {}: expected [python] engine = \"...\"", runtime_toml.display())
+    })?;
     let python = PathBuf::from(&parsed.python.engine);
-    let python = if python.is_relative() {
-        runtime_toml.parent().map(|d| d.join(&python)).unwrap_or(python)
-    } else {
-        python
-    };
+    let python =
+        if python.is_relative() { runtime_toml.parent().map(|d| d.join(&python)).unwrap_or(python) } else { python };
     if !python.is_file() {
         return Err(anyhow!(
             "engine interpreter from runtime.toml does not exist: {} (re-run the setup script)",
@@ -234,8 +230,9 @@ impl EngineClient {
 
         let mut pythonpath = OsString::from(&cfg.engine_src);
         if let Some(existing) = std::env::var_os("PYTHONPATH").filter(|v| !v.is_empty()) {
-            let joined = std::env::join_paths(std::env::split_paths(&pythonpath).chain(std::env::split_paths(&existing)))
-                .context("cannot build PYTHONPATH")?;
+            let joined =
+                std::env::join_paths(std::env::split_paths(&pythonpath).chain(std::env::split_paths(&existing)))
+                    .context("cannot build PYTHONPATH")?;
             pythonpath = joined;
         }
 
@@ -270,9 +267,7 @@ impl EngineClient {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("cannot start the engine with {}", python.display()))?;
+        let mut child = cmd.spawn().with_context(|| format!("cannot start the engine with {}", python.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("engine stdin unavailable"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("engine stdout unavailable"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("engine stderr unavailable"))?;
@@ -363,7 +358,10 @@ impl EngineClient {
         if let Err(e) = self.write_line(&line) {
             (self.sink)(
                 self.id,
-                EngineMsg::Response { id, result: Err(protocol::EngineError::new("internal", format!("engine is not running: {e}"))) },
+                EngineMsg::Response {
+                    id,
+                    result: Err(protocol::EngineError::new("internal", format!("engine is not running: {e}"))),
+                },
             );
         }
         id
@@ -375,9 +373,8 @@ impl EngineClient {
 
     fn write_line(&self, line: &str) -> std::io::Result<()> {
         let mut guard = self.stdin.lock().unwrap_or_else(|e| e.into_inner());
-        let stdin = guard
-            .as_mut()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin closed"))?;
+        let stdin =
+            guard.as_mut().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin closed"))?;
         stdin.write_all(line.as_bytes())?;
         stdin.write_all(b"\n")?;
         stdin.flush()
@@ -456,9 +453,8 @@ fn parse_line(line: &str) -> Result<Option<EngineMsg>, ()> {
         return Ok(None);
     }
     let result = if let Some(err) = obj.get("error").filter(|e| !e.is_null()) {
-        Err(serde_json::from_value(err.clone()).unwrap_or_else(|_| {
-            protocol::EngineError::new("internal", format!("malformed error from engine: {err}"))
-        }))
+        Err(serde_json::from_value(err.clone())
+            .unwrap_or_else(|_| protocol::EngineError::new("internal", format!("malformed error from engine: {err}"))))
     } else {
         Ok(obj.get("result").cloned().unwrap_or(Value::Null))
     };

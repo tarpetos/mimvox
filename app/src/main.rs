@@ -3,8 +3,8 @@
 mod audio;
 mod engine;
 mod state;
-mod update;
 mod ui;
+mod update;
 
 use rune::{App, AppSpec, Titlebar};
 use state::AppState;
@@ -19,8 +19,18 @@ fn leave_appimage_env() {
     let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) else { return };
     let appdir = std::path::PathBuf::from(appdir);
     let inside = |p: &std::path::Path| p.starts_with(&appdir);
-    for var in ["PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "XDG_DATA_DIRS", "PERLLIB", "QT_PLUGIN_PATH",
-        "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0", "GSETTINGS_SCHEMA_DIR", "PYTHONHOME"] {
+    for var in [
+        "PATH",
+        "LD_LIBRARY_PATH",
+        "PYTHONPATH",
+        "XDG_DATA_DIRS",
+        "PERLLIB",
+        "QT_PLUGIN_PATH",
+        "GST_PLUGIN_SYSTEM_PATH",
+        "GST_PLUGIN_SYSTEM_PATH_1_0",
+        "GSETTINGS_SCHEMA_DIR",
+        "PYTHONHOME",
+    ] {
         let Some(value) = std::env::var_os(var) else { continue };
         let kept: Vec<_> = std::env::split_paths(&value).filter(|p| !p.as_os_str().is_empty() && !inside(p)).collect();
         // SAFETY: called first thing in `main`, before any other thread exists.
@@ -43,7 +53,8 @@ fn keep_appimage_fds_to_self() {
         return;
     }
     let Ok(dir) = std::fs::read_dir("/proc/self/fd") else { return };
-    let fds: Vec<i32> = dir.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).filter(|fd| *fd > 2).collect();
+    let fds: Vec<i32> =
+        dir.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).filter(|fd| *fd > 2).collect();
     for fd in fds {
         // SAFETY: fcntl on a descriptor number only reads and sets its flags; a stale number (the directory listing's own
         // descriptor, closed by now) fails with EBADF and is skipped.

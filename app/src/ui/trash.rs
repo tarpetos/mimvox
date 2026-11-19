@@ -26,7 +26,9 @@ fn key(kind: Kind, id: u64) -> String {
 }
 
 pub fn button(p: Palette, kind: Kind, id: u64) -> El {
-    icon_button(p, &format!("trash-{}", key(kind, id)), &icons::TRASH, "Delete this result", move |s| s.trash.confirm = Some((kind, id)))
+    icon_button(p, &format!("trash-{}", key(kind, id)), &icons::TRASH, "Delete this result", move |s| {
+        s.trash.confirm = Some((kind, id))
+    })
 }
 
 pub fn confirming(s: &AppState, kind: Kind, id: u64) -> bool {
@@ -41,13 +43,36 @@ fn deleting(s: &AppState, kind: Kind, id: u64) -> bool {
 pub fn confirm_row(s: &AppState, p: Palette, kind: Kind, id: u64, path: &Path, play: &Path) -> El {
     let k = key(kind, id);
     if deleting(s, kind, id) {
-        return row().key(format!("trash-confirm-{k}")).w_full().h(28.0).center_y().child(text("Deleting…").font(ty::CAPTION).color(p.text_dim));
+        return row()
+            .key(format!("trash-confirm-{k}"))
+            .w_full()
+            .h(28.0)
+            .center_y()
+            .child(text("Deleting…").font(ty::CAPTION).color(p.text_dim));
     }
     let (path, play) = (path.to_path_buf(), play.to_path_buf());
-    row().key(format!("trash-confirm-{k}")).w_full().gap(8.0).center_y()
+    row()
+        .key(format!("trash-confirm-{k}"))
+        .w_full()
+        .gap(8.0)
+        .center_y()
         .child(text("Delete this result?").font(ty::CAPTION).color(p.bad).grow(1.0).min_w(0.0).truncate())
-        .child(Button::new("Delete").danger().small().key(format!("trash-yes-{k}")).on_press(move |s| delete(s, kind, id, &path, &play)).build(p))
-        .child(Button::new("Cancel").ghost().small().key(format!("trash-no-{k}")).on_press(|s| s.trash.confirm = None).build(p))
+        .child(
+            Button::new("Delete")
+                .danger()
+                .small()
+                .key(format!("trash-yes-{k}"))
+                .on_press(move |s| delete(s, kind, id, &path, &play))
+                .build(p),
+        )
+        .child(
+            Button::new("Cancel")
+                .ghost()
+                .small()
+                .key(format!("trash-no-{k}"))
+                .on_press(|s| s.trash.confirm = None)
+                .build(p),
+        )
 }
 
 fn delete(s: &mut AppState, kind: Kind, id: u64, path: &PathBuf, play: &PathBuf) {

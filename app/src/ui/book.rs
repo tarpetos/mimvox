@@ -1,12 +1,18 @@
 //! Book mode of Speak: read a whole book in the active voice, one file per chapter.
 
-use super::components::{Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel, segmented, status_dot};
+use super::components::{
+    Button, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar,
+    section_panel, segmented, status_dot,
+};
 use super::playbar;
 use super::shell::{self, EngineStatus};
 use super::theme::{Palette, motion, radius, ty};
 use super::voices::kit;
 use crate::engine::EngineMsg;
-use crate::engine::protocol::{self, BookChapterDone, BookChapterIn, BookChapterRow, BookDone, BookParams, BookProgress, BookStarted, BookSummary, TextImport};
+use crate::engine::protocol::{
+    self, BookChapterDone, BookChapterIn, BookChapterRow, BookDone, BookParams, BookProgress, BookStarted, BookSummary,
+    TextImport,
+};
 use crate::state::{AppState, Screen};
 use rune::{El, ScrollSpec, TextEdit, col, el, row, text};
 use serde_json::{Value, json};
@@ -16,7 +22,8 @@ use std::path::{Path, PathBuf};
 pub const LONG_WORDS: u32 = 5000;
 
 /// File types the engine's `text.import` reads.
-pub const TEXT_EXTS: &[&str] = &["txt", "md", "markdown", "html", "htm", "xhtml", "epub", "docx", "odt", "rtf", "fb2", "pdf", "srt", "vtt"];
+pub const TEXT_EXTS: &[&str] =
+    &["txt", "md", "markdown", "html", "htm", "xhtml", "epub", "docx", "odt", "rtf", "fb2", "pdf", "srt", "vtt"];
 
 /// Generation seconds per audio second until a book has measured its own (an RTX 4070 measured 0.2-0.4 with
 /// Best for an untrained voice; voice conversion adds to it).
@@ -26,7 +33,8 @@ fn guess_rtf(quality: protocol::Quality) -> f32 {
 
 pub fn is_text_path(p: &Path) -> bool {
     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-    name.ends_with(".fb2.zip") || p.extension().and_then(|e| e.to_str()).is_some_and(|e| TEXT_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    name.ends_with(".fb2.zip")
+        || p.extension().and_then(|e| e.to_str()).is_some_and(|e| TEXT_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +64,15 @@ pub struct Draft {
 }
 
 fn draft_chapters(list: &[protocol::TextChapter]) -> Vec<DraftChapter> {
-    list.iter().map(|c| DraftChapter { title: c.title.clone(), text: c.text.clone(), words: c.words, est_s: c.est_s, include: true }).collect()
+    list.iter()
+        .map(|c| DraftChapter {
+            title: c.title.clone(),
+            text: c.text.clone(),
+            words: c.words,
+            est_s: c.est_s,
+            include: true,
+        })
+        .collect()
 }
 
 pub struct BookState {
@@ -137,7 +153,9 @@ impl Default for BookState {
 
 impl BookState {
     pub fn running(&self) -> bool {
-        self.project.as_ref().is_some_and(|p| p.status == "running") || self.start_req.is_some() || self.resume_req.is_some()
+        self.project.as_ref().is_some_and(|p| p.status == "running")
+            || self.start_req.is_some()
+            || self.resume_req.is_some()
     }
 }
 
@@ -186,18 +204,35 @@ pub fn set_mode(s: &mut AppState, book: bool) {
 }
 
 fn opened(s: &mut AppState, file: TextImport, purpose: Purpose) {
-    if !file.language.is_empty() && s.shell.languages.iter().any(|l| l.code == file.language) && file.language != super::speak::language(s) {
+    if !file.language.is_empty()
+        && s.shell.languages.iter().any(|l| l.code == file.language)
+        && file.language != super::speak::language(s)
+    {
         super::speak::set_language(s, &file.language);
         if file.language_detected {
-            shell::toast(s, Tone::Neutral, format!("Language set to {} (detected in the text).", super::lang::name(&file.language)));
+            shell::toast(
+                s,
+                Tone::Neutral,
+                format!("Language set to {} (detected in the text).", super::lang::name(&file.language)),
+            );
         }
     }
     for w in file.warnings.iter().take(2) {
         shell::toast(s, Tone::Warning, w.clone());
     }
     if purpose == Purpose::Auto && file.words <= LONG_WORDS {
-        let joined = file.chapters.iter().map(|c| if file.chapters.len() > 1 && !c.title.is_empty() { format!("{}\n\n{}", c.title, c.text) } else { c.text.clone() })
-            .collect::<Vec<_>>().join("\n\n");
+        let joined = file
+            .chapters
+            .iter()
+            .map(|c| {
+                if file.chapters.len() > 1 && !c.title.is_empty() {
+                    format!("{}\n\n{}", c.title, c.text)
+                } else {
+                    c.text.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let mut edit = TextEdit::new(joined);
         edit.focused = true;
         s.speak.text = edit;
@@ -205,7 +240,15 @@ fn opened(s: &mut AppState, file: TextImport, purpose: Purpose) {
         return;
     }
     if purpose == Purpose::Auto {
-        shell::toast(s, Tone::Neutral, format!("{} is long ({} words): it opened in Book mode, where each chapter becomes its own file.", file.name, group(file.words)));
+        shell::toast(
+            s,
+            Tone::Neutral,
+            format!(
+                "{} is long ({} words): it opened in Book mode, where each chapter becomes its own file.",
+                file.name,
+                group(file.words)
+            ),
+        );
     }
     let chapters = draft_chapters(&file.chapters);
     let mut file = file;
@@ -271,20 +314,44 @@ fn split_how(how: &str) -> &'static str {
 fn split_line(p: Palette, d: &Draft) -> Option<El> {
     let (how, parts) = d.auto.as_ref()?;
     let (msg, button) = if d.before_split.is_some() {
-        (format!("Split into {} parts {}.", d.chapters.len(), split_how(how)),
-         Button::new("Undo split").ghost().small().icon(&icons::REFRESH).key("book-undo-split")
-             .help("Back to the chapters of the file (changes made since are undone too)").on_press(undo_split))
+        (
+            format!("Split into {} parts {}.", d.chapters.len(), split_how(how)),
+            Button::new("Undo split")
+                .ghost()
+                .small()
+                .icon(&icons::REFRESH)
+                .key("book-undo-split")
+                .help("Back to the chapters of the file (changes made since are undone too)")
+                .on_press(undo_split),
+        )
     } else {
         let long = d.chapters.iter().filter(|c| c.words >= 600).count() <= 1;
         let what = if long { "No chapters in this file" } else { "Some chapters are very long" };
-        (format!("{what}: it can be split into {} parts {}.", parts.len(), split_how(how)),
-         Button::new("Split automatically").secondary().small().icon(&icons::SPARKLE).key("book-auto-split")
-             .help("Undo puts the chapters back as they were").on_press(auto_split))
+        (
+            format!("{what}: it can be split into {} parts {}.", parts.len(), split_how(how)),
+            Button::new("Split automatically")
+                .secondary()
+                .small()
+                .icon(&icons::SPARKLE)
+                .key("book-auto-split")
+                .help("Undo puts the chapters back as they were")
+                .on_press(auto_split),
+        )
     };
-    Some(row().key("book-split").w_full().gap(10.0).center_y().px(10.0).py(8.0).radius(super::theme::radius::CONTROL)
-        .fill(p.accent.alpha(0.07)).border(1.0, p.accent.alpha(0.2))
-        .child(text(msg).font(ty::CAPTION).color(p.text_dim).wrap().grow(1.0).min_w(0.0))
-        .child(button.build(p)))
+    Some(
+        row()
+            .key("book-split")
+            .w_full()
+            .gap(10.0)
+            .center_y()
+            .px(10.0)
+            .py(8.0)
+            .radius(super::theme::radius::CONTROL)
+            .fill(p.accent.alpha(0.07))
+            .border(1.0, p.accent.alpha(0.2))
+            .child(text(msg).font(ty::CAPTION).color(p.text_dim).wrap().grow(1.0).min_w(0.0))
+            .child(button.build(p)),
+    )
 }
 
 /// Joins chapter `i + 1` into chapter `i`; its title becomes a paragraph of the text.
@@ -317,8 +384,20 @@ fn split(s: &mut AppState, i: usize) {
     let wa = head.split_whitespace().count() as u32;
     let wb = tail.split_whitespace().count() as u32;
     let total = (wa + wb).max(1) as f32;
-    let first = DraftChapter { title: c.title.clone(), text: head, words: wa, est_s: c.est_s * wa as f32 / total, include: c.include };
-    let second = DraftChapter { title: format!("{} (2)", c.title), text: tail, words: wb, est_s: c.est_s * wb as f32 / total, include: c.include };
+    let first = DraftChapter {
+        title: c.title.clone(),
+        text: head,
+        words: wa,
+        est_s: c.est_s * wa as f32 / total,
+        include: c.include,
+    };
+    let second = DraftChapter {
+        title: format!("{} (2)", c.title),
+        text: tail,
+        words: wb,
+        est_s: c.est_s * wb as f32 / total,
+        include: c.include,
+    };
     d.chapters.splice(i..=i, [first, second]);
 }
 
@@ -357,7 +436,12 @@ fn start(s: &mut AppState) {
         title: &title,
         source: d.file.path.to_str(),
         format: Some(&d.file.format),
-        chapters: d.chapters.iter().filter(|c| c.include).map(|c| BookChapterIn { title: &c.title, text: &c.text }).collect(),
+        chapters: d
+            .chapters
+            .iter()
+            .filter(|c| c.include)
+            .map(|c| BookChapterIn { title: &c.title, text: &c.text })
+            .collect(),
         voice_id: &voice.id,
         language: &lang,
         expressiveness: s.book.expressiveness,
@@ -414,7 +498,12 @@ fn pick_book_voice(s: &mut AppState, voice: String) {
 }
 
 fn keep_made_chapters(s: &mut AppState, voice: String) {
-    let partial: Vec<u32> = s.book.project.as_ref().map(|p| p.chapter_list.iter().filter(|c| c.status == "partial").map(|c| c.index).collect()).unwrap_or_default();
+    let partial: Vec<u32> = s
+        .book
+        .project
+        .as_ref()
+        .map(|p| p.chapter_list.iter().filter(|c| c.status == "partial").map(|c| c.index).collect())
+        .unwrap_or_default();
     reread(s, Some(voice), Some(partial));
 }
 
@@ -577,8 +666,18 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
         match result.clone().and_then(protocol::parse_result::<BookStarted>) {
             Ok(st) => {
                 let Some(d) = b.draft.take() else { return };
-                let rows = d.chapters.iter().filter(|c| c.include).enumerate()
-                    .map(|(i, c)| BookChapterRow { index: i as u32, title: c.title.clone(), words: c.words, status: "waiting".into(), ..Default::default() })
+                let rows = d
+                    .chapters
+                    .iter()
+                    .filter(|c| c.include)
+                    .enumerate()
+                    .map(|(i, c)| BookChapterRow {
+                        index: i as u32,
+                        title: c.title.clone(),
+                        words: c.words,
+                        status: "waiting".into(),
+                        ..Default::default()
+                    })
                     .collect::<Vec<_>>();
                 b.project = Some(BookSummary {
                     id: st.id.clone(),
@@ -630,7 +729,12 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
         }
     } else if b.list_req == Some(id) {
         b.list_req = None;
-        let list: Vec<BookSummary> = result.as_ref().ok().and_then(|v| v.get("books")).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+        let list: Vec<BookSummary> = result
+            .as_ref()
+            .ok()
+            .and_then(|v| v.get("books"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
         b.recent = list;
         if std::mem::replace(&mut b.first_list, false) {
             let want = match &b.project {
@@ -648,7 +752,13 @@ fn on_response(s: &mut AppState, id: u64, result: &Result<Value, protocol::Engin
         match result {
             Ok(v) => {
                 let path = v.get("path_play").and_then(Value::as_str).map(PathBuf::from);
-                let title = s.book.project.as_ref().and_then(|p| p.chapter_list.iter().find(|c| c.index == index)).map(|c| c.title.clone()).unwrap_or_default();
+                let title = s
+                    .book
+                    .project
+                    .as_ref()
+                    .and_then(|p| p.chapter_list.iter().find(|c| c.index == index))
+                    .map(|c| c.title.clone())
+                    .unwrap_or_default();
                 if let Some(path) = path {
                     toggle_play(s, &path, title, index);
                 }
@@ -726,7 +836,11 @@ fn on_event(s: &mut AppState, name: &str, data: &Value) {
                 p.m4b = done.m4b.clone();
                 p.chapters_done = p.chapters;
                 let hours = fmt_len(p.totals.audio_s);
-                let note = if done.m4b_requested && done.m4b.is_none() { " The M4B could not be made (it needs ffmpeg with AAC)." } else { "" };
+                let note = if done.m4b_requested && done.m4b.is_none() {
+                    " The M4B could not be made (it needs ffmpeg with AAC)."
+                } else {
+                    ""
+                };
                 shell::toast(s, Tone::Success, format!("The book is ready: {hours} of audio.{note}"));
             }
             s.book.stopping = None;
@@ -845,16 +959,24 @@ pub fn settle(s: &mut AppState) -> bool {
         if !s.book.settings_loaded {
             s.book.settings_loaded = true;
             s.book.m4b = super::onboarding::setting("book_m4b").and_then(|v| v.as_bool()).unwrap_or(false);
-            s.book.read_titles = super::onboarding::setting("book_read_titles").and_then(|v| v.as_bool()).unwrap_or(true);
-            s.book.keep_voice = super::onboarding::setting("book_keep_voice").and_then(|v| v.as_bool()).unwrap_or(false);
-            s.book.expressiveness = super::onboarding::setting("book_expressiveness").and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(EXPRESSIVENESS);
+            s.book.read_titles =
+                super::onboarding::setting("book_read_titles").and_then(|v| v.as_bool()).unwrap_or(true);
+            s.book.keep_voice =
+                super::onboarding::setting("book_keep_voice").and_then(|v| v.as_bool()).unwrap_or(false);
+            s.book.expressiveness = super::onboarding::setting("book_expressiveness")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or(EXPRESSIVENESS);
             changed = true;
         } else if s.book.settings_dirty {
             s.book.settings_dirty = false;
             super::onboarding::save_setting("book_m4b", json!(s.book.m4b));
             super::onboarding::save_setting("book_read_titles", json!(s.book.read_titles));
             super::onboarding::save_setting("book_keep_voice", json!(s.book.keep_voice));
-            super::onboarding::save_setting("book_expressiveness", json!((s.book.expressiveness * 100.0).round() / 100.0));
+            super::onboarding::save_setting(
+                "book_expressiveness",
+                json!((s.book.expressiveness * 100.0).round() / 100.0),
+            );
         }
         if !s.book.listed && shell::engine_ready(s) {
             request_list(s);
@@ -893,7 +1015,8 @@ pub fn mode_switch(s: &AppState, p: Palette) -> El {
 }
 
 pub fn panel(s: &AppState, p: Palette) -> El {
-    let head = row().key("book-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y().child(mode_switch(s, p));
+    let head =
+        row().key("book-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y().child(mode_switch(s, p));
     let mut c = section_panel(p, "Book").key("book-panel").grow(1.0).min_w(0.0).h_full().gap(12.0).child(head);
     c = if let Some(d) = &s.book.draft {
         c.child(draft_view(s, p, d))
@@ -907,8 +1030,14 @@ pub fn panel(s: &AppState, p: Palette) -> El {
 
 fn empty_view(s: &AppState, p: Palette) -> El {
     let busy = s.book.importing.is_some() || s.book.get_req.is_some();
-    let open = Button::new(if busy { "Opening…" } else { "Open book…" }).primary().large().icon(&icons::FILE).key("book-open")
-        .disabled(busy || !matches!(s.shell.engine, EngineStatus::Ready { .. })).on_press(|s| choose_file(s, true)).build(p);
+    let open = Button::new(if busy { "Opening…" } else { "Open book…" })
+        .primary()
+        .large()
+        .icon(&icons::FILE)
+        .key("book-open")
+        .disabled(busy || !matches!(s.shell.engine, EngineStatus::Ready { .. }))
+        .on_press(|s| choose_file(s, true))
+        .build(p);
     col().key("book-empty").w_full().grow(1.0).min_h(0.0).center().gap(14.0)
         .child(empty_state(p, &icons::FILE, "Read a whole book in your voice",
             "EPUB, DOCX, ODT, FB2, PDF with a text layer, TXT, Markdown, HTML, RTF or subtitles. Every chapter becomes its own file, and you can pause and continue later, even after closing the app."))
@@ -917,13 +1046,26 @@ fn empty_view(s: &AppState, p: Palette) -> El {
 }
 
 fn file_card(p: Palette, title: &str, sub: String, right: El) -> El {
-    glass_card(p).key("book-file").w_full().padding(12.0)
-        .child(row().w_full().gap(12.0).center_y()
-            .child(el().size(36.0, 36.0).radius(radius::CONTROL).center().fill(p.accent.alpha(0.14)).child(icon_el(&icons::FILE, 17.0, p.accent)))
-            .child(col().grow(1.0).min_w(0.0).gap(2.0)
-                .child(text(title.to_owned()).font(ty::TITLE).color(p.text).truncate())
-                .child(text(sub).font(ty::CAPTION).color(p.text_faint).truncate()))
-            .child(right))
+    glass_card(p).key("book-file").w_full().padding(12.0).child(
+        row()
+            .w_full()
+            .gap(12.0)
+            .center_y()
+            .child(el().size(36.0, 36.0).radius(radius::CONTROL).center().fill(p.accent.alpha(0.14)).child(icon_el(
+                &icons::FILE,
+                17.0,
+                p.accent,
+            )))
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(2.0)
+                    .child(text(title.to_owned()).font(ty::TITLE).color(p.text).truncate())
+                    .child(text(sub).font(ty::CAPTION).color(p.text_faint).truncate()),
+            )
+            .child(right),
+    )
 }
 
 fn draft_view(s: &AppState, p: Palette, d: &Draft) -> El {
@@ -936,34 +1078,79 @@ fn draft_view(s: &AppState, p: Palette, d: &Draft) -> El {
         sub.push(e.to_uppercase());
     }
     let title = if f.title.trim().is_empty() { f.name.clone() } else { f.title.clone() };
-    let name_line = if f.title.trim().is_empty() || f.title == f.name { sub.join(" · ") } else { format!("{} · {}", f.name, sub.join(" · ")) };
-    let right = row().gap(8.0).center_y()
-        .child(Button::new("Open another…").ghost().small().key("book-open-other").on_press(|s| choose_file(s, true)).build(p))
+    let name_line = if f.title.trim().is_empty() || f.title == f.name {
+        sub.join(" · ")
+    } else {
+        format!("{} · {}", f.name, sub.join(" · "))
+    };
+    let right = row()
+        .gap(8.0)
+        .center_y()
+        .child(
+            Button::new("Open another…")
+                .ghost()
+                .small()
+                .key("book-open-other")
+                .on_press(|s| choose_file(s, true))
+                .build(p),
+        )
         .child(icon_button(p, "book-close", &icons::CLOSE, "Close this file", close));
     let inc: Vec<&DraftChapter> = d.chapters.iter().filter(|c| c.include).collect();
     let words: u32 = inc.iter().map(|c| c.words).sum();
     let speed = s.speak.speed.max(0.5);
     let audio = inc.iter().map(|c| c.est_s).sum::<f32>() / speed;
     let make = audio * guess_rtf(s.speak.quality);
-    let totals = row().key("book-totals").w_full().gap(8.0).center_y().flex_wrap()
+    let totals = row()
+        .key("book-totals")
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .flex_wrap()
         .child(badge(p, &format!("{} of {} chapters", inc.len(), d.chapters.len()), Tone::Accent))
         .child(badge(p, &format!("{} words", group(words)), Tone::Neutral))
         .child(badge(p, &format!("about {} of audio", fmt_len(audio)), Tone::Neutral))
         .child(badge(p, &format!("about {} to make", fmt_len(make)), Tone::Neutral));
-    let list = col().w_full().gap(2.0).children(d.chapters.iter().enumerate().map(|(i, c)| draft_row(s, p, i, c, i + 1 == d.chapters.len())));
+    let list = col()
+        .w_full()
+        .gap(2.0)
+        .children(d.chapters.iter().enumerate().map(|(i, c)| draft_row(s, p, i, c, i + 1 == d.chapters.len())));
     let block = start_blocker(s);
     let voice = shell::active_voice(s).map(|v| v.name.clone()).unwrap_or_else(|| "no voice".into());
     let hint = block.map(str::to_owned).unwrap_or_else(|| {
-        format!("Read by {voice} in {} · saved as {} files, one per chapter", super::lang::name(&super::speak::language(s)), super::formats::output_format(s).to_uppercase())
+        format!(
+            "Read by {voice} in {} · saved as {} files, one per chapter",
+            super::lang::name(&super::speak::language(s)),
+            super::formats::output_format(s).to_uppercase()
+        )
     });
     let starting = s.book.start_req.is_some();
-    let bar = row().key("book-bar").w_full().gap(16.0).center_y()
-        .child(col().grow(1.0).min_w(0.0).gap(2.0)
-            .child(text("Ready to read").font(ty::LABEL).color(p.text))
-            .child(text(hint).font(ty::CAPTION).color(if block.is_some() { p.warn } else { p.text_faint }).wrap()))
-        .child(Button::new(if starting { "Starting…" } else { "Read the book" }).primary().large().icon(&icons::SPARKLE).key("book-start")
-            .disabled(block.is_some() || starting).on_press(start).build(p));
-    let mut c = col().key("book-draft").w_full().grow(1.0).min_h(0.0).gap(12.0)
+    let bar =
+        row()
+            .key("book-bar")
+            .w_full()
+            .gap(16.0)
+            .center_y()
+            .child(
+                col().grow(1.0).min_w(0.0).gap(2.0).child(text("Ready to read").font(ty::LABEL).color(p.text)).child(
+                    text(hint).font(ty::CAPTION).color(if block.is_some() { p.warn } else { p.text_faint }).wrap(),
+                ),
+            )
+            .child(
+                Button::new(if starting { "Starting…" } else { "Read the book" })
+                    .primary()
+                    .large()
+                    .icon(&icons::SPARKLE)
+                    .key("book-start")
+                    .disabled(block.is_some() || starting)
+                    .on_press(start)
+                    .build(p),
+            );
+    let mut c = col()
+        .key("book-draft")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .gap(12.0)
         .child(file_card(p, &title, name_line, right))
         .child(totals);
     if let Some(w) = f.warnings.first() {
@@ -976,13 +1163,30 @@ fn draft_view(s: &AppState, p: Palette, d: &Draft) -> El {
 }
 
 fn chapter_scroller(p: Palette, list: El) -> El {
-    super::components::well(p).key("book-chapters").w_full().grow(1.0).min_h(120.0).padding(6.0)
-        .child(col().key("book-chapters-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(list))
+    super::components::well(p).key("book-chapters").w_full().grow(1.0).min_h(120.0).padding(6.0).child(
+        col()
+            .key("book-chapters-scroll")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .scroll_edge_fade(14.0)
+            .child(list),
+    )
 }
 
 fn check_box(p: Palette, key: String, on: bool, on_press: impl Fn(&mut AppState) + 'static) -> El {
-    let b = el().key(key).role("checkbox").label("Include").checked(on).focusable(true).size(20.0, 20.0).radius(radius::SMALL).center()
-        .motion(motion::UI).on_press(on_press);
+    let b = el()
+        .key(key)
+        .role("checkbox")
+        .label("Include")
+        .checked(on)
+        .focusable(true)
+        .size(20.0, 20.0)
+        .radius(radius::SMALL)
+        .center()
+        .motion(motion::UI)
+        .on_press(on_press);
     if on {
         b.fill(p.accent).child(icon_el(&icons::CHECK, 13.0, p.on_accent))
     } else {
@@ -993,12 +1197,35 @@ fn check_box(p: Palette, key: String, on: bool, on_press: impl Fn(&mut AppState)
 fn draft_row(s: &AppState, p: Palette, i: usize, c: &DraftChapter, last: bool) -> El {
     let renaming = s.book.renaming.as_ref().filter(|(k, _)| *k == i);
     let title: El = match renaming {
-        Some((_, edit)) => kit::submit_field(&p, edit, "Chapter title", |s: &mut AppState| &mut s.book.renaming.as_mut().expect("renaming").1, commit_rename),
-        None => text(c.title.clone()).key(format!("book-title{i}")).font(ty::LABEL).color(if c.include { p.text } else { p.text_faint }).truncate().grow(1.0).min_w(0.0)
-            .role("button").label(format!("Rename {}", c.title)).help("Click to rename").on_press(move |s: &mut AppState| start_rename(s, i)),
+        Some((_, edit)) => kit::submit_field(
+            &p,
+            edit,
+            "Chapter title",
+            |s: &mut AppState| &mut s.book.renaming.as_mut().expect("renaming").1,
+            commit_rename,
+        ),
+        None => text(c.title.clone())
+            .key(format!("book-title{i}"))
+            .font(ty::LABEL)
+            .color(if c.include { p.text } else { p.text_faint })
+            .truncate()
+            .grow(1.0)
+            .min_w(0.0)
+            .role("button")
+            .label(format!("Rename {}", c.title))
+            .help("Click to rename")
+            .on_press(move |s: &mut AppState| start_rename(s, i)),
     };
     let meta = format!("{} words · {}", group(c.words), fmt_len(c.est_s / s.speak.speed.max(0.5)));
-    let mut r = row().key(format!("book-ch{i}")).w_full().min_h(40.0).px(8.0).gap(10.0).center_y().radius(radius::CONTROL).hover(p.glass_hover)
+    let mut r = row()
+        .key(format!("book-ch{i}"))
+        .w_full()
+        .min_h(40.0)
+        .px(8.0)
+        .gap(10.0)
+        .center_y()
+        .radius(radius::CONTROL)
+        .hover(p.glass_hover)
         .child(check_box(p, format!("book-inc{i}"), c.include, move |s| toggle_include(s, i)))
         .child(text(format!("{}", i + 1)).font(ty::NUM).color(p.text_faint).w(26.0))
         .child(el().grow(1.0).min_w(0.0).child(title))
@@ -1007,7 +1234,9 @@ fn draft_row(s: &AppState, p: Palette, i: usize, c: &DraftChapter, last: bool) -
     r = r.child(if last {
         el().size(28.0, 28.0)
     } else {
-        small_icon(p, format!("book-merge{i}"), &MERGE, "Join the next chapter into this one", move |s| merge_next(s, i))
+        small_icon(p, format!("book-merge{i}"), &MERGE, "Join the next chapter into this one", move |s| {
+            merge_next(s, i)
+        })
     });
     if !c.include {
         r = r.opacity(0.7);
@@ -1015,9 +1244,24 @@ fn draft_row(s: &AppState, p: Palette, i: usize, c: &DraftChapter, last: bool) -
     r
 }
 
-fn small_icon(p: Palette, key: String, glyph: &'static rune::Icon, help: &str, on_press: impl Fn(&mut AppState) + 'static) -> El {
-    el().key(key).role("button").label(help.to_owned()).help(help.to_owned()).size(28.0, 28.0).radius(14.0).center()
-        .hover(p.glass_hover).focusable(true).motion(motion::UI).on_press(on_press)
+fn small_icon(
+    p: Palette,
+    key: String,
+    glyph: &'static rune::Icon,
+    help: &str,
+    on_press: impl Fn(&mut AppState) + 'static,
+) -> El {
+    el().key(key)
+        .role("button")
+        .label(help.to_owned())
+        .help(help.to_owned())
+        .size(28.0, 28.0)
+        .radius(14.0)
+        .center()
+        .hover(p.glass_hover)
+        .focusable(true)
+        .motion(motion::UI)
+        .on_press(on_press)
         .child(icon_el(glyph, 14.0, p.text_dim))
 }
 
@@ -1047,10 +1291,18 @@ fn project_view(s: &AppState, p: Palette, b: &BookSummary) -> El {
         sub.push(format!("{} words", group(b.words)));
     }
     let running = b.status == "running";
-    let right = row().gap(8.0).center_y()
+    let right = row()
+        .gap(8.0)
+        .center_y()
         .child(badge(p, word, tone))
-        .children(b.folder.is_some().then(|| icon_button(p, "book-folder", &icons::FOLDER, "Open the book's folder", open_folder)))
-        .children((!running).then(|| icon_button(p, "book-close", &icons::CLOSE, "Close this book (it stays in the list on the right)", close)));
+        .children(
+            b.folder
+                .is_some()
+                .then(|| icon_button(p, "book-folder", &icons::FOLDER, "Open the book's folder", open_folder)),
+        )
+        .children((!running).then(|| {
+            icon_button(p, "book-close", &icons::CLOSE, "Close this book (it stays in the list on the right)", close)
+        }));
     let t = &b.totals;
     let k = (b.current + 1).min(b.chapters.max(1));
     let label = match b.status.as_str() {
@@ -1073,25 +1325,60 @@ fn project_view(s: &AppState, p: Palette, b: &BookSummary) -> El {
         facts.push(format!("ready in about {}", fmt_len(eta)));
     }
     if let Some(r) = t.rtf.filter(|r| *r > 0.0 && !making) {
-        facts.push(if r < 1.0 { format!("{:.0}× faster than real time", 1.0 / r) } else { format!("{r:.1}× slower than real time") });
+        facts.push(if r < 1.0 {
+            format!("{:.0}× faster than real time", 1.0 / r)
+        } else {
+            format!("{r:.1}× slower than real time")
+        });
     }
     if b.status == "done" && t.elapsed_s > 0.0 {
         facts.push(format!("made in {}", fmt_len(t.elapsed_s)));
     }
-    let progress = col().key("book-progress").w_full().gap(8.0)
-        .child(row().w_full().center_y().justify_between().gap(10.0)
-            .child(text(label).font(ty::LABEL).color(p.text))
-            .child(text(facts.join(" · ")).font(ty::NUM).color(p.text_dim)))
-        .child(progress_bar(p, Some(if making { s.book.m4b_progress.0 / 100.0 } else { (t.percent / 100.0).max(if running { 0.01 } else { 0.0 }) })));
+    let progress = col()
+        .key("book-progress")
+        .w_full()
+        .gap(8.0)
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .justify_between()
+                .gap(10.0)
+                .child(text(label).font(ty::LABEL).color(p.text))
+                .child(text(facts.join(" · ")).font(ty::NUM).color(p.text_dim)),
+        )
+        .child(progress_bar(
+            p,
+            Some(if making {
+                s.book.m4b_progress.0 / 100.0
+            } else {
+                (t.percent / 100.0).max(if running { 0.01 } else { 0.0 })
+            }),
+        ));
     let list = col().w_full().gap(2.0).children(b.chapter_list.iter().map(|c| project_row(s, p, b, c)));
-    let mut c = col().key("book-project").w_full().grow(1.0).min_h(0.0).gap(12.0)
+    let mut c = col()
+        .key("book-project")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .gap(12.0)
         .child(file_card(p, &b.title, sub.join(" · "), right))
         .child(progress);
     if let Some(e) = b.error.as_ref().filter(|_| b.status == "error") {
-        c = c.child(text(format!("Stopped: {}. Resume tries again from the same place.", e.message)).font(ty::CAPTION).color(p.bad).wrap());
+        c = c.child(
+            text(format!("Stopped: {}. Resume tries again from the same place.", e.message))
+                .font(ty::CAPTION)
+                .color(p.bad)
+                .wrap(),
+        );
     }
     if b.interrupted && b.status == "paused" {
-        c = c.child(text("The app closed while this book was being read. Resume continues where it stopped.").font(ty::CAPTION).color(p.text_dim).wrap());
+        c = c.child(
+            text("The app closed while this book was being read. Resume continues where it stopped.")
+                .font(ty::CAPTION)
+                .color(p.text_dim)
+                .wrap(),
+        );
     }
     c.child(chapter_scroller(p, list)).child(project_bar(s, p, b))
 }
@@ -1107,24 +1394,61 @@ fn project_row(s: &AppState, p: Palette, b: &BookSummary, c: &BookChapterRow) ->
             }
             m
         }),
-        "partial" if running => (status_dot(p, Tone::Accent, true), if c.segments > 0 { format!("part {} of {}", c.segment.min(c.segments), c.segments) } else { "starting…".into() }),
-        "partial" => (icon_el(&icons::PAUSE, 13.0, p.warn), format!("stopped at part {} of {}", c.segment, c.segments.max(c.segment))),
-        _ => (el().size(10.0, 10.0).radius(5.0).border(1.0, p.text_faint), if c.words > 0 { format!("{} words", group(c.words)) } else { String::new() }),
+        "partial" if running => (
+            status_dot(p, Tone::Accent, true),
+            if c.segments > 0 {
+                format!("part {} of {}", c.segment.min(c.segments), c.segments)
+            } else {
+                "starting…".into()
+            },
+        ),
+        "partial" => (
+            icon_el(&icons::PAUSE, 13.0, p.warn),
+            format!("stopped at part {} of {}", c.segment, c.segments.max(c.segment)),
+        ),
+        _ => (
+            el().size(10.0, 10.0).radius(5.0).border(1.0, p.text_faint),
+            if c.words > 0 { format!("{} words", group(c.words)) } else { String::new() },
+        ),
     };
     let on = c.status == "partial" && running;
-    let mut r = row().key(format!("book-row{idx}")).w_full().min_h(40.0).px(8.0).gap(10.0).center_y().radius(radius::CONTROL)
+    let mut r = row()
+        .key(format!("book-row{idx}"))
+        .w_full()
+        .min_h(40.0)
+        .px(8.0)
+        .gap(10.0)
+        .center_y()
+        .radius(radius::CONTROL)
         .fill(if on { p.accent.alpha(0.08) } else { rune::Color::TRANSPARENT })
         .child(el().w(20.0).center().child(mark))
         .child(text(format!("{}", idx + 1)).font(ty::NUM).color(p.text_faint).w(26.0))
-        .child(text(c.title.clone()).font(ty::LABEL).color(if c.status == "waiting" { p.text_dim } else { p.text }).truncate().grow(1.0).min_w(0.0))
+        .child(
+            text(c.title.clone())
+                .font(ty::LABEL)
+                .color(if c.status == "waiting" { p.text_dim } else { p.text })
+                .truncate()
+                .grow(1.0)
+                .min_w(0.0),
+        )
         .child(text(meta).font(ty::CAPTION).color(p.text_faint));
     if c.status == "done" && !running && s.book.reread_req.is_none() {
-        r = r.child(small_icon(p, format!("book-redo{idx}"), &icons::REFRESH, "Read this chapter again", move |s| reread(s, None, Some(vec![idx]))));
+        r = r.child(small_icon(p, format!("book-redo{idx}"), &icons::REFRESH, "Read this chapter again", move |s| {
+            reread(s, None, Some(vec![idx]))
+        }));
     }
     if c.status == "done" {
         let playing = chapter_playing(s, idx);
-        let btn = el().key(format!("book-play{idx}")).role("button").label(if playing { "Pause" } else { "Play" }).size(28.0, 28.0).radius(14.0).center()
-            .hover(rune::Color::WHITE.alpha(0.1)).focusable(true).motion(motion::UI)
+        let btn = el()
+            .key(format!("book-play{idx}"))
+            .role("button")
+            .label(if playing { "Pause" } else { "Play" })
+            .size(28.0, 28.0)
+            .radius(14.0)
+            .center()
+            .hover(rune::Color::WHITE.alpha(0.1))
+            .focusable(true)
+            .motion(motion::UI)
             .on_press(move |s: &mut AppState| play_chapter(s, idx))
             .child(icon_el(if playing { &icons::PAUSE } else { &icons::PLAY }, 12.0, p.on_accent));
         r = r.child(accent_glass(p, btn));
@@ -1156,31 +1480,90 @@ fn project_bar(s: &AppState, p: Palette, b: &BookSummary) -> El {
             None => "Resume reads on with the settings the book started with.".to_owned(),
         }),
     };
-    let mut r = row().key("book-bar").w_full().gap(12.0).center_y()
-        .child(col().grow(1.0).min_w(0.0).gap(2.0)
+    let mut r = row().key("book-bar").w_full().gap(12.0).center_y().child(
+        col()
+            .grow(1.0)
+            .min_w(0.0)
+            .gap(2.0)
             .child(text(title).font(ty::LABEL).color(p.text))
-            .child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap()));
+            .child(text(hint).font(ty::CAPTION).color(p.text_faint).wrap()),
+    );
     let waiting = s.book.stopping.is_some() || s.book.resume_req.is_some();
     match b.status.as_str() {
         "running" => {
-            r = r.child(Button::new("Cancel").ghost().key("book-cancel").disabled(waiting).on_press(|s| stop(s, "cancel")).build(p))
-                .child(Button::new("Pause").large().icon(&icons::PAUSE).key("book-pause").disabled(waiting).on_press(|s| stop(s, "pause")).build(p));
+            r = r
+                .child(
+                    Button::new("Cancel")
+                        .ghost()
+                        .key("book-cancel")
+                        .disabled(waiting)
+                        .on_press(|s| stop(s, "cancel"))
+                        .build(p),
+                )
+                .child(
+                    Button::new("Pause")
+                        .large()
+                        .icon(&icons::PAUSE)
+                        .key("book-pause")
+                        .disabled(waiting)
+                        .on_press(|s| stop(s, "pause"))
+                        .build(p),
+                );
         }
         "done" => {
-            r = r.child(Button::new("Change voice").ghost().icon(&icons::USER).key("book-voice").disabled(s.book.reread_req.is_some())
-                .on_press(|s| s.book.voice_menu = Some(None)).build(p))
+            r = r
+                .child(
+                    Button::new("Change voice")
+                        .ghost()
+                        .icon(&icons::USER)
+                        .key("book-voice")
+                        .disabled(s.book.reread_req.is_some())
+                        .on_press(|s| s.book.voice_menu = Some(None))
+                        .build(p),
+                )
                 .child(Button::new("New book").ghost().key("book-new").on_press(|s| choose_file(s, true)).build(p))
-                .child(Button::new("Open folder").primary().large().icon(&icons::FOLDER).key("book-open-folder").on_press(open_folder).build(p));
+                .child(
+                    Button::new("Open folder")
+                        .primary()
+                        .large()
+                        .icon(&icons::FOLDER)
+                        .key("book-open-folder")
+                        .on_press(open_folder)
+                        .build(p),
+                );
         }
         _ => {
-            r = r.child(Button::new("Change voice").ghost().icon(&icons::USER).key("book-voice").disabled(waiting || s.book.reread_req.is_some())
-                .on_press(|s| s.book.voice_menu = Some(None)).build(p));
+            r = r.child(
+                Button::new("Change voice")
+                    .ghost()
+                    .icon(&icons::USER)
+                    .key("book-voice")
+                    .disabled(waiting || s.book.reread_req.is_some())
+                    .on_press(|s| s.book.voice_menu = Some(None))
+                    .build(p),
+            );
             if b.status == "paused" || b.status == "error" {
-                r = r.child(Button::new("Cancel").ghost().key("book-cancel").help("Drop the unfinished chapter; finished chapters are kept").on_press(|s| stop(s, "cancel")).build(p));
+                r = r.child(
+                    Button::new("Cancel")
+                        .ghost()
+                        .key("book-cancel")
+                        .help("Drop the unfinished chapter; finished chapters are kept")
+                        .on_press(|s| stop(s, "cancel"))
+                        .build(p),
+                );
             }
-            let blocked = s.speak.is_generating() || s.book.recent.iter().any(|x| x.status == "running" && x.id != b.id);
-            r = r.child(Button::new(if s.book.resume_req.is_some() { "Resuming…" } else { "Resume" }).primary().large().icon(&icons::PLAY).key("book-resume")
-                .disabled(waiting || blocked || !matches!(s.shell.engine, EngineStatus::Ready { .. })).on_press(resume).build(p));
+            let blocked =
+                s.speak.is_generating() || s.book.recent.iter().any(|x| x.status == "running" && x.id != b.id);
+            r = r.child(
+                Button::new(if s.book.resume_req.is_some() { "Resuming…" } else { "Resume" })
+                    .primary()
+                    .large()
+                    .icon(&icons::PLAY)
+                    .key("book-resume")
+                    .disabled(waiting || blocked || !matches!(s.shell.engine, EngineStatus::Ready { .. }))
+                    .on_press(resume)
+                    .build(p),
+            );
         }
     }
     r
@@ -1196,34 +1579,85 @@ pub fn voice_overlay(s: &AppState, p: Palette) -> Option<El> {
             for v in &s.shell.voices {
                 let current = b.voice_id.as_deref() == Some(v.id.as_str());
                 let id = v.id.clone();
-                let mut r = row().key(format!("book-voice-{}", v.id)).w_full().h(38.0).px(12.0).gap(10.0).center_y().radius(19.0)
-                    .child(text(v.name.clone()).font(ty::LABEL).color(if current { p.text_dim } else { p.text }).grow(1.0).truncate())
+                let mut r = row()
+                    .key(format!("book-voice-{}", v.id))
+                    .w_full()
+                    .h(38.0)
+                    .px(12.0)
+                    .gap(10.0)
+                    .center_y()
+                    .radius(19.0)
+                    .child(
+                        text(v.name.clone())
+                            .font(ty::LABEL)
+                            .color(if current { p.text_dim } else { p.text })
+                            .grow(1.0)
+                            .truncate(),
+                    )
                     .child(el().w(16.0).children(current.then(|| icon_el(&icons::CHECK, 14.0, p.accent))));
                 if !current {
-                    r = r.role("button").label(format!("Read with {}", v.name)).hover(p.glass_hover).focusable(true)
+                    r = r
+                        .role("button")
+                        .label(format!("Read with {}", v.name))
+                        .hover(p.glass_hover)
+                        .focusable(true)
                         .on_press(move |s: &mut AppState| pick_book_voice(s, id.clone()));
                 }
                 list = list.child(r);
             }
-            col().w_full().gap(6.0)
+            col()
+                .w_full()
+                .gap(6.0)
                 .child(text("Read this book with").font(ty::LABEL).color(p.text).px(12.0).pt(4.0))
                 .child(list)
         }
         Some(id) => {
             let (new, old) = (name(id), b.voice_id.as_deref().map(name).unwrap_or_else(|| "another voice".to_owned()));
             let (all, keep) = (id.clone(), id.clone());
-            col().w_full().gap(10.0).padding(6.0)
+            col()
+                .w_full()
+                .gap(10.0)
+                .padding(6.0)
                 .child(text(format!("Read with {new}")).font(ty::LABEL).color(p.text))
-                .child(text(format!("{} of {} chapters are made with {old}.", b.chapters_done, b.chapters)).font(ty::CAPTION).color(p.text_dim).wrap())
-                .child(Button::new(format!("Read all {} chapters again", b.chapters)).primary().key("book-voice-all")
-                    .on_press(move |s| reread(s, Some(all.clone()), None)).build(p))
-                .child(Button::new(format!("Keep them, read the rest with {new}")).ghost().key("book-voice-keep")
-                    .on_press(move |s| keep_made_chapters(s, keep.clone())).build(p))
-                .child(Button::new("Back").ghost().small().key("book-voice-back").on_press(|s| s.book.voice_menu = Some(None)).build(p))
+                .child(
+                    text(format!("{} of {} chapters are made with {old}.", b.chapters_done, b.chapters))
+                        .font(ty::CAPTION)
+                        .color(p.text_dim)
+                        .wrap(),
+                )
+                .child(
+                    Button::new(format!("Read all {} chapters again", b.chapters))
+                        .primary()
+                        .key("book-voice-all")
+                        .on_press(move |s| reread(s, Some(all.clone()), None))
+                        .build(p),
+                )
+                .child(
+                    Button::new(format!("Keep them, read the rest with {new}"))
+                        .ghost()
+                        .key("book-voice-keep")
+                        .on_press(move |s| keep_made_chapters(s, keep.clone()))
+                        .build(p),
+                )
+                .child(
+                    Button::new("Back")
+                        .ghost()
+                        .small()
+                        .key("book-voice-back")
+                        .on_press(|s| s.book.voice_menu = Some(None))
+                        .build(p),
+                )
         }
     };
-    let scrim = el().key("book-voice-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.book.voice_menu = None);
-    let panel = col().key("book-voice-menu").w(300.0).padding(8.0).radius(radius::PANEL + 4.0)
+    let scrim = el()
+        .key("book-voice-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .on_press(|s: &mut AppState| s.book.voice_menu = None);
+    let panel = col()
+        .key("book-voice-menu")
+        .w(300.0)
+        .padding(8.0)
+        .radius(radius::PANEL + 4.0)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.88))
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
@@ -1236,7 +1670,11 @@ pub fn voice_overlay(s: &AppState, p: Palette) -> Option<El> {
 }
 
 pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
-    let head = row().key("book-side-head").pin(None, Some(16.5), Some(22.0), None).gap(8.0).center_y()
+    let head = row()
+        .key("book-side-head")
+        .pin(None, Some(16.5), Some(22.0), None)
+        .gap(8.0)
+        .center_y()
         .child(super::formats::output_chip(s, p, "book-outfmt"));
     let m4b = kit::checkbox(&p, s.book.m4b, "Also make one M4B audiobook with chapter marks", |s| {
         s.book.m4b = !s.book.m4b;
@@ -1247,7 +1685,11 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         s.book.settings_dirty = true;
     });
     // Keyed slots: both checkboxes have the same own key. The inset keeps the scroll area's clip off their border.
-    let mut opts = col().key("book-opts").w_full().pl(2.0).gap(10.0)
+    let mut opts = col()
+        .key("book-opts")
+        .w_full()
+        .pl(2.0)
+        .gap(10.0)
         .child(el().key("book-opt-m4b").w_full().child(m4b))
         .child(el().key("book-opt-titles").w_full().child(titles));
     if super::speak::language(s) == "uk" && super::setuprun::has(s, "ukrainian") && s.speak.exact_stress {
@@ -1264,7 +1706,8 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     }
     let mut list = col().w_full().gap(6.0);
     let shown = s.book.project.as_ref().map(|b| b.id.as_str());
-    let mut books: Vec<&BookSummary> = s.book.recent.iter().map(|b| s.book.project.as_ref().filter(|p| p.id == b.id).unwrap_or(b)).collect();
+    let mut books: Vec<&BookSummary> =
+        s.book.recent.iter().map(|b| s.book.project.as_ref().filter(|p| p.id == b.id).unwrap_or(b)).collect();
     books.sort_by_key(|b| !of_active_voice(s, b));
     for b in books.iter().copied().take(12) {
         let id = b.id.clone();
@@ -1275,25 +1718,65 @@ pub fn side_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
         if let Some(voice) = voice_label(s, b) {
             detail = format!("{voice} · {detail}");
         }
-        let mut card = row().key(format!("book-recent-{}", b.id)).w_full().px(10.0).py(8.0).gap(8.0).center_y().radius(radius::CONTROL)
-            .fill(if on { p.accent.alpha(0.12) } else { p.glass_hover.alpha(0.0) }).hover(p.glass_hover).focusable(true)
-            .on_press(move |s: &mut AppState| open_book(s, &id))
-            .child(col().grow(1.0).min_w(0.0).gap(2.0)
-                .child(text(b.title.clone()).font(ty::LABEL).color(p.text).truncate())
-                .child(row().gap(6.0).center_y().child(status_dot(p, tone, b.status == "running")).child(text(format!("{word} · {detail}")).font(ty::CAPTION).color(p.text_faint).truncate())));
+        let mut card =
+            row()
+                .key(format!("book-recent-{}", b.id))
+                .w_full()
+                .px(10.0)
+                .py(8.0)
+                .gap(8.0)
+                .center_y()
+                .radius(radius::CONTROL)
+                .fill(if on { p.accent.alpha(0.12) } else { p.glass_hover.alpha(0.0) })
+                .hover(p.glass_hover)
+                .focusable(true)
+                .on_press(move |s: &mut AppState| open_book(s, &id))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(2.0)
+                        .child(text(b.title.clone()).font(ty::LABEL).color(p.text).truncate())
+                        .child(row().gap(6.0).center_y().child(status_dot(p, tone, b.status == "running")).child(
+                            text(format!("{word} · {detail}")).font(ty::CAPTION).color(p.text_faint).truncate(),
+                        )),
+                );
         if b.status != "running" {
-            card = card.child(small_icon(p, format!("book-forget-{}", b.id), &icons::TRASH, "Remove from the list (the audio files stay)", move |s| forget_book(s, &id2)));
+            card = card.child(small_icon(
+                p,
+                format!("book-forget-{}", b.id),
+                &icons::TRASH,
+                "Remove from the list (the audio files stay)",
+                move |s| forget_book(s, &id2),
+            ));
         }
         list = list.child(card);
     }
     let books = if books.is_empty() {
-        col().key("book-recent-empty").w_full().child(text("Books you read appear here, so you can come back to them.").font(ty::CAPTION).color(p.text_faint).wrap())
+        col().key("book-recent-empty").w_full().child(
+            text("Books you read appear here, so you can come back to them.")
+                .font(ty::CAPTION)
+                .color(p.text_faint)
+                .wrap(),
+        )
     } else {
-        col().key("book-recent").w_full().gap(8.0).child(text("Your books").font(ty::LABEL).color(p.text_dim)).child(list)
+        col()
+            .key("book-recent")
+            .w_full()
+            .gap(8.0)
+            .child(text("Your books").font(ty::LABEL).color(p.text_dim))
+            .child(list)
     };
     let body = col().w_full().gap(16.0).child(opts).child(books);
     let body = if own_scroll {
-        col().key("book-side-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(body)
+        col()
+            .key("book-side-scroll")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .scroll_edge_fade(14.0)
+            .child(body)
     } else {
         body
     };
@@ -1355,22 +1838,38 @@ fn scene_file() -> TextImport {
 
 fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
     scene_base(s);
-    let rows = CHAPTERS.iter().enumerate().map(|(i, (t, w))| {
-        let d = *w as f32 / 145.0 * 60.0;
-        let st = if i < done { "done" } else if i == done && seg.0 > 0 { "partial" } else { "waiting" };
-        BookChapterRow {
-            index: i as u32,
-            title: (*t).into(),
-            words: *w,
-            status: st.into(),
-            segment: if st == "partial" { seg.0 } else { 0 },
-            segments: if st == "partial" { seg.1 } else { 0 },
-            audio_s: if st == "done" { d } else if st == "partial" { d * seg.0 as f32 / seg.1 as f32 } else { 0.0 },
-            rtf: (st == "done").then_some(0.30 + 0.01 * i as f32),
-            path: (st == "done").then(|| PathBuf::from(format!("/tmp/books/{:02} - {t}.mp3", i + 1))),
-            ..Default::default()
-        }
-    }).collect::<Vec<_>>();
+    let rows = CHAPTERS
+        .iter()
+        .enumerate()
+        .map(|(i, (t, w))| {
+            let d = *w as f32 / 145.0 * 60.0;
+            let st = if i < done {
+                "done"
+            } else if i == done && seg.0 > 0 {
+                "partial"
+            } else {
+                "waiting"
+            };
+            BookChapterRow {
+                index: i as u32,
+                title: (*t).into(),
+                words: *w,
+                status: st.into(),
+                segment: if st == "partial" { seg.0 } else { 0 },
+                segments: if st == "partial" { seg.1 } else { 0 },
+                audio_s: if st == "done" {
+                    d
+                } else if st == "partial" {
+                    d * seg.0 as f32 / seg.1 as f32
+                } else {
+                    0.0
+                },
+                rtf: (st == "done").then_some(0.30 + 0.01 * i as f32),
+                path: (st == "done").then(|| PathBuf::from(format!("/tmp/books/{:02} - {t}.mp3", i + 1))),
+                ..Default::default()
+            }
+        })
+        .collect::<Vec<_>>();
     let audio: f32 = rows.iter().map(|r| r.audio_s).sum();
     let total: f32 = CHAPTERS.iter().map(|c| c.1 as f32 / 145.0 * 60.0).sum();
     let finished = status == "done";
@@ -1401,15 +1900,41 @@ fn scene_project(s: &mut AppState, status: &str, done: usize, seg: (u32, u32)) {
     });
     s.book.recent = vec![
         s.book.project.clone().unwrap_or_default(),
-        BookSummary { id: "kobzar-20261101-090000".into(), title: "Кобзар".into(), status: "done".into(), chapters: 24, chapters_done: 24, totals: protocol::BookTotals { audio_s: 31_200.0, ..Default::default() }, ..Default::default() },
+        BookSummary {
+            id: "kobzar-20261101-090000".into(),
+            title: "Кобзар".into(),
+            status: "done".into(),
+            chapters: 24,
+            chapters_done: 24,
+            totals: protocol::BookTotals { audio_s: 31_200.0, ..Default::default() },
+            ..Default::default()
+        },
     ];
 }
 
 pub fn scene_imported(s: &mut AppState) {
     scene_base(s);
-    let chapters = CHAPTERS.iter().enumerate().map(|(i, (t, w))| DraftChapter { title: (*t).into(), text: String::new(), words: *w, est_s: *w as f32 / 145.0 * 60.0, include: i > 0 }).collect();
+    let chapters = CHAPTERS
+        .iter()
+        .enumerate()
+        .map(|(i, (t, w))| DraftChapter {
+            title: (*t).into(),
+            text: String::new(),
+            words: *w,
+            est_s: *w as f32 / 145.0 * 60.0,
+            include: i > 0,
+        })
+        .collect();
     s.book.draft = Some(Draft { file: scene_file(), chapters, auto: None, before_split: None });
-    s.book.recent = vec![BookSummary { id: "kobzar-20261101-090000".into(), title: "Кобзар".into(), status: "done".into(), chapters: 24, chapters_done: 24, totals: protocol::BookTotals { audio_s: 31_200.0, ..Default::default() }, ..Default::default() }];
+    s.book.recent = vec![BookSummary {
+        id: "kobzar-20261101-090000".into(),
+        title: "Кобзар".into(),
+        status: "done".into(),
+        chapters: 24,
+        chapters_done: 24,
+        totals: protocol::BookTotals { audio_s: 31_200.0, ..Default::default() },
+        ..Default::default()
+    }];
 }
 
 pub fn scene_imported_uk(s: &mut AppState) {
@@ -1421,14 +1946,28 @@ pub fn scene_imported_uk(s: &mut AppState) {
 
 pub fn scene_autosplit_offer(s: &mut AppState) {
     scene_base(s);
-    let one = |title: &str, words: u32| DraftChapter { title: title.into(), text: String::new(), words, est_s: words as f32 / 145.0 * 60.0, include: true };
-    let parts = [1833, 1601, 1957, 1925, 1704, 2222, 1763, 1708, 1083].iter().enumerate()
-        .map(|(i, w)| one(&format!("Частина {}", i + 1), *w)).collect();
+    let one = |title: &str, words: u32| DraftChapter {
+        title: title.into(),
+        text: String::new(),
+        words,
+        est_s: words as f32 / 145.0 * 60.0,
+        include: true,
+    };
+    let parts = [1833, 1601, 1957, 1925, 1704, 2222, 1763, 1708, 1083]
+        .iter()
+        .enumerate()
+        .map(|(i, w)| one(&format!("Частина {}", i + 1), *w))
+        .collect();
     let mut file = scene_file();
     file.title = "Тіні забутих предків".into();
     file.name = "Тіні забутих предків - Михайло Коцюбинський.epub".into();
     file.language = "uk".into();
-    s.book.draft = Some(Draft { file, chapters: vec![one("Тіні забутих предків", 15796)], auto: Some(("length".into(), parts)), before_split: None });
+    s.book.draft = Some(Draft {
+        file,
+        chapters: vec![one("Тіні забутих предків", 15796)],
+        auto: Some(("length".into(), parts)),
+        before_split: None,
+    });
 }
 
 pub fn scene_autosplit_done(s: &mut AppState) {
@@ -1467,7 +2006,16 @@ pub fn scene_interrupted(s: &mut AppState) {
 
 pub fn scene_finished(s: &mut AppState) {
     scene_project(s, "done", CHAPTERS.len(), (0, 0));
-    playbar::scene_now(s, "/tmp/books/02.wav", CHAPTERS[1].0, &chapter_caption(1), playbar::Source::Speak, playbar::Status::Playing, 312.0, 2031.0);
+    playbar::scene_now(
+        s,
+        "/tmp/books/02.wav",
+        CHAPTERS[1].0,
+        &chapter_caption(1),
+        playbar::Source::Speak,
+        playbar::Status::Playing,
+        312.0,
+        2031.0,
+    );
 }
 
 pub fn scene_empty(s: &mut AppState) {
@@ -1495,11 +2043,21 @@ mod draft_tests {
     use super::*;
 
     fn sample() -> Draft {
-        let one = |t: &str, text: &str| DraftChapter { title: t.into(), text: text.into(), words: 2, est_s: 1.0, include: true };
+        let one = |t: &str, text: &str| DraftChapter {
+            title: t.into(),
+            text: text.into(),
+            words: 2,
+            est_s: 1.0,
+            include: true,
+        };
         let mut file = scene_file();
         file.title = "Тіні забутих предків".into();
-        Draft { file, chapters: vec![one("Частина 1", "Іван був"), one("Частина 2", "дев'ятнадцятою дитиною")],
-                auto: Some(("length".into(), vec![one("1", "a")])), before_split: Some(vec![one("Тіні", "Іван був дев'ятнадцятою")]) }
+        Draft {
+            file,
+            chapters: vec![one("Частина 1", "Іван був"), one("Частина 2", "дев'ятнадцятою дитиною")],
+            auto: Some(("length".into(), vec![one("1", "a")])),
+            before_split: Some(vec![one("Тіні", "Іван був дев'ятнадцятою")]),
+        }
     }
 
     #[test]
@@ -1537,7 +2095,16 @@ mod play_next_tests {
         scene_project(&mut s, "running", 3, (37, 112));
         let id = s.book.project.as_ref().unwrap().id.clone();
         s.book.played = Some((id, index));
-        playbar::scene_now(&mut s, "/tmp/c.wav", "Chapter", &chapter_caption(index), playbar::Source::Speak, playbar::Status::Ended, 60.0, 60.0);
+        playbar::scene_now(
+            &mut s,
+            "/tmp/c.wav",
+            "Chapter",
+            &chapter_caption(index),
+            playbar::Source::Speak,
+            playbar::Status::Ended,
+            60.0,
+            60.0,
+        );
         s
     }
 
@@ -1568,12 +2135,23 @@ mod voice_tests {
     use crate::ui::shell::VoiceInfo;
 
     fn book(id: &str, voice: &str, status: &str) -> BookSummary {
-        BookSummary { id: id.into(), title: id.into(), voice_id: Some(voice.into()), status: status.into(), chapters: 3, chapters_done: 1, ..Default::default() }
+        BookSummary {
+            id: id.into(),
+            title: id.into(),
+            voice_id: Some(voice.into()),
+            status: status.into(),
+            chapters: 3,
+            chapters_done: 1,
+            ..Default::default()
+        }
     }
 
     fn state() -> AppState {
         let mut s = AppState::default();
-        s.shell.voices = ["taras", "sage"].iter().map(|v| VoiceInfo { id: (*v).into(), name: v.to_uppercase(), ..Default::default() }).collect();
+        s.shell.voices = ["taras", "sage"]
+            .iter()
+            .map(|v| VoiceInfo { id: (*v).into(), name: v.to_uppercase(), ..Default::default() })
+            .collect();
         s.shell.active_voice = Some("sage".into());
         s.book.recent = vec![book("a", "taras", "paused"), book("b", "sage", "paused"), book("c", "gone", "done")];
         s

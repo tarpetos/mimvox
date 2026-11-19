@@ -43,10 +43,8 @@ fn fetch_max_f32(a: &AtomicU32, v: f32) {
 pub fn input_devices() -> Vec<String> {
     let host = cpal::default_host();
     let default = host.default_input_device().and_then(|d| d.name().ok());
-    let mut names: Vec<String> = host
-        .input_devices()
-        .map(|it| it.filter_map(|d| d.name().ok()).collect())
-        .unwrap_or_default();
+    let mut names: Vec<String> =
+        host.input_devices().map(|it| it.filter_map(|d| d.name().ok()).collect()).unwrap_or_default();
     if let Some(def) = default {
         names.retain(|n| *n != def);
         names.insert(0, def);
@@ -75,7 +73,11 @@ pub const METER_HZ: u32 = 25;
 #[derive(Clone, Debug)]
 pub enum CaptureEvent {
     /// `level`: meter 0..1 (peak with a 0.25 s decay); `peak`: highest sample so far.
-    Level { level: f32, peak: f32, elapsed_s: f32 },
+    Level {
+        level: f32,
+        peak: f32,
+        elapsed_s: f32,
+    },
     Error(String),
 }
 
@@ -150,7 +152,11 @@ where
                 if since >= every {
                     let dt = since as f32 / rate as f32;
                     shown = block_max.max(shown * (-dt / 0.25).exp()).min(1.0);
-                    sink(CaptureEvent::Level { level: shown, peak: load_f32(&shared.peak), elapsed_s: total as f32 / rate as f32 });
+                    sink(CaptureEvent::Level {
+                        level: shown,
+                        peak: load_f32(&shared.peak),
+                        elapsed_s: total as f32 / rate as f32,
+                    });
                     since = 0;
                     block_max = 0.0;
                 }
@@ -203,9 +209,7 @@ impl Recorder {
                         other => return Err(anyhow!("unsupported microphone sample format {other:?}")),
                     }
                     .map_err(|e| anyhow!("cannot start capture on \"{name}\": {e}"))?;
-                    stream
-                        .play()
-                        .map_err(|e| anyhow!("cannot start capture on \"{name}\": {e}"))?;
+                    stream.play().map_err(|e| anyhow!("cannot start capture on \"{name}\": {e}"))?;
                     Ok((stream, rate, name))
                 })();
                 match setup {
@@ -222,13 +226,9 @@ impl Recorder {
             .context("cannot start the audio capture thread")?;
 
         match init_rx.recv() {
-            Ok(Ok((sample_rate, device_name))) => Ok(Self {
-                shared,
-                sample_rate,
-                device_name,
-                stop: Some(stop_tx),
-                thread: Some(thread),
-            }),
+            Ok(Ok((sample_rate, device_name))) => {
+                Ok(Self { shared, sample_rate, device_name, stop: Some(stop_tx), thread: Some(thread) })
+            }
             Ok(Err(msg)) => {
                 let _ = thread.join();
                 Err(anyhow!(msg))
@@ -293,12 +293,8 @@ impl Drop for Recorder {
 
 /// Writes mono 16-bit PCM.
 pub fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> anyhow::Result<()> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
+    let spec =
+        hound::WavSpec { channels: 1, sample_rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
     let mut w = hound::WavWriter::create(path, spec).with_context(|| format!("cannot write {}", path.display()))?;
     for s in samples {
         w.write_sample((s.clamp(-1.0, 1.0) * 32767.0).round() as i16)?;
@@ -316,10 +312,7 @@ pub fn read_wav_mono(path: &Path) -> anyhow::Result<(Vec<f32>, u32)> {
         hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>()?,
         hound::SampleFormat::Int => {
             let scale = 1.0 / (1u64 << (spec.bits_per_sample.clamp(1, 32) - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|v| v as f32 * scale))
-                .collect::<Result<_, _>>()?
+            reader.samples::<i32>().map(|s| s.map(|v| v as f32 * scale)).collect::<Result<_, _>>()?
         }
     };
     let mono = if channels == 1 {
@@ -482,7 +475,15 @@ impl Player {
     pub fn new(sink: Option<PlaySink>) -> anyhow::Result<Self> {
         let shared = Arc::new(PlayShared {
             // The real rate is only known once the device is open; the stretcher is rebuilt for it below.
-            track: Mutex::new(Track { id: 0, samples: Vec::new(), state: State::Idle, live: false, looped: false, speed: 1.0, stretch: Stretcher::new(48_000) }),
+            track: Mutex::new(Track {
+                id: 0,
+                samples: Vec::new(),
+                state: State::Idle,
+                live: false,
+                looped: false,
+                speed: 1.0,
+                stretch: Stretcher::new(48_000),
+            }),
             next_id: AtomicU64::new(1),
             error: Mutex::new(None),
         });
@@ -516,9 +517,7 @@ impl Player {
                         other => return Err(anyhow!("unsupported output sample format {other:?}")),
                     }
                     .map_err(|e| anyhow!("cannot start playback on \"{name}\": {e}"))?;
-                    stream
-                        .play()
-                        .map_err(|e| anyhow!("cannot start playback on \"{name}\": {e}"))?;
+                    stream.play().map_err(|e| anyhow!("cannot start playback on \"{name}\": {e}"))?;
                     Ok((stream, rate, name))
                 })();
                 match setup {

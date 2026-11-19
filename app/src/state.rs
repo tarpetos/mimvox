@@ -4,8 +4,8 @@
 use crate::audio::Player;
 use crate::engine::EngineClient;
 use crate::ui::{
-    book::BookState, formats::FormatsState, onboarding::OnboardingState, record::RecordState, redub::RedubState, relocate::RelocateState, shell::ShellState, speak::SpeakState, train::TrainState,
-    voices::VoicesState,
+    book::BookState, formats::FormatsState, onboarding::OnboardingState, record::RecordState, redub::RedubState,
+    relocate::RelocateState, shell::ShellState, speak::SpeakState, train::TrainState, voices::VoicesState,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -33,7 +33,9 @@ impl Screen {
     }
 
     pub fn from_key(key: &str) -> Option<Screen> {
-        [Screen::Voices, Screen::Record, Screen::Train, Screen::Speak, Screen::Redub].into_iter().find(|s| s.key() == Some(key))
+        [Screen::Voices, Screen::Record, Screen::Train, Screen::Speak, Screen::Redub]
+            .into_iter()
+            .find(|s| s.key() == Some(key))
     }
 }
 
@@ -68,7 +70,11 @@ impl Default for AppState {
         record.data_dir = shell.data_dir.clone();
         let onboarding = OnboardingState::default();
         let screen = if onboarding.runtime_present && !crate::ui::shell::headless_run() {
-            if has_voices(&shell.data_dir) { last_screen(crate::ui::onboarding::setting("screen").as_ref()) } else { Screen::Voices }
+            if has_voices(&shell.data_dir) {
+                last_screen(crate::ui::onboarding::setting("screen").as_ref())
+            } else {
+                Screen::Voices
+            }
         } else {
             Screen::default()
         };

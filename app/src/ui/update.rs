@@ -36,7 +36,10 @@ fn kind(s: &AppState) -> Kind {
 enum Phase {
     #[default]
     Offered,
-    Downloading { got: u64, total: Option<u64> },
+    Downloading {
+        got: u64,
+        total: Option<u64>,
+    },
     Ready,
     Failed(String),
 }
@@ -56,7 +59,10 @@ fn setting(key: &str) -> Option<serde_json::Value> {
 }
 
 fn engine_settled(s: &AppState) -> bool {
-    matches!(s.shell.engine, EngineStatus::Ready { .. } | EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. })
+    matches!(
+        s.shell.engine,
+        EngineStatus::Ready { .. } | EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. }
+    )
 }
 
 pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
@@ -99,7 +105,8 @@ fn start_install(s: &mut AppState, version: String) {
         return;
     }
     update::discard_pending();
-    let notes = release(s, &version).map(|r| r.notes.clone()).or_else(|| s.update.found.as_ref().and_then(|f| f.notes.clone()));
+    let notes =
+        release(s, &version).map(|r| r.notes.clone()).or_else(|| s.update.found.as_ref().and_then(|f| f.notes.clone()));
     s.update.found = Some(Found::preview(&version, notes.as_deref()));
     s.update.phase = Phase::Downloading { got: 0, total: None };
     s.update.hidden = false;
@@ -195,7 +202,8 @@ fn check_now(s: &mut AppState) {
                     offer(s, found);
                 }
                 Ok(None) => {
-                    s.update.checked = Some((Tone::Success, format!("You have the newest version, {}.", env!("CARGO_PKG_VERSION"))));
+                    s.update.checked =
+                        Some((Tone::Success, format!("You have the newest version, {}.", env!("CARGO_PKG_VERSION"))));
                 }
                 Err(e) => s.update.checked = Some((Tone::Danger, format!("Could not check for updates: {e}"))),
             }
@@ -216,8 +224,11 @@ fn release<'a>(s: &'a AppState, version: &str) -> Option<&'a Release> {
 
 fn selected(s: &AppState) -> Option<String> {
     let list = releases(s);
-    let installing = s.update.found.as_ref().filter(|_| !matches!(s.update.phase, Phase::Offered)).map(|f| f.version.clone());
-    s.update.selected.clone()
+    let installing =
+        s.update.found.as_ref().filter(|_| !matches!(s.update.phase, Phase::Offered)).map(|f| f.version.clone());
+    s.update
+        .selected
+        .clone()
         .or(installing)
         .or_else(|| list.iter().find(|r| update::compare(&r.version) == Ordering::Equal).map(|r| r.version.clone()))
         .or_else(|| list.first().map(|r| r.version.clone()))
@@ -258,7 +269,10 @@ fn blocks(md: &str) -> Vec<Block> {
         .map(|(kind, body)| match kind {
             0 => Block::Heading(inline(&body)),
             1 => {
-                let lead = body.strip_prefix("**").and_then(|b| b.split_once("**")).map(|(lead, rest)| (lead.to_owned(), rest.to_owned()));
+                let lead = body
+                    .strip_prefix("**")
+                    .and_then(|b| b.split_once("**"))
+                    .map(|(lead, rest)| (lead.to_owned(), rest.to_owned()));
                 match lead {
                     Some((lead, rest)) => Block::Item(
                         Some(inline(lead.trim_end_matches(':'))),
@@ -328,7 +342,9 @@ fn notes_view(p: Palette, notes: &str) -> El {
                 if !body.is_empty() {
                     words = words.child(text(body).font(ty::BODY).color(p.text_dim).wrap());
                 }
-                row().w_full().gap(10.0)
+                row()
+                    .w_full()
+                    .gap(10.0)
                     .child(el().pt(7.0).child(el().size(5.0, 5.0).radius(2.5).fill(p.accent.alpha(0.8))))
                     .child(words)
             }
@@ -342,7 +358,19 @@ pub fn version_button(s: &AppState, p: Palette) -> El {
     const BREATHE: Cycle = Cycle {
         period: 3.2,
         phase: 0.0,
-        stops: &[(0.0, 0.0), (0.1, 0.1), (0.2, 0.35), (0.3, 0.65), (0.4, 0.9), (0.5, 1.0), (0.6, 0.9), (0.7, 0.65), (0.8, 0.35), (0.9, 0.1), (1.0, 0.0)],
+        stops: &[
+            (0.0, 0.0),
+            (0.1, 0.1),
+            (0.2, 0.35),
+            (0.3, 0.65),
+            (0.4, 0.9),
+            (0.5, 1.0),
+            (0.6, 0.9),
+            (0.7, 0.65),
+            (0.8, 0.35),
+            (0.9, 0.1),
+            (1.0, 0.0),
+        ],
         still: 0.7,
         fps: 24.0,
     };
@@ -351,17 +379,36 @@ pub fn version_button(s: &AppState, p: Palette) -> El {
         Some(f) if waiting => format!("Mimvox {} is available: updates and what's new", f.version),
         _ => "Updates and what's new".to_owned(),
     };
-    let pill = row().key("version-button").role("button").label("Updates").h(28.0).px(12.0).center().radius(14.0)
-        .fill(if s.update.dialog { p.glass_hover } else { p.glass }).gradient(p.glass_top, p.glass_bottom)
+    let pill = row()
+        .key("version-button")
+        .role("button")
+        .label("Updates")
+        .h(28.0)
+        .px(12.0)
+        .center()
+        .radius(14.0)
+        .fill(if s.update.dialog { p.glass_hover } else { p.glass })
+        .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(3.0, 10.0, p.shadow_soft);
-    let version = text(format!("v{}", env!("CARGO_PKG_VERSION"))).font(rune::TextStyle::new(11.5, 600.0).lh(15.0))
-        .color(if waiting { p.accent } else { p.text_dim }).a11y_hidden();
+    let version = text(format!("v{}", env!("CARGO_PKG_VERSION")))
+        .font(rune::TextStyle::new(11.5, 600.0).lh(15.0))
+        .color(if waiting { p.accent } else { p.text_dim })
+        .a11y_hidden();
     // The glowing rim lies over the pill's own, outside the layout: the pill is the same size either way.
-    let rim = el().key("version-rim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).radius(14.0).inert()
-        .border(1.0, p.accent).cycle(BREATHE);
+    let rim = el()
+        .key("version-rim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .radius(14.0)
+        .inert()
+        .border(1.0, p.accent)
+        .cycle(BREATHE);
     super::components::glass_edge(p, pill)
-        .hover(p.glass_hover).focusable(true).cursor(rune::Cursor::Pointer).motion(super::theme::motion::UI).help(help)
+        .hover(p.glass_hover)
+        .focusable(true)
+        .cursor(rune::Cursor::Pointer)
+        .motion(super::theme::motion::UI)
+        .help(help)
         .on_press(|s: &mut AppState| open_dialog(s, None))
         .child(version)
         .children(waiting.then_some(rim))
@@ -389,45 +436,107 @@ pub fn banner(s: &AppState, p: Palette) -> Option<El> {
         Phase::Failed(e) => (format!("Mimvox {v} could not be downloaded"), e.clone(), None),
     };
     let version = v.clone();
-    let whats_new = Button::new("What's new").ghost().small().key("update-notes")
+    let whats_new = Button::new("What's new")
+        .ghost()
+        .small()
+        .key("update-notes")
         .on_press(move |s| open_dialog(s, Some(version.clone())));
     let mut buttons = row().gap(8.0).center_y();
     match &s.update.phase {
         Phase::Offered => {
             buttons = buttons
                 .child(Button::new("Skip this version").ghost().small().key("update-skip").on_press(skip).build(p))
-                .child(Button::new("Later").ghost().small().key("update-later").on_press(|s| s.update.hidden = true).build(p))
+                .child(
+                    Button::new("Later")
+                        .ghost()
+                        .small()
+                        .key("update-later")
+                        .on_press(|s| s.update.hidden = true)
+                        .build(p),
+                )
                 .child(whats_new.build(p));
             let version = v.clone();
             buttons = if auto {
-                buttons.child(Button::new("Update").primary().small().icon(&icons::SPARKLE).key("update-go")
-                    .on_press(move |s| start_install(s, version.clone())).build(p))
+                buttons.child(
+                    Button::new("Update")
+                        .primary()
+                        .small()
+                        .icon(&icons::SPARKLE)
+                        .key("update-go")
+                        .on_press(move |s| start_install(s, version.clone()))
+                        .build(p),
+                )
             } else {
-                buttons.child(Button::new("Download").primary().small().icon(&icons::OPEN).key("update-page")
-                    .on_press(move |s| s.update.open = Some(update::release_page(&version))).build(p))
+                buttons.child(
+                    Button::new("Download")
+                        .primary()
+                        .small()
+                        .icon(&icons::OPEN)
+                        .key("update-page")
+                        .on_press(move |s| s.update.open = Some(update::release_page(&version)))
+                        .build(p),
+                )
             };
         }
         Phase::Downloading { .. } => {}
         Phase::Ready => {
             buttons = buttons
-                .child(Button::new("Later").ghost().small().key("update-later").on_press(|s| s.update.hidden = true).build(p))
-                .child(Button::new("Restart now").primary().small().icon(&icons::REFRESH).key("update-restart").on_press(restart_now).build(p));
+                .child(
+                    Button::new("Later")
+                        .ghost()
+                        .small()
+                        .key("update-later")
+                        .on_press(|s| s.update.hidden = true)
+                        .build(p),
+                )
+                .child(
+                    Button::new("Restart now")
+                        .primary()
+                        .small()
+                        .icon(&icons::REFRESH)
+                        .key("update-restart")
+                        .on_press(restart_now)
+                        .build(p),
+                );
         }
         Phase::Failed(_) => {
             let version = v.clone();
             buttons = buttons
-                .child(Button::new("Download page").ghost().small().key("update-page")
-                    .on_press(move |s| s.update.open = Some(update::release_page(&version))).build(p))
-                .child(Button::new("Try again").primary().small().icon(&icons::REFRESH).key("update-retry").on_press(retry).build(p));
+                .child(
+                    Button::new("Download page")
+                        .ghost()
+                        .small()
+                        .key("update-page")
+                        .on_press(move |s| s.update.open = Some(update::release_page(&version)))
+                        .build(p),
+                )
+                .child(
+                    Button::new("Try again")
+                        .primary()
+                        .small()
+                        .icon(&icons::REFRESH)
+                        .key("update-retry")
+                        .on_press(retry)
+                        .build(p),
+                );
         }
     }
-    let mut info = col().grow(1.0).min_w(0.0).gap(2.0)
+    let mut info = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(2.0)
         .child(text(title).font(ty::LABEL).color(p.text))
         .child(text(detail).font(ty::CAPTION).color(p.text_dim).wrap().max_lines(2));
     if let Some(v) = progress {
         info = info.child(el().w_full().pt(4.0).child(progress_bar(p, Some(v))));
     }
-    let row_ = row().key("update-banner").w_full().px(14.0).py(9.0).gap(12.0).center_y()
+    let row_ = row()
+        .key("update-banner")
+        .w_full()
+        .px(14.0)
+        .py(9.0)
+        .gap(12.0)
+        .center_y()
         .child(icon_el(&icons::SPARKLE, 16.0, p.accent))
         .child(info)
         .child(buttons);
@@ -455,44 +564,97 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
     let current = env!("CARGO_PKG_VERSION");
     let kind = kind(s);
     let subtitle = match kind {
-        Kind::Auto => format!("You have Mimvox {current}. Any version from {} on can be installed here, older ones too.", update::OLDEST),
-        Kind::Manual => format!("You have Mimvox {current}. This copy cannot replace itself: install a version from its download page."),
+        Kind::Auto => format!(
+            "You have Mimvox {current}. Any version from {} on can be installed here, older ones too.",
+            update::OLDEST
+        ),
+        Kind::Manual => format!(
+            "You have Mimvox {current}. This copy cannot replace itself: install a version from its download page."
+        ),
         Kind::Never => format!("You have Mimvox {current}, a development build: it never installs releases."),
     };
-    let check = Button::new(if s.update.checking { "Checking…" } else { "Check for updates" }).ghost().small().icon(&icons::REFRESH)
-        .key("updates-check").disabled(s.update.checking).on_press(check_now).build(p);
-    let head = row().w_full().gap(12.0).center_y()
-        .child(col().grow(1.0).min_w(0.0).gap(2.0)
-            .child(text("Updates").font(ty::TITLE).color(p.text))
-            .child(text(subtitle).font(ty::CAPTION).color(p.text_dim).wrap()))
+    let check = Button::new(if s.update.checking { "Checking…" } else { "Check for updates" })
+        .ghost()
+        .small()
+        .icon(&icons::REFRESH)
+        .key("updates-check")
+        .disabled(s.update.checking)
+        .on_press(check_now)
+        .build(p);
+    let head = row()
+        .w_full()
+        .gap(12.0)
+        .center_y()
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(2.0)
+                .child(text("Updates").font(ty::TITLE).color(p.text))
+                .child(text(subtitle).font(ty::CAPTION).color(p.text_dim).wrap()),
+        )
         .child(check)
         .child(icon_button(p, "updates-close", &icons::CLOSE, "Close", close_dialog));
-    let mut card = col().key("updates-dialog").w(860.0).h(560.0).padding(22.0).gap(14.0).radius(radius::PANEL)
-        .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0)).border_gradient(1.0, p.rim_top, p.rim_bottom).shadow(18.0, 50.0, p.shadow)
+    let mut card = col()
+        .key("updates-dialog")
+        .w(860.0)
+        .h(560.0)
+        .padding(22.0)
+        .gap(14.0)
+        .radius(radius::PANEL)
+        .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0))
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
+        .shadow(18.0, 50.0, p.shadow)
         .on_press(|_: &mut AppState| {})
         .child(head);
     if let Some((tone, msg)) = &s.update.checked {
         card = card.child(kit::notice(&p, *tone, msg));
     }
     let chosen = selected(s);
-    card = card.child(row().key("updates-body").w_full().grow(1.0).min_h(0.0).gap(14.0)
-        .child(version_list(s, p, chosen.as_deref()))
-        .child(details(s, p, chosen.as_deref(), kind)));
+    card = card.child(
+        row()
+            .key("updates-body")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .gap(14.0)
+            .child(version_list(s, p, chosen.as_deref()))
+            .child(details(s, p, chosen.as_deref(), kind)),
+    );
     let scrim = el().key("updates-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close_dialog);
-    Some(el().key("updates-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center().fill(Color::BLACK.alpha(0.55))
-        .child(scrim).child(card))
+    Some(
+        el().key("updates-layer")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .center()
+            .fill(Color::BLACK.alpha(0.55))
+            .child(scrim)
+            .child(card),
+    )
 }
 
 fn version_list(s: &AppState, p: Palette, chosen: Option<&str>) -> El {
     let mut list = col().w_full().gap(4.0);
     match &s.update.list {
-        List::NotAsked | List::Loading => list = list.child(text("Loading versions…").font(ty::CAPTION).color(p.text_faint).px(10.0).py(8.0)),
+        List::NotAsked | List::Loading => {
+            list = list.child(text("Loading versions…").font(ty::CAPTION).color(p.text_faint).px(10.0).py(8.0))
+        }
         List::Failed(e) => {
             list = list
-                .child(text(format!("The versions could not be loaded: {e}")).font(ty::CAPTION).color(p.text_dim).wrap().px(10.0).py(6.0))
-                .child(el().px(10.0).child(Button::new("Try again").ghost().small().key("updates-reload").on_press(load_list).build(p)));
+                .child(
+                    text(format!("The versions could not be loaded: {e}"))
+                        .font(ty::CAPTION)
+                        .color(p.text_dim)
+                        .wrap()
+                        .px(10.0)
+                        .py(6.0),
+                )
+                .child(el().px(10.0).child(
+                    Button::new("Try again").ghost().small().key("updates-reload").on_press(load_list).build(p),
+                ));
         }
-        List::Loaded(all) if all.is_empty() => list = list.child(text("No versions found.").font(ty::CAPTION).color(p.text_faint).px(10.0).py(8.0)),
+        List::Loaded(all) if all.is_empty() => {
+            list = list.child(text("No versions found.").font(ty::CAPTION).color(p.text_faint).px(10.0).py(8.0))
+        }
         List::Loaded(all) => {
             for r in all {
                 let on = chosen == Some(r.version.as_str());
@@ -503,19 +665,44 @@ fn version_list(s: &AppState, p: Palette, chosen: Option<&str>) -> El {
                     Ordering::Less => None,
                 };
                 list = list.child(
-                    row().key(format!("updates-v{}", r.version)).role("tab").label(format!("Mimvox {}", r.version)).checked(on)
-                        .w_full().h(46.0).px(12.0).gap(8.0).center_y().radius(radius::CARD)
-                        .fill(if on { p.accent.alpha(0.14) } else { Color::TRANSPARENT }).hover(p.glass_hover).focusable(true)
+                    row()
+                        .key(format!("updates-v{}", r.version))
+                        .role("tab")
+                        .label(format!("Mimvox {}", r.version))
+                        .checked(on)
+                        .w_full()
+                        .h(46.0)
+                        .px(12.0)
+                        .gap(8.0)
+                        .center_y()
+                        .radius(radius::CARD)
+                        .fill(if on { p.accent.alpha(0.14) } else { Color::TRANSPARENT })
+                        .hover(p.glass_hover)
+                        .focusable(true)
                         .on_press(move |s: &mut AppState| s.update.selected = Some(version.clone()))
-                        .child(col().grow(1.0).min_w(0.0).gap(1.0)
-                            .child(text(r.version.clone()).font(ty::LABEL).color(p.text))
-                            .children((!r.date.is_empty()).then(|| text(r.date.clone()).font(ty::CAPTION).color(p.text_faint))))
+                        .child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(1.0)
+                                .child(text(r.version.clone()).font(ty::LABEL).color(p.text))
+                                .children(
+                                    (!r.date.is_empty())
+                                        .then(|| text(r.date.clone()).font(ty::CAPTION).color(p.text_faint)),
+                                ),
+                        )
                         .children(tag),
                 );
             }
         }
     }
-    col().key("updates-list").w(200.0).h_full().scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).child(list)
+    col()
+        .key("updates-list")
+        .w(200.0)
+        .h_full()
+        .scroll(ScrollSpec { stick_bottom: false })
+        .scroll_edge_fade(12.0)
+        .child(list)
 }
 
 fn details(s: &AppState, p: Palette, chosen: Option<&str>, kind: Kind) -> El {
@@ -524,19 +711,37 @@ fn details(s: &AppState, p: Palette, chosen: Option<&str>, kind: Kind) -> El {
         return pane.child(text("Choose a version on the left.").font(ty::BODY).color(p.text_faint));
     };
     let r = release(s, v);
-    let notes = r.map(|r| r.notes.clone()).or_else(|| s.update.found.as_ref().filter(|f| f.version == v).and_then(|f| f.notes.clone()));
+    let notes = r
+        .map(|r| r.notes.clone())
+        .or_else(|| s.update.found.as_ref().filter(|f| f.version == v).and_then(|f| f.notes.clone()));
     let date = r.map(|r| r.date.clone()).filter(|d| !d.is_empty());
-    let head = row().w_full().gap(10.0).center_y()
+    let head = row()
+        .w_full()
+        .gap(10.0)
+        .center_y()
         .child(text(format!("Mimvox {v}")).font(ty::TITLE).color(p.text))
         .children(date.map(|d| text(d).font(ty::CAPTION).color(p.text_faint)))
         .child(el().grow(1.0))
-        .child(Button::new("Release page").ghost().small().icon(&icons::OPEN).key("updates-page")
-            .on_press({
-                let v = v.to_owned();
-                move |s| s.update.open = Some(update::release_page(&v))
-            }).build(p));
+        .child(
+            Button::new("Release page")
+                .ghost()
+                .small()
+                .icon(&icons::OPEN)
+                .key("updates-page")
+                .on_press({
+                    let v = v.to_owned();
+                    move |s| s.update.open = Some(update::release_page(&v))
+                })
+                .build(p),
+        );
     // Keyed by version: another version's notes start at the top, not where the last ones were scrolled to.
-    let body = col().key(format!("updates-notes-{v}")).w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
+    let body = col()
+        .key(format!("updates-notes-{v}"))
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec { stick_bottom: false })
+        .scroll_edge_fade(14.0)
         .child(match notes {
             Some(n) => notes_view(p, &n),
             None => text("Loading the notes…").font(ty::BODY).color(p.text_faint),
@@ -548,27 +753,64 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
     let foot = col().key("updates-action").w_full().gap(10.0);
     let order = update::compare(v);
     if order == Ordering::Equal {
-        return foot.child(row().gap(8.0).center_y()
-            .child(icon_el(&icons::CHECK, 14.0, p.ok))
-            .child(text("This is the version you have.").font(ty::BODY).color(p.text_dim)));
+        return foot.child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(icon_el(&icons::CHECK, 14.0, p.ok))
+                .child(text("This is the version you have.").font(ty::BODY).color(p.text_dim)),
+        );
     }
     let this = s.update.found.as_ref().is_some_and(|f| f.version == v);
     match (&s.update.phase, this) {
         (Phase::Downloading { got, total }, true) => {
             return foot
-                .child(text(format!("Downloading Mimvox {v}…  {}", size_line(*got, *total))).font(ty::BODY).color(p.text_dim))
+                .child(
+                    text(format!("Downloading Mimvox {v}…  {}", size_line(*got, *total)))
+                        .font(ty::BODY)
+                        .color(p.text_dim),
+                )
                 .child(progress_bar(p, Some(fraction(*got, *total))));
         }
         (Phase::Ready, true) => {
-            return foot.child(row().w_full().gap(10.0).center_y()
-                .child(text(format!("Mimvox {v} is downloaded and verified. It installs when you close Mimvox.")).font(ty::BODY).color(p.text_dim).wrap().grow(1.0).min_w(0.0))
-                .child(Button::new("Restart now").primary().small().icon(&icons::REFRESH).key("updates-restart").on_press(restart_now).build(p)));
+            return foot.child(
+                row()
+                    .w_full()
+                    .gap(10.0)
+                    .center_y()
+                    .child(
+                        text(format!("Mimvox {v} is downloaded and verified. It installs when you close Mimvox."))
+                            .font(ty::BODY)
+                            .color(p.text_dim)
+                            .wrap()
+                            .grow(1.0)
+                            .min_w(0.0),
+                    )
+                    .child(
+                        Button::new("Restart now")
+                            .primary()
+                            .small()
+                            .icon(&icons::REFRESH)
+                            .key("updates-restart")
+                            .on_press(restart_now)
+                            .build(p),
+                    ),
+            );
         }
         (Phase::Failed(e), true) => {
             return foot
                 .child(kit::notice(&p, Tone::Danger, &format!("Mimvox {v} could not be downloaded: {e}")))
-                .child(row().w_full().justify_end()
-                    .child(Button::new("Try again").primary().small().icon(&icons::REFRESH).key("updates-retry").on_press(retry).build(p)));
+                .child(
+                    row().w_full().justify_end().child(
+                        Button::new("Try again")
+                            .primary()
+                            .small()
+                            .icon(&icons::REFRESH)
+                            .key("updates-retry")
+                            .on_press(retry)
+                            .build(p),
+                    ),
+                );
         }
         _ => {}
     }
@@ -583,11 +825,19 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
     let button = match kind {
         Kind::Auto => {
             let label = if older { format!("Install {v}") } else { format!("Update to {v}") };
-            let b = Button::new(label).small().icon(&icons::SPARKLE).key("updates-install").disabled(downloading(s))
+            let b = Button::new(label)
+                .small()
+                .icon(&icons::SPARKLE)
+                .key("updates-install")
+                .disabled(downloading(s))
                 .on_press(move |s| start_install(s, version.clone()));
             if older { b.secondary() } else { b.primary() }
         }
-        Kind::Manual | Kind::Never => Button::new("Download page").primary().small().icon(&icons::OPEN).key("updates-install")
+        Kind::Manual | Kind::Never => Button::new("Download page")
+            .primary()
+            .small()
+            .icon(&icons::OPEN)
+            .key("updates-install")
             .on_press(move |s| s.update.open = Some(update::release_page(&version))),
     };
     let note = if downloading(s) {
@@ -597,9 +847,14 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
     } else {
         ""
     };
-    foot.child(row().w_full().gap(10.0).center_y()
-        .child(text(note).font(ty::CAPTION).color(p.text_faint).wrap().grow(1.0).min_w(0.0))
-        .child(button.build(p)))
+    foot.child(
+        row()
+            .w_full()
+            .gap(10.0)
+            .center_y()
+            .child(text(note).font(ty::CAPTION).color(p.text_faint).wrap().grow(1.0).min_w(0.0))
+            .child(button.build(p)),
+    )
 }
 
 const NOTES_030: &str = "\n* **Romanian:** Speak, Book and Redub now offer Romanian. Record has Romanian reading texts too (Quick,\n  Standard and Pro), so a voice can be recorded and trained in Romanian from start to finish.\n* **A voice from recordings you already have:** Record's start page now begins with a card for audio or video\n  files of one person: no reading and no preset.\n* **Player:** no Stop button any more (pause, the knob and Close cover it).\n";
@@ -619,7 +874,14 @@ fn demo(s: &mut AppState, newer: bool) {
         list.push(Release { version: "0.5.0".into(), date: "2026-12-01".into(), notes: "\n* **Updates window:** every version with its notes; install any of them, older ones too.\n* **Check for updates** whenever you like, from the version in the header.\n".into() });
     }
     list.push(Release { version: current.into(), date: "2026-11-18".into(), notes: NOTES_043.into() });
-    for (version, date, notes) in [("0.4.2", "2026-11-16", NOTES_042), ("0.4.1", "2026-11-15", NOTES_041), ("0.4.0", "2026-11-15", NOTES_040), ("0.3.1", "2026-11-14", NOTES_031), ("0.3.0", "2026-11-14", NOTES_030), ("0.2.0", "2026-11-13", NOTES_020)] {
+    for (version, date, notes) in [
+        ("0.4.2", "2026-11-16", NOTES_042),
+        ("0.4.1", "2026-11-15", NOTES_041),
+        ("0.4.0", "2026-11-15", NOTES_040),
+        ("0.3.1", "2026-11-14", NOTES_031),
+        ("0.3.0", "2026-11-14", NOTES_030),
+        ("0.2.0", "2026-11-13", NOTES_020),
+    ] {
         if version != current {
             list.push(Release { version: version.into(), date: date.into(), notes: notes.into() });
         }
@@ -681,12 +943,15 @@ mod tests {
     #[test]
     fn notes_become_headings_bullets_and_paragraphs() {
         let md = "## Added\n\n* **Romanian:** Speak and Book now offer it.\n  More [here](https://x.y) and `code`.\n* plain item\n\nA closing line\nthat wraps.\n";
-        assert_eq!(blocks(md), vec![
-            Block::Heading("Added".into()),
-            Block::Item(Some("Romanian".into()), "Speak and Book now offer it. More here and code.".into()),
-            Block::Item(None, "plain item".into()),
-            Block::Para("A closing line that wraps.".into()),
-        ]);
+        assert_eq!(
+            blocks(md),
+            vec![
+                Block::Heading("Added".into()),
+                Block::Item(Some("Romanian".into()), "Speak and Book now offer it. More here and code.".into()),
+                Block::Item(None, "plain item".into()),
+                Block::Para("A closing line that wraps.".into()),
+            ]
+        );
     }
 
     #[test]

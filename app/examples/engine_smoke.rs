@@ -145,7 +145,14 @@ fn run() -> anyhow::Result<()> {
                         anyhow::bail!("no voices to speak with; create one first");
                     };
                     println!("tts.generate voice={vid} text={:?}", args.text);
-                    tts_req = Some(engine.send(protocol::tts_generate(vid, &args.text, 0.8, 1.0, protocol::Quality::Best, 1.0)));
+                    tts_req = Some(engine.send(protocol::tts_generate(
+                        vid,
+                        &args.text,
+                        0.8,
+                        1.0,
+                        protocol::Quality::Best,
+                        1.0,
+                    )));
                 }
                 EngineMsg::Response { id, result } if Some(id) == tts_req => {
                     let started: protocol::JobStarted = protocol::parse_result(result.map_err(anyhow::Error::from)?)?;

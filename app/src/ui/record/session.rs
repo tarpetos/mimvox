@@ -44,7 +44,9 @@ pub fn view(r: &RecordState, p: Pal) -> El {
         .w_full()
         .center_y()
         .gap(12.0)
-        .child(button(p, "back", "All presets", BtnKind::Ghost, !r.recording(), |s: &mut AppState| s.record.back_to_pick()))
+        .child(button(p, "back", "All presets", BtnKind::Ghost, !r.recording(), |s: &mut AppState| {
+            s.record.back_to_pick()
+        }))
         .child(txt(plan.title.clone(), 17.0, 650.0, p.text))
         .child(chip(p, format!("goal {}", fmt_min(plan.target_minutes)), Tone::Neutral))
         .child(el().grow(1.0))
@@ -71,7 +73,14 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
         .child(txt(part.title.clone(), 14.0, 500.0, p.text_dim))
         .child(el().grow(1.0))
         .child(chip(p, format!("about {}", fmt_dur(part.est_seconds)), Tone::Neutral))
-        .child(button(p, "import", "Import file…", BtnKind::Secondary, !r.recording() && !r.importing, |s: &mut AppState| crate::ui::record::import_file(s)));
+        .child(button(
+            p,
+            "import",
+            "Import file…",
+            BtnKind::Secondary,
+            !r.recording() && !r.importing,
+            |s: &mut AppState| crate::ui::record::import_file(s),
+        ));
 
     let body = col()
         .w_full()
@@ -81,7 +90,8 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
         .scroll_edge_fade(18.0)
         .child(txt_lh(part.text.clone(), 23.0, 500.0, 35.0, p.text).wrap().w_full());
 
-    let (level, clip, elapsed) = active.map_or((0.0, false, 0.0), |a| (a.level, a.clipped || a.peak >= 0.99, a.elapsed_s));
+    let (level, clip, elapsed) =
+        active.map_or((0.0, false, 0.0), |a| (a.level, a.clipped || a.peak >= 0.99, a.elapsed_s));
     let too_loud = clip || level_to_meter(level) > 0.92;
     let meter_row = row()
         .w_full()
@@ -90,7 +100,11 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
         .child(el().grow(1.0).child(meter(p, level, active.map_or(0.0, |a| a.peak))))
         .child(
             txt(
-                if active.is_some() { format!("{} / ~{}", fmt_dur(elapsed), fmt_dur(part.est_seconds)) } else { "0:00".to_string() },
+                if active.is_some() {
+                    format!("{} / ~{}", fmt_dur(elapsed), fmt_dur(part.est_seconds))
+                } else {
+                    "0:00".to_string()
+                },
                 15.0,
                 650.0,
                 if active.is_some() { p.text } else { p.text_faint },
@@ -117,18 +131,27 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
             s.record.goto(c.wrapping_sub(1));
         }))
         .child(el().grow(1.0))
-        .child(
-            col().items_center().gap(6.0).child(big).child(txt(
-                if rec { "Stop" } else if take.status == TakeStatus::Saved { "Record again" } else { "Record" },
-                13.0,
-                600.0,
-                p.text_dim,
-            )),
-        )
+        .child(col().items_center().gap(6.0).child(big).child(txt(
+            if rec {
+                "Stop"
+            } else if take.status == TakeStatus::Saved {
+                "Record again"
+            } else {
+                "Record"
+            },
+            13.0,
+            600.0,
+            p.text_dim,
+        )))
         .child(el().grow(1.0))
-        .child(button(p, "play", if r.playing { "Pause take" } else { "Play take" }, BtnKind::Secondary, can_nav && take.path.is_some(), |s: &mut AppState| {
-            crate::ui::record::toggle_play(s)
-        }))
+        .child(button(
+            p,
+            "play",
+            if r.playing { "Pause take" } else { "Play take" },
+            BtnKind::Secondary,
+            can_nav && take.path.is_some(),
+            |s: &mut AppState| crate::ui::record::toggle_play(s),
+        ))
         .child(button(p, "next", "Next", BtnKind::Secondary, can_nav && r.current + 1 < n, |s: &mut AppState| {
             let c = s.record.current;
             s.record.goto(c + 1);
@@ -150,8 +173,15 @@ fn recorder_card(r: &RecordState, p: Pal) -> El {
         .child(controls);
     if over {
         card.child(
-            col().key("drop-hint").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center().gap(8.0).radius(theme::radius::PANEL).inert()
-                .fill(p.bg_top.alpha(0.9)).border(2.0, p.accent)
+            col()
+                .key("drop-hint")
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .center()
+                .gap(8.0)
+                .radius(theme::radius::PANEL)
+                .inert()
+                .fill(p.bg_top.alpha(0.9))
+                .border(2.0, p.accent)
                 .child(txt(format!("Release to use this file for part {}", r.current + 1), 18.0, 650.0, p.text))
                 .child(txt("It is checked and added like a live recording.", 13.5, 450.0, p.text_dim)),
         )
@@ -176,7 +206,11 @@ fn record_button(p: Pal, recording: bool, ready: bool) -> El {
         .border(3.0, if recording { p.bad } else { p.text_faint })
         .child(el().size(inner_w, inner_w).radius(inner_r).fill(p.bad).motion(theme::motion::SNAP));
     if ready || recording {
-        b = b.hover(p.glass_hover).press(p.glass_press).focusable(true).on_press(|s: &mut AppState| crate::ui::record::toggle_recording(s));
+        b = b
+            .hover(p.glass_hover)
+            .press(p.glass_press)
+            .focusable(true)
+            .on_press(|s: &mut AppState| crate::ui::record::toggle_recording(s));
     } else {
         b = b.opacity(0.45);
     }
@@ -228,7 +262,10 @@ fn take_banner(r: &RecordState, p: Pal, t: &Take) -> El {
             ))
         }
         TakeStatus::Saving => c = c.child(txt("Saving...", 14.0, 600.0, p.text_dim)),
-        TakeStatus::Failed => c = c.child(txt(t.error.clone().unwrap_or_else(|| "Something went wrong".into()), 14.0, 600.0, p.bad).wrap()),
+        TakeStatus::Failed => {
+            c = c
+                .child(txt(t.error.clone().unwrap_or_else(|| "Something went wrong".into()), 14.0, 600.0, p.bad).wrap())
+        }
         TakeStatus::Saved | TakeStatus::Rejected => {
             let tone = verdict_tone(t.verdict);
             let head = row()
@@ -236,18 +273,30 @@ fn take_banner(r: &RecordState, p: Pal, t: &Take) -> El {
                 .center_y()
                 .gap(10.0)
                 .child(chip(p, if t.status == TakeStatus::Saved { "Saved" } else { "Not saved" }, tone))
-                .child(txt(format!("{}  {}", fmt_dur(t.duration_s), verdict_word(t.verdict)), 14.0, 650.0, tone.color(p)))
+                .child(txt(
+                    format!("{}  {}", fmt_dur(t.duration_s), verdict_word(t.verdict)),
+                    14.0,
+                    650.0,
+                    tone.color(p),
+                ))
                 .child(el().grow(1.0));
-            let head = if t.status == TakeStatus::Saved && t.verdict == Some(Verdict::Warn) && r.next_open(r.current).is_some() {
+            let head = if t.status == TakeStatus::Saved
+                && t.verdict == Some(Verdict::Warn)
+                && r.next_open(r.current).is_some()
+            {
                 head.child(button(p, "continue", "Continue", BtnKind::Primary, !r.recording(), |s: &mut AppState| {
                     if let Some(n) = s.record.next_open(s.record.current) {
                         s.record.goto(n);
                     }
                 }))
             } else if t.status == TakeStatus::Saved && t.verdict == Some(Verdict::Warn) {
-                head.child(button(p, "finish", "Finish", BtnKind::Primary, true, |s: &mut AppState| s.record.phase = Phase::Summary))
+                head.child(button(p, "finish", "Finish", BtnKind::Primary, true, |s: &mut AppState| {
+                    s.record.phase = Phase::Summary
+                }))
             } else if t.status == TakeStatus::Rejected {
-                head.child(button(p, "retry", "Record again", BtnKind::Danger, !r.recording(), |s: &mut AppState| crate::ui::record::rerecord(s)))
+                head.child(button(p, "retry", "Record again", BtnKind::Danger, !r.recording(), |s: &mut AppState| {
+                    crate::ui::record::rerecord(s)
+                }))
             } else {
                 head
             };
@@ -326,18 +375,30 @@ fn footer(r: &RecordState, p: Pal) -> El {
     let level = level_of(r);
     let (cta, msg): (El, String) = match next_step(r) {
         Next::Train => (
-            button(p, "cta", "Ready to train", BtnKind::Primary, !r.recording(), |s: &mut AppState| s.screen = Screen::Train),
-            r.summary.as_ref().map(|s| s.message.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| "You have enough speech to train your voice.".into()),
+            button(p, "cta", "Ready to train", BtnKind::Primary, !r.recording(), |s: &mut AppState| {
+                s.screen = Screen::Train
+            }),
+            r.summary
+                .as_ref()
+                .map(|s| s.message.clone())
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| "You have enough speech to train your voice.".into()),
         ),
         Next::Speak => (
-            button(p, "cta", "Ready to speak", BtnKind::Primary, !r.recording(), |s: &mut AppState| s.screen = Screen::Speak),
+            button(p, "cta", "Ready to speak", BtnKind::Primary, !r.recording(), |s: &mut AppState| {
+                s.screen = Screen::Speak
+            }),
             "Your voice is ready. You can speak any text with it now.".into(),
         ),
         Next::More => {
             let need = (plan.target_minutes - total).max(0.0);
             (
                 button(p, "cta", "Keep recording", BtnKind::Secondary, false, |_| {}),
-                if total <= 0.0 { "Record your first part to get started.".to_string() } else { format!("About {} more to go.", fmt_min(need)) },
+                if total <= 0.0 {
+                    "Record your first part to get started.".to_string()
+                } else {
+                    format!("About {} more to go.", fmt_min(need))
+                },
             )
         }
     };
@@ -354,8 +415,18 @@ fn footer(r: &RecordState, p: Pal) -> El {
                         row()
                             .w_full()
                             .justify_between()
-                            .child(txt(format!("{} / {}", fmt_min(total), fmt_min(plan.target_minutes)), 14.0, 700.0, p.text))
-                            .child(txt(format!("{}/{} parts", r.saved_count(), plan.parts.len()), 12.5, 500.0, p.text_faint)),
+                            .child(txt(
+                                format!("{} / {}", fmt_min(total), fmt_min(plan.target_minutes)),
+                                14.0,
+                                700.0,
+                                p.text,
+                            ))
+                            .child(txt(
+                                format!("{}/{} parts", r.saved_count(), plan.parts.len()),
+                                12.5,
+                                500.0,
+                                p.text_faint,
+                            )),
                     )
                     .child(progress(p, frac, if frac >= 1.0 { p.ok } else { p.accent }, 8.0)),
             )
@@ -370,21 +441,48 @@ fn summary_card(r: &RecordState, p: Pal) -> El {
     let tone = level_tone(level);
     let (title, body) = match next_step(r) {
         Next::Train => ("All parts recorded", "Your recordings are enough to train a high quality copy of your voice."),
-        Next::Speak => ("Your voice is ready", "Quick cloning needs no training. Type any text and hear it in your voice."),
+        Next::Speak => {
+            ("Your voice is ready", "Quick cloning needs no training. Type any text and hear it in your voice.")
+        }
         Next::More => ("A little more to record", "Record the parts that are still empty to reach the goal."),
     };
     let msg = r.summary.as_ref().map(|s| s.message.clone()).filter(|m| !m.is_empty()).unwrap_or_default();
-    let mut c = panel(p).grow(1.0).min_w(0.0).min_h(0.0).padding(32.0).gap(14.0).center().child(chip(p, level.label(), tone))
+    let mut c = panel(p)
+        .grow(1.0)
+        .min_w(0.0)
+        .min_h(0.0)
+        .padding(32.0)
+        .gap(14.0)
+        .center()
+        .child(chip(p, level.label(), tone))
         .child(txt(title, 30.0, 700.0, p.text))
         .child(txt(body, 16.0, 450.0, p.text_dim).wrap().max_w(520.0))
-        .child(txt(format!("{} recorded in {} parts", fmt_min(r.total_minutes()), r.saved_count()), 15.0, 650.0, p.text));
+        .child(txt(
+            format!("{} recorded in {} parts", fmt_min(r.total_minutes()), r.saved_count()),
+            15.0,
+            650.0,
+            p.text,
+        ));
     if !msg.is_empty() {
         c = c.child(txt(msg, 13.5, 450.0, p.text_faint).wrap().max_w(520.0));
     }
-    let mut actions = row().gap(12.0).child(button(p, "review", "Review parts", BtnKind::Secondary, true, |s: &mut AppState| s.record.phase = Phase::Session));
+    let mut actions =
+        row().gap(12.0).child(button(p, "review", "Review parts", BtnKind::Secondary, true, |s: &mut AppState| {
+            s.record.phase = Phase::Session
+        }));
     match next_step(r) {
-        Next::Train => actions = actions.child(button(p, "go-train", "Ready to train", BtnKind::Primary, true, |s: &mut AppState| s.screen = Screen::Train)),
-        Next::Speak => actions = actions.child(button(p, "go-speak", "Ready to speak", BtnKind::Primary, true, |s: &mut AppState| s.screen = Screen::Speak)),
+        Next::Train => {
+            actions =
+                actions.child(button(p, "go-train", "Ready to train", BtnKind::Primary, true, |s: &mut AppState| {
+                    s.screen = Screen::Train
+                }))
+        }
+        Next::Speak => {
+            actions =
+                actions.child(button(p, "go-speak", "Ready to speak", BtnKind::Primary, true, |s: &mut AppState| {
+                    s.screen = Screen::Speak
+                }))
+        }
         Next::More => {}
     }
     c.child(actions)

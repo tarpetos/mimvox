@@ -6,10 +6,10 @@ use serde_json::{Value, json};
 
 use crate::engine::EngineMsg;
 use crate::state::{AppState, Screen};
-use crate::ui::theme::{self, Palette, radius, ty};
 use crate::ui::components::Tone;
 use crate::ui::events;
 use crate::ui::shell::EngineStatus as ShellEngine;
+use crate::ui::theme::{self, Palette, radius, ty};
 use crate::ui::voices::kit::{self, BtnKind};
 
 pub fn data_dir() -> PathBuf {
@@ -25,7 +25,10 @@ fn settings_path() -> PathBuf {
 }
 
 pub(crate) fn read_settings() -> Value {
-    std::fs::read_to_string(settings_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}))
+    std::fs::read_to_string(settings_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| json!({}))
 }
 
 fn write_settings(path: &Path, v: &Value) {
@@ -161,7 +164,11 @@ pub(crate) fn free_bytes(path: &str) -> Option<u64> {
             "[System.IO.DriveInfo]::new((Get-Item -LiteralPath '{}').PSDrive.Root).AvailableFreeSpace",
             p.display().to_string().replace('\'', "''")
         );
-        let out = Command::new("powershell").args(["-NoProfile", "-Command", &script]).creation_flags(0x0800_0000).output().ok()?;
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .creation_flags(0x0800_0000)
+            .output()
+            .ok()?;
         String::from_utf8_lossy(&out.stdout).trim().parse().ok()
     }
     #[cfg(not(windows))]
@@ -221,7 +228,10 @@ pub fn recheck(s: &mut AppState) -> bool {
 
 /// `tools/setup/runtime_version.txt`, the file setup also reads.
 fn required_runtime() -> Option<u32> {
-    let text = std::fs::read_to_string(crate::engine::find_resources()?.join("tools").join("setup").join("runtime_version.txt")).ok()?;
+    let text = std::fs::read_to_string(
+        crate::engine::find_resources()?.join("tools").join("setup").join("runtime_version.txt"),
+    )
+    .ok()?;
     text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#'))?.parse().ok()
 }
 
@@ -265,7 +275,10 @@ pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
             ),
         )
     };
-    let mut info = col().grow(1.0).min_w(0.0).gap(2.0)
+    let mut info = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(2.0)
         .child(text(title).font(ty::LABEL).color(p.text))
         .child(text(detail).font(ty::CAPTION).color(p.text_dim).wrap().max_lines(2));
     if running {
@@ -274,9 +287,21 @@ pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
     let button = if running {
         Button::new("Cancel").ghost().small().key("runtime-cancel").on_press(setuprun::cancel).build(p)
     } else {
-        Button::new("Run setup").primary().small().icon(&icons::REFRESH).key("runtime-setup").on_press(run_setup_update).build(p)
+        Button::new("Run setup")
+            .primary()
+            .small()
+            .icon(&icons::REFRESH)
+            .key("runtime-setup")
+            .on_press(run_setup_update)
+            .build(p)
     };
-    let row_ = row().key("runtime-banner").w_full().px(14.0).py(9.0).gap(12.0).center_y()
+    let row_ = row()
+        .key("runtime-banner")
+        .w_full()
+        .px(14.0)
+        .py(9.0)
+        .gap(12.0)
+        .center_y()
         .child(icon_el(&icons::ALERT, 16.0, p.warn))
         .child(info)
         .child(button);
@@ -368,17 +393,12 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     let o = &s.onboarding;
 
-    let hero = row()
-        .w_full()
-        .gap(16.0)
-        .center_y()
-        .child(crate::ui::shell::brand_mark(s, 56.0))
-        .child(
-            col()
-                .gap(4.0)
-                .child(text("Welcome").font(ty::DISPLAY).color(p.text))
-                .child(text("Mimvox").font(ty::TITLE).color(p.text_dim)),
-        );
+    let hero = row().w_full().gap(16.0).center_y().child(crate::ui::shell::brand_mark(s, 56.0)).child(
+        col()
+            .gap(4.0)
+            .child(text("Welcome").font(ty::DISPLAY).color(p.text))
+            .child(text("Mimvox").font(ty::TITLE).color(p.text_dim)),
+    );
 
     let intro = text(
         "Clone your own voice on this computer, then type any text and hear it spoken the way you would say it. \
@@ -397,17 +417,11 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         .child(step(&p, 2, "Train", "Optional: about 1 hour on an RTX-class GPU"))
         .child(step(&p, 3, "Speak", "Any text in 60+ languages, in your voice"));
 
-    let mut page = col().w_full().gap(18.0).child(
-        kit::panel(&p).gap(18.0).child(hero).child(intro).child(steps),
-    );
+    let mut page = col().w_full().gap(18.0).child(kit::panel(&p).gap(18.0).child(hero).child(intro).child(steps));
     page = page.child(engine_card(&p, s));
 
     let ready = o.runtime_present;
-    let hint = if !o.runtime_present {
-        "Run setup first, then you can continue."
-    } else {
-        "You are all set."
-    };
+    let hint = if !o.runtime_present { "Run setup first, then you can continue." } else { "You are all set." };
     page = page.child(
         row()
             .w_full()
@@ -430,9 +444,11 @@ fn step(p: &Palette, n: u32, title: &str, sub: &str) -> El {
         .fill(p.well)
         .border(1.0, p.well_rim)
         .child(
-            el().size(24.0, 24.0).radius(radius::CONTROL).center().fill(p.accent.alpha(0.25)).child(
-                text(n.to_string()).font(ty::LABEL).color(p.accent),
-            ),
+            el().size(24.0, 24.0)
+                .radius(radius::CONTROL)
+                .center()
+                .fill(p.accent.alpha(0.25))
+                .child(text(n.to_string()).font(ty::LABEL).color(p.accent)),
         )
         .child(text(title.to_string()).font(ty::TITLE).color(p.text))
         .child(text(sub.to_string()).font(ty::CAPTION).color(p.text_dim).wrap())
@@ -446,18 +462,38 @@ fn location_block(p: &Palette, o: &OnboardingState, needed_gb: f32) -> El {
             let short = if ok { String::new() } else { format!(" (about {needed_gb:.0} GB needed)") };
             (format!("{:.1} GB free on this drive{short}", b as f64 / 1e9), ok)
         }
-        Some((path, None)) if path == o.location.text.trim() => ("Free space could not be read for this folder.".to_owned(), true),
+        Some((path, None)) if path == o.location.text.trim() => {
+            ("Free space could not be read for this folder.".to_owned(), true)
+        }
         _ => ("Checking free space…".to_owned(), true),
     };
-    col().key("location").w_full().gap(8.0)
+    col()
+        .key("location")
+        .w_full()
+        .gap(8.0)
         .child(text("Install location").font(ty::LABEL).color(p.text))
-        .child(row().w_full().gap(10.0).center_y()
-            .child(kit::field(p, &o.location, "Folder for the speech models and your voices", |s: &mut AppState| &mut s.onboarding.location))
-            .child(kit::button(p, "Change location…", BtnKind::Glass, !o.picking, pick_location)))
-        .child(text(format!("{line}. Pick a folder, or edit the path, to change where everything is installed.")).font(ty::CAPTION).color(if tone_ok { p.text_faint } else { p.warn }).wrap())
-        .children((!o.location.text.trim().is_empty() && !std::path::Path::new(o.location.text.trim()).is_dir()).then(|| {
-            text("This folder does not exist yet: setup creates it.").font(ty::CAPTION).color(p.text_dim).wrap()
-        }))
+        .child(
+            row()
+                .w_full()
+                .gap(10.0)
+                .center_y()
+                .child(kit::field(
+                    p,
+                    &o.location,
+                    "Folder for the speech models and your voices",
+                    |s: &mut AppState| &mut s.onboarding.location,
+                ))
+                .child(kit::button(p, "Change location…", BtnKind::Glass, !o.picking, pick_location)),
+        )
+        .child(
+            text(format!("{line}. Pick a folder, or edit the path, to change where everything is installed."))
+                .font(ty::CAPTION)
+                .color(if tone_ok { p.text_faint } else { p.warn })
+                .wrap(),
+        )
+        .children((!o.location.text.trim().is_empty() && !std::path::Path::new(o.location.text.trim()).is_dir()).then(
+            || text("This folder does not exist yet: setup creates it.").font(ty::CAPTION).color(p.text_dim).wrap(),
+        ))
 }
 
 fn engine_card(p: &Palette, s: &AppState) -> El {
@@ -471,7 +507,8 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
     } else {
         (kit::badge(p, "Runtime missing", Tone::Warning), "The speech engine is not installed yet.")
     };
-    card = card.child(row().w_full().gap(10.0).center_y().child(badge).child(text(line).font(ty::BODY).color(p.text_dim)));
+    card =
+        card.child(row().w_full().gap(10.0).center_y().child(badge).child(text(line).font(ty::BODY).color(p.text_dim)));
 
     let run = &s.setup;
     let running = super::setuprun::running(s);
@@ -492,9 +529,15 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
         }
         match &run.phase {
             super::setuprun::Phase::Error(e) => card = card.child(kit::notice(p, Tone::Danger, e)),
-            super::setuprun::Phase::Finished(true) => card = card.child(kit::notice(p, Tone::Success, "Setup finished.")),
+            super::setuprun::Phase::Finished(true) => {
+                card = card.child(kit::notice(p, Tone::Success, "Setup finished."))
+            }
             super::setuprun::Phase::Finished(false) => {
-                card = card.child(kit::notice(p, Tone::Danger, "Some steps failed (see above). Run setup again: it retries them and keeps what is done."))
+                card = card.child(kit::notice(
+                    p,
+                    Tone::Danger,
+                    "Some steps failed (see above). Run setup again: it retries them and keeps what is done.",
+                ))
             }
             _ => {}
         }
@@ -598,7 +641,13 @@ fn base(s: &mut AppState) {
 }
 
 fn device(backend: &str, name: &str, vram: f32) -> Option<DeviceInfo> {
-    Some(DeviceInfo { backend: Some(backend.into()), name: Some(name.into()), vram_gb: Some(vram), version: Some("0.1.0".into()), vendor: None })
+    Some(DeviceInfo {
+        backend: Some(backend.into()),
+        name: Some(name.into()),
+        vram_gb: Some(vram),
+        version: Some("0.1.0".into()),
+        vendor: None,
+    })
 }
 
 fn scene_welcome(s: &mut AppState) {
@@ -633,7 +682,10 @@ fn scene_cpu_warning(s: &mut AppState) {
 fn scene_engine_stopped(s: &mut AppState) {
     scene_ready_gpu(s);
     s.onboarding.device = None;
-    s.shell.set_engine(ShellEngine::Stopped { code: Some(1), detail: "ModuleNotFoundError: No module named 'torch'".into() });
+    s.shell.set_engine(ShellEngine::Stopped {
+        code: Some(1),
+        detail: "ModuleNotFoundError: No module named 'torch'".into(),
+    });
 }
 
 pub fn scenes() -> &'static [(&'static str, fn(&mut AppState))] {

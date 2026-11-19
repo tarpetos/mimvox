@@ -12,7 +12,10 @@ pub static TIMERS: AtomicU64 = AtomicU64::new(0);
 
 fn target() -> Option<&'static (std::path::PathBuf, Instant)> {
     static T: OnceLock<Option<(std::path::PathBuf, Instant)>> = OnceLock::new();
-    T.get_or_init(|| std::env::var_os("MIMVOX_FRAME_STATS").filter(|v| !v.is_empty()).map(|p| (p.into(), Instant::now()))).as_ref()
+    T.get_or_init(|| {
+        std::env::var_os("MIMVOX_FRAME_STATS").filter(|v| !v.is_empty()).map(|p| (p.into(), Instant::now()))
+    })
+    .as_ref()
 }
 
 #[inline]

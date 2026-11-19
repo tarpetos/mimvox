@@ -56,13 +56,23 @@ pub struct PlaybarState {
 
 impl Default for PlaybarState {
     fn default() -> Self {
-        PlaybarState { now: None, watch: None, retried: None, scrub: None, looped: false, speed: 1.0, speed_menu: false }
+        PlaybarState {
+            now: None,
+            watch: None,
+            retried: None,
+            scrub: None,
+            looped: false,
+            speed: 1.0,
+            speed_menu: false,
+        }
     }
 }
 
 fn player_call<T>(s: &AppState, f: impl FnOnce(&crate::audio::Player) -> anyhow::Result<T>) -> Result<T, String> {
     let p = s.player.as_ref().ok_or_else(|| shell::audio_unavailable(s))?;
-    shell::guard(|| f(p)).map_err(|_| "Audio playback is not available.".to_owned())?.map_err(|e| format!("Could not play audio: {e}"))
+    shell::guard(|| f(p))
+        .map_err(|_| "Audio playback is not available.".to_owned())?
+        .map_err(|e| format!("Could not play audio: {e}"))
 }
 
 fn player_do(s: &AppState, f: impl FnOnce(&crate::audio::Player)) {
@@ -82,7 +92,17 @@ fn start(s: &mut AppState, path: &Path, title: String, what: String, source: Sou
         p.set_speed(speed);
         p.play(path, live)
     })?;
-    s.playbar.now = Some(Now { path: path.to_path_buf(), title, what, source, status: Status::Playing, pos_s: 0.0, len_s, live, track });
+    s.playbar.now = Some(Now {
+        path: path.to_path_buf(),
+        title,
+        what,
+        source,
+        status: Status::Playing,
+        pos_s: 0.0,
+        len_s,
+        live,
+        track,
+    });
     s.playbar.watch = Some((track, shell::clock_now(s) + STALL_S));
     jump(track, 0.0, len_s);
     Ok(())
@@ -100,11 +120,16 @@ pub fn settle(s: &mut AppState, tx: &mut rune::Tx) -> bool {
         return false;
     }
     s.playbar.watch = None;
-    let Some(n) = s.playbar.now.clone().filter(|n| n.track == track && n.status == Status::Playing && n.pos_s <= 0.0) else {
+    let Some(n) = s.playbar.now.clone().filter(|n| n.track == track && n.status == Status::Playing && n.pos_s <= 0.0)
+    else {
         return false;
     };
     if s.playbar.retried == Some(track) {
-        shell::toast(s, Tone::Danger, "The audio output does not respond. Check the sound device in the system settings.");
+        shell::toast(
+            s,
+            Tone::Danger,
+            "The audio output does not respond. Check the sound device in the system settings.",
+        );
         return true;
     }
     shell::restart_audio(s);
@@ -120,11 +145,23 @@ pub fn settle(s: &mut AppState, tx: &mut rune::Tx) -> bool {
     true
 }
 
-pub fn play(s: &mut AppState, path: &Path, title: impl Into<String>, what: impl Into<String>, source: Source) -> Result<(), String> {
+pub fn play(
+    s: &mut AppState,
+    path: &Path,
+    title: impl Into<String>,
+    what: impl Into<String>,
+    source: Source,
+) -> Result<(), String> {
     start(s, path, title.into(), what.into(), source, false)
 }
 
-pub fn toggle(s: &mut AppState, path: &Path, title: impl Into<String>, what: impl Into<String>, source: Source) -> Result<(), String> {
+pub fn toggle(
+    s: &mut AppState,
+    path: &Path,
+    title: impl Into<String>,
+    what: impl Into<String>,
+    source: Source,
+) -> Result<(), String> {
     if s.playbar.now.as_ref().is_some_and(|n| n.path == path && !n.live) {
         toggle_pause(s);
         return Ok(());
@@ -288,7 +325,9 @@ pub fn set_speed(s: &mut AppState, speed: f32) {
 }
 
 pub fn sink() -> crate::audio::PlaySink {
-    let progress = super::events::Latest::new(|s: &mut AppState, (track, pos, len): (u64, f32, f32)| on_progress(s, track, pos, len));
+    let progress = super::events::Latest::new(|s: &mut AppState, (track, pos, len): (u64, f32, f32)| {
+        on_progress(s, track, pos, len)
+    });
     // Every report feeds the glide; only one that changes the clock (`shows`) goes to the UI thread.
     let sent = std::sync::Mutex::new((0u64, 0.0f32, 0.0f32));
     std::sync::Arc::new(move |ev| match ev {
@@ -395,7 +434,10 @@ fn glide(s: &mut AppState, tx: &mut rune::Tx) {
         return;
     };
     let track = n.track;
-    if let Some(frac) = glide.step(s.playbar.speed).filter(|_| HEARD.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|h| h.track == track)) {
+    if let Some(frac) = glide
+        .step(s.playbar.speed)
+        .filter(|_| HEARD.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|h| h.track == track))
+    {
         place(frac, false);
     }
     let clock = tx.clock();
@@ -445,7 +487,9 @@ fn shows(shown_s: f32, pos_s: f32, len_s: f32) -> bool {
 }
 
 fn on_progress(s: &mut AppState, track: u64, pos_s: f32, len_s: f32) -> bool {
-    let Some(n) = s.playbar.now.as_mut().filter(|n| n.track == track && n.status == Status::Playing) else { return false };
+    let Some(n) = s.playbar.now.as_mut().filter(|n| n.track == track && n.status == Status::Playing) else {
+        return false;
+    };
     let moved = shows(n.pos_s, pos_s, len_s);
     let changed = moved || (n.len_s - len_s).abs() > 1e-3;
     if moved {
@@ -491,9 +535,25 @@ fn speed_label(v: f32) -> String {
     format!("{t}×")
 }
 
-fn round_button(p: Palette, key: &str, glyph: &'static rune::Icon, label: &str, on: bool, f: impl Fn(&mut AppState) + 'static) -> El {
-    let b = el().key(key.to_owned()).role("button").label(label.to_owned()).help(label.to_owned()).size(32.0, 32.0).radius(16.0).center()
-        .focusable(true).motion(motion::UI).on_press(f);
+fn round_button(
+    p: Palette,
+    key: &str,
+    glyph: &'static rune::Icon,
+    label: &str,
+    on: bool,
+    f: impl Fn(&mut AppState) + 'static,
+) -> El {
+    let b = el()
+        .key(key.to_owned())
+        .role("button")
+        .label(label.to_owned())
+        .help(label.to_owned())
+        .size(32.0, 32.0)
+        .radius(16.0)
+        .center()
+        .focusable(true)
+        .motion(motion::UI)
+        .on_press(f);
     let b = if on {
         b.fill(p.accent.alpha(0.2)).border(1.0, p.accent.alpha(0.45)).hover(p.accent.alpha(0.28))
     } else {
@@ -511,25 +571,51 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
     };
     let on = n.status == Status::Playing;
     let frac = if n.len_s > 0.0 { (n.pos_s / n.len_s).clamp(0.0, 1.0) } else { 0.0 };
-    let native = strip(rail.filter(|_| !covered && !s.shell.scripted()).map(|rail| (rail, scale, p, n, s.playbar.speed, frac)));
+    let native =
+        strip(rail.filter(|_| !covered && !s.shell.scripted()).map(|rail| (rail, scale, p, n, s.playbar.speed, frac)));
     sync_rail(rail.map(|r| r[2]), (!on || s.shell.scripted()).then_some(frac)); // (a scripted run has no audio thread)
-    let play = el().key("pb-play").role("button").label(if on { "Pause" } else { "Play" }).help(if on { "Pause (Space)" } else { "Play (Space)" })
-        .size(38.0, 38.0).radius(19.0).center().focusable(true).motion(motion::UI)
+    let play = el()
+        .key("pb-play")
+        .role("button")
+        .label(if on { "Pause" } else { "Play" })
+        .help(if on { "Pause (Space)" } else { "Play (Space)" })
+        .size(38.0, 38.0)
+        .radius(19.0)
+        .center()
+        .focusable(true)
+        .motion(motion::UI)
         .hover(Color::WHITE.alpha(0.1))
         .on_press(toggle_pause)
         .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 16.0, p.on_accent));
     let play = accent_glass(p, play);
-    let title = col().key("pb-title").w(230.0).min_w(0.0).gap(1.0)
+    let title = col()
+        .key("pb-title")
+        .w(230.0)
+        .min_w(0.0)
+        .gap(1.0)
         .child(text(n.title.clone()).font(ty::LABEL).color(p.text).truncate())
         .child(text(n.what.clone()).font(ty::CAPTION).color(p.text_faint).truncate());
     // The total rounds like the result cards' lengths (a 3.8 s take is "0:04" on its card and here).
     let total = if n.live { format!("{}…", clock(n.len_s.round())) } else { clock(n.len_s.round()) };
     let looped = s.playbar.looped;
-    let loop_b = round_button(p, "pb-loop", &LOOP, if looped { "Loop: on" } else { "Loop: off" }, looped, move |s| set_loop(s, !looped)).checked(looped);
+    let loop_b = round_button(p, "pb-loop", &LOOP, if looped { "Loop: on" } else { "Loop: off" }, looped, move |s| {
+        set_loop(s, !looped)
+    })
+    .checked(looped);
     let speed = s.playbar.speed;
     let open = s.playbar.speed_menu;
-    let chip = row().key("pb-speed").role("button").label(format!("Speed {}", speed_label(speed))).help("Playback speed (the pitch stays)")
-        .h(30.0).px(10.0).gap(5.0).center().radius(15.0).focusable(true).motion(motion::UI)
+    let chip = row()
+        .key("pb-speed")
+        .role("button")
+        .label(format!("Speed {}", speed_label(speed)))
+        .help("Playback speed (the pitch stays)")
+        .h(30.0)
+        .px(10.0)
+        .gap(5.0)
+        .center()
+        .radius(15.0)
+        .focusable(true)
+        .motion(motion::UI)
         .fill(if open || speed != 1.0 { p.accent.alpha(0.16) } else { p.glass })
         .border(1.0, if speed != 1.0 { p.accent.alpha(0.4) } else { p.rim_top.alpha(0.25) })
         .hover(p.glass_hover)
@@ -539,8 +625,19 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
     let close = round_button(p, "pb-close", &icons::CLOSE, "Close the player", false, stop);
     // instant_changes: animating each position move with the layout springs kept the window (and its blurs)
     // redrawing at the display's full rate while anything played.
-    let bar = row().key("playbar").role("group").label("Player").instant_changes().w_full().h(BAR_H).pl(9.0).pr(10.0).gap(10.0).center_y()
-        .radius(radius::PANEL + 4.0).continuous_corners()
+    let bar = row()
+        .key("playbar")
+        .role("group")
+        .label("Player")
+        .instant_changes()
+        .w_full()
+        .h(BAR_H)
+        .pl(9.0)
+        .pr(10.0)
+        .gap(10.0)
+        .center_y()
+        .radius(radius::PANEL + 4.0)
+        .continuous_corners()
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.9))
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
@@ -567,7 +664,14 @@ fn strip(over: Option<([f32; 4], f32, Palette, &Now, f32, f32)>) -> bool {
                 let [r, g, b, _] = c.premul_srgb(1.0);
                 [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8]
             };
-            let look = super::seekstrip::Look { track_pt: 5.0, knob_pt: 14.0, fill_top: rgb(p.accent_top), fill_bottom: rgb(p.accent), ring: rgb(p.accent), knob: !n.live };
+            let look = super::seekstrip::Look {
+                track_pt: 5.0,
+                knob_pt: 14.0,
+                fill_top: rgb(p.accent_top),
+                fill_bottom: rgb(p.accent),
+                ring: rgb(p.accent),
+                knob: !n.live,
+            };
             super::seekstrip::show(rail, scale, look, n.track, n.status == Status::Playing, speed, frac)
         }
         None => {
@@ -587,15 +691,50 @@ fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
     const TRACK: f32 = 5.0;
     const KNOB: f32 = 14.0;
     let len = n.len_s;
-    let knob = el().key("pb-knob").size(KNOB, KNOB).pin(Some(-KNOB / 2.0), Some((TRACK - KNOB) / 2.0), None, None).radius(KNOB / 2.0)
-        .fill(Color::WHITE.alpha(0.85)).border(1.0, p.accent.alpha(0.6)).shadow(2.0, 6.0, Color::BLACK.alpha(0.5))
+    let knob = el()
+        .key("pb-knob")
+        .size(KNOB, KNOB)
+        .pin(Some(-KNOB / 2.0), Some((TRACK - KNOB) / 2.0), None, None)
+        .radius(KNOB / 2.0)
+        .fill(Color::WHITE.alpha(0.85))
+        .border(1.0, p.accent.alpha(0.6))
+        .shadow(2.0, 6.0, Color::BLACK.alpha(0.5))
         .live_offset(knob_at());
-    let fill = el().key("pb-fill").h(TRACK).w_full().radius(TRACK / 2.0).gradient(p.accent_top, p.accent).live_offset(fill_at());
-    let groove = el().key("pb-track").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).radius(TRACK / 2.0).fill(p.well).border(1.0, p.well_rim)
-        .clip_rounded(TRACK / 2.0).child(fill);
-    let groove = if native { el().key("pb-track").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).radius(TRACK / 2.0).fill(p.well).border(1.0, p.well_rim) } else { groove };
+    let fill = el()
+        .key("pb-fill")
+        .h(TRACK)
+        .w_full()
+        .radius(TRACK / 2.0)
+        .gradient(p.accent_top, p.accent)
+        .live_offset(fill_at());
+    let groove = el()
+        .key("pb-track")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .radius(TRACK / 2.0)
+        .fill(p.well)
+        .border(1.0, p.well_rim)
+        .clip_rounded(TRACK / 2.0)
+        .child(fill);
+    let groove = if native {
+        el().key("pb-track")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .radius(TRACK / 2.0)
+            .fill(p.well)
+            .border(1.0, p.well_rim)
+    } else {
+        groove
+    };
     let track = el().key(RAIL).w_full().h(TRACK).child(groove).children((!n.live && !native).then_some(knob));
-    let hit = col().key("pb-seek").role("slider").label("Position").w_full().h(28.0).px(KNOB / 2.0).justify_center().grow(1.0).min_w(60.0)
+    let hit = col()
+        .key("pb-seek")
+        .role("slider")
+        .label("Position")
+        .w_full()
+        .h(28.0)
+        .px(KNOB / 2.0)
+        .justify_center()
+        .grow(1.0)
+        .min_w(60.0)
         .range_value(f64::from(n.pos_s), 0.0, f64::from(len.max(0.01)))
         .a11y_value(format!("{} of {}", clock(n.pos_s), clock(len)))
         .child(track);
@@ -603,7 +742,8 @@ fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
         return hit.opacity(0.55).help("Seeking works once the whole text is generated");
     }
     let pos = n.pos_s;
-    hit.focusable(true).cursor(rune::Cursor::Pointer)
+    hit.focusable(true)
+        .cursor(rune::Cursor::Pointer)
         .on_step(move |s: &mut AppState, steps, _| seek(s, pos + steps as f32 * STEP_S))
         .on_drag(move |s: &mut AppState, d: &mut Drag, tx| {
             // Dragging only moves the knob; the sound jumps once, to where it is let go (no "scrubbing" noise).
@@ -632,19 +772,39 @@ pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
     if !s.playbar.speed_menu || s.playbar.now.is_none() {
         return None;
     }
-    let scrim = el().key("pb-speed-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(|s: &mut AppState| s.playbar.speed_menu = false);
+    let scrim = el()
+        .key("pb-speed-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .on_press(|s: &mut AppState| s.playbar.speed_menu = false);
     let mut list = col().key("pb-speed-list").role("menu").w_full().gap(2.0).focus_group();
     for v in SPEEDS {
         let on = (s.playbar.speed - v).abs() < 1e-3;
         list = list.child(
-            row().key(format!("pb-speed-{v}")).role("menuitem").label(speed_label(v)).checked(on).w_full().h(30.0).px(10.0).gap(8.0).center_y().radius(15.0)
-                .fill(if on { p.accent.alpha(0.14) } else { Color::TRANSPARENT }).hover(p.glass_hover).focusable(true)
+            row()
+                .key(format!("pb-speed-{v}"))
+                .role("menuitem")
+                .label(speed_label(v))
+                .checked(on)
+                .w_full()
+                .h(30.0)
+                .px(10.0)
+                .gap(8.0)
+                .center_y()
+                .radius(15.0)
+                .fill(if on { p.accent.alpha(0.14) } else { Color::TRANSPARENT })
+                .hover(p.glass_hover)
+                .focusable(true)
                 .on_press(move |s: &mut AppState| set_speed(s, v))
                 .child(text(speed_label(v)).font(ty::NUM).color(p.text).grow(1.0))
                 .child(el().w(14.0).children(on.then(|| icon_el(&icons::CHECK, 13.0, p.accent)))),
         );
     }
-    let panel = col().key("pb-speed-menu").w(112.0).padding(6.0).gap(4.0).radius(radius::CARD + 2.0)
+    let panel = col()
+        .key("pb-speed-menu")
+        .w(112.0)
+        .padding(6.0)
+        .gap(4.0)
+        .radius(radius::CARD + 2.0)
         .fill(rune::oklcha(0.21, 0.03, 255.0, 0.98))
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
@@ -663,12 +823,40 @@ static LOOP: rune::Icon = rune::Icon {
     body: r#"<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 7.4V6.6A2.4 2.4 0 0 1 5.2 4.2H12.4M10.6 2.4L12.4 4.2L10.6 6"/><path d="M13.2 8.6V9.4A2.4 2.4 0 0 1 10.8 11.8H3.6M5.4 10L3.6 11.8L5.4 13.6"/></g>"#,
 };
 
-pub fn scene_now(s: &mut AppState, path: &str, title: &str, what: &str, source: Source, status: Status, pos_s: f32, len_s: f32) {
-    s.playbar.now = Some(Now { path: path.into(), title: title.into(), what: what.into(), source, status, pos_s, len_s, live: false, track: 0 });
+pub fn scene_now(
+    s: &mut AppState,
+    path: &str,
+    title: &str,
+    what: &str,
+    source: Source,
+    status: Status,
+    pos_s: f32,
+    len_s: f32,
+) {
+    s.playbar.now = Some(Now {
+        path: path.into(),
+        title: title.into(),
+        what: what.into(),
+        source,
+        status,
+        pos_s,
+        len_s,
+        live: false,
+        track: 0,
+    });
 }
 
 pub fn scene_live(s: &mut AppState, title: &str, pos_s: f32, len_s: f32) {
-    scene_now(s, "/tmp/job1/chunk0.wav", title, "Speak · playing as it is generated", Source::Speak, Status::Playing, pos_s, len_s);
+    scene_now(
+        s,
+        "/tmp/job1/chunk0.wav",
+        title,
+        "Speak · playing as it is generated",
+        Source::Speak,
+        Status::Playing,
+        pos_s,
+        len_s,
+    );
     if let Some(n) = s.playbar.now.as_mut() {
         n.live = true;
     }
@@ -683,7 +871,16 @@ fn scene_playing(s: &mut AppState) {
 
 fn scene_paused(s: &mut AppState) {
     super::speak::scene_done(s);
-    scene_now(s, "/tmp/out2.wav", "The quick brown fox jumps over the lazy dog.", "Speak · result", Source::Speak, Status::Paused, 1.6, 3.8);
+    scene_now(
+        s,
+        "/tmp/out2.wav",
+        "The quick brown fox jumps over the lazy dog.",
+        "Speak · result",
+        Source::Speak,
+        Status::Paused,
+        1.6,
+        3.8,
+    );
     shell::toast(s, Tone::Success, "Exported as MP3");
 }
 
@@ -707,7 +904,12 @@ fn scene_speed_menu(s: &mut AppState) {
 
 fn scene_live_bar(s: &mut AppState) {
     super::speak::scene_generating(s);
-    scene_live(s, "Welcome back. In a few seconds this paragraph will be read in my own voice, one sentence…", 3.4, 9.0);
+    scene_live(
+        s,
+        "Welcome back. In a few seconds this paragraph will be read in my own voice, one sentence…",
+        3.4,
+        9.0,
+    );
 }
 
 fn scene_record(s: &mut AppState) {

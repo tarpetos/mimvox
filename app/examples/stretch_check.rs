@@ -19,7 +19,9 @@ fn main() {
     let tone: Vec<f32> = (0..rate * 3)
         .map(|i| {
             let t = i as f32 / rate as f32;
-            0.5 * (2.0 * PI * 200.0 * t).sin() + 0.25 * (2.0 * PI * 400.0 * t).sin() + 0.12 * (2.0 * PI * 600.0 * t).sin()
+            0.5 * (2.0 * PI * 200.0 * t).sin()
+                + 0.25 * (2.0 * PI * 400.0 * t).sin()
+                + 0.12 * (2.0 * PI * 600.0 * t).sin()
         })
         .collect();
     failed += check("tone 200 Hz", &tone, rate, Measure::Dominant, out_dir);
@@ -106,7 +108,10 @@ fn switching(src: &[f32], rate: u32) -> u32 {
     let step = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
     let (a, b) = (step(src), step(&out));
     let ok = b <= a * 1.3;
-    println!("  speed changes every 0.1 s: largest sample step {b:.4} (source {a:.4})  {}", if ok { "ok" } else { "FAIL" });
+    println!(
+        "  speed changes every 0.1 s: largest sample step {b:.4} (source {a:.4})  {}",
+        if ok { "ok" } else { "FAIL" }
+    );
     u32::from(!ok)
 }
 
@@ -192,7 +197,8 @@ fn read_wav(path: &Path) -> Result<(Vec<f32>, u32), hound::Error> {
 }
 
 fn write_wav(path: &Path, x: &[f32], rate: u32) -> Result<(), hound::Error> {
-    let spec = hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let spec =
+        hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
     let mut w = hound::WavWriter::create(path, spec)?;
     for v in x {
         w.write_sample((v.clamp(-1.0, 1.0) * 32767.0).round() as i16)?;

@@ -1,16 +1,16 @@
 //! Speak screen: type text, press Generate, hear it in your voice while it is still being made.
 
 use super::components::{
-    Button, Slider, TextArea, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons, progress_bar, section_panel,
-    segmented_fill, segmented_help, status_dot,
+    Button, Slider, TextArea, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons,
+    progress_bar, section_panel, segmented_fill, segmented_help, status_dot,
 };
 use super::lang;
 use super::playbar;
 use super::shell::{self, EngineStatus, VoiceInfo};
-use super::trash;
 use super::theme::{self, Palette, motion, ty};
-use crate::engine::protocol::{self, EngineEvent, NativeVoice, Quality, TtsChunk, TtsStarted};
+use super::trash;
 use crate::engine::EngineMsg;
+use crate::engine::protocol::{self, EngineEvent, NativeVoice, Quality, TtsChunk, TtsStarted};
 use crate::state::{AppState, Screen};
 use rune::{Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, row, text};
 use serde_json::{Value, json};
@@ -39,7 +39,16 @@ impl Take {
     pub fn from_entry(id: u64, e: protocol::OutputEntry) -> Take {
         let text = e.text.filter(|t| !t.trim().is_empty() && !e.legacy).unwrap_or_else(|| e.name.clone());
         let play = e.path_play.filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| e.path.clone());
-        Take { id, text, voice: e.voice_name.unwrap_or_default(), path: e.path, play, duration_s: e.duration_s.unwrap_or(0.0), elapsed_s: e.elapsed_s, created: e.created }
+        Take {
+            id,
+            text,
+            voice: e.voice_name.unwrap_or_default(),
+            path: e.path,
+            play,
+            duration_s: e.duration_s.unwrap_or(0.0),
+            elapsed_s: e.elapsed_s,
+            created: e.created,
+        }
     }
 }
 
@@ -264,7 +273,12 @@ pub(crate) fn note_reference(s: &mut AppState, voice_id: &str, lang: &str, used:
     if used.accent.as_deref() == Some("native-us") || used.reference_language.is_none() {
         return;
     }
-    let own_clip = s.shell.voices.iter().find(|v| v.id == voice_id).is_some_and(|v| !v.references.iter().any(|r| lang::base(r) == lang::base(lang)));
+    let own_clip = s
+        .shell
+        .voices
+        .iter()
+        .find(|v| v.id == voice_id)
+        .is_some_and(|v| !v.references.iter().any(|r| lang::base(r) == lang::base(lang)));
     if own_clip {
         let value = json!(used.reference_language);
         shell::set_reference_language(s, voice_id, &value);
@@ -274,7 +288,9 @@ pub(crate) fn note_reference(s: &mut AppState, voice_id: &str, lang: &str, used:
 fn blocker(s: &AppState) -> Option<&'static str> {
     match &s.shell.engine {
         EngineStatus::Idle | EngineStatus::Starting { .. } => return Some("Waiting for the engine to start…"),
-        EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => return Some("The engine is not running. Press Retry above."),
+        EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => {
+            return Some("The engine is not running. Press Retry above.");
+        }
         EngineStatus::Ready { .. } => {}
     }
     if shell::active_voice(s).is_none() {
@@ -302,8 +318,18 @@ pub fn generate(s: &mut AppState) {
     let lang = language(s);
     let out = super::formats::output_format(s);
     let accent = accent_param(s, &lang);
-    let (method, params) =
-        protocol::tts_generate(&voice.id, &text, s.speak.expressiveness, s.speak.voice_match, s.speak.quality, s.speak.speed, &lang, &out, accent, s.speak.exact_stress);
+    let (method, params) = protocol::tts_generate(
+        &voice.id,
+        &text,
+        s.speak.expressiveness,
+        s.speak.voice_match,
+        s.speak.quality,
+        s.speak.speed,
+        &lang,
+        &out,
+        accent,
+        s.speak.exact_stress,
+    );
     shell::stop_audio(s);
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
@@ -380,7 +406,9 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
         EngineMsg::Response { id, result } if *id == a.req => match result {
             Ok(v) => {
                 let mut notes = (None, None);
-                if let Ok(TtsStarted { job, segments, segment_chars, accent_note, reference_note }) = protocol::parse_result(v.clone()) {
+                if let Ok(TtsStarted { job, segments, segment_chars, accent_note, reference_note }) =
+                    protocol::parse_result(v.clone())
+                {
                     a.job = Some(job);
                     if segments > 0 {
                         a.total = segments as usize;
@@ -414,7 +442,11 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                     path: done.path.clone(),
                     play,
                     duration_s: done.duration_s,
-                    elapsed_s: Some(if ev.data.get("elapsed_s").is_some() { done.elapsed_s } else { (s.shell.now - a.started) as f32 }),
+                    elapsed_s: Some(if ev.data.get("elapsed_s").is_some() {
+                        done.elapsed_s
+                    } else {
+                        (s.shell.now - a.started) as f32
+                    }),
                     created: super::history::now_unix(),
                 };
                 playbar::finish_live(s, Some((&take.play, one_line(&take.text))));
@@ -557,7 +589,10 @@ pub fn settle(s: &mut AppState) -> bool {
             }
             if s.speak.accent_dirty {
                 s.speak.accent_dirty = false;
-                super::onboarding::save_setting("accent", json!(if s.speak.native_accent { "native-us" } else { "own" }));
+                super::onboarding::save_setting(
+                    "accent",
+                    json!(if s.speak.native_accent { "native-us" } else { "own" }),
+                );
                 super::onboarding::save_setting("native_voice", json!(s.speak.native_voice.as_str()));
             }
         }
@@ -625,7 +660,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     let r = row().key("speak").w_full().h_full().px(16.0).pb(16.0).gap(16.0);
     if s.book.shown {
-        return r.child(super::book::panel(s, p)).child(side_column(s, p, cx, |own_scroll| super::book::side_panel(s, p, own_scroll)));
+        return r
+            .child(super::book::panel(s, p))
+            .child(side_column(s, p, cx, |own_scroll| super::book::side_panel(s, p, own_scroll)));
     }
     r.child(text_panel(s, p)).child(side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
 }
@@ -641,8 +678,13 @@ pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, resul
     let style = col().key("side-style").w_full().child(style_panel(s, p));
     let side = col().key("side").w(320.0).h_full();
     if cramped {
-        side.scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0)
-            .child(col().w_full().gap(16.0).child(style).child(col().key("side-results").w_full().min_h(RESULTS_MIN_H).child(results(false))))
+        side.scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(
+            col()
+                .w_full()
+                .gap(16.0)
+                .child(style)
+                .child(col().key("side-results").w_full().min_h(RESULTS_MIN_H).child(results(false))),
+        )
     } else {
         side.gap(16.0).child(style).child(results(true))
     }
@@ -652,16 +694,26 @@ fn text_panel(s: &AppState, p: Palette) -> El {
     let words = s.speak.text.text.split_whitespace().count();
     let est = (words as f32 / 2.6).round();
     let meta = if words == 0 { String::new() } else { format!("{words} words · about {} of speech", fmt_time(est)) };
-    let open = Button::new("Open text file…").ghost().small().icon(&icons::FILE).key("speak-open-file")
+    let open = Button::new("Open text file…")
+        .ghost()
+        .small()
+        .icon(&icons::FILE)
+        .key("speak-open-file")
         .help("TXT, Markdown, HTML, EPUB, DOCX, ODT, RTF, FB2, PDF or subtitles. A long text opens in Book mode.")
-        .on_press(|s| super::book::choose_file(s, false)).build(p);
+        .on_press(|s| super::book::choose_file(s, false))
+        .build(p);
     let clear = (!s.speak.text.text.is_empty()).then(|| {
         super::components::icon_button(p, "speak-clear", &icons::TRASH, "Clear the text", |s: &mut AppState| {
             s.speak.text = TextEdit::new("");
             s.speak.text.focused = true;
         })
     });
-    let head = row().key("speak-head").pin(None, Some(14.5), Some(22.0), None).gap(10.0).center_y().instant_changes()
+    let head = row()
+        .key("speak-head")
+        .pin(None, Some(14.5), Some(22.0), None)
+        .gap(10.0)
+        .center_y()
+        .instant_changes()
         .children((!meta.is_empty()).then(|| text(meta).font(ty::CAPTION).color(p.text_faint)))
         .children(clear)
         .child(open)
@@ -670,7 +722,15 @@ fn text_panel(s: &AppState, p: Palette) -> El {
         .placeholder(format!("Type or paste anything in {}, then press Generate.", lang::name(&language(s))))
         .on_submit(generate)
         .build(p);
-    section_panel(p, "What should I say?").key("text-panel").grow(1.0).min_w(0.0).h_full().gap(12.0).child(head).child(editor).child(action_bar(s, p))
+    section_panel(p, "What should I say?")
+        .key("text-panel")
+        .grow(1.0)
+        .min_w(0.0)
+        .h_full()
+        .gap(12.0)
+        .child(head)
+        .child(editor)
+        .child(action_bar(s, p))
 }
 
 fn action_bar(s: &AppState, p: Palette) -> El {
@@ -680,9 +740,15 @@ fn action_bar(s: &AppState, p: Palette) -> El {
             let k = (a.chunks + 1).min(a.total);
             let of = if a.exact { format!("{}", a.total) } else { format!("~{}", a.total) };
             let (label, sub) = if a.buffering() {
-                (format!("Getting ahead · part {k} of {of}"), "Playback starts once the rest can keep up, so it never stutters.".to_owned())
+                (
+                    format!("Getting ahead · part {k} of {of}"),
+                    "Playback starts once the rest can keep up, so it never stutters.".to_owned(),
+                )
             } else if a.chunks == 0 {
-                (if a.total > 1 { format!("Generating part 1 of {of}") } else { "Generating…".to_owned() }, "The first words play as soon as they are ready.".to_owned())
+                (
+                    if a.total > 1 { format!("Generating part 1 of {of}") } else { "Generating…".to_owned() },
+                    "The first words play as soon as they are ready.".to_owned(),
+                )
             } else if a.chunks >= a.total {
                 ("Finishing up…".to_owned(), "Almost done.".to_owned())
             } else {
@@ -694,13 +760,25 @@ fn action_bar(s: &AppState, p: Palette) -> El {
             } else {
                 (a.total > 1).then(|| (a.chunks as f32 / a.total as f32).max(0.03))
             };
-            let info = col().grow(1.0).min_w(0.0).gap(8.0)
-                .child(row().w_full().center_y().justify_between()
-                    .child(text(label).font(ty::LABEL).color(p.text))
-                    .child(text(fmt_time(elapsed)).font(ty::NUM).color(p.text_dim)))
+            let info = col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(8.0)
+                .child(
+                    row()
+                        .w_full()
+                        .center_y()
+                        .justify_between()
+                        .child(text(label).font(ty::LABEL).color(p.text))
+                        .child(text(fmt_time(elapsed)).font(ty::NUM).color(p.text_dim)),
+                )
                 .child(progress_bar(p, frac))
                 .child(text(sub).font(ty::CAPTION).color(p.text_faint));
-            row().key("bar-active").w_full().gap(20.0).center_y()
+            row()
+                .key("bar-active")
+                .w_full()
+                .gap(20.0)
+                .center_y()
                 .child(info)
                 .child(Button::new("Stop").large().icon(&icons::STOP).key("stop").on_press(cancel).build(p))
         }
@@ -708,22 +786,54 @@ fn action_bar(s: &AppState, p: Palette) -> El {
             let block = blocker(s);
             let empty = s.speak.text.text.trim().is_empty();
             let voice_line = match shell::active_voice(s) {
-                Some(v) => col().gap(2.0)
-                    .child(row().gap(8.0).center_y().child(text(format!("Speaking as {}", v.name)).font(ty::LABEL).color(p.text))
-                        .child(badge(p, if v.trained { "Trained" } else { "Zero-shot" }, if v.trained { Tone::Success } else { Tone::Accent }))
-                        .child(Button::new("More recordings of this voice…").ghost().small().icon(&icons::PLUS).key("speak-ref-media").on_press(|s| {
-                            shell::set_screen(s, Screen::Voices);
-                            super::refmedia::pick_files(s);
-                        }).build(p)))
+                Some(v) => col()
+                    .gap(2.0)
+                    .child(
+                        row()
+                            .gap(8.0)
+                            .center_y()
+                            .child(text(format!("Speaking as {}", v.name)).font(ty::LABEL).color(p.text))
+                            .child(badge(
+                                p,
+                                if v.trained { "Trained" } else { "Zero-shot" },
+                                if v.trained { Tone::Success } else { Tone::Accent },
+                            ))
+                            .child(
+                                Button::new("More recordings of this voice…")
+                                    .ghost()
+                                    .small()
+                                    .icon(&icons::PLUS)
+                                    .key("speak-ref-media")
+                                    .on_press(|s| {
+                                        shell::set_screen(s, Screen::Voices);
+                                        super::refmedia::pick_files(s);
+                                    })
+                                    .build(p),
+                            ),
+                    )
                     .child(hint_line(s, p, block)),
-                None => col().gap(2.0)
+                None => col()
+                    .gap(2.0)
                     .child(text("No voice selected").font(ty::LABEL).color(p.text))
                     .child(text(block.unwrap_or("")).font(ty::CAPTION).color(p.warn)),
             };
-            let go = Button::new("Generate").primary().large().icon(&icons::SPARKLE).key("generate").disabled(empty || block.is_some()).on_press(generate).build(p);
-            let mut r = row().key("bar-idle").w_full().gap(20.0).center_y().child(el().grow(1.0).min_w(0.0).child(voice_line));
-            if block.is_some() && shell::active_voice(s).is_none() && matches!(s.shell.engine, EngineStatus::Ready { .. }) {
-                r = r.child(Button::new("Add a voice").key("go-record").on_press(super::record::start_new_voice).build(p));
+            let go = Button::new("Generate")
+                .primary()
+                .large()
+                .icon(&icons::SPARKLE)
+                .key("generate")
+                .disabled(empty || block.is_some())
+                .on_press(generate)
+                .build(p);
+            let mut r =
+                row().key("bar-idle").w_full().gap(20.0).center_y().child(el().grow(1.0).min_w(0.0).child(voice_line));
+            if block.is_some()
+                && shell::active_voice(s).is_none()
+                && matches!(s.shell.engine, EngineStatus::Ready { .. })
+            {
+                r = r.child(
+                    Button::new("Add a voice").key("go-record").on_press(super::record::start_new_voice).build(p),
+                );
             }
             r.child(go)
         }
@@ -735,7 +845,10 @@ fn hint_line(s: &AppState, p: Palette, block: Option<&'static str>) -> El {
         return text(b).font(ty::CAPTION).color(p.warn);
     }
     if s.shell.preparing_voice() {
-        return row().key("preparing").gap(6.0).center_y()
+        return row()
+            .key("preparing")
+            .gap(6.0)
+            .center_y()
             .child(status_dot(p, Tone::Accent, true))
             .child(text("Preparing voice…").font(ty::CAPTION).color(p.text_dim));
     }
@@ -753,37 +866,69 @@ fn toggle_exact_stress(s: &mut AppState) {
 
 pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     let trained = shell::active_voice(s).is_some_and(|v: &VoiceInfo| v.trained);
-    let speed = Slider::new("speed", "Speed", s.speak.speed, 0.8, 1.3).step(0.05).decimals(2).unit("×").ends("Slower", "Faster")
+    let speed = Slider::new("speed", "Speed", s.speak.speed, 0.8, 1.3)
+        .step(0.05)
+        .decimals(2)
+        .unit("×")
+        .ends("Slower", "Faster")
         .on_change(|s, v| {
             s.speak.speed = (v * 100.0).round() / 100.0;
             s.speak.speed_dirty = true;
-        }).build(p);
+        })
+        .build(p);
     // Book mode keeps its own, calmer expressiveness.
     let book = s.screen == Screen::Speak && s.book.shown;
-    let expr = Slider::new("expr", "Expressiveness", if book { s.book.expressiveness } else { s.speak.expressiveness }, 0.4, 1.0).step(0.05)
-        .ends("Steady", "Lively")
-        .on_change(move |s, v| {
-            if book {
-                s.book.expressiveness = v;
-                s.book.settings_dirty = true;
-            } else {
-                s.speak.expressiveness = v;
-            }
-        }).build(p);
-    let mut m = Slider::new("match", "Voice match", s.speak.voice_match, 0.3, 1.0).step(0.05).ends("Natural", "Closest to me")
-        .on_change(|s, v| s.speak.voice_match = v).build(p);
+    let expr = Slider::new(
+        "expr",
+        "Expressiveness",
+        if book { s.book.expressiveness } else { s.speak.expressiveness },
+        0.4,
+        1.0,
+    )
+    .step(0.05)
+    .ends("Steady", "Lively")
+    .on_change(move |s, v| {
+        if book {
+            s.book.expressiveness = v;
+            s.book.settings_dirty = true;
+        } else {
+            s.speak.expressiveness = v;
+        }
+    })
+    .build(p);
+    let mut m = Slider::new("match", "Voice match", s.speak.voice_match, 0.3, 1.0)
+        .step(0.05)
+        .ends("Natural", "Closest to me")
+        .on_change(|s, v| s.speak.voice_match = v)
+        .build(p);
     if !trained {
         m = m.opacity(0.5);
     }
-    let quality = row().key("quality").w_full().center_y().justify_between().gap(10.0)
-        .child(col().gap(1.0)
-            .child(text("Quality").font(ty::LABEL).color(p.text))
-            .child(text(if s.speak.quality == Quality::Best { "Richest detail · 32 steps" } else { "About twice as fast · 16 steps" }).font(ty::CAPTION).color(p.text_faint)))
+    let quality = row()
+        .key("quality")
+        .w_full()
+        .center_y()
+        .justify_between()
+        .gap(10.0)
+        .child(
+            col().gap(1.0).child(text("Quality").font(ty::LABEL).color(p.text)).child(
+                text(if s.speak.quality == Quality::Best {
+                    "Richest detail · 32 steps"
+                } else {
+                    "About twice as fast · 16 steps"
+                })
+                .font(ty::CAPTION)
+                .color(p.text_faint),
+            ),
+        )
         .child(segmented_help(
             p,
             "quality-pick",
             &["Best", "Fast"],
-            &["32 decoding steps per sentence (the first one uses 16, so sound starts sooner)", "16 decoding steps: about twice as fast, slightly less clean"],
+            &[
+                "32 decoding steps per sentence (the first one uses 16, so sound starts sooner)",
+                "16 decoding steps: about twice as fast, slightly less clean",
+            ],
             usize::from(s.speak.quality == Quality::Fast),
             |s, i| s.speak.quality = if i == 1 { Quality::Fast } else { Quality::Best },
         ));
@@ -804,7 +949,9 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
             .font(ty::CAPTION).color(p.text_faint).wrap());
     }
     if !trained && shell::active_voice(s).is_some() {
-        c = c.child(text("Voice match applies once this voice is trained.").font(ty::CAPTION).color(p.text_faint).wrap());
+        c = c.child(
+            text("Voice match applies once this voice is trained.").font(ty::CAPTION).color(p.text_faint).wrap(),
+        );
     } else if trained && !super::setuprun::has(s, "training") {
         c = c.child(super::setuprun::install_line(s, p, "training", "Voice match"));
     }
@@ -814,23 +961,41 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
 fn language_row(s: &AppState, p: Palette) -> El {
     let code = language(s);
     let voice = shell::active_voice(s);
-    let head = row().key("speak-lang").w_full().center_y().justify_between().gap(10.0)
-        .child(col().gap(1.0).min_w(0.0)
-            .child(text("Language").font(ty::LABEL).color(p.text))
-            .child(text("What the text is written in").font(ty::CAPTION).color(p.text_faint)))
+    let head = row()
+        .key("speak-lang")
+        .w_full()
+        .center_y()
+        .justify_between()
+        .gap(10.0)
+        .child(
+            col()
+                .gap(1.0)
+                .min_w(0.0)
+                .child(text("Language").font(ty::LABEL).color(p.text))
+                .child(text("What the text is written in").font(ty::CAPTION).color(p.text_faint)),
+        )
         .child(lang::chip(&p, "speak-lang-chip", &lang::label(&code), lang::Target::Speak, voice.is_some()));
     let mut c = col().w_full().gap(8.0).child(head);
     // With HolosTTS the engine reads Ukrainian with dictionary stress; without it OmniVoice guesses, and a "+"
     // before a vowel is a hint it often follows.
     if code == "uk" && super::setuprun::has(s, "ukrainian") {
-        c = c.child(el().key("speak-exact-stress").w_full().child(super::voices::kit::checkbox(&p, s.speak.exact_stress,
-            "Exact stress (HolosTTS)", toggle_exact_stress)));
+        c = c.child(el().key("speak-exact-stress").w_full().child(super::voices::kit::checkbox(
+            &p,
+            s.speak.exact_stress,
+            "Exact stress (HolosTTS)",
+            toggle_exact_stress,
+        )));
     }
     if exact_ukrainian(s) {
         c = c.child(text("Every word as the dictionary and the sentence say. A + before a vowel changes one: співак+ом. The voice can sound less like the original: turn it off to compare.")
             .font(ty::CAPTION).color(p.text_faint).wrap());
     } else if code == "uk" {
-        c = c.child(text("Wrong stress? Type + before the stressed vowel: співак+ом.").font(ty::CAPTION).color(p.text_faint).wrap());
+        c = c.child(
+            text("Wrong stress? Type + before the stressed vowel: співак+ом.")
+                .font(ty::CAPTION)
+                .color(p.text_faint)
+                .wrap(),
+        );
         if !super::setuprun::has(s, "ukrainian") {
             c = c.child(super::setuprun::install_line(s, p, "ukrainian", "Exact Ukrainian stress"));
         }
@@ -848,16 +1013,30 @@ fn language_row(s: &AppState, p: Palette) -> El {
         } else {
             format!("Voice recorded in {rec}: timbre kept, a {target} reference clip improves the accent.")
         };
-        let mut box_ = col().key("speak-lang-hint").w_full().gap(8.0).padding(10.0).radius(super::theme::radius::CONTROL)
-            .fill(p.accent.alpha(0.07)).border(1.0, p.accent.alpha(0.2))
+        let mut box_ = col()
+            .key("speak-lang-hint")
+            .w_full()
+            .gap(8.0)
+            .padding(10.0)
+            .radius(super::theme::radius::CONTROL)
+            .fill(p.accent.alpha(0.07))
+            .border(1.0, p.accent.alpha(0.2))
             .child(text(hint).font(ty::CAPTION).color(p.text_dim).wrap());
         if !has_ref {
             let c2 = code.clone();
-            box_ = box_.child(row().child(Button::new(format!("Record a {target} reference")).small().icon(&icons::MIC).key("speak-lang-ref")
-                .on_press(move |s| {
-                    super::refclip::start_language(s, &c2);
-                    shell::set_screen(s, Screen::Voices);
-                }).build(p)));
+            box_ = box_.child(
+                row().child(
+                    Button::new(format!("Record a {target} reference"))
+                        .small()
+                        .icon(&icons::MIC)
+                        .key("speak-lang-ref")
+                        .on_press(move |s| {
+                            super::refclip::start_language(s, &c2);
+                            shell::set_screen(s, Screen::Voices);
+                        })
+                        .build(p),
+                ),
+            );
         }
         c = c.child(box_);
     }
@@ -891,11 +1070,20 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
         &format!("{key}-pick"),
         &["Native (American)", "Like my recordings"],
         if trained && !s.shell.zero_shot_vc {
-            &["A native American speaker says it, then your trained voice model gives it your timbre", "Copies the accent of your own recordings"]
+            &[
+                "A native American speaker says it, then your trained voice model gives it your timbre",
+                "Copies the accent of your own recordings",
+            ]
         } else if possible {
-            &["A native American speaker says it, then it gets the timbre of your reference clip (no training needed)", "Copies the accent of your own recordings"]
+            &[
+                "A native American speaker says it, then it gets the timbre of your reference clip (no training needed)",
+                "Copies the accent of your own recordings",
+            ]
         } else {
-            &["Needs the zero-shot voice converter (run setup) or a trained voice", "Copies the accent of your own recordings"]
+            &[
+                "Needs the zero-shot voice converter (run setup) or a trained voice",
+                "Copies the accent of your own recordings",
+            ]
         },
         usize::from(!native),
         possible,
@@ -912,7 +1100,10 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
     } else {
         format!("English gets the accent of {source}.")
     };
-    let mut c = col().key(key.to_owned()).w_full().gap(8.0)
+    let mut c = col()
+        .key(key.to_owned())
+        .w_full()
+        .gap(8.0)
         .child(text("Accent").font(ty::LABEL).color(p.text))
         .child(pick)
         .child(text(caption).font(ty::CAPTION).color(p.text_faint).wrap());
@@ -922,13 +1113,31 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
         } else {
             "Install the native accent, or train this voice, to speak English without an accent; or add an English reference clip in Voices."
         };
-        c = c.child(col().key(format!("{key}-hint")).w_full().gap(8.0).padding(10.0).radius(theme::radius::CONTROL)
-            .fill(p.warn.alpha(0.08)).border(1.0, p.warn.alpha(0.25))
-            .child(text(hint).font(ty::CAPTION).color(if possible { p.text_dim } else { p.warn }).wrap())
-            .child(row().gap(8.0)
-                .child(Button::new("Add an English clip").small().icon(&icons::MIC).key(format!("{key}-add-en"))
-                    .on_press(|s| add_reference(s, "en")).build(p)))
-            .children((!s.shell.zero_shot_vc).then(|| super::setuprun::install_line(s, p, "native_accent", "The native accent"))));
+        c = c.child(
+            col()
+                .key(format!("{key}-hint"))
+                .w_full()
+                .gap(8.0)
+                .padding(10.0)
+                .radius(theme::radius::CONTROL)
+                .fill(p.warn.alpha(0.08))
+                .border(1.0, p.warn.alpha(0.25))
+                .child(text(hint).font(ty::CAPTION).color(if possible { p.text_dim } else { p.warn }).wrap())
+                .child(
+                    row().gap(8.0).child(
+                        Button::new("Add an English clip")
+                            .small()
+                            .icon(&icons::MIC)
+                            .key(format!("{key}-add-en"))
+                            .on_press(|s| add_reference(s, "en"))
+                            .build(p),
+                    ),
+                )
+                .children(
+                    (!s.shell.zero_shot_vc)
+                        .then(|| super::setuprun::install_line(s, p, "native_accent", "The native accent")),
+                ),
+        );
     }
     if native {
         let v = s.speak.native_voice;
@@ -941,7 +1150,11 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
             p,
             &format!("{key}-speaker-pick"),
             &["Auto", "Male", "Female"],
-            &["The native speaker whose pitch is closest to yours", "Always the male native speaker", "Always the female native speaker"],
+            &[
+                "The native speaker whose pitch is closest to yours",
+                "Always the male native speaker",
+                "Always the female native speaker",
+            ],
             sel,
             true,
             |s, i| {
@@ -949,15 +1162,32 @@ pub(crate) fn accent_block(s: &AppState, p: Palette, key: &str) -> El {
                 s.speak.accent_dirty = true;
             },
         );
-        c = c.child(row().key(format!("{key}-speaker")).w_full().center_y().gap(10.0)
-            .child(text("Speaker").font(ty::LABEL).color(p.text))
-            .child(el().grow(1.0).min_w(0.0).child(pick)));
+        c = c.child(
+            row()
+                .key(format!("{key}-speaker"))
+                .w_full()
+                .center_y()
+                .gap(10.0)
+                .child(text("Speaker").font(ty::LABEL).color(p.text))
+                .child(el().grow(1.0).min_w(0.0).child(pick)),
+        );
     }
     c
 }
 
-pub(crate) fn results_head(s: &AppState, p: Palette, kind: trash::Kind, count: usize, more: bool, chip_key: &str) -> El {
-    row().key(format!("{chip_key}-head")).pin(None, Some(16.5), Some(22.0), None).gap(8.0).center_y()
+pub(crate) fn results_head(
+    s: &AppState,
+    p: Palette,
+    kind: trash::Kind,
+    count: usize,
+    more: bool,
+    chip_key: &str,
+) -> El {
+    row()
+        .key(format!("{chip_key}-head"))
+        .pin(None, Some(16.5), Some(22.0), None)
+        .gap(8.0)
+        .center_y()
         .children((count > 0).then(|| badge(p, &format!("{count}{}", if more { "+" } else { "" }), Tone::Neutral)))
         .child(super::history::refresh_button(s, p, kind))
         .child(super::formats::output_chip(s, p, chip_key))
@@ -967,12 +1197,27 @@ fn results_panel(s: &AppState, p: Palette, own_scroll: bool) -> El {
     let more = super::history::has_older(s, trash::Kind::Speak);
     let head = results_head(s, p, trash::Kind::Speak, s.speak.takes.len(), more, "speak-outfmt");
     let body = if s.speak.takes.is_empty() {
-        col().key("takes-empty").w_full().grow(1.0).justify_center().child(empty_state(p, &icons::WAVE, "Nothing yet", "Generated speech appears here."))
+        col().key("takes-empty").w_full().grow(1.0).justify_center().child(empty_state(
+            p,
+            &icons::WAVE,
+            "Nothing yet",
+            "Generated speech appears here.",
+        ))
     } else {
-        let list = col().w_full().gap(8.0).children(s.speak.takes.iter().map(|t| take_row(s, p, t)))
+        let list = col()
+            .w_full()
+            .gap(8.0)
+            .children(s.speak.takes.iter().map(|t| take_row(s, p, t)))
             .children(more.then(|| super::history::older_button(s, p, trash::Kind::Speak)));
         if own_scroll {
-            col().key("takes").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(list)
+            col()
+                .key("takes")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .scroll_edge_fade(14.0)
+                .child(list)
         } else {
             col().key("takes").w_full().child(list)
         }
@@ -992,8 +1237,16 @@ fn one_line(text: &str) -> String {
 fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
     let id = t.id;
     let on = playbar::playing(s, &t.play);
-    let play = el().key(format!("play{id}")).role("button").label(if on { "Pause" } else { "Play" }).size(36.0, 36.0).radius(18.0).center()
-        .hover(rune::Color::WHITE.alpha(0.1)).focusable(true).motion(motion::UI)
+    let play = el()
+        .key(format!("play{id}"))
+        .role("button")
+        .label(if on { "Pause" } else { "Play" })
+        .size(36.0, 36.0)
+        .radius(18.0)
+        .center()
+        .hover(rune::Color::WHITE.alpha(0.1))
+        .focusable(true)
+        .motion(motion::UI)
         .on_press(move |s: &mut AppState| toggle_take(s, id))
         .child(icon_el(if on { &icons::PAUSE } else { &icons::PLAY }, 15.0, p.on_accent));
     let play = accent_glass(p, play);
@@ -1014,16 +1267,29 @@ fn take_row(s: &AppState, p: Palette, t: &Take) -> El {
         None => fmt_time(t.duration_s),
     };
     let export = super::formats::export_button(p, format!("export-take{id}"), &t.path, &t.play, true);
-    glass_card(p).key(format!("take{id}")).w_full().padding(10.0).gap(10.0)
-        .child(row().w_full().gap(10.0).center_y()
-            .child(play)
-            .child(col().grow(1.0).min_w(0.0).gap(1.0)
-                .child(text(one_line(&t.text)).font(ty::LABEL).color(p.text).truncate())
-                .child(text(meta).font(ty::CAPTION).color(p.text_faint))))
+    glass_card(p)
+        .key(format!("take{id}"))
+        .w_full()
+        .padding(10.0)
+        .gap(10.0)
+        .child(
+            row().w_full().gap(10.0).center_y().child(play).child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(1.0)
+                    .child(text(one_line(&t.text)).font(ty::LABEL).color(p.text).truncate())
+                    .child(text(meta).font(ty::CAPTION).color(p.text_faint)),
+            ),
+        )
         .child(if trash::confirming(s, trash::Kind::Speak, id) {
             trash::confirm_row(s, p, trash::Kind::Speak, id, &t.path, &t.play)
         } else {
-            row().w_full().gap(8.0).center_y().child(export).child(reveal).child(open).child(trash::button(p, trash::Kind::Speak, id))
+            row().w_full().gap(8.0).center_y().child(export).child(reveal).child(open).child(trash::button(
+                p,
+                trash::Kind::Speak,
+                id,
+            ))
         })
 }
 
@@ -1033,17 +1299,53 @@ starting to play before the last sentence has even been generated.";
 fn demo_voice(s: &mut AppState, trained: bool) {
     s.screen = Screen::Speak;
     s.shell.voices = vec![
-        VoiceInfo { id: "me".into(), name: "My voice".into(), preset: Some("standard".into()), dataset_minutes: 6.4, parts: 5, trained, trained_epochs: if trained { 300 } else { 0 }, ..Default::default() },
-        VoiceInfo { id: "pro".into(), name: "Studio take".into(), preset: Some("pro".into()), dataset_minutes: 15.0, parts: 12, trained: true, trained_epochs: 300, ..Default::default() },
+        VoiceInfo {
+            id: "me".into(),
+            name: "My voice".into(),
+            preset: Some("standard".into()),
+            dataset_minutes: 6.4,
+            parts: 5,
+            trained,
+            trained_epochs: if trained { 300 } else { 0 },
+            ..Default::default()
+        },
+        VoiceInfo {
+            id: "pro".into(),
+            name: "Studio take".into(),
+            preset: Some("pro".into()),
+            dataset_minutes: 15.0,
+            parts: 12,
+            trained: true,
+            trained_epochs: 300,
+            ..Default::default()
+        },
     ];
     s.shell.active_voice = Some("me".into());
-    s.shell.set_engine(EngineStatus::Ready { device: Some("NVIDIA GeForce RTX 4070".into()), tts: Some("ready".into()), rvc: Some("ready".into()) });
+    s.shell.set_engine(EngineStatus::Ready {
+        device: Some("NVIDIA GeForce RTX 4070".into()),
+        tts: Some("ready".into()),
+        rvc: Some("ready".into()),
+    });
 }
 
 fn demo_takes(s: &mut AppState) {
-    let mk = |id, text: &str, d, e| Take { id, text: text.into(), voice: "My voice".into(), path: format!("/tmp/out{id}.wav").into(), play: format!("/tmp/out{id}.wav").into(), duration_s: d, elapsed_s: Some(e), created: 0.0 };
+    let mk = |id, text: &str, d, e| Take {
+        id,
+        text: text.into(),
+        voice: "My voice".into(),
+        path: format!("/tmp/out{id}.wav").into(),
+        play: format!("/tmp/out{id}.wav").into(),
+        duration_s: d,
+        elapsed_s: Some(e),
+        created: 0.0,
+    };
     s.speak.takes = vec![
-        mk(3, "Welcome back. In a few seconds this paragraph will be read in my own voice.\n\nA second paragraph follows after an empty line, and a third one after it.\n\nThat is all.", 14.2, 9.1),
+        mk(
+            3,
+            "Welcome back. In a few seconds this paragraph will be read in my own voice.\n\nA second paragraph follows after an empty line, and a third one after it.\n\nThat is all.",
+            14.2,
+            9.1,
+        ),
         mk(2, "The quick brown fox jumps over the lazy dog.", 3.8, 2.6),
         mk(1, "Hello, this is a test of my cloned voice.", 3.1, 2.2),
     ];
@@ -1068,7 +1370,8 @@ pub fn scene_language_uk(s: &mut AppState) {
 
 pub fn scene_language_uk_no_extension(s: &mut AppState) {
     scene_language_uk(s);
-    s.shell.components = Some(["speech", "training", "translation", "native_accent", "music_removal"].map(String::from).to_vec());
+    s.shell.components =
+        Some(["speech", "training", "translation", "native_accent", "music_removal"].map(String::from).to_vec());
 }
 
 fn demo_voice_uk(s: &mut AppState, trained: bool) {
@@ -1202,7 +1505,11 @@ pub fn scene_trash_confirm(s: &mut AppState) {
 
 pub fn scene_toast_long(s: &mut AppState) {
     scene_done(s);
-    shell::toast(s, Tone::Warning, "The reference clip is Ukrainian speech, so the English carries a Ukrainian accent. Add an English clip under Other languages in Voices, or choose Native (American) in Accent.");
+    shell::toast(
+        s,
+        Tone::Warning,
+        "The reference clip is Ukrainian speech, so the English carries a Ukrainian accent. Add an English clip under Other languages in Voices, or choose Native (American) in Accent.",
+    );
 }
 
 pub fn scene_export_menu(s: &mut AppState) {
@@ -1210,7 +1517,11 @@ pub fn scene_export_menu(s: &mut AppState) {
     s.formats.scene_ready();
     s.speak.text = TextEdit::new(SAMPLE);
     demo_takes(s);
-    s.formats.menu = Some(super::formats::Menu { anchor: "export-take3".into(), src: "/tmp/out3.wav".into(), audio: "/tmp/out3.wav".into() });
+    s.formats.menu = Some(super::formats::Menu {
+        anchor: "export-take3".into(),
+        src: "/tmp/out3.wav".into(),
+        audio: "/tmp/out3.wav".into(),
+    });
     s.formats.format = "opus".into();
 }
 
@@ -1237,7 +1548,10 @@ pub fn scene_engine_starting(s: &mut AppState) {
 pub fn scene_engine_stopped(s: &mut AppState) {
     s.screen = Screen::Speak;
     s.speak.text = TextEdit::new("Hello there.");
-    s.shell.set_engine(EngineStatus::Stopped { code: Some(1), detail: "CUDA out of memory while loading the speech model.".into() });
+    s.shell.set_engine(EngineStatus::Stopped {
+        code: Some(1),
+        detail: "CUDA out of memory while loading the speech model.".into(),
+    });
 }
 
 #[cfg(test)]

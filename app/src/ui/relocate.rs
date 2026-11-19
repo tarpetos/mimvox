@@ -27,8 +27,13 @@ enum Phase {
     #[default]
     Idle,
     Picking,
-    Confirm { target: PathBuf, facts: Facts },
-    Running { shared: Shared },
+    Confirm {
+        target: PathBuf,
+        facts: Facts,
+    },
+    Running {
+        shared: Shared,
+    },
     Failed(String),
 }
 
@@ -129,7 +134,8 @@ fn run(s: &mut AppState) {
     if blocked(s, &target).is_some() {
         return;
     }
-    let mut cmd = match super::setuprun::command(&["--move-to".into(), target.clone().into_os_string(), "--yes".into()]) {
+    let mut cmd = match super::setuprun::command(&["--move-to".into(), target.clone().into_os_string(), "--yes".into()])
+    {
         Ok(c) => c,
         Err(e) => {
             s.relocate.phase = Phase::Failed(e);
@@ -152,7 +158,13 @@ fn run(s: &mut AppState) {
     };
     let (out, err) = (child.stdout.take(), child.stderr.take());
     let mut readers = Vec::new();
-    for stream in [out.map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), err.map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
+    for stream in [
+        out.map(|o| Box::new(o) as Box<dyn std::io::Read + Send>),
+        err.map(|e| Box::new(e) as Box<dyn std::io::Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    {
         readers.push(std::thread::spawn(move || {
             for line in BufReader::new(stream).split(b'\n').flatten() {
                 // Progress bars rewrite one line with \r: look at the last piece.
@@ -212,15 +224,31 @@ fn on_exit(s: &mut AppState, code: Option<i32>) {
     }
     let tail = shared.tail.last().cloned().unwrap_or_default();
     let code = code.map_or("no exit code".to_owned(), |c| format!("exit code {c}"));
-    let why = if tail.is_empty() { format!("The move failed ({code}).") } else { format!("The move failed ({code}): {tail}") };
+    let why = if tail.is_empty() {
+        format!("The move failed ({code}).")
+    } else {
+        format!("The move failed ({code}): {tail}")
+    };
     fail(s, why);
 }
 
 pub fn footer(s: &AppState, p: &Palette) -> El {
-    kit::card(p).gap(10.0)
+    kit::card(p)
+        .gap(10.0)
         .child(text("Data location").font(ty::TITLE).color(p.text))
-        .child(text(format!("Your voices, recordings and models live in {}", s.shell.data_dir.display())).font(ty::CAPTION).color(p.text_dim).wrap())
-        .child(row().child(kit::button(p, "Move data…", BtnKind::Glass, !s.relocate.busy() && shell::engine_ready(s), start)))
+        .child(
+            text(format!("Your voices, recordings and models live in {}", s.shell.data_dir.display()))
+                .font(ty::CAPTION)
+                .color(p.text_dim)
+                .wrap(),
+        )
+        .child(row().child(kit::button(
+            p,
+            "Move data…",
+            BtnKind::Glass,
+            !s.relocate.busy() && shell::engine_ready(s),
+            start,
+        )))
 }
 
 fn gb(b: u64) -> String {
@@ -235,7 +263,11 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
             let block = blocked(s, target);
             let short = matches!((f.size, f.free), (Some(sz), Some(fr)) if fr < sz + sz / 20);
             let measured = if f.done {
-                format!("{} to move. {} free on the new drive.", f.size.map_or("Unknown size".into(), gb), f.free.map_or("Unknown space".into(), gb))
+                format!(
+                    "{} to move. {} free on the new drive.",
+                    f.size.map_or("Unknown size".into(), gb),
+                    f.free.map_or("Unknown space".into(), gb)
+                )
             } else {
                 "Measuring…".to_owned()
             };
@@ -250,9 +282,14 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
             if let Some(why) = &block {
                 c = c.child(kit::notice(p, Tone::Warning, why));
             }
-            c.child(row().w_full().justify_end().gap(10.0)
-                .child(kit::button(p, "Cancel", BtnKind::Glass, true, cancel))
-                .child(kit::button(p, "Move", BtnKind::Primary, f.done && !short && block.is_none(), run)))
+            c.child(
+                row()
+                    .w_full()
+                    .justify_end()
+                    .gap(10.0)
+                    .child(kit::button(p, "Cancel", BtnKind::Glass, true, cancel))
+                    .child(kit::button(p, "Move", BtnKind::Primary, f.done && !short && block.is_none(), run)),
+            )
         }
         Phase::Running { shared } => {
             let (pct, detail) = shared.progress.clone().unwrap_or((0.0, String::new()));
@@ -263,17 +300,31 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
         }
         Phase::Failed(msg) => dialog(p, "The move did not finish")
             .child(kit::notice(p, Tone::Danger, msg))
-            .child(text("Your data is still in its old location and keeps working.").font(ty::BODY).color(p.text_dim).wrap())
+            .child(
+                text("Your data is still in its old location and keeps working.")
+                    .font(ty::BODY)
+                    .color(p.text_dim)
+                    .wrap(),
+            )
             .child(row().w_full().justify_end().child(kit::button(p, "Close", BtnKind::Primary, true, cancel))),
     };
     Some(
-        el().key("relocate-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center()
-            .fill(rune::Color::BLACK.alpha(0.55)).on_press(|_: &mut AppState| {}).child(card),
+        el().key("relocate-layer")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .center()
+            .fill(rune::Color::BLACK.alpha(0.55))
+            .on_press(|_: &mut AppState| {})
+            .child(card),
     )
 }
 
 fn dialog(p: &Palette, title: &str) -> El {
-    col().key("relocate-dialog").w(480.0).padding(22.0).gap(12.0).radius(radius::PANEL)
+    col()
+        .key("relocate-dialog")
+        .w(480.0)
+        .padding(22.0)
+        .gap(12.0)
+        .radius(radius::PANEL)
         .fill(rune::oklcha(0.2, 0.03, 255.0, 0.96))
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(18.0, 50.0, p.shadow)
