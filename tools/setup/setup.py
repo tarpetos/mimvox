@@ -1154,19 +1154,8 @@ class Setup:
         say(f"{label}: made from {venv_home(venv)}, outside {self.python_dir}; making it again from a Python there"
             f"{', with the same packages' if pins else ''}...")
         new = venv.with_name(venv.name + ".new")
-        for extra in (["--offline"], []):
-            if new.exists():
-                _rmtree(new)
-            try:
-                built = self.run(self._new_venv(version, new, "--relocatable", *extra), cwd=cwd) == 0 \
-                    and install(venv_python(new, self.plat), [*extra, "-c", str(constraints)] if pins else extra)
-            except SetupError:
-                built = False
-            if built:
-                break
-            if extra:
-                say(f"{label}: not everything is in the cache ({self.data_dir / 'cache' / 'uv'}); downloading the rest...")
-        else:
+        if not (self._runtime_python(label, version, cwd)
+                and self._build_from_cache(label, new, version, install, ["-c", str(constraints)] if pins else [], cwd)):
             if new.exists():
                 _rmtree(new)
             if not keep:
@@ -1188,6 +1177,37 @@ class Setup:
             raise SetupError(f"{label}: the new environment could not replace the old one ({error}); the old one is "
                              "kept. Close Mimvox and run setup again.") from None
         say(f"{label}: ready, on {venv_home(venv)}.")
+
+    def _runtime_python(self, label: str, version: str, cwd: Path) -> bool:
+        """Python ``version`` in <runtime>/python, downloaded first when it is not there: an offline ``uv venv`` cannot
+        fetch it."""
+        if self.quiet(self.uv("python", "find", "--managed-python", "--system", "--no-python-downloads", version),
+                      cwd=cwd) == 0:
+            return True
+        say(f"{label}: downloading Python {version} into {self.python_dir}...")
+        if self.run(self.uv("python", "install", "--no-bin", "--no-registry", version), cwd=cwd) == 0:
+            return True
+        say(f"{label}: Python {version} could not be downloaded.")
+        return False
+
+    def _build_from_cache(self, label: str, new: Path, version: str, install: Callable[[Path, Sequence[str]], bool],
+                          args: Sequence[str], cwd: Path) -> bool:
+        """The venv at ``new`` from the package cache (hard links, offline); the packages it lacks are downloaded only
+        when that fails."""
+        for extra in (["--offline"], []):
+            if new.exists():
+                _rmtree(new)
+            try:
+                built = self.run(self._new_venv(version, new, "--relocatable", "--offline"), cwd=cwd) == 0 \
+                    and install(venv_python(new, self.plat), [*extra, *args])
+            except SetupError:
+                built = False
+            if built:
+                return True
+            if extra:
+                say(f"{label}: not every package is in the cache ({self.data_dir / 'cache' / 'uv'}); downloading the "
+                    "missing ones...")
+        return False
 
     def _frozen(self, venv: Path) -> list[str]:
         """Its registry packages, as ``name==version`` lines."""
