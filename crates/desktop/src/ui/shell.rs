@@ -644,10 +644,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if s.shell.voice_menu_open {
         overlays.push(voice_menu(s, p));
     }
-    overlays.extend(super::relocate::overlay(s, &p));
     overlays.extend(super::update::overlay(s, &p));
-    overlays.extend(super::modules::overlay(s, &p));
     overlays.extend(super::settings::overlay(s, &p));
+    overlays.extend(super::relocate::overlay(s, &p));
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
     overlays.extend(super::book::voice_overlay(s, p));
@@ -967,7 +966,7 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
             p.text_dim,
         ));
     } else if matches!(s.shell.engine, EngineStatus::Ready { .. } | EngineStatus::Starting { .. }) {
-        pill = pill.role("button").hover(p.glass_hover).focusable(true).on_press(super::modules::open);
+        pill = pill.role("button").hover(p.glass_hover).focusable(true).on_press_tx(super::settings::open_modules);
     }
     pill
 }

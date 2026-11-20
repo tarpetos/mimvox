@@ -1,15 +1,14 @@
-use super::components::{Button, Tone, badge, icon_button, icons};
+use super::components::{Button, Tone, badge, icons};
 use super::setuprun::{self, COMPONENTS, Component};
 use super::shell::{self, EngineStatus};
 use super::theme::{Palette, radius, ty};
 use crate::engine::EngineMsg;
 use crate::state::AppState;
-use rune::{Color, El, ScrollSpec, col, el, row, text};
+use rune::{El, col, row, text};
 use serde_json::json;
 
 #[derive(Default)]
 pub struct ModulesState {
-    pub open: bool,
     toggle_req: Option<(u64, &'static str, bool)>,
     confirm_remove: Option<&'static str>,
 }
@@ -31,13 +30,7 @@ pub fn status(s: &AppState, id: &str) -> Status {
     }
 }
 
-pub fn open(s: &mut AppState) {
-    s.modules.open = true;
-    s.modules.confirm_remove = None;
-}
-
-fn close(s: &mut AppState) {
-    s.modules.open = false;
+pub fn reset(s: &mut AppState) {
     s.modules.confirm_remove = None;
 }
 
@@ -95,64 +88,39 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
     }
 }
 
-pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
-    if !s.modules.open {
-        return None;
+pub fn summary(s: &AppState) -> String {
+    if setuprun::running(s) {
+        return "Setup is running…".to_owned();
     }
-    let p = *p;
-    let head = row().w_full().gap(12.0).center_y()
-        .child(col().grow(1.0).min_w(0.0).gap(2.0)
-            .child(text("Modules").font(ty::TITLE).color(p.text))
-            .child(text("Optional parts of the speech engine. Turning one off keeps its files; removing it frees the disk. Speech itself is always installed.")
-                .font(ty::CAPTION).color(p.text_dim).wrap()))
-        .child(icon_button(p, "modules-close", &icons::CLOSE, "Close", close));
-    let mut card = col()
-        .key("modules-dialog")
-        .w(720.0)
-        .padding(22.0)
-        .gap(12.0)
-        .radius(radius::PANEL)
-        .fill(rune::oklcha(0.2, 0.03, 255.0, 1.0))
-        .border_gradient(1.0, p.rim_top, p.rim_bottom)
-        .shadow(18.0, 50.0, p.shadow)
-        .on_press(|_: &mut AppState| {})
-        .child(head);
-    let mut body = col().w_full().gap(12.0);
+    if s.shell.components.is_none() {
+        return "Waiting for the engine".to_owned();
+    }
+    let count = |want: Status| COMPONENTS.iter().filter(|c| c.id != "speech" && status(s, c.id) == want).count();
+    [(count(Status::On), "on"), (count(Status::Off), "off"), (count(Status::Missing), "not installed")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, word)| format!("{n} {word}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub fn section(s: &AppState, p: Palette) -> El {
+    let mut body = col().key("modules-list").w_full().gap(12.0).px(6.0).pb(6.0).child(
+        text("Optional parts of the speech engine. Turning one off keeps its files; removing it frees the disk. Speech itself is always installed.")
+            .font(ty::CAPTION)
+            .color(p.text_dim)
+            .wrap(),
+    );
     if let Some(why) = busy_reason(s).filter(|_| !setuprun::running(s)) {
         body = body.child(super::voices::kit::notice(&p, Tone::Neutral, why));
     }
-    let setup_shown =
-        setuprun::running(s) || matches!(s.setup.phase, setuprun::Phase::Error(_) | setuprun::Phase::Finished(false));
-    if setup_shown {
+    if setuprun::running(s) || matches!(s.setup.phase, setuprun::Phase::Error(_) | setuprun::Phase::Finished(false)) {
         body = body.child(setuprun::panel(s, p));
     }
     for c in COMPONENTS.iter().filter(|c| c.id != "speech") {
         body = body.child(module_row(s, p, c));
     }
-    // A scroll area has no height of its own: the dialog takes a fixed one only when setup's steps make it long.
-    if setup_shown {
-        card = card.h(640.0).child(
-            col()
-                .key("modules-list")
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
-                .scroll(ScrollSpec { stick_bottom: false })
-                .scroll_edge_fade(12.0)
-                .child(body),
-        );
-    } else {
-        card = card.child(body.key("modules-list"));
-    }
-    let scrim = el().key("modules-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close);
-    Some(
-        el().key("modules-layer")
-            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .center()
-            .fill(Color::BLACK.alpha(0.55))
-            .child(scrim)
-            .child(card),
-    )
+    body
 }
 
 fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
@@ -243,8 +211,7 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
         .child(actions)
 }
 
-fn demo(s: &mut AppState) {
-    super::speak::scene_idle(s);
+pub fn demo(s: &mut AppState) {
     s.shell.components = Some(vec![
         "speech".into(),
         "training".into(),
@@ -253,24 +220,8 @@ fn demo(s: &mut AppState) {
         "native_accent".into(),
     ]);
     s.shell.components_off = vec!["ukrainian".into()];
-    s.modules.open = true;
 }
 
-fn scene_open(s: &mut AppState) {
-    demo(s);
-}
-
-fn scene_confirm(s: &mut AppState) {
-    demo(s);
-    s.modules.confirm_remove = Some("ukrainian");
-}
-
-fn scene_installing(s: &mut AppState) {
-    demo(s);
-    setuprun::scene_running(s);
-    s.setup.adding = Some("ukrainian".into());
-}
-
-pub fn scenes() -> &'static [super::Scene] {
-    &[("modules", scene_open), ("modules_confirm_remove", scene_confirm), ("modules_installing", scene_installing)]
+pub fn demo_confirm_remove(s: &mut AppState, id: &'static str) {
+    s.modules.confirm_remove = Some(id);
 }

@@ -4,11 +4,23 @@ use super::theme::{Palette, radius, ty};
 use super::voices::kit;
 use crate::state::AppState;
 use mimvox_api::token::TokenSource;
-use rune::{Color, El, ScrollSpec, col, el, row, text};
+use rune::{Color, El, ScrollSpec, Tx, col, el, row, text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
+    Modules,
+    Data,
     Api,
+}
+
+impl Section {
+    fn key(self) -> &'static str {
+        match self {
+            Section::Modules => "settings-modules",
+            Section::Data => "settings-data",
+            Section::Api => "settings-api",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -18,12 +30,24 @@ pub struct SettingsState {
 }
 
 pub fn open(s: &mut AppState) {
+    open_at(s, Section::Api);
+}
+
+pub fn open_modules(s: &mut AppState, tx: &mut Tx) {
+    open_at(s, Section::Modules);
+    tx.scroll_key_to(Section::Modules.key(), 0.0);
+}
+
+fn open_at(s: &mut AppState, which: Section) {
     s.settings.open = true;
-    s.settings.fold = Some(Section::Api);
+    s.settings.fold = Some(which);
+    super::modules::reset(s);
+    super::relocate::measure_free(s);
 }
 
 fn close(s: &mut AppState) {
     s.settings.open = false;
+    super::modules::reset(s);
     s.api.confirm_new_token = false;
     s.api.token_shown = false;
 }
@@ -44,27 +68,30 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
                 ),
             )
             .child(icon_button(p, "settings-close", &icons::CLOSE, "Close", close));
-    let open = s.settings.fold == Some(Section::Api);
-    let mut api_box = col()
-        .key("settings-api")
-        .w_full()
-        .gap(14.0)
-        .padding(12.0)
-        .radius(radius::CONTROL)
-        .fill(p.well)
-        .border(1.0, p.well_rim)
-        .child(fold_row(p, "API", &api_summary(s), open, Section::Api));
-    if open {
-        api_box = api_box.child(api_section(s, p));
-    }
+    let fold = |which: Section, title: &str, summary: String, content: fn(&AppState, Palette) -> El| {
+        let open = s.settings.fold == Some(which);
+        col()
+            .key(which.key())
+            .w_full()
+            .gap(14.0)
+            .padding(12.0)
+            .radius(radius::CONTROL)
+            .fill(p.well)
+            .border(1.0, p.well_rim)
+            .child(fold_row(p, title, &summary, open, which))
+            .children(open.then(|| content(s, p)))
+    };
     let body = col()
         .key("settings-list")
         .w_full()
         .shrink()
         .min_h(0.0)
+        .gap(12.0)
         .scroll(ScrollSpec { stick_bottom: false })
         .scroll_edge_fade(12.0)
-        .child(api_box);
+        .child(fold(Section::Modules, "Modules", super::modules::summary(s), super::modules::section))
+        .child(fold(Section::Data, "Data folder", super::relocate::summary(s), |s, p| super::relocate::section(s, &p)))
+        .child(fold(Section::Api, "API", api_summary(s), api_section));
     let card = col()
         .key("settings-dialog")
         .w(720.0)
@@ -96,7 +123,7 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
 
 fn fold_row(p: Palette, title: &str, summary: &str, open: bool, which: Section) -> El {
     row()
-        .key(format!("settings-fold-{title}"))
+        .key(format!("{}-fold", which.key()))
         .role("button")
         .label(title.to_owned())
         .w_full()
@@ -414,6 +441,8 @@ fn notice(p: Palette) -> El {
 
 fn demo(s: &mut AppState) {
     super::speak::scene_idle(s);
+    super::relocate::demo(s);
+    super::modules::demo(s);
     s.api.prefs_read = true;
     s.api.token = Some((
         "q3Vt0bWm9xR2kLs7YdFh4NcJ8uPzA1eGiOwT6yHrBvE".into(),
@@ -479,6 +508,31 @@ fn scene_folded(s: &mut AppState) {
     s.settings.fold = None;
 }
 
+fn modules_demo(s: &mut AppState) {
+    demo(s);
+    s.settings.fold = Some(Section::Modules);
+}
+
+fn scene_modules(s: &mut AppState) {
+    modules_demo(s);
+}
+
+fn scene_modules_confirm_remove(s: &mut AppState) {
+    modules_demo(s);
+    super::modules::demo_confirm_remove(s, "ukrainian");
+}
+
+fn scene_modules_installing(s: &mut AppState) {
+    modules_demo(s);
+    super::setuprun::scene_running(s);
+    s.setup.adding = Some("ukrainian".into());
+}
+
+pub fn scene_data(s: &mut AppState) {
+    demo(s);
+    s.settings.fold = Some(Section::Data);
+}
+
 pub fn scenes() -> &'static [super::Scene] {
     &[
         ("settings_api_off", scene_off),
@@ -489,5 +543,9 @@ pub fn scenes() -> &'static [super::Scene] {
         ("settings_api_new_token", scene_new_token),
         ("settings_api_other_engine", scene_other_engine),
         ("settings_folded", scene_folded),
+        ("settings_modules", scene_modules),
+        ("settings_modules_confirm_remove", scene_modules_confirm_remove),
+        ("settings_modules_installing", scene_modules_installing),
+        ("settings_data", scene_data),
     ]
 }

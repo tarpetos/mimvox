@@ -699,7 +699,7 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
                     .gap(4.0)
                     .child(text(format!("{} is turned off", c.label)).font(ty::LABEL).color(p.text))
                     .child(
-                        text("Its files are still installed. Turn it on in Modules (the status pill at the top).")
+                        text("Its files are still installed. Turn it on in Settings, under Modules.")
                             .font(ty::CAPTION)
                             .color(p.text_dim)
                             .wrap(),
@@ -710,7 +710,7 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
                     .ghost()
                     .small()
                     .key(format!("install-{id}-modules"))
-                    .on_press(super::modules::open)
+                    .on_press_tx(super::settings::open_modules)
                     .build(p),
             );
         return glass_card(p).w_full().child(row_);
@@ -802,7 +802,7 @@ pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
                     .ghost()
                     .small()
                     .key(format!("install-line-{id}-modules"))
-                    .on_press(super::modules::open)
+                    .on_press_tx(super::settings::open_modules)
                     .build(p),
             );
     }
