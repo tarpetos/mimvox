@@ -103,6 +103,7 @@ recordings joined with short pauses).
 | **Several voices** | Keep more than one voice (for example "Studio" and "Casual"), rename or delete them, and see how much data each one has. |
 | **Import an RVC model** | Already have an RVC or Applio model (`.pth`, optional `.index`) of your own voice, or of someone who agreed? **Import voice model…** turns it and a short clean clip into a trained voice, with no training. |
 | **Two sliders** | **Expressiveness** and **Voice match**. The validated defaults are already set; you do not need to touch anything else. |
+| **Local API and MCP** | Turn on **Settings** > **API** and other programs use Mimvox over HTTP: an OpenAI-compatible speech endpoint, every engine method, live progress and an interactive reference at `/docs`. `mimvox-mcp` lets Claude and other AI assistants speak in your voice and read books. `mimvox-server` runs it all without the window. See [Local API and MCP](#local-api-and-mcp). |
 | **Private by design** | No account, no cloud, no telemetry. Setup downloads the models once; after that the app works offline. The only request of its own is a check for a new version at launch (it can be turned off). |
 | **Exact Ukrainian stress** | An optional part (1.5 GB) reads Ukrainian from phonemes with the stress written in: a dictionary and the grammar of the sentence decide every word, and that is what is spoken (HolosTTS). Without it, Ukrainian is spoken by OmniVoice as before. |
 | **Updates from inside the app** | A new version shows a banner: **Update** downloads it, checks its signature and installs it when you close the app or press **Restart now** (Windows, macOS, AppImage; a `.deb` gets a link to the download page). The version in the header opens the **Updates** window: every version with its notes, **Check for updates**, and any version to install, older ones too. |
@@ -196,6 +197,60 @@ The [usage guide](docs/usage.md) walks through the whole app step by step: setup
 speaking in other languages, Redub (translate and dub a video, convert, re-speak), tips for quality and
 troubleshooting.
 
+## Local API and MCP
+
+Other programs and AI assistants can use Mimvox too, on this computer or your local network. Both are off until you
+turn them on, and everything still runs on your computer.
+
+- **Local HTTP API:** an OpenAI-compatible speech endpoint (`POST /v1/audio/speech`), every engine method over
+  `POST /rpc` (voices, speech, audiobooks, Redub, training), live progress over `GET /events` (Server-Sent Events),
+  and file upload and download over `/files`.
+- **MCP server:** `mimvox-mcp` lets Claude Desktop, Claude Code and other Model Context Protocol clients list your
+  voices, speak text and get the audio back, read a document as an audiobook, pause and resume it, follow long jobs,
+  move files to and from the API and call any engine method.
+
+**Turn it on.** Press the status button at the top right (*Ready*) to open **Settings**, unfold **API** and press
+**Turn on API**: the app serves it on `http://127.0.0.1:8765` while it is open. Without the window, run
+`mimvox-server` instead (installed next to the app: `mimvox-server.exe` in the install folder on Windows,
+`/usr/bin/mimvox-server` from the `.deb`, `Mimvox.app/Contents/MacOS/mimvox-server` on macOS, or
+`./Mimvox.AppImage serve`). One engine runs per data folder, so close the app first.
+
+**Token and network.** Programs on this computer need no token unless **Require token** is on; web pages in a browser
+never get in without one. **Local network** makes the API reachable from other computers and always needs the token,
+sent as `Authorization: Bearer <token>`. Settings shows and copies it; `mimvox-server token show` prints it.
+
+**Docs.** [http://127.0.0.1:8765/docs](http://127.0.0.1:8765/docs) is an interactive reference of every endpoint and
+engine method, where you can try them; `/openapi.json` is the same as an OpenAPI 3.1 file.
+
+```bash
+curl http://127.0.0.1:8765/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "mimvox", "voice": "My voice", "input": "Hello! This is my own voice."}' \
+  -o hello.mp3
+```
+
+OpenAI's client libraries work with the base URL `http://127.0.0.1:8765/v1` and the token as the API key (any key
+while no token is required). `voice` is a voice's name or id; `response_format` can be `mp3`, `wav`, `flac`,
+`opus`, `aac` or `pcm`.
+
+**MCP.** With the API on, add `mimvox-mcp` to your assistant. Claude Desktop (Settings, Developer, **Edit Config**):
+
+```json
+{
+  "mcpServers": {
+    "mimvox": { "command": "C:\\Users\\<you>\\AppData\\Local\\Programs\\Mimvox\\mimvox-mcp.exe" }
+  }
+}
+```
+
+On macOS the command is `/Applications/Mimvox.app/Contents/MacOS/mimvox-mcp`, from the `.deb` `/usr/bin/mimvox-mcp`,
+and with the AppImage its own path with `"args": ["mcp"]`. Claude Code: `claude mcp add mimvox -- <that path>`. On
+this computer `mimvox-mcp` finds the token by itself; for another computer pass `--url http://<address>:8765` and
+the token in `MIMVOX_API_TOKEN`. Then ask, for example, "Read this paragraph in my voice and save it as MP3".
+
+The [usage guide](docs/usage.md#settings-the-local-api) has the details: every setting, configs for each system, the
+headless server and the MCP tools. The same consent and non-commercial rules apply to everything made through them.
+
 ## Build
 
 Installers for the desktop app are made by the scripts in `scripts/build/`, one per operating system (the files are
@@ -281,6 +336,7 @@ Where your data lives (voices, datasets, trained models, generated audio) is des
 
 | Page | What it covers |
 | --- | --- |
+| [Usage guide](docs/usage.md) | Every screen step by step, Settings, the local API and MCP, troubleshooting |
 | [Architecture](docs/architecture.md) | App, engine and RVC worker, data layout, protocol summary |
 | [Recording guide](docs/recording-guide.md) | Microphone, room, distance, levels, presets, how much data you need |
 | [Performance](docs/performance.md) | Measured speed, training time and similarity scores |

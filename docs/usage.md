@@ -245,9 +245,9 @@ The play buttons on the screens follow the bar: a result's button shows a pause 
 (the bar stays, with its position), and pressing it again continues. When a track has played to its end the bar
 stays, so **Play** starts it again; close the bar when you are done.
 
-While Speak is still generating (see [Streaming playback](#streaming-playback)) the bar shows the part that has
-arrived so far (the total ends in *…*), and seeking is off until the whole text is ready. When generation finishes, the
-bar shows the finished result and seeking works.
+While Speak is still generating (see [Streaming playback](#streaming-playback)) the seek bar is a loading bar: it
+fills with the part made so far (the same share as Speak's progress), the total shows *…*, and there is no knob, so
+seeking is off. When generation finishes, the knob appears where the sound is and seeking works.
 
 ### Settings: the local API
 
@@ -255,6 +255,8 @@ The **API** section lets scripts and other programs on your computer (or your lo
 the app is open: generate speech, list voices, call any engine method. It is off by default and stops when the app
 closes. The app serves it with its own engine, so what the app does and what the API asks share one engine and wait
 for each other (a second generation while one runs is refused as busy).
+
+![Settings with the API turned on](screenshots/usage-settings-api.png)
 
 - **Turn on API**: the first time, a short notice asks you to confirm: clone only your own voice or one whose owner
   gave you permission, the speech model's weights are for non-commercial use only (CC BY-NC 4.0), and anyone who can
@@ -277,6 +279,42 @@ OpenAI-compatible speech server with the base URL `http://127.0.0.1:8765/v1` and
 (`Authorization: Bearer <token>`); all endpoints are in
 [the engine protocol](../contract/engine-protocol.md#http-api). If `mimvox-server` already runs on the same data
 folder, the app's engine cannot start and the API cannot either: stop the server, then press **Retry**.
+
+For example, speech in a voice called *My voice* as a WAV file, and the list of voices through the engine method:
+
+```bash
+curl http://127.0.0.1:8765/v1/audio/speech -H "Content-Type: application/json" \
+  -d '{"model": "mimvox", "voice": "My voice", "input": "Hello! This is my own voice.", "response_format": "wav"}' \
+  -o hello.wav
+curl http://127.0.0.1:8765/rpc -H "Content-Type: application/json" -d '{"method": "voices.list"}'
+```
+
+With a token, add `-H "Authorization: Bearer <token>"`. `voice` is a voice's name or id, and `response_format` one of
+`mp3` (the default), `wav`, `flac`, `opus`, `aac` and `pcm` (24 kHz, as OpenAI's). The interactive reference at
+`/docs` lists every engine method with an example.
+
+### Without the window: `mimvox-server`
+
+`mimvox-server` serves the same API with no window, for a computer without a desktop or a script that starts and
+stops it. It is installed next to the app and uses the same data folder, voices and token:
+
+| System | `mimvox-server` |
+| --- | --- |
+| Windows | `C:\Users\<you>\AppData\Local\Programs\Mimvox\mimvox-server.exe` (the install folder you chose) |
+| macOS | `/Applications/Mimvox.app/Contents/MacOS/mimvox-server` |
+| Linux `.deb` | `/usr/bin/mimvox-server` |
+| Linux AppImage | the AppImage itself with the argument `serve`: `/path/to/Mimvox.AppImage serve` |
+
+```
+mimvox-server                          # http://127.0.0.1:8765, this computer only
+mimvox-server token show               # print the token (made when there is none)
+mimvox-server --bind 0.0.0.0:8765      # the local network: run token show once first, the token is required
+mimvox-server --require-token          # ask for the token on this computer too
+```
+
+`mimvox serve` with the same arguments runs it from the app (on Windows run `mimvox-server.exe`: `mimvox.exe` has
+no console). `--data-dir` picks another data folder, `token new` replaces the token. Ctrl+C stops the server and its
+engine. Only one engine runs per data folder, so the server and the open app cannot share one: close the app first.
 
 ### Use Mimvox from Claude and other AI assistants (MCP)
 
@@ -343,6 +381,11 @@ claude mcp add mimvox -- /path/to/Mimvox.AppImage mcp
 
 (add `--scope user` to have it in every project). Then ask, for example, "List my Mimvox voices" or "Read this
 paragraph in my voice and save it as MP3".
+
+The tools: `speak` (text in a voice, saved in your results and handed back to the assistant as audio), `list_voices`,
+`import_text` and `start_book` (a document read as an audiobook), `book_status`, `pause_book` and `resume_book`,
+`job_status` and `wait_job` (long jobs, with progress), `upload_file` and `download_file` (files to and from the
+computer that runs Mimvox), and `engine_call` for every other engine method, from making a voice to training it.
 
 - **Token.** On this computer `mimvox-mcp` finds the API's token by itself (`api/token` in your data folder), so
   **Require token** may be on. For another address, or a token kept elsewhere, give it as an environment variable:
@@ -674,6 +717,10 @@ The same recovery applies after a crash or a power cut.
 1. Make sure the voice you want is active (top right). *Speaking as My voice* under the text box confirms it.
 2. Type or paste text into **What should I say?**. The counter shows the words and the estimated length of speech.
 3. Press **Generate** (or **Ctrl+Enter**).
+
+The arrows at the top of the text box are **Undo** and **Redo** (also Ctrl+Z, and Ctrl+Shift+Z or Ctrl+Y; Cmd on
+macOS); the trash button next to them clears the text. Clearing it and opening a text file can be undone too. What you
+typed is still there after a restart.
 
 ### The Style panel
 
@@ -1134,6 +1181,8 @@ More detail: the [recording guide](recording-guide.md).
 | **"The voice engine stopped"** (banner under the header, the status button says *Engine stopped*) | Press **Retry** in the banner, or in **Settings** (the status button). The banner shows the last error line. If it keeps stopping, look at the engine log (below) and run `./setup.sh --quick-check` (or `setup.cmd --quick-check`) to verify the install. A *"not set up yet"* message means setup has not completed: run it again. |
 | **Generation is slow** | The first phrase after start is always slower (the models and the voice are being prepared). Check the device on the welcome screen or by hovering the *Ready* status button: it should name your NVIDIA GPU. If setup reported the `cpu` backend, re-run setup on a machine with a supported GPU and current NVIDIA driver. Close other programs that use the GPU (games, other AI tools, browsers with hardware acceleration). **Fast** quality is about twice as fast per sentence. Do not train while you want to speak. |
 | **"Not enough free GPU memory"** or **"not enough free memory (RAM)"** | Mimvox gives each model only the memory that is free and stops a job that does not fit, so the computer never runs out. Close other programs that use the graphics card or a lot of memory (games, video, browsers) and try again. 8 GB of video memory is the practical minimum. |
+| **The status button says *Not enough memory*** ("not enough memory (RAM) for speech on the processor") | Mimvox speaks on the processor (no supported GPU) and the computer has less than 11 GB of RAM, so the speech model is not loaded at all: it would be swapped to the disk and take many minutes per sentence. Use a supported graphics card, or a computer with 12 GB of RAM or more (16 GB recommended). |
+| **The API says the port is in use, or "another Mimvox engine"** | Another program holds port 8765: pick another **Port** in Settings > API. "Another Mimvox engine ... is already running" means `mimvox-server` runs on the same data folder: stop it, then press **Retry**. |
 | **The microphone is missing** | Open the microphone chip on Record: the list is refreshed every time it opens. Plug the microphone in before opening it, check that it is enabled and not muted in your system's sound settings, and that the app is allowed to use the microphone (macOS and Windows privacy settings). *"Cannot use this microphone"* shows the system's reason. A remembered microphone that is gone falls back to the system default with a warning. |
 | **"No clear speech found"** on every take | The wrong input is selected, or it is muted. Use the level test in the microphone list: the bar must move when you speak. |
 | **A file is refused** | *"That kind of file is not supported"*: use one of the formats listed in [Redub](#supported-formats-and-exporting). A video without sound gives *"This file has no audio track."* |
@@ -1175,6 +1224,8 @@ Everything the app makes lives in one folder (the one you chose during setup; se
   settings.json                  your app settings (microphone, last choices, "Save as" format, "Remove background music",
                                  the API section)
   api/token, api/uploads/        the local API's token and the files sent to it (uploads go after 24 hours)
+  books/                         each audiobook's progress, so it can be paused and resumed
+  engine.lock                    held while an engine runs, so the app and mimvox-server never share the folder
   runtime/, runtime.toml         the installed engine and models (about 30 GB)
 ```
 
