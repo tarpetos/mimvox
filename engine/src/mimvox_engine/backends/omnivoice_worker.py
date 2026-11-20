@@ -71,6 +71,8 @@ SIDECAR_VERSION = 3
 # Measured in fp32: the worker peaked at 7.45 GB (Windows) and 7.1 GB (Linux) with Whisper loaded; the system, the engine
 # and the app need about 3.5 GB beside it.
 CPU_RAM_NEED_GB = float(os.environ.get("MIMVOX_CPU_RAM_NEED_GB", "11"))
+# Measured on an 8 GB laptop: the first voice-clone prompt after loading took the worker from 3.6 to 6.8 GB in 6 s.
+CPU_PROMPT_GB = float(os.environ.get("MIMVOX_CPU_PROMPT_GB", "3.2"))
 
 _state = {"model": None, "device": None}
 _prompts = collections.OrderedDict()
@@ -345,7 +347,7 @@ def _prompt(ref, ref_text=None):
         return _prompts[key]
     wav, sr, text = _reference(ref, ref_text)
     kit_worker.check_cancel()
-    _check_ram()
+    _check_ram(0.0 if _prompts else CPU_PROMPT_GB)
     prompt = _state["model"].create_voice_clone_prompt((torch.from_numpy(wav), sr), ref_text=text)
     _prompts[key] = prompt
     while len(_prompts) > max(1, args.prompt_cache):
@@ -353,17 +355,23 @@ def _prompt(ref, ref_text=None):
     return prompt
 
 
-def _check_ram():
-    """On the CPU, before every model pass. Every step reads all the weights: on a computer whose RAM cannot hold the
-    worker, or once a part of them is paged out, each segment waits minutes on the disk."""
+def _check_ram(grow_gb=0.0):
+    """On the CPU, before every model pass that may grow the worker by ``grow_gb``. Every step reads all the weights: on a
+    computer whose RAM cannot hold the worker, or once a part of them is paged out, each segment waits minutes on the
+    disk. A refusal releases the model, as most of that memory is the worker's own; the next request loads it again."""
     if not _on_cpu():
         return
     model = _state["model"]
     too_small = kit.ram_too_small(CPU_RAM_NEED_GB)
-    msg = too_small or (model is not None and kit.ram_short(
-        [(p.data_ptr(), p.numel() * p.element_size()) for p in model.parameters()]))
+    msg = too_small
+    if not msg and model is not None:
+        msg = kit.ram_short([(p.data_ptr(), p.numel() * p.element_size()) for p in model.parameters()])
+        if not msg and grow_gb > 0:
+            msg = kit.ram_no_room(grow_gb)
     if msg:
         _log(msg)
+        if model is not None:
+            op_release()
         raise kit.OpError("no_memory", msg, permanent=bool(too_small))
 
 

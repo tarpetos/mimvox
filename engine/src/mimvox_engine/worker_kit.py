@@ -35,9 +35,12 @@ NO_VRAM = "not enough free GPU memory: close programs that use the graphics card
 NO_RAM = "not enough free memory (RAM): close other programs and try again"
 NO_COMMIT = ("not enough free memory: the graphics card has room, but Windows has no memory left to back it; close "
              "other programs and try again")
-NO_RAM_CPU = ("not enough free memory (RAM): {out:.1f} GB of the speech model are no longer in the {total:.0f} GB of RAM "
-              "({free:.1f} GB free), so speech on the processor slows to minutes per sentence; close other programs and "
-              "try again")
+NO_RAM_CPU = ("not enough free memory (RAM): the speech model needs more RAM than is free on this computer ({out:.1f} GB "
+              "of it are no longer in the {total:.0f} GB of RAM, {free:.1f} GB free), so speech on the processor would "
+              "take minutes per sentence; close other programs or use a computer with more RAM")
+NO_RAM_CPU_GROW = ("not enough free memory (RAM): the speech model needs about {need:.1f} GB more to take on a voice and "
+                   "{free:.1f} GB of the {total:.0f} GB of RAM are free on this computer; close other programs or use a "
+                   "computer with more RAM")
 NO_RAM_CPU_TOTAL = ("not enough memory (RAM) for speech on the processor: it needs a computer with at least {need:.0f} GB "
                     "of RAM and this one has {total:.1f} GB, so the speech model would be swapped out to the disk and "
                     "take minutes per sentence; use a graphics card or a computer with more RAM")
@@ -263,6 +266,14 @@ def ram_short(ranges):
     if not thrashing(mem[0], mem[1], out):
         return None
     return NO_RAM_CPU.format(out=out / 2**30, total=mem[0] / 2**30, free=mem[1] / 2**30)
+
+
+def ram_no_room(grow_gb):
+    """The message when the RAM cannot take ``grow_gb`` more and stay above the low mark; else None."""
+    mem = physical_memory()
+    if mem is None or mem[1] >= grow_gb * 2**30 + _ram_low(mem[0]):
+        return None
+    return NO_RAM_CPU_GROW.format(need=grow_gb, free=mem[1] / 2**30, total=mem[0] / 2**30)
 
 
 def ram_too_small(need_gb):

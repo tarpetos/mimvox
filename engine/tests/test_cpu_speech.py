@@ -102,7 +102,7 @@ def test_ram_short_counts_the_weights_outside_ram(monkeypatch):
     monkeypatch.setattr(worker_kit, "physical_memory", lambda: (8 * GB, 0))
     monkeypatch.setattr(worker_kit, "resident_share", lambda r: 0.25)
     msg = worker_kit.ram_short(ranges)
-    assert msg is not None and "3.0 GB of the speech model" in msg and "8 GB of RAM (0.0 GB free)" in msg
+    assert msg is not None and "3.0 GB of it are no longer in the 8 GB of RAM, 0.0 GB free" in msg
     monkeypatch.setattr(worker_kit, "resident_share", lambda r: 0.9)
     assert worker_kit.ram_short(ranges) is None
     monkeypatch.setattr(worker_kit, "resident_share", lambda r: pytest.fail("not asked while RAM is free"))
@@ -187,6 +187,18 @@ def test_too_little_ram_in_all_is_not_worth_a_book_retry(tmp_path):
         _synth(b, tmp_path)
     assert info.value.code == "no_memory" and info.value.message == f"OmniVoice: {msg}"
     assert not book._short_of_memory(info.value)
+
+
+@pytest.mark.parametrize(("device", "forgets"), [("cpu", True), ("cuda", False)])
+def test_a_refusal_on_the_cpu_forgets_the_warm_references(tmp_path, device, forgets):
+    ref = tmp_path / "reference.wav"
+    ref.write_bytes(b"")
+    b = _backend(device, error=WorkerError("no_memory", "full"))
+    b._mark_warm(str(ref))
+    with pytest.raises(EngineError):
+        asyncio.run(b.synthesize("Hi.", "en", str(ref), SynthParams(out_path=str(tmp_path / "o.wav"),
+                                                                   reference_text="hello")))
+    assert b.is_warm(str(ref)) is not forgets
 
 
 def test_no_memory_keeps_its_code_from_warm_and_the_speech_worker(tmp_path):
@@ -291,6 +303,13 @@ STUB_OMNIVOICE = textwrap.dedent("""
             return []
 
         def create_voice_clone_prompt(self, audio, ref_text=None):
+            full = os.environ.get("FAKE_RAM_FULL")
+            if full:  # the prompt grew the worker: its weights are paged out while that file exists
+                import sys
+                sys.modules["__main__"].kit.ram_short = lambda r: "not enough free memory (RAM): fake" \
+                    if os.path.exists(full) else None
+            with open(os.environ["FAKE_PROMPTS"], "a") as fh:
+                fh.write("p")
             return "prompt"
 
         def generate(self, **kw):
@@ -301,7 +320,7 @@ LAUNCH = "import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = sys.arg
          "run_name='__main__')"
 
 
-def _stub_worker(tmp_path, device, need_gb, load_s=0.0, gpu=None):
+def _stub_worker(tmp_path, device, need_gb, load_s=0.0, gpu=None, prompt_gb=0, ram_full=None):
     """A client of the real OmniVoice worker script over stub torch and omnivoice modules, and the params of an op."""
     stubs = tmp_path / "stubs"
     (stubs / "torch").mkdir(parents=True, exist_ok=True)
@@ -311,7 +330,9 @@ def _stub_worker(tmp_path, device, need_gb, load_s=0.0, gpu=None):
     ref = tmp_path / "reference.wav"
     sf.write(str(ref), np.zeros(24000, dtype=np.float32), 24000)
     env = dict(os.environ, MIMVOX_OMNIVOICE_FAST="0", MIMVOX_CPU_RAM_NEED_GB=str(need_gb),
-               FAKE_CUDA="1" if (device == "cuda" if gpu is None else gpu) else "0", FAKE_LOADED=str(tmp_path / "loaded"), FAKE_LOAD_S=str(load_s))
+               FAKE_CUDA="1" if (device == "cuda" if gpu is None else gpu) else "0", FAKE_LOADED=str(tmp_path / "loaded"),
+               FAKE_LOAD_S=str(load_s), FAKE_PROMPTS=str(tmp_path / "prompts"), MIMVOX_CPU_PROMPT_GB=str(prompt_gb),
+               **({"FAKE_RAM_FULL": str(ram_full)} if ram_full else {}))
     argv = [sys.executable, "-c", LAUNCH, str(stubs), omnivoice.WORKER, "--model-dir", str(tmp_path / "model"),
             "--device", device]
     params = {"ref": str(ref), "ref_text": "hello", "text": "Hello there.", "out": str(tmp_path / "out.wav"),
@@ -319,11 +340,11 @@ def _stub_worker(tmp_path, device, need_gb, load_s=0.0, gpu=None):
     return WorkerClient("omnivoice", argv, env, start_timeout=60.0), params
 
 
-def _omnivoice_worker(tmp_path, device, need_gb, ops):
+def _omnivoice_worker(tmp_path, device, need_gb, ops, **kw):
     """The result or the error code per op."""
 
     async def main():
-        client, params = _stub_worker(tmp_path, device, need_gb)
+        client, params = _stub_worker(tmp_path, device, need_gb, **kw)
         answers = []
         try:
             for op in ops:
@@ -355,8 +376,47 @@ def test_cpu_speaks_when_the_ram_is_enough(tmp_path):
 
 @needs_ram_figure
 def test_the_gpu_skips_the_ram_check(tmp_path):
-    (synth,) = _omnivoice_worker(tmp_path, "cuda", 10**6, ["synth"])
+    (synth,) = _omnivoice_worker(tmp_path, "cuda", 10**6, ["synth"], prompt_gb=10**6)
     assert synth["out"] == str(tmp_path / "out.wav")
+
+
+@needs_ram_figure
+def test_a_refusal_after_the_prompt_grew_the_worker_releases_the_model(tmp_path):
+    full, loaded = tmp_path / "full", tmp_path / "loaded"
+    full.touch()
+
+    async def main():
+        client, params = _stub_worker(tmp_path, "cpu", 0, ram_full=full)
+        try:
+            with pytest.raises(WorkerError) as info:
+                await client.call("synth", params, timeout=60.0, retry=False)
+            status = await client.call("status", {}, timeout=60.0)
+            full.unlink()
+            loaded.unlink()
+            return info.value, status, await client.call("synth", params, timeout=60.0, retry=False)
+        finally:
+            await client.close()
+
+    refused, status, synth = asyncio.run(main())
+    assert (refused.code, refused.permanent, refused.message) == ("no_memory", False, "not enough free memory (RAM): fake")
+    assert status["loaded"] is False
+    assert loaded.exists() and synth["out"] == str(tmp_path / "out.wav")
+
+
+@needs_ram_figure
+def test_the_first_prompt_needs_room_to_grow(tmp_path):
+    refused, status = _omnivoice_worker(tmp_path, "cpu", 0, ["synth", "status"], prompt_gb=10**6)
+    assert refused == ("no_memory", False) and status["loaded"] is False
+    assert (tmp_path / "loaded").exists() and not (tmp_path / "prompts").exists()
+
+
+def test_ram_no_room(monkeypatch):
+    monkeypatch.setattr(worker_kit, "physical_memory", lambda: (16 * GB, 3 * GB))
+    msg = worker_kit.ram_no_room(3.2)
+    assert msg is not None and "needs about 3.2 GB more" in msg and "3.0 GB of the 16 GB of RAM are free" in msg
+    assert "use a computer with more RAM" in msg
+    monkeypatch.setattr(worker_kit, "physical_memory", lambda: (16 * GB, 5 * GB))
+    assert worker_kit.ram_no_room(3.2) is None
 
 
 def _installed(monkeypatch):

@@ -75,7 +75,8 @@ flowchart LR
   against commit under WDDM, so a share of the RAM would be wrong); the job also ends them with the engine; on Linux the engine raises its OOM score, so the kernel stops Mimvox first
   (`memguard.py`). The commit counts the page file, so it misses a model on the CPU being paged out: before every model
   pass on the CPU the speech worker refuses a computer with too little RAM in all (`worker_kit.ram_too_small`) and
-  checks how much of its weights is still in RAM (`worker_kit.ram_short`); either is reported as `no_memory`.
+  checks how much of its weights is still in RAM (`worker_kit.ram_short`) and, before the first voice-clone prompt, that
+  the RAM has room for it (`worker_kit.ram_no_room`); each is reported as `no_memory` and releases the model.
 - **A persistent engine.** Loading the models is the slow part. The engine starts once with the app and keeps OmniVoice
   and the RVC worker loaded in GPU memory, so each phrase pays only for synthesis (see
   [performance.md](performance.md)).
