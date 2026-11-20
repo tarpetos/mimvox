@@ -60,7 +60,7 @@ fn send(s: &mut AppState, tag: Tag, method: &str, params: Value) {
         }
         None => {
             s.voices.error =
-                Some("The voice engine is not running. Check the status at the top and press Retry.".into())
+                Some("The voice engine is not running: press the status at the top right, then Retry.".into())
         }
     }
 }

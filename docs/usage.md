@@ -91,8 +91,8 @@ the app itself on the first start, in its window; there is no script to run and 
    stress". It installs in the background with its
    progress on that screen, and the engine restarts by itself when it is done.
 
-   **Modules:** open **Settings** > **Modules** (or press the status pill at the top right, *Ready*) to see every
-   optional part with its size and state.
+   **Modules:** open **Settings** (the status button at the top right, *Ready*) > **Modules** to see every optional
+   part with its size and state.
    **Install** adds a missing one, **Turn off** keeps its files but stops using it (for example to compare Ukrainian
    with and without exact stress), **Turn on** brings it back, and **Remove** deletes it to free the disk. Turning a
    part on or off restarts the engine, so it waits while a book is read, a voice trains or speech is made.
@@ -109,7 +109,7 @@ the app itself on the first start, in its window; there is no script to run and 
 4. Press **Run setup**. The card shows the steps with a progress bar and what setup is doing right now; **Show
    details** opens its log. The GPU is found by itself (NVIDIA: CUDA; AMD on Linux: ROCm; Apple Silicon: MPS;
    otherwise the CPU).
-5. When setup is done the engine starts by itself: the status pill at the top right says *Starting engine…*, then
+5. When setup is done the engine starts by itself: the status button at the top right says *Starting engine…*, then
    *Loading models…*, then **Ready**, and the card shows your device. Press **Get started**.
 
 **Cancel** stops setup; **Run setup again** continues where it stopped (every step skips what is already there and an
@@ -151,7 +151,7 @@ options (all of them: `./setup.sh --help`):
 
 To move everything (runtime, models and your voices) to another drive:
 
-1. Open **Settings** (the sliders button at the far right) and unfold **Data folder**. It shows the current folder
+1. Open **Settings** (the status button at the top right) and unfold **Data folder**. It shows the current folder
    and the free space on its drive.
 2. Press **Move data…** and pick an empty folder.
 3. The app shows how much it will move and the free space on the new drive, then asks you to confirm. The voice engine
@@ -199,14 +199,16 @@ updates** asks for the newest version at once, even one you skipped. **Release p
 - **Version pill** next to **Mimvox**: opens the [Updates](#updates) window. Its rim glows in and out while a newer
   version is waiting.
 - **Tabs** in the middle of the header: **Record**, **Train**, **Speak**, **Redub**.
-- **Engine pill** on the right: *Ready*, *Loading models…*, *Training · speech paused*, *Models missing* or
-  *Engine stopped*. When the engine has stopped, press it to restart; otherwise it opens **Settings** at **Modules**.
+- **Status button** on the right, with a sliders icon: the engine's state, *Ready*, *Loading models…*, *Training ·
+  speech paused*, *Not enough memory*, *Models missing* or *Engine stopped*; hover it for the device and the models.
+  In a narrow window only its dot and icon stay. Press it to open **Settings**: the app's settings, in folded
+  sections: **Modules** (see [First launch](#first-launch-setup-in-the-app)), **Data folder** (see
+  [Moving the data folder later](#moving-the-data-folder-later)) and [the local API](#settings-the-local-api). The
+  same engine state is at the top of Settings, with **Retry** when the engine has stopped. Settings opens on the
+  section you left open, or on **Modules** when models are missing or a module the current screen needs is turned off.
 - **Voice pill** at the far right: the active voice. Open it to switch voices, see whether each one is *Trained* or
   *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice** (the Record start page, set to make a
   new voice).
-- **Settings** (the sliders button at the far right): the app's settings, in folded sections: **Modules** (see
-  [First launch](#first-launch-setup-in-the-app)), **Data folder** (see
-  [Moving the data folder later](#moving-the-data-folder-later)) and [the local API](#settings-the-local-api).
 - **Dropping files** anywhere on the window works on every screen. Recordings dropped on Record's start page, on Speak
   or on Train are somebody's voice: a dialog asks whether they are **a new voice** or **more recordings of the active
   one** (see [Use recordings you already have](#use-recordings-you-already-have)). While a reading is open on Record
@@ -633,7 +635,7 @@ Record**, or **Go to Speak** to use the voice zero-shot.
 **How long it takes:** about 55 minutes for 300 epochs on 6.4 minutes of recordings on an RTX 4070 with 12 GB. The Train
 screen shows its own estimate before you start. Expect several hours on an Apple GPU and many hours without a GPU.
 
-While a voice trains, the GPU belongs to training: Speak and Redub are unavailable (the engine pill says *Training ·
+While a voice trains, the GPU belongs to training: Speak and Redub are unavailable (the status button says *Training ·
 speech paused*). You can still use the other screens. When training finishes, the speech models reload (about half a
 minute) and the voice is marked *Trained*. Press **Go to Speak**.
 
@@ -1126,8 +1128,8 @@ More detail: the [recording guide](recording-guide.md).
 
 | Problem | What to do |
 | --- | --- |
-| **"The voice engine stopped"** (banner under the header, the pill says *Engine stopped*) | Press **Retry** in the banner, or press the pill. The banner shows the last error line. If it keeps stopping, look at the engine log (below) and run `./setup.sh --quick-check` (or `setup.cmd --quick-check`) to verify the install. A *"not set up yet"* message means setup has not completed: run it again. |
-| **Generation is slow** | The first phrase after start is always slower (the models and the voice are being prepared). Check the device on the welcome screen or by hovering the *Ready* pill: it should name your NVIDIA GPU. If setup reported the `cpu` backend, re-run setup on a machine with a supported GPU and current NVIDIA driver. Close other programs that use the GPU (games, other AI tools, browsers with hardware acceleration). **Fast** quality is about twice as fast per sentence. Do not train while you want to speak. |
+| **"The voice engine stopped"** (banner under the header, the status button says *Engine stopped*) | Press **Retry** in the banner, or in **Settings** (the status button). The banner shows the last error line. If it keeps stopping, look at the engine log (below) and run `./setup.sh --quick-check` (or `setup.cmd --quick-check`) to verify the install. A *"not set up yet"* message means setup has not completed: run it again. |
+| **Generation is slow** | The first phrase after start is always slower (the models and the voice are being prepared). Check the device on the welcome screen or by hovering the *Ready* status button: it should name your NVIDIA GPU. If setup reported the `cpu` backend, re-run setup on a machine with a supported GPU and current NVIDIA driver. Close other programs that use the GPU (games, other AI tools, browsers with hardware acceleration). **Fast** quality is about twice as fast per sentence. Do not train while you want to speak. |
 | **"Not enough free GPU memory"** or **"not enough free memory (RAM)"** | Mimvox gives each model only the memory that is free and stops a job that does not fit, so the computer never runs out. Close other programs that use the graphics card or a lot of memory (games, video, browsers) and try again. 8 GB of video memory is the practical minimum. |
 | **The microphone is missing** | Open the microphone chip on Record: the list is refreshed every time it opens. Plug the microphone in before opening it, check that it is enabled and not muted in your system's sound settings, and that the app is allowed to use the microphone (macOS and Windows privacy settings). *"Cannot use this microphone"* shows the system's reason. A remembered microphone that is gone falls back to the system default with a warning. |
 | **"No clear speech found"** on every take | The wrong input is selected, or it is muted. Use the level test in the microphone list: the bar must move when you speak. |

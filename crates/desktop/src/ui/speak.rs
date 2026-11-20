@@ -741,10 +741,12 @@ fn text_panel(s: &AppState, p: Palette, cx: &mut Cx<AppState>) -> El {
         s.speak.text.redo();
         s.speak.text.focused = true;
     });
+    // Set apart from undo and redo: it is the destructive one.
     let clear = (!s.speak.text.text.is_empty()).then(|| {
         icon_button(p, "speak-clear", &icons::TRASH, "Clear the text", |s: &mut AppState| {
             replace_text(&mut s.speak.text, "")
         })
+        .ml(8.0)
     });
     let head = row()
         .key("speak-head")
@@ -1601,6 +1603,20 @@ pub fn scene_engine_stopped(s: &mut AppState) {
         code: Some(1),
         detail: "CUDA out of memory while loading the speech model.".into(),
     });
+}
+
+pub fn models_missing() -> EngineStatus {
+    EngineStatus::Ready {
+        device: Some("NVIDIA GeForce RTX 4070".into()),
+        tts: Some("missing".into()),
+        rvc: Some("ready".into()),
+    }
+}
+
+pub fn scene_engine_models_missing(s: &mut AppState) {
+    demo_voice(s, true);
+    s.speak.text = TextEdit::new("Hello there.");
+    s.shell.set_engine(models_missing());
 }
 
 pub fn scene_engine_no_memory(s: &mut AppState) {

@@ -302,7 +302,7 @@ fn start(s: &mut AppState) {
     if !send(s, Tag::Start, "train.start", json!({ "voice_id": id, "epochs": epochs })) {
         finish_run(
             &mut s.train,
-            Phase::Failed("The voice engine is not running. Check the status at the top and press Retry.".into()),
+            Phase::Failed("The voice engine is not running: press the status at the top right, then Retry.".into()),
         );
     }
 }
@@ -329,7 +329,7 @@ fn resume(s: &mut AppState) {
     if !send(s, Tag::Resume, "train.resume", json!({ "voice_id": id })) {
         finish_run(
             &mut s.train,
-            Phase::Failed("The voice engine is not running. Check the status at the top and press Retry.".into()),
+            Phase::Failed("The voice engine is not running: press the status at the top right, then Retry.".into()),
         );
     }
 }
