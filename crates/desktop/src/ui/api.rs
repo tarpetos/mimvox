@@ -242,6 +242,14 @@ pub fn url(s: &AppState, addr: SocketAddr) -> String {
     }
 }
 
+/// The interactive docs; with the network address unknown, the browser opens them on this computer.
+pub fn docs_url(s: &AppState, addr: SocketAddr) -> String {
+    if addr.ip().is_unspecified() && s.api.lan_ip.is_none() {
+        return format!("http://{}/docs", SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), addr.port()));
+    }
+    format!("{}/docs", url(s, addr))
+}
+
 struct Hosting {
     rt: tokio::runtime::Runtime,
     host: Host,
@@ -403,6 +411,16 @@ mod tests {
         assert!(lan.needs_token());
         assert!(lan.addr().ip().is_unspecified());
         assert!(Prefs { require_token: true, ..local }.needs_token());
+    }
+
+    #[test]
+    fn docs_urls_follow_the_address() {
+        let mut s = AppState::default();
+        assert_eq!(docs_url(&s, s.api.prefs.addr()), "http://127.0.0.1:8765/docs");
+        s.api.prefs = Prefs { lan: true, port: 9000, ..Prefs::default() };
+        assert_eq!(docs_url(&s, s.api.prefs.addr()), "http://127.0.0.1:9000/docs", "network address unknown");
+        s.api.lan_ip = Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 23)));
+        assert_eq!(docs_url(&s, s.api.prefs.addr()), "http://192.168.1.23:9000/docs");
     }
 
     #[test]

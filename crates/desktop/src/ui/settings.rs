@@ -6,7 +6,7 @@ use super::voices::kit;
 use crate::engine::protocol::RedubMode;
 use crate::state::{AppState, Screen};
 use mimvox_api::token::TokenSource;
-use rune::{Color, El, ScrollSpec, Tx, col, el, row, text};
+use rune::{Color, El, ScrollSpec, Span, Tx, col, el, row, text};
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,6 +307,7 @@ fn api_section(s: &AppState, p: Palette) -> El {
         "Lets scripts and other programs use Mimvox, as long as the app is open.",
         switch(p, "api-on", "Turn on API", prefs.on, true, move |s: &mut AppState| api::set_on(s, !prefs.on)),
     ));
+    c = c.child(docs_row(s, p));
     c = c.children(status_line(s, p));
 
     let address = segmented(
@@ -354,6 +355,43 @@ fn api_section(s: &AppState, p: Palette) -> El {
         .color(p.text_faint)
         .wrap(),
     )
+}
+
+fn docs_row(s: &AppState, p: Palette) -> El {
+    let prefs = s.api.prefs;
+    let listening = match &s.api.status {
+        Status::Listening(addr) if prefs.on => Some(*addr),
+        _ => None,
+    };
+    let url = api::docs_url(s, listening.unwrap_or(prefs.addr()));
+    let detail = match listening {
+        Some(_) => "Every endpoint, with try-it, in your browser.",
+        None if !prefs.on => "Turn on the API to open the docs.",
+        None => "Opens once the API is listening.",
+    };
+    let ink = if listening.is_some() { p.accent } else { p.text_faint };
+    let link = row()
+        .key("api-docs-link")
+        .gap(6.0)
+        .center_y()
+        .child(
+            text(url.clone())
+                .font(ty::LABEL)
+                .color(ink)
+                .spans(vec![Span::new(0, url.len()).underline(ink.alpha(0.7))])
+                .a11y_hidden(),
+        )
+        .child(icon_el(&icons::OPEN, 14.0, ink));
+    let link = match listening {
+        Some(_) => link
+            .href(url.clone())
+            .label(format!("Open API docs, {url}"))
+            .help("Open in your browser")
+            .focusable(true)
+            .cursor(rune::Cursor::Pointer),
+        None => link.role("link").label(format!("API docs, {url}")).disabled(true),
+    };
+    setting_row(p, "API docs", detail, link)
 }
 
 fn hint_url(s: &AppState) -> String {

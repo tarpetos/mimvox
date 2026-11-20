@@ -226,6 +226,7 @@ The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth
 | `futures-util`, `clap`, `base64`, `getrandom`, `uuid`, `toml` | MIT OR Apache-2.0 |
 | `rubato` (resampling to 24 kHz for OpenAI's `pcm`) | MIT OR Apache-2.0 |
 | `subtle` (constant-time token comparison) | BSD-3-Clause |
+| `flate2` (the docs page's bundle for clients without gzip) | MIT OR Apache-2.0 |
 
 ### Direct Rust dependencies of `mimvox-mcp` (`crates/mcp`)
 
@@ -240,9 +241,23 @@ The IndexTTS-2.5 checkpoint files themselves (`gpt.pth`, `s2mel.pth`, `codec.pth
 All transitive Rust dependencies are listed in `Cargo.lock`. Generate the complete licence list of a release build
 with `cargo about` (or `cargo license`) and check it before distributing binaries.
 
+### Scalar API Reference (MIT; the API's `/docs` page)
+
+- `@scalar/api-reference` **1.77.0** (released 2026-11-05), the standalone browser bundle `dist/browser/standalone.js`
+  from <https://registry.npmjs.org/@scalar/api-reference/-/api-reference-1.77.0.tgz> (npm integrity
+  `sha512-41DOlbgId6h8XX008AtzmX8EpILmLMk14rHs9RcrdwCTP1HCFgE+m/HnJy4pXi9ffMWgEAnnv4Sh13QmAA+muQ==`), project
+  <https://github.com/scalar/scalar>. Copyright (c) 2023-present Scalar. MIT License, the text in
+  `crates/api/vendor/scalar/LICENSE`.
+- Kept unmodified, gzip-compressed (`gzip -9 -n`) as `crates/api/vendor/scalar/standalone.js.gz` and built into the API.
+  SHA-256 of `standalone.js`: `4f387c930903fe6b63b3497ebf02ca65005d52016c72dcc8bfc44ac662986cb3`; of the `.gz`:
+  `0016325b42471abb5a92760548896c268971cdc86a642a4704433a9557904485`. Its own dependencies (Vue, Tailwind CSS,
+  highlight.js and others) are bundled in that file under their own licences, mostly MIT (highlight.js BSD-3-Clause),
+  with the licence comments they carry.
+
 ## Fonts and icons
 
-The app icon is made for this project (`tools/release/`).
+The app icon is made for this project (`tools/release/`), and so are the API icons made from it
+(`tools/release/icons/api_*.png`, also on the API docs page).
 
 ### Noto Sans (SIL Open Font License 1.1)
 

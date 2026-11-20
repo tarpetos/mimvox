@@ -1,5 +1,6 @@
 //! The local HTTP API: contract/engine-protocol.md, "HTTP API".
 
+mod docs;
 mod ffmpeg;
 mod files;
 pub mod host;
@@ -100,7 +101,7 @@ struct AppState {
 pub fn router(hub: Hub, mut cfg: ApiConfig, stop: CancellationToken) -> Router {
     cfg.data_dir = std::path::absolute(&cfg.data_dir).unwrap_or(cfg.data_dir);
     let state = AppState { hub, cfg: Arc::new(cfg), speech: Arc::default(), stop };
-    Router::new()
+    let mut app = Router::new()
         .route("/health", get(health))
         .route("/rpc", post(rpc).layer(DefaultBodyLimit::max(RPC_BODY_LIMIT)))
         .route("/events", get(events))
@@ -108,8 +109,14 @@ pub fn router(hub: Hub, mut cfg: ApiConfig, stop: CancellationToken) -> Router {
         .route("/v1/models", get(openai::models))
         .route("/v1/audio/voices", get(openai::voices))
         .route("/v1/audio/speech", post(openai::speech).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
-        .layer(middleware::from_fn_with_state(state.clone(), guard))
-        .with_state(state)
+        .route("/openapi.json", get(docs::openapi))
+        .route("/docs", get(docs::page))
+        .route("/docs/scalar.js", get(docs::scalar_js))
+        .route("/docs/init.js", get(docs::init_js));
+    for &(path, png) in docs::ICONS {
+        app = app.route(path, get(move || async move { docs::icon(png) }));
+    }
+    app.layer(middleware::from_fn_with_state(state.clone(), guard)).with_state(state)
 }
 
 #[derive(Debug)]
@@ -186,6 +193,7 @@ fn local_request(headers: &HeaderMap) -> bool {
 
 async fn guard(State(st): State<AppState>, req: Request, next: Next) -> Response {
     match &st.cfg.token {
+        Some(_) if docs::PUBLIC_PATHS.contains(&req.uri().path()) => {}
         Some(expected) => {
             let given = req
                 .headers()
