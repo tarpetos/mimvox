@@ -107,6 +107,23 @@ fn command(url: &str, data: &Path, args: &[&str], env: &[(&str, &str)]) -> Comma
     cmd
 }
 
+/// The icons are inline PNGs: a client never fetches anything to show them.
+fn assert_server_info(info: &Value) {
+    assert_eq!(info["name"], "mimvox-mcp", "{info}");
+    assert_eq!(info["title"], "Mimvox", "{info}");
+    let icons = info["icons"].as_array().expect("icons");
+    assert!(!icons.is_empty(), "{info}");
+    for icon in icons {
+        let src = icon["src"].as_str().unwrap();
+        let data =
+            src.strip_prefix("data:image/png;base64,").unwrap_or_else(|| panic!("not a PNG data URI: {src:.60}"));
+        assert!(BASE64.decode(data).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(icon["mimeType"], "image/png");
+        let size = icon["sizes"][0].as_str().unwrap();
+        assert!(size.split_once('x').is_some_and(|(w, h)| w == h && w.parse::<u32>().is_ok()), "{size}");
+    }
+}
+
 /// An MCP client over the child's stdio, one JSON-RPC message per line.
 struct Mcp {
     _child: Child,
@@ -147,7 +164,7 @@ impl Mcp {
                 }),
             )
             .await;
-        assert_eq!(init["result"]["serverInfo"]["name"], "mimvox-mcp", "{init}");
+        assert_server_info(&init["result"]["serverInfo"]);
         assert!(init["result"]["capabilities"]["tools"].is_object(), "{init}");
         assert!(init["result"]["capabilities"]["resources"].is_object(), "{init}");
         mcp.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await;
@@ -497,7 +514,7 @@ async fn streamable_http() {
     assert_eq!(res.status(), 200);
     let session = res.headers().get("mcp-session-id").map(|v| v.to_str().unwrap().to_string());
     let msg = http_message(res).await;
-    assert_eq!(msg["result"]["serverInfo"]["name"], "mimvox-mcp", "{msg}");
+    assert_server_info(&msg["result"]["serverInfo"]);
     let s = session.as_deref();
     let res = post(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), s).await.unwrap();
     assert!(res.status().is_success(), "{}", res.status());

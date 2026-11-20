@@ -2492,6 +2492,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "winresource",
 ]
 
 [[package]]
@@ -2510,6 +2511,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "windows-sys 0.59.0",
+ "winresource",
 ]
 
 [[package]]
