@@ -7,24 +7,29 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 OUT = Path(__file__).resolve().parent / "icons"
 PNG_SIZES = (16, 32, 48, 64, 128, 256, 512, 1024)
-FONT = Path(__file__).resolve().parents[2] / "crates" / "desktop" / "assets" / "fonts" / "NotoSans-Bold.ttf"
 LABELS = {"api": "API", "mcp": "MCP"}
 LABEL_SIZES = (16, 24, 32, 48, 64, 256)
-# Up to 24 px the label alone fills the tile; up to 32 px it is set in a 7-pixel bitmap font, where an outline blurs.
+# The label: round-capped strokes on a 64-unit tile, as crates/api/assets/docs-icon.svg draws "API". Up to 32 px,
+# where strokes blur, a 7-pixel bitmap font instead; up to 24 px the label alone fills the tile.
 COMPACT_MAX = 24
-NATIVE_LABEL_MAX = 32
-PIXEL_GLYPHS = {
+BITMAP_MAX = 32
+STROKE = 4.6
+CAP = 15.0
+LABEL_TOP = 37.5
+LABEL_CX = 32.4
+KERNING = {"AP": 4.2, "PI": 4.94, "MC": 6.2, "CP": 6.0}
+BITMAP_GLYPHS = {
     "A": (".#.", "#.#", "#.#", "###", "#.#", "#.#", "#.#"),
     "C": (".##", "#..", "#..", "#..", "#..", "#..", ".##"),
     "I": ("###", ".#.", ".#.", ".#.", ".#.", ".#.", "###"),
     "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
     "P": ("##.", "#.#", "#.#", "##.", "#..", "#..", "#.."),
 }
-BOLD_GLYPHS = {
+BOLD_BITMAP_GLYPHS = {
     "A": (".###.", "##.##", "##.##", "#####", "##.##", "##.##", "##.##"),
     "C": (".####", "##...", "##...", "##...", "##...", "##...", ".####"),
     "I": ("####", ".##.", ".##.", ".##.", ".##.", ".##.", "####"),
@@ -48,21 +53,49 @@ def diagonal_mask(size: int) -> Image.Image:
     return Image.blend(v, h, 0.5)
 
 
-def draw_label(draw: ImageDraw.ImageDraw, label: str, cx: float, cy: float, cap: float) -> None:
-    """``label`` in capitals ``cap`` high, its ink centred on (cx, cy), the letters spaced a little apart."""
-    font = ImageFont.truetype(str(FONT), round(cap / 0.714))  # Noto Sans: cap height 0.714 em
-    track = cap * 0.12
-    boxes = [font.getbbox(ch, anchor="ls") for ch in label]
-    widths = [b[2] - b[0] for b in boxes]
-    x = cx - (sum(widths) + track * (len(label) - 1)) / 2
-    top = min(b[1] for b in boxes)
-    for ch, box, w in zip(label, boxes, widths):
-        draw.text((x - box[0], cy - top / 2), ch, font=font, fill=255, anchor="ls")
-        x += w + track
+def arc(cx: float, cy: float, rx: float, ry: float, start: float, end: float) -> list[tuple[float, float]]:
+    steps = 24
+    return [(cx + rx * math.cos(math.radians(start + (end - start) * i / steps)),
+             cy + ry * math.sin(math.radians(start + (end - start) * i / steps))) for i in range(steps + 1)]
 
 
-def draw_pixel_label(img: Image.Image, label: str, cy: float) -> None:
-    glyphs = PIXEL_GLYPHS if img.width <= 16 else BOLD_GLYPHS
+# Each letter: its width and its strokes, x from 0, y from 0 (top) to CAP.
+GLYPHS: dict[str, tuple[float, list[list[tuple[float, float]]]]] = {
+    "A": (12.0, [[(0, CAP), (6, 0), (12, CAP)], [(3, 10.4), (9, 10.4)]]),
+    "C": (9.7, [arc(5.5, CAP / 2, 5.5, CAP / 2, -40, -320)]),
+    "I": (0.0, [[(0, 0), (0, CAP)]]),
+    "M": (11.0, [[(0, CAP), (0, 0), (5.5, 8.5), (11, 0), (11, CAP)]]),
+    "P": (6.86, [[(0, CAP), (0, 0), (3.16, 0), *arc(3.16, 3.7, 3.7, 3.7, -90, 90)[1:], (0, 7.4)]]),
+}
+
+
+def label_strokes(label: str) -> list[list[tuple[float, float]]]:
+    """The label's strokes, centred on x = 0 with its top at y = 0."""
+    gaps = [KERNING[a + b] for a, b in zip(label, label[1:])] + [0]
+    x = -(sum(GLYPHS[ch][0] for ch in label) + sum(gaps)) / 2
+    strokes = []
+    for ch, gap in zip(label, gaps):
+        w, lines = GLYPHS[ch]
+        strokes += [[(x + px, py) for px, py in line] for line in lines]
+        x += w + gap
+    return strokes
+
+
+def draw_strokes(draw: ImageDraw.ImageDraw, strokes: list[list[tuple[float, float]]], unit: float, x0: float,
+                 y0: float, width: float) -> None:
+    """Round caps and joins: a disc at every step along each stroke."""
+    r = width * unit / 2
+    for line in strokes:
+        for (ax, ay), (bx, by) in zip(line, line[1:]):
+            steps = max(1, math.ceil(math.hypot(bx - ax, by - ay) * unit / (r * 0.15)))
+            for i in range(steps + 1):
+                x = x0 + (ax + (bx - ax) * i / steps) * unit
+                y = y0 + (ay + (by - ay) * i / steps) * unit
+                draw.ellipse((x - r, y - r, x + r, y + r), fill=255)
+
+
+def draw_bitmap_label(img: Image.Image, label: str, cy: float) -> None:
+    glyphs = BITMAP_GLYPHS if img.width <= 16 else BOLD_BITMAP_GLYPHS
     rows = [".".join(glyphs[ch][r] for ch in label) for r in range(7)]
     x0, y0 = (img.width - len(rows[0]) + 1) // 2, round(cy - len(rows) / 2)
     for y, row in enumerate(rows):
@@ -123,9 +156,9 @@ def render(size: int, bars: int, label: str | None = None) -> Image.Image:
     cx, cy = s / 2, s / 2
     scale = 1.0
     compact = label is not None and size <= COMPACT_MAX
-    if label and not compact:
-        cy, scale = margin + inner_side * 0.36, 0.62
     span = inner_side * 0.58
+    if label and not compact:
+        cy, scale, span = margin + inner_side * 0.318, 0.8, inner_side * 0.534
     pitch = span / (bars - 1)
     bar_w = pitch * 0.52
     heights = []
@@ -141,8 +174,10 @@ def render(size: int, bars: int, label: str | None = None) -> Image.Image:
         for i, h in enumerate(heights):
             x = cx - span / 2 + i * pitch
             d.rounded_rectangle((x - bar_w / 2, cy - h / 2, x + bar_w / 2, cy + h / 2), bar_w / 2, fill=255)
-        if label and size > NATIVE_LABEL_MAX:
-            draw_label(d, label, cx, margin + inner_side * 0.75, inner_side * 0.2)
+    letters = Image.new("L", (s, s), 0)
+    if label and size > BITMAP_MAX:
+        unit = s / 64
+        draw_strokes(ImageDraw.Draw(letters), label_strokes(label), unit, LABEL_CX * unit, LABEL_TOP * unit, STROKE)
 
     glow = wave.filter(ImageFilter.GaussianBlur(s * 0.03)).point(lambda p: min(255, int(p * 1.1)))
     img = Image.alpha_composite(img, Image.merge("RGBA", (
@@ -151,11 +186,12 @@ def render(size: int, bars: int, label: str | None = None) -> Image.Image:
     shade = Image.linear_gradient("L").transpose(Image.FLIP_TOP_BOTTOM).resize((s, s), Image.BILINEAR)
     bar_alpha = ImageChops.multiply(wave, shade.point(lambda p: 215 + int(p * 40 / 255)))
     img = Image.alpha_composite(img, Image.merge("RGBA", (
-        Image.new("L", (s, s), BAR[0]), Image.new("L", (s, s), BAR[1]), Image.new("L", (s, s), BAR[2]), bar_alpha)))
+        Image.new("L", (s, s), BAR[0]), Image.new("L", (s, s), BAR[1]), Image.new("L", (s, s), BAR[2]),
+        ImageChops.lighter(bar_alpha, letters))))
 
     img = img.resize((size, size), Image.LANCZOS)
-    if label and size <= NATIVE_LABEL_MAX:
-        draw_pixel_label(img, label, size / 2 if compact else (margin + inner_side * 0.75) * size / s)
+    if label and size <= BITMAP_MAX:
+        draw_bitmap_label(img, label, size / 2 if compact else (LABEL_TOP + CAP / 2) * size / 64)
     return img
 
 
@@ -172,7 +208,7 @@ def main() -> None:
     images[1024].save(OUT / "icon.icns", sizes=[(n, n) for n in (16, 32, 64, 128, 256, 512, 1024)])
 
     for name, label in LABELS.items():
-        labelled = {n: render(n, bars=5 if n <= 48 else 7, label=label) for n in LABEL_SIZES}
+        labelled = {n: render(n, bars=5, label=label) for n in LABEL_SIZES}
         for n, image in labelled.items():
             image.save(OUT / f"{name}_{n}x{n}.png")
         labelled[256].save(OUT / f"{name}.ico", sizes=[(n, n) for n in LABEL_SIZES],
