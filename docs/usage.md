@@ -91,7 +91,8 @@ the app itself on the first start, in its window; there is no script to run and 
    stress". It installs in the background with its
    progress on that screen, and the engine restarts by itself when it is done.
 
-   **Modules:** press the status pill at the top right (*Ready*) to see every optional part with its size and state.
+   **Modules:** open **Settings** > **Modules** (or press the status pill at the top right, *Ready*) to see every
+   optional part with its size and state.
    **Install** adds a missing one, **Turn off** keeps its files but stops using it (for example to compare Ukrainian
    with and without exact stress), **Turn on** brings it back, and **Remove** deletes it to free the disk. Turning a
    part on or off restarts the engine, so it waits while a book is read, a voice trains or speech is made.
@@ -150,8 +151,9 @@ options (all of them: `./setup.sh --help`):
 
 To move everything (runtime, models and your voices) to another drive:
 
-1. Open **Voices** (the voice menu at the top right, then **Manage voices**).
-2. At the bottom, under **Data location**, press **Move data…** and pick an empty folder.
+1. Open **Settings** (the sliders button at the far right) and unfold **Data folder**. It shows the current folder
+   and the free space on its drive.
+2. Press **Move data…** and pick an empty folder.
 3. The app shows how much it will move and the free space on the new drive, then asks you to confirm. The voice engine
    stops while the files are copied and starts again afterwards. Nothing is deleted from the old folder until the copy
    is complete and checked; if the move fails, your data stays where it was and keeps working.
@@ -198,12 +200,13 @@ updates** asks for the newest version at once, even one you skipped. **Release p
   version is waiting.
 - **Tabs** in the middle of the header: **Record**, **Train**, **Speak**, **Redub**.
 - **Engine pill** on the right: *Ready*, *Loading models…*, *Training · speech paused*, *Models missing* or
-  *Engine stopped*. When the engine has stopped, press it to restart.
+  *Engine stopped*. When the engine has stopped, press it to restart; otherwise it opens **Settings** at **Modules**.
 - **Voice pill** at the far right: the active voice. Open it to switch voices, see whether each one is *Trained* or
   *Zero-shot*, and reach **Manage voices** (the Voices screen) or **New voice** (the Record start page, set to make a
   new voice).
-- **Settings** (the sliders button at the far right): the app's settings, in folded sections. For now one:
-  [the local API](#settings-the-local-api).
+- **Settings** (the sliders button at the far right): the app's settings, in folded sections: **Modules** (see
+  [First launch](#first-launch-setup-in-the-app)), **Data folder** (see
+  [Moving the data folder later](#moving-the-data-folder-later)) and [the local API](#settings-the-local-api).
 - **Dropping files** anywhere on the window works on every screen. Recordings dropped on Record's start page, on Speak
   or on Train are somebody's voice: a dialog asks whether they are **a new voice** or **more recordings of the active
   one** (see [Use recordings you already have](#use-recordings-you-already-have)). While a reading is open on Record
@@ -1127,7 +1130,7 @@ Setup prints its progress to the terminal it runs in; there is no separate setup
 ## 10. Your data folder
 
 Everything the app makes lives in one folder (the one you chose during setup; see the defaults in
-[Install](#first-launch-setup-in-the-app)). The **Data location** card at the bottom of the Voices screen shows its path.
+[Install](#first-launch-setup-in-the-app)). **Settings** > **Data folder** shows its path.
 
 ```
 <data folder>/
