@@ -472,7 +472,8 @@ impl<S: 'static> Host<S> {
                 // on screen (`Presented::unchanged`). Upstream drew and presented one per move: a full-window frame
                 // at the pointer's report rate for as long as it moved, whatever was under it.
                 l.timer_frame.may_reuse();
-                l.request_redraw();
+                // PATCH: a frame of motion already on its way takes the move along (`Win::motion_at`), unless a press drags.
+                if l.motion_at.is_none() || rt.pressing() { l.request_redraw(); }
             }
             WindowEvent::CursorLeft { .. } => {
                 rt.pointer_leave();

@@ -397,10 +397,17 @@ impl<S: 'static> Host<S> {
             // display shows them, so a timer paces the next frame instead of the loop.
             #[cfg(target_os = "macos")]
             if !l.native.pacing.as_mut().is_some_and(|p| p.start()) { l.backoff_step(BackoffEvent::At(now + TIMER_FRAME)); }
+            // PATCH: motion alone waits for its next step (`motion_interval`); input and other changes draw at once.
             #[cfg(not(target_os = "macos"))]
-            l.request_redraw();
+            {
+                let motion_only = !rt.stale() && !rt.live_pending() && rt.window_frame.is_none() && self.frame_move.is_none()
+                    && self.args.frames.is_none();
+                l.motion_at = motion_only.then(|| pacing::motion_interval(display_hz(l))).flatten().map(|wait| now + wait);
+                if l.motion_at.is_none() { l.request_redraw(); }
+            }
             self.meter.set_pacing(l.pacing_state(true));
         } else {
+            l.motion_at = None;
             l.stop_pacing();
             self.meter.set_pacing(l.pacing_state(false));
         }

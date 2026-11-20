@@ -41,6 +41,7 @@ impl<S: 'static> AnyHost for Host<S> {
             .chain(win.filter(|_| shown.is_none()).and_then(|w| w.hidden_pace.deadline()))
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
+            .chain(shown.and_then(|w| w.motion_at))
             .min()
     }
 
@@ -186,6 +187,11 @@ impl<S: 'static> Host<S> {
             if launcher || self.life.shown() { w.request_redraw(); }
         }
         if let Some(w) = &mut self.win && !self.life.shown() && w.hidden_pace.take_due(Instant::now()) {
+            w.request_redraw();
+        }
+        // PATCH: the next frame of motion is due (`Win::motion_at`).
+        if let Some(w) = &mut self.win && w.motion_at.is_some_and(|at| at <= Instant::now()) {
+            w.motion_at = None;
             w.request_redraw();
         }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
