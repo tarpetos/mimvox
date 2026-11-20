@@ -507,6 +507,26 @@ right of the screen (and in the voice menu) reads the voices folder again: a voi
 Each card shows *Trained* or *Untrained*, the minutes recorded, and the number of epochs after training. A paused or
 interrupted training shows as *Paused 115/300* or *Interrupted 115/300*.
 
+### Import an existing voice model
+
+An RVC voice model you already have (a `.pth` from RVC or Applio, often with an `.index` file) can be used without
+training:
+
+1. Press **Import voice model…** next to **New voice**.
+2. Type a **Name**, choose the **Model (.pth)** and, if you have it, the **Index**.
+3. Choose a **Reference clip**: a short, clean recording of the same voice (10-20 seconds, any format Record imports).
+   Speech is cloned from this clip; the model then refines the timbre.
+4. Pick the voice's **Language**, tick **This is my voice, or I have the owner's permission to use it**, and press
+   **Import**.
+
+The new voice is selected and shows as *Trained* (with the epochs when the file name has them, as in
+`anna_300e_9000s.pth`). The files are copied into the voice's folder. A file that is not an RVC voice model is refused
+with the reason, for example a `.zip` (unpack it first) or a training checkpoint (`G_…` / `D_…`) instead of the
+smaller model RVC and Applio save for inference. To check it, the app only reads the file's structure.
+
+Only import a model of your own voice, or of a person who has given you explicit permission (see
+[DISCLAIMER.md](../DISCLAIMER.md)). The box must be ticked before **Import** is enabled.
+
 ### The reference clip and "Choose…"
 
 The speech model clones your voice from one short clip of your recordings, the **reference clip**. It copies the pace

@@ -66,6 +66,7 @@ pub struct AppState {
     pub modules: crate::ui::modules::ModulesState,
     pub settings: crate::ui::settings::SettingsState,
     pub api: crate::ui::api::ApiState,
+    pub voiceimport: crate::ui::voiceimport::ImportState,
 }
 
 impl Default for AppState {
@@ -106,6 +107,7 @@ impl Default for AppState {
             modules: Default::default(),
             settings: Default::default(),
             api: Default::default(),
+            voiceimport: Default::default(),
         }
     }
 }
