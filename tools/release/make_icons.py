@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Generate the app icon set into tools/release/icons/ (committed):
+"""Generate the app icon set, and its labelled variants for mimvox-server, mimvox-mcp and the API docs, into
+tools/release/icons/ (committed):
 ``uv run --with pillow python tools/release/make_icons.py``."""
 from __future__ import annotations
 
 import math
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 OUT = Path(__file__).resolve().parent / "icons"
 PNG_SIZES = (16, 32, 48, 64, 128, 256, 512, 1024)
+FONT = Path(__file__).resolve().parents[2] / "crates" / "desktop" / "assets" / "fonts" / "NotoSans-Bold.ttf"
+# name: (label, font size as a share of the side, whether an .ico is made)
+LABELS = {"api": ("API", 0.24, False), "mcp": ("MCP", 0.24, True), "server": ("SERVER", 0.16, True)}
+LABEL_SIZES = (16, 24, 32, 48, 64, 256)
+# Below this the label cannot be read: the plain app icon instead.
+LABEL_MIN = 32
 
 TOP = (34, 52, 78)
 BOTTOM = (7, 12, 21)
@@ -104,6 +111,22 @@ def render(size: int, bars: int) -> Image.Image:
     return img.resize((size, size), Image.LANCZOS)
 
 
+def labelled(icon: Image.Image, label: str, font_size: float) -> Image.Image:
+    s = icon.width
+    font = ImageFont.truetype(str(FONT), int(s * font_size))
+    text = Image.new("RGBA", icon.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(text)
+    left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
+    pos = ((s - (right - left)) / 2 - left, int(s * 0.74) - (bottom - top) / 2 - top)
+    draw.text(pos, label, font=font, fill=(255, 255, 255, 255))
+    glow = Image.new("RGBA", icon.size, (0, 0, 0, 0))
+    ImageDraw.Draw(glow).text(pos, label, font=font, fill=(120, 180, 255, 200))
+    out = icon.copy()
+    out.alpha_composite(glow.filter(ImageFilter.GaussianBlur(s * 22 / 1024)))
+    out.alpha_composite(text)
+    return out
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     images: dict[int, Image.Image] = {}
@@ -115,6 +138,16 @@ def main() -> None:
 
     images[256].save(OUT / "icon.ico", sizes=[(n, n) for n in (16, 32, 48, 64, 128, 256)])
     images[1024].save(OUT / "icon.icns", sizes=[(n, n) for n in (16, 32, 64, 128, 256, 512, 1024)])
+
+    for name, (label, font_size, ico) in LABELS.items():
+        big = labelled(images[1024], label, font_size)
+        sized = {n: big.resize((n, n), Image.LANCZOS) if n >= LABEL_MIN else images.get(n) or render(n, bars=5)
+                 for n in LABEL_SIZES}
+        for n, image in sized.items():
+            image.save(OUT / f"{name}_{n}x{n}.png")
+        if ico:
+            sized[256].save(OUT / f"{name}.ico", sizes=[(n, n) for n in LABEL_SIZES],
+                            append_images=[sized[n] for n in LABEL_SIZES if n != 256])
     print(f"wrote {len(list(OUT.iterdir()))} files to {OUT}")
 
 
