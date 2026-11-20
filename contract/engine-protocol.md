@@ -1719,7 +1719,7 @@ mimvox serve [the same arguments]
 | `GET /v1/models` | `{"object":"list","data":[{"id":"mimvox",...}]}` |
 | `GET /v1/audio/voices` | the `voices.list` result |
 | `GET /openapi.json` | OpenAPI 3.1 description of every endpoint above, each `/rpc` method (its `params` and result) and each `/events` event, built from `crates/api/openapi/methods.json` (a unit test keeps it equal to the engine's methods and to this document); `info.version` is the API crate's version |
-| `GET /docs` | interactive reference with try-it (Scalar API Reference, bundled, offline; its assets `/docs/scalar.js`, `/docs/init.js`), served with a CSP that allows only this origin. The bearer token is pasted on the page; try-it requests go through the usual checks. `/docs`, its assets and `/openapi.json` need no token (no data in them) but, without a token configured, keep the `Host`/`Origin`/`Sec-Fetch-Site` rules |
+| `GET /docs` | interactive reference with try-it (Scalar API Reference, bundled, offline; its assets `/docs/scalar.js`, `/docs/init.js` and the icon `/docs/icon.svg`), served with a CSP that allows only this origin. The bearer token is pasted on the page; try-it requests go through the usual checks. `/docs`, its assets and `/openapi.json` need no token (no data in them) but, without a token configured, keep the `Host`/`Origin`/`Sec-Fetch-Site` rules |
 
 Errors keep the engine's body `{"code","message"}` (`/v1/*`: OpenAI's `{"error":{"message","type","code"}}`) with the
 status: `bad_request` 400, `not_found` 404, `busy` 409, `not_ready` 503, `no_memory` 503, every other engine code 500; the server's own

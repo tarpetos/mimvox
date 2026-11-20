@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<title>Mimvox API</title>
+<defs>
+<linearGradient id="body" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22344e"/><stop offset="1" stop-color="#070c15"/></linearGradient>
+<linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".27"/><stop offset="1" stop-color="#fff" stop-opacity=".1"/></linearGradient>
+<radialGradient id="bloom" cx=".75" cy=".85" r=".45"><stop offset="0" stop-color="#9cd2ff" stop-opacity=".16"/><stop offset="1" stop-color="#9cd2ff" stop-opacity="0"/></radialGradient>
+<filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.6"/></filter>
+</defs>
+<rect x="4.5" y="4.5" width="55" height="55" rx="12.9" fill="url(#body)"/>
+<rect x="4.5" y="4.5" width="55" height="55" rx="12.9" fill="url(#bloom)"/>
+<rect x="4.9" y="4.9" width="54.2" height="54.2" rx="12.5" fill="none" stroke="url(#rim)" stroke-width=".8"/>
+<g fill="#9cd2ff" opacity=".55" filter="url(#glow)"><rect x="15.42" y="20.17" width="3.82" height="3.66" rx="1.91"/><rect x="22.76" y="16.5" width="3.82" height="11.01" rx="1.91"/><rect x="30.09" y="13.63" width="3.82" height="16.74" rx="1.91"/><rect x="37.43" y="14.45" width="3.82" height="15.09" rx="1.91"/><rect x="44.77" y="20.17" width="3.82" height="3.66" rx="1.91"/></g>
+<g fill="#c4e4ff"><rect x="15.42" y="20.17" width="3.82" height="3.66" rx="1.91"/><rect x="22.76" y="16.5" width="3.82" height="11.01" rx="1.91"/><rect x="30.09" y="13.63" width="3.82" height="16.74" rx="1.91"/><rect x="37.43" y="14.45" width="3.82" height="15.09" rx="1.91"/><rect x="44.77" y="20.17" width="3.82" height="3.66" rx="1.91"/></g>
+<path d="M18.4 52.5L24.4 37.5L30.4 52.5M21.4 47.9H27.4M34.6 52.5V37.5H37.76A3.7 3.7 0 0 1 37.76 44.9H34.6M46.4 37.5V52.5" fill="none" stroke="#c4e4ff" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

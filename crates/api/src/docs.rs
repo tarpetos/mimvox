@@ -7,9 +7,10 @@ use serde_json::{Map, Value, json};
 
 const TABLE: &str = include_str!("../openapi/methods.json");
 const SCALAR_GZ: &[u8] = include_bytes!("../vendor/scalar/standalone.js.gz");
+const ICON: &str = include_str!("../assets/docs-icon.svg");
 
 /// Served without the token: they carry no data.
-pub const PUBLIC_PATHS: &[&str] = &["/docs", "/docs/scalar.js", "/docs/init.js", "/openapi.json"];
+pub const PUBLIC_PATHS: &[&str] = &["/docs", "/docs/scalar.js", "/docs/init.js", "/docs/icon.svg", "/openapi.json"];
 
 pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
 img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; base-uri 'none'; \
@@ -21,6 +22,7 @@ const PAGE: &str = r#"<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mimvox API</title>
+<link rel="icon" type="image/svg+xml" href="/docs/icon.svg">
 </head>
 <body>
 <div id="app"></div>
@@ -33,6 +35,18 @@ const PAGE: &str = r#"<!doctype html>
 // Scalar's online extras (fonts, telemetry, AI agent, MCP, its hosted client) are off; the CSP blocks them anyway.
 const INIT: &str = r#"Scalar.createApiReference('#app', {
   url: '/openapi.json',
+  favicon: '/docs/icon.svg',
+  customCss: `
+    .scalar-app aside::before, .t-doc__header header::after {
+      content: ''; flex: none; background: url(/docs/icon.svg) no-repeat left center / contain;
+    }
+    .scalar-app aside::before {
+      content: 'Mimvox API'; display: flex; align-items: center; height: 40px; margin: 14px 12px 4px;
+      padding-left: 50px; background-size: 40px 40px; font-size: 16px; font-weight: 600;
+      color: var(--scalar-color-1);
+    }
+    .t-doc__header header::after { width: 28px; height: 28px; margin-right: 8px; }
+  `,
   withDefaultFonts: false,
   telemetry: false,
   agent: { disabled: true },
@@ -62,6 +76,12 @@ pub async fn page() -> Response {
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    res
+}
+
+pub async fn icon() -> Response {
+    let mut res = ([(header::CONTENT_TYPE, "image/svg+xml")], ICON).into_response();
+    res.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     res
 }
 
@@ -564,6 +584,14 @@ mod tests {
         assert_eq!(examples.len(), names("methods").len());
         let voices = &examples["dataset.add"]["value"]["params"];
         assert!(voices.get("voice_id").is_some(), "examples carry the required params: {voices}");
+    }
+
+    #[test]
+    fn the_icon_draws_offline() {
+        assert!(ICON.starts_with("<svg") && ICON.contains("Mimvox API"));
+        let outside = ICON.replace("http://www.w3.org/2000/svg", "");
+        assert!(!outside.contains("http") && !outside.contains("<text") && !outside.contains("font"), "{ICON}");
+        assert!(INIT.contains("/docs/icon.svg") && PAGE.contains("/docs/icon.svg"));
     }
 
     #[test]

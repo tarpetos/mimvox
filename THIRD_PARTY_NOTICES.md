@@ -256,7 +256,8 @@ with `cargo about` (or `cargo license`) and check it before distributing binarie
 
 ## Fonts and icons
 
-The app icon is made for this project (`tools/release/`).
+The app icon is made for this project (`tools/release/`), and so is the API docs icon drawn from it
+(`crates/api/assets/docs-icon.svg`).
 
 ### Noto Sans (SIL Open Font License 1.1)
 

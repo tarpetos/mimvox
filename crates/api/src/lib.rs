@@ -113,6 +113,7 @@ pub fn router(hub: Hub, mut cfg: ApiConfig, stop: CancellationToken) -> Router {
         .route("/docs", get(docs::page))
         .route("/docs/scalar.js", get(docs::scalar_js))
         .route("/docs/init.js", get(docs::init_js))
+        .route("/docs/icon.svg", get(docs::icon))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }

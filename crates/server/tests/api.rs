@@ -485,11 +485,17 @@ async fn docs_and_openapi() {
     assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
     let csp = res.headers()["content-security-policy"].to_str().unwrap().to_string();
     assert!(csp.contains("default-src 'none'") && csp.contains("connect-src 'self'"), "{csp}");
-    assert!(res.text().await.unwrap().contains("/docs/scalar.js"));
-    for asset in ["/docs/scalar.js", "/docs/init.js"] {
+    let page = res.text().await.unwrap();
+    assert!(page.contains("<title>Mimvox API</title>"));
+    for (asset, kind) in [
+        ("/docs/scalar.js", "text/javascript"),
+        ("/docs/init.js", "text/javascript"),
+        ("/docs/icon.svg", "image/svg+xml"),
+    ] {
+        assert!(page.contains(asset), "{asset} is not on the page");
         let res = client.get(server.url(asset)).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK, "{asset}");
-        assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/javascript"));
+        assert!(res.headers()["content-type"].to_str().unwrap().starts_with(kind), "{asset}");
         assert!(!res.bytes().await.unwrap().is_empty());
     }
     let res = client.get(server.url("/docs/scalar.js")).header("accept-encoding", "gzip").send().await.unwrap();
@@ -505,7 +511,7 @@ async fn docs_on_loopback_without_token_refuse_web_pages() {
     let setup = Setup::new();
     let server = setup.start(&[], &[]).await;
     let client = reqwest::Client::new();
-    for path in ["/docs", "/openapi.json", "/docs/scalar.js"] {
+    for path in ["/docs", "/openapi.json", "/docs/scalar.js", "/docs/icon.svg"] {
         let get = |h: &'static str, v: &'static str| client.get(server.url(path)).header(h, v).send();
         assert_eq!(get("sec-fetch-site", "none").await.unwrap().status(), StatusCode::OK, "{path}");
         assert_eq!(get("sec-fetch-site", "same-origin").await.unwrap().status(), StatusCode::OK, "{path}");
