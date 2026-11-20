@@ -171,7 +171,7 @@ fn start(s: &mut AppState, paths: Vec<PathBuf>) {
             };
         }
         None => {
-            m(s).error = Some("The voice engine is not running. Check the status at the top and press Retry.".into())
+            m(s).error = Some("The voice engine is not running: press the status at the top right, then Retry.".into())
         }
     }
 }

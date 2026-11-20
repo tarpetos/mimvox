@@ -699,10 +699,12 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
                     .gap(4.0)
                     .child(text(format!("{} is turned off", c.label)).font(ty::LABEL).color(p.text))
                     .child(
-                        text("Its files are still installed. Turn it on in Settings, under Modules.")
-                            .font(ty::CAPTION)
-                            .color(p.text_dim)
-                            .wrap(),
+                        text(
+                            "Its files are still installed. Turn it on in Settings (the status button), under Modules.",
+                        )
+                        .font(ty::CAPTION)
+                        .color(p.text_dim)
+                        .wrap(),
                     ),
             )
             .child(

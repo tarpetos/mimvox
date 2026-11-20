@@ -1,10 +1,13 @@
 use super::api::{self, Status};
-use super::components::{Button, Tone, icon_button, icon_el, icons, segmented, switch};
+use super::components::{Button, Tone, icon_button, icon_el, icons, segmented, status_dot, switch};
+use super::shell::{self, EngineStatus};
 use super::theme::{Palette, radius, ty};
 use super::voices::kit;
-use crate::state::AppState;
+use crate::engine::protocol::RedubMode;
+use crate::state::{AppState, Screen};
 use mimvox_api::token::TokenSource;
 use rune::{Color, El, ScrollSpec, Tx, col, el, row, text};
+use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -12,6 +15,11 @@ pub enum Section {
     Data,
     Api,
 }
+
+const ALL: [Section; 3] = [Section::Modules, Section::Data, Section::Api];
+
+/// settings.json key of the section left open.
+const SAVED_KEY: &str = "settings_section";
 
 impl Section {
     fn key(self) -> &'static str {
@@ -21,28 +29,99 @@ impl Section {
             Section::Api => "settings-api",
         }
     }
+
+    fn name(self) -> &'static str {
+        match self {
+            Section::Modules => "modules",
+            Section::Data => "data",
+            Section::Api => "api",
+        }
+    }
 }
 
-#[derive(Default)]
+/// `None` is all folded; never saved (or unknown) is API.
+fn from_saved(v: Option<&Value>) -> Option<Section> {
+    match v.and_then(Value::as_str) {
+        Some("none") => None,
+        Some(name) => ALL.into_iter().find(|s| s.name() == name).or(Some(Section::Api)),
+        None => Some(Section::Api),
+    }
+}
+
+fn to_saved(fold: Option<Section>) -> Value {
+    json!(fold.map_or("none", Section::name))
+}
+
 pub struct SettingsState {
     pub open: bool,
     pub fold: Option<Section>,
+    /// The section the person left open; Settings opens on it.
+    pub last: Option<Section>,
+    last_read: bool,
+    last_dirty: bool,
 }
 
+impl Default for SettingsState {
+    fn default() -> Self {
+        SettingsState { open: false, fold: None, last: Some(Section::Api), last_read: false, last_dirty: false }
+    }
+}
+
+fn screen_module(s: &AppState) -> Option<&'static str> {
+    match s.screen {
+        Screen::Train => Some("training"),
+        Screen::Redub => match s.redub.mode {
+            RedubMode::Dub => Some("translation"),
+            RedubMode::Convert => Some("training"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn needs_attention(s: &AppState) -> bool {
+    shell::models_missing(s)
+        || screen_module(s).is_some_and(|id| super::modules::status(s, id) == super::modules::Status::Off)
+}
+
+/// On Modules when something needs attention (without forgetting the remembered section), else on the remembered one.
 pub fn open(s: &mut AppState) {
-    open_at(s, Section::Api);
+    let which = if needs_attention(s) { Some(Section::Modules) } else { s.settings.last };
+    show(s, which);
 }
 
 pub fn open_modules(s: &mut AppState, tx: &mut Tx) {
-    open_at(s, Section::Modules);
+    show(s, Some(Section::Modules));
     tx.scroll_key_to(Section::Modules.key(), 0.0);
 }
 
-fn open_at(s: &mut AppState, which: Section) {
+fn show(s: &mut AppState, which: Option<Section>) {
     s.settings.open = true;
-    s.settings.fold = Some(which);
+    s.settings.fold = which;
     super::modules::reset(s);
     super::relocate::measure_free(s);
+}
+
+fn toggle(s: &mut AppState, which: Section) {
+    let fold = if s.settings.fold == Some(which) { None } else { Some(which) };
+    s.settings.fold = fold;
+    s.settings.last = fold;
+    s.settings.last_dirty = true;
+}
+
+pub fn settle(s: &mut AppState) -> bool {
+    if s.shell.scripted() {
+        return false;
+    }
+    if !s.settings.last_read {
+        s.settings.last_read = true;
+        s.settings.last = from_saved(super::onboarding::setting(SAVED_KEY).as_ref());
+    }
+    if s.settings.last_dirty {
+        s.settings.last_dirty = false;
+        super::onboarding::save_setting(SAVED_KEY, to_saved(s.settings.last));
+    }
+    false
 }
 
 fn close(s: &mut AppState) {
@@ -105,6 +184,7 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
         .shadow(18.0, 50.0, p.shadow)
         .on_press(|_: &mut AppState| {})
         .child(head)
+        .child(engine_line(s, p))
         .child(body);
     let scrim = el().key("settings-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close);
     let mut layer = col()
@@ -134,14 +214,44 @@ fn fold_row(p: Palette, title: &str, summary: &str, open: bool, which: Section) 
         .radius(radius::CONTROL)
         .hover(p.glass_hover)
         .focusable(true)
-        .on_press(move |s: &mut AppState| {
-            s.settings.fold = if s.settings.fold == Some(which) { None } else { Some(which) }
-        })
+        .on_press(move |s: &mut AppState| toggle(s, which))
         .child(text(title.to_owned()).font(ty::LABEL).color(p.text).a11y_hidden())
         .child(
             text(summary.to_owned()).font(ty::CAPTION).color(p.text_dim).grow(1.0).min_w(0.0).truncate().a11y_hidden(),
         )
         .child(icon_el(&icons::CHEVRON_DOWN, 12.0, p.text_dim).rotate(if open { std::f32::consts::PI } else { 0.0 }))
+}
+
+fn engine_line(s: &AppState, p: Palette) -> El {
+    let look = shell::engine_look(s);
+    let (summary, facts) = shell::engine_details(s);
+    let info = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(2.0)
+        .child(text(look.label).font(ty::LABEL).color(p.text))
+        .child(text(summary).font(ty::CAPTION).color(p.text_dim).wrap())
+        .children((!facts.is_empty()).then(|| text(facts.join(" · ")).font(ty::CAPTION).color(p.text_faint).wrap()));
+    row()
+        .key("settings-engine")
+        .role("status")
+        .label(format!("Engine: {}", look.label))
+        .w_full()
+        .gap(12.0)
+        .padding(12.0)
+        .radius(radius::CONTROL)
+        .fill(p.well)
+        .border(1.0, p.well_rim)
+        .child(el().pt(5.0).child(status_dot(p, look.tone, look.pulse)))
+        .child(info)
+        .children(look.retry.then(|| {
+            Button::new("Retry")
+                .small()
+                .icon(&icons::REFRESH)
+                .key("settings-engine-retry")
+                .on_press(shell::restart_engine)
+                .build(p)
+        }))
 }
 
 fn api_summary(s: &AppState) -> String {
@@ -439,7 +549,7 @@ fn notice(p: Palette) -> El {
         .child(card)
 }
 
-fn demo(s: &mut AppState) {
+fn demo_state(s: &mut AppState) {
     super::speak::scene_idle(s);
     super::relocate::demo(s);
     super::modules::demo(s);
@@ -448,6 +558,49 @@ fn demo(s: &mut AppState) {
         "q3Vt0bWm9xR2kLs7YdFh4NcJ8uPzA1eGiOwT6yHrBvE".into(),
         TokenSource::File(s.shell.data_dir.join("api").join("token")),
     ));
+}
+
+fn demo(s: &mut AppState) {
+    demo_state(s);
+    open(s);
+}
+
+fn with_engine(s: &mut AppState, engine: EngineStatus) {
+    demo_state(s);
+    s.shell.set_engine(engine);
+    open(s);
+}
+
+fn scene_engine_ready(s: &mut AppState) {
+    demo(s);
+}
+
+fn scene_engine_starting(s: &mut AppState) {
+    with_engine(s, EngineStatus::Starting { since: 0.0 });
+}
+
+fn scene_engine_stopped(s: &mut AppState) {
+    with_engine(
+        s,
+        EngineStatus::Stopped { code: Some(1), detail: "CUDA out of memory while loading the speech model.".into() },
+    );
+}
+
+fn scene_engine_no_memory(s: &mut AppState) {
+    super::speak::scene_engine_no_memory(s);
+    let engine = s.shell.engine.clone();
+    let why = s.shell.tts_message.clone();
+    with_engine(s, engine);
+    s.shell.tts_message = why;
+}
+
+fn scene_engine_models_missing(s: &mut AppState) {
+    with_engine(s, super::speak::models_missing());
+}
+
+fn scene_remembered_data(s: &mut AppState) {
+    demo_state(s);
+    s.settings.last = Some(Section::Data);
     open(s);
 }
 
@@ -547,5 +700,62 @@ pub fn scenes() -> &'static [super::Scene] {
         ("settings_modules_confirm_remove", scene_modules_confirm_remove),
         ("settings_modules_installing", scene_modules_installing),
         ("settings_data", scene_data),
+        ("settings_engine_ready", scene_engine_ready),
+        ("settings_engine_starting", scene_engine_starting),
+        ("settings_engine_stopped", scene_engine_stopped),
+        ("settings_engine_no_memory", scene_engine_no_memory),
+        ("settings_engine_models_missing", scene_engine_models_missing),
+        ("settings_remembered_data", scene_remembered_data),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_reopen_on_the_section_left_open_unless_something_needs_attention() {
+        let mut s = AppState::default();
+        super::super::speak::scene_idle(&mut s);
+        open(&mut s);
+        assert_eq!(s.settings.fold, Some(Section::Api), "never chosen: API");
+        toggle(&mut s, Section::Data);
+        close(&mut s);
+        open(&mut s);
+        assert_eq!(s.settings.fold, Some(Section::Data));
+        toggle(&mut s, Section::Data);
+        close(&mut s);
+        open(&mut s);
+        assert_eq!(s.settings.fold, None, "all folded stays folded");
+        toggle(&mut s, Section::Data);
+        close(&mut s);
+
+        s.shell.set_engine(super::super::speak::models_missing());
+        open(&mut s);
+        assert_eq!(s.settings.fold, Some(Section::Modules));
+        assert_eq!(s.settings.last, Some(Section::Data), "attention does not overwrite the choice");
+        close(&mut s);
+        super::super::speak::scene_idle(&mut s);
+        s.screen = Screen::Train;
+        s.shell.components_off = vec!["training".into()];
+        open(&mut s);
+        assert_eq!(s.settings.fold, Some(Section::Modules), "Train needs voice training, which is off");
+        close(&mut s);
+        s.screen = Screen::Speak;
+        open(&mut s);
+        assert_eq!(s.settings.fold, Some(Section::Data));
+    }
+
+    #[test]
+    fn the_remembered_section_survives_a_restart_through_settings_json() {
+        for fold in [Some(Section::Modules), Some(Section::Data), Some(Section::Api), None] {
+            let saved = json!({ SAVED_KEY: to_saved(fold) });
+            let text = serde_json::to_string(&saved).unwrap();
+            let read: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(from_saved(read.get(SAVED_KEY)), fold);
+        }
+        assert_eq!(from_saved(None), Some(Section::Api));
+        assert_eq!(from_saved(Some(&json!("gone"))), Some(Section::Api));
+        assert_eq!(from_saved(Some(&json!(3))), Some(Section::Api));
+    }
 }
