@@ -1,8 +1,8 @@
 //! Speak screen: type text, press Generate, hear it in your voice while it is still being made.
 
 use super::components::{
-    Button, Slider, TextArea, Tone, accent_glass, badge, empty_state, glass_card, icon_button, icon_el, icons,
-    progress_bar, section_panel, segmented_fill, segmented_help, status_dot,
+    Button, Slider, TextArea, Tone, accent_glass, badge, empty_state, glass_card, glass_panel, icon_button,
+    icon_button_if, icon_el, icons, progress_bar, section_panel, segmented_fill, segmented_help, status_dot,
 };
 use super::lang;
 use super::playbar;
@@ -670,7 +670,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
             .child(super::book::panel(s, p))
             .child(side_column(s, p, cx, |own_scroll| super::book::side_panel(s, p, own_scroll)));
     }
-    r.child(text_panel(s, p)).child(side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
+    r.child(text_panel(s, p, cx)).child(side_column(s, p, cx, |own_scroll| results_panel(s, p, own_scroll)))
 }
 
 const RESULTS_MIN_H: f32 = 240.0;
@@ -696,7 +696,32 @@ pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, resul
     }
 }
 
-fn text_panel(s: &AppState, p: Palette) -> El {
+const UNDO_HELP: &str = if cfg!(target_os = "macos") { "Undo (Cmd+Z)" } else { "Undo (Ctrl+Z)" };
+const REDO_HELP: &str = if cfg!(target_os = "macos") { "Redo (Cmd+Shift+Z)" } else { "Redo (Ctrl+Shift+Z)" };
+
+// Rune keeps the undo history but has no can_undo: try it on a copy (the history's snapshots are shared).
+fn can_undo(t: &TextEdit) -> bool {
+    let mut probe = t.clone();
+    probe.undo();
+    probe.text != t.text
+}
+
+fn can_redo(t: &TextEdit) -> bool {
+    let mut probe = t.clone();
+    probe.redo();
+    probe.text != t.text
+}
+
+/// Replaces the whole text as one undo step, so a clear or an opened file can be undone.
+pub fn replace_text(t: &mut TextEdit, text: &str) {
+    t.undo_group(|t| {
+        t.set_selection(0, t.text.len());
+        t.insert(text);
+    });
+    t.focused = true;
+}
+
+fn text_panel(s: &AppState, p: Palette, cx: &mut Cx<AppState>) -> El {
     let words = s.speak.text.text.split_whitespace().count();
     let est = (words as f32 / 2.6).round();
     let meta = if words == 0 { String::new() } else { format!("{words} words · about {} of speech", fmt_time(est)) };
@@ -708,10 +733,17 @@ fn text_panel(s: &AppState, p: Palette) -> El {
         .help("TXT, Markdown, HTML, EPUB, DOCX, ODT, RTF, FB2, PDF or subtitles. A long text opens in Book mode.")
         .on_press(|s| super::book::choose_file(s, false))
         .build(p);
+    let undo = icon_button_if(p, "speak-undo", &icons::UNDO, UNDO_HELP, can_undo(&s.speak.text), |s| {
+        s.speak.text.undo();
+        s.speak.text.focused = true;
+    });
+    let redo = icon_button_if(p, "speak-redo", &icons::REDO, REDO_HELP, can_redo(&s.speak.text), |s| {
+        s.speak.text.redo();
+        s.speak.text.focused = true;
+    });
     let clear = (!s.speak.text.text.is_empty()).then(|| {
-        super::components::icon_button(p, "speak-clear", &icons::TRASH, "Clear the text", |s: &mut AppState| {
-            s.speak.text = TextEdit::new("");
-            s.speak.text.focused = true;
+        icon_button(p, "speak-clear", &icons::TRASH, "Clear the text", |s: &mut AppState| {
+            replace_text(&mut s.speak.text, "")
         })
     });
     let head = row()
@@ -720,20 +752,31 @@ fn text_panel(s: &AppState, p: Palette) -> El {
         .gap(10.0)
         .center_y()
         .instant_changes()
-        .children((!meta.is_empty()).then(|| text(meta).font(ty::CAPTION).color(p.text_faint)))
+        .children((!meta.is_empty()).then(|| text(meta).font(ty::CAPTION).color(p.text_faint).min_w(0.0).truncate()))
+        .child(undo)
+        .child(redo)
         .children(clear)
         .child(open)
         .child(super::book::mode_switch(s, p));
+    // The head is pinned over the panel's top edge: in a narrow window it stops short of the title.
+    let panel_w = cx.layout_with("text-panel", |r| r[2]);
+    let title_w = cx.layout_with("text-panel-title", |r| r[2]);
+    let head = match (panel_w, title_w) {
+        (Some(panel), Some(title)) => head.max_w((panel - 2.0 * 22.0 - title - 16.0).max(0.0)),
+        _ => head,
+    };
     let editor = TextArea::new("speak-text", &s.speak.text, |s| &mut s.speak.text)
         .placeholder(format!("Type or paste anything in {}, then press Generate.", lang::name(&language(s))))
         .on_submit(generate)
         .build(p);
-    section_panel(p, "What should I say?")
+    glass_panel(p)
+        .padding(22.0)
         .key("text-panel")
         .grow(1.0)
         .min_w(0.0)
         .h_full()
         .gap(12.0)
+        .child(row().child(text("What should I say?").key("text-panel-title").font(ty::TITLE).color(p.text)))
         .child(head)
         .child(editor)
         .child(action_bar(s, p))
@@ -1606,5 +1649,103 @@ mod text_tests {
         }
         assert_eq!(std::fs::read_to_string(dir.join("speak-text.txt")).unwrap(), "Нічого");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+    use rune::Mods;
+
+    fn press(t: &mut TextEdit, key: Key, mods: Mods) {
+        t.key(&KeyEvent { key, mods }, None);
+    }
+
+    fn type_text(t: &mut TextEdit, s: &str) {
+        for c in s.chars() {
+            press(t, Key::Text(c.to_string()), Mods::default());
+        }
+    }
+
+    fn primary(shift: bool) -> Mods {
+        Mods { cmd: true, shift, ..Mods::default() }
+    }
+
+    #[test]
+    fn a_typing_run_is_one_step_and_a_caret_move_starts_another() {
+        let mut t = TextEdit::new("");
+        assert!(!can_undo(&t) && !can_redo(&t));
+        type_text(&mut t, "Hello there");
+        press(&mut t, Key::Left, Mods::default());
+        type_text(&mut t, "X");
+        assert_eq!(t.text, "Hello therXe");
+        t.undo();
+        assert_eq!(t.text, "Hello there");
+        t.undo();
+        assert_eq!(t.text, "");
+        assert!(!can_undo(&t) && can_redo(&t));
+        t.redo();
+        t.redo();
+        assert_eq!(t.text, "Hello therXe");
+    }
+
+    #[test]
+    fn the_history_is_capped() {
+        let mut t = TextEdit::new("");
+        for i in 0..300 {
+            t.insert(&format!("w{i} "));
+        }
+        let mut steps = 0;
+        while can_undo(&t) {
+            t.undo();
+            steps += 1;
+        }
+        assert!((100..300).contains(&steps), "{steps} steps kept");
+        assert!(t.text.starts_with("w0 w1 "), "the oldest edits stay in the text");
+    }
+
+    #[test]
+    fn a_clear_and_an_opened_file_can_be_undone() {
+        let mut t = TextEdit::new("Hello there.");
+        type_text(&mut t, " More");
+        replace_text(&mut t, "");
+        assert_eq!(t.text, "");
+        assert!(t.focused);
+        t.undo();
+        assert_eq!(t.text, "Hello there. More");
+        assert_eq!(t.range(), (17, 17), "the caret comes back where it was");
+        replace_text(&mut t, "From a file.\n\nSecond paragraph.");
+        t.undo();
+        assert_eq!(t.text, "Hello there. More");
+        t.redo();
+        assert_eq!(t.text, "From a file.\n\nSecond paragraph.");
+    }
+
+    #[test]
+    fn new_typing_drops_the_redo() {
+        let mut t = TextEdit::new("");
+        type_text(&mut t, "one");
+        t.undo();
+        assert!(can_redo(&t));
+        type_text(&mut t, "two");
+        assert!(!can_redo(&t));
+        t.redo();
+        assert_eq!(t.text, "two");
+    }
+
+    #[test]
+    fn the_shortcuts_use_the_same_history() {
+        let mut t = TextEdit::new("");
+        type_text(&mut t, "abc");
+        replace_text(&mut t, "");
+        press(&mut t, Key::Command('z'), primary(false));
+        assert_eq!(t.text, "abc");
+        press(&mut t, Key::Command('z'), primary(true));
+        assert_eq!(t.text, "");
+        press(&mut t, Key::Command('z'), primary(false));
+        if !cfg!(target_os = "macos") {
+            press(&mut t, Key::Command('y'), primary(false));
+            assert_eq!(t.text, "");
+        }
     }
 }

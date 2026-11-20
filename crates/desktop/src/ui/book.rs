@@ -233,9 +233,7 @@ fn opened(s: &mut AppState, file: TextImport, purpose: Purpose) {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let mut edit = TextEdit::new(joined);
-        edit.focused = true;
-        s.speak.text = edit;
+        super::speak::replace_text(&mut s.speak.text, &joined);
         s.book.shown = false;
         return;
     }

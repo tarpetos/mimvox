@@ -78,6 +78,8 @@ pub mod icons {
         "trash",
         r#"<path d="M3 4.4H13M6.4 4.4V3A.8.8 0 0 1 7.2 2.2H8.8A.8.8 0 0 1 9.6 3V4.4M4.2 4.4L4.8 12.8A1 1 0 0 0 5.8 13.8H10.2A1 1 0 0 0 11.2 12.8L11.8 4.4"/>"#
     );
+    stroke_icon!(UNDO, "undo", r#"<path d="M5.5 3.4L2.8 6.2L5.5 9M2.8 6.2H10A3.2 3.2 0 0 1 10 12.6H7"/>"#);
+    stroke_icon!(REDO, "redo", r#"<path d="M10.5 3.4L13.2 6.2L10.5 9M13.2 6.2H6A3.2 3.2 0 0 0 6 12.6H9"/>"#);
     stroke_icon!(POWER, "power", r#"<path d="M8 2.2V7.4M4.7 4.3A5 5 0 1 0 11.3 4.3"/>"#);
     stroke_icon!(
         SLIDERS,
@@ -456,6 +458,18 @@ pub fn icon_button(
     help: &str,
     on_press: impl Fn(&mut AppState) + 'static,
 ) -> El {
+    icon_button_if(p, key, glyph, help, true, on_press)
+}
+
+/// A disabled one stays in place, dimmed, and still shows its tooltip.
+pub fn icon_button_if(
+    p: Palette,
+    key: &str,
+    glyph: &'static Icon,
+    help: &str,
+    enabled: bool,
+    on_press: impl Fn(&mut AppState) + 'static,
+) -> El {
     let b = el()
         .key(key.to_owned())
         .role("button")
@@ -467,14 +481,12 @@ pub fn icon_button(
         .gradient(p.glass_top, p.glass_bottom)
         .border_gradient(1.0, p.rim_top, p.rim_bottom)
         .shadow(3.0, 10.0, p.shadow_soft);
-    glass_edge(p, b)
-        .hover(p.glass_hover)
-        .press(p.glass_press)
-        .focusable(true)
-        .motion(motion::UI)
-        .help(help.to_owned())
-        .on_press(on_press)
-        .child(icon_el(glyph, 16.0, p.text_dim))
+    let b = glass_edge(p, b).motion(motion::UI).help(help.to_owned()).child(icon_el(glyph, 16.0, p.text_dim));
+    if enabled {
+        b.hover(p.glass_hover).press(p.glass_press).focusable(true).on_press(on_press)
+    } else {
+        b.disabled(true).opacity(0.42)
+    }
 }
 
 /// `key` anchors the dropdown; `a11y` is the accessible label.
