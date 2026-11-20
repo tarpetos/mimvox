@@ -228,7 +228,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if let Some(err) = &v.error {
         body = body.child(kit::notice(&p, Tone::Danger, err));
     }
-    body = body.child(create_card).child(list).child(crate::ui::relocate::footer(s, &p));
+    body = body.child(create_card).child(list);
     kit::page(body)
 }
 

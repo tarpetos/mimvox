@@ -1,4 +1,4 @@
-use super::components::Tone;
+use super::components::{Button, Tone};
 use super::events;
 use super::shell::{self, EngineStatus};
 use super::theme::{Palette, radius, ty};
@@ -40,6 +40,8 @@ enum Phase {
 #[derive(Default)]
 pub struct RelocateState {
     phase: Phase,
+    /// (folder it was measured for, bytes free on its drive).
+    free: Option<(PathBuf, Option<u64>)>,
 }
 
 impl RelocateState {
@@ -69,6 +71,17 @@ pub fn start(s: &mut AppState) {
                 None => s.relocate.phase = Phase::Idle,
             }
         });
+    });
+}
+
+pub fn measure_free(s: &mut AppState) {
+    if s.shell.scripted() {
+        return;
+    }
+    let dir = s.shell.data_dir.clone();
+    std::thread::spawn(move || {
+        let bytes = super::onboarding::free_bytes(&dir.display().to_string());
+        events::post(move |s| s.relocate.free = Some((dir, bytes)));
     });
 }
 
@@ -219,6 +232,7 @@ fn on_exit(s: &mut AppState, code: Option<i32>) {
         s.relocate.phase = Phase::Idle;
         super::onboarding::recheck(s);
         shell::restart_engine(s);
+        measure_free(s);
         shell::toast(s, Tone::Success, "Your data was moved");
         return;
     }
@@ -232,23 +246,43 @@ fn on_exit(s: &mut AppState, code: Option<i32>) {
     fail(s, why);
 }
 
-pub fn footer(s: &AppState, p: &Palette) -> El {
-    kit::card(p)
-        .gap(10.0)
-        .child(text("Data location").font(ty::TITLE).color(p.text))
+pub fn summary(s: &AppState) -> String {
+    s.shell.data_dir.display().to_string()
+}
+
+pub fn section(s: &AppState, p: &Palette) -> El {
+    let free = match &s.relocate.free {
+        Some((dir, Some(b))) if *dir == s.shell.data_dir => format!("{} free on this drive", gb(*b)),
+        Some((dir, None)) if *dir == s.shell.data_dir => "Free space could not be read.".to_owned(),
+        _ => "Checking free space…".to_owned(),
+    };
+    let place = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(2.0)
+        .child(text(s.shell.data_dir.display().to_string()).key("data-path").font(ty::LABEL).color(p.text).wrap())
+        .child(text(free).key("data-free").font(ty::CAPTION).color(p.text_dim));
+    col()
+        .key("data-section")
+        .w_full()
+        .gap(12.0)
+        .px(6.0)
+        .pb(6.0)
         .child(
-            text(format!("Your voices, recordings and models live in {}", s.shell.data_dir.display()))
+            text("Your voices, recordings, results and the speech engine with its models.")
                 .font(ty::CAPTION)
                 .color(p.text_dim)
                 .wrap(),
         )
-        .child(row().child(kit::button(
-            p,
-            "Move data…",
-            BtnKind::Glass,
-            !s.relocate.busy() && shell::engine_ready(s),
-            start,
-        )))
+        .child(
+            row().w_full().gap(16.0).center_y().child(place).child(
+                Button::new("Move data…")
+                    .key("data-move")
+                    .disabled(s.relocate.busy() || !shell::engine_ready(s))
+                    .on_press(start)
+                    .build(*p),
+            ),
+        )
 }
 
 fn gb(b: u64) -> String {
@@ -331,24 +365,24 @@ fn dialog(p: &Palette, title: &str) -> El {
         .child(text(title.to_owned()).font(ty::TITLE).color(p.text))
 }
 
-fn demo(s: &mut AppState) {
-    super::voices::scenes()[0].1(s);
+pub fn demo(s: &mut AppState) {
     s.shell.data_dir = PathBuf::from("/home/me/.local/share/mimvox");
+    s.relocate.free = Some((s.shell.data_dir.clone(), Some(84_600_000_000)));
 }
 
 pub fn scene_confirm(s: &mut AppState) {
-    demo(s);
+    super::settings::scene_data(s);
     let facts = Facts { size: Some(31_400_000_000), free: Some(212_000_000_000), done: true };
     s.relocate.phase = Phase::Confirm { target: PathBuf::from("/mnt/d/Voices/mimvox"), facts };
 }
 
 pub fn scene_running(s: &mut AppState) {
-    demo(s);
+    super::settings::scene_data(s);
     let shared = Shared { progress: Some((42.0, "13.2/31.4 GB".into())), ..Shared::default() };
     s.relocate.phase = Phase::Running { shared };
 }
 
 pub fn scene_failed(s: &mut AppState) {
-    demo(s);
+    super::settings::scene_data(s);
     s.relocate.phase = Phase::Failed("The move failed (exit code 1): not enough free space on the target drive".into());
 }
