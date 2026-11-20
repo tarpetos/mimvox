@@ -1,15 +1,36 @@
 #!/usr/bin/env python3
-"""Generate the app icon set into tools/release/icons/ (committed):
+"""Generate the app icon set, and its API and MCP variants for mimvox-server and mimvox-mcp, into
+tools/release/icons/ (committed):
 ``uv run --with pillow python tools/release/make_icons.py``."""
 from __future__ import annotations
 
 import math
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 OUT = Path(__file__).resolve().parent / "icons"
 PNG_SIZES = (16, 32, 48, 64, 128, 256, 512, 1024)
+FONT = Path(__file__).resolve().parents[2] / "crates" / "desktop" / "assets" / "fonts" / "NotoSans-Bold.ttf"
+LABELS = {"api": "API", "mcp": "MCP"}
+LABEL_SIZES = (16, 24, 32, 48, 64, 256)
+# Up to 24 px the label alone fills the tile; up to 32 px it is set in a 7-pixel bitmap font, where an outline blurs.
+COMPACT_MAX = 24
+NATIVE_LABEL_MAX = 32
+PIXEL_GLYPHS = {
+    "A": (".#.", "#.#", "#.#", "###", "#.#", "#.#", "#.#"),
+    "C": (".##", "#..", "#..", "#..", "#..", "#..", ".##"),
+    "I": ("###", ".#.", ".#.", ".#.", ".#.", ".#.", "###"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "P": ("##.", "#.#", "#.#", "##.", "#..", "#..", "#.."),
+}
+BOLD_GLYPHS = {
+    "A": (".###.", "##.##", "##.##", "#####", "##.##", "##.##", "##.##"),
+    "C": (".####", "##...", "##...", "##...", "##...", "##...", ".####"),
+    "I": ("####", ".##.", ".##.", ".##.", ".##.", ".##.", "####"),
+    "M": ("##...##", "###.###", "##.#.##", "##.#.##", "##...##", "##...##", "##...##"),
+    "P": ("####.", "##.##", "##.##", "####.", "##...", "##...", "##..."),
+}
 
 TOP = (34, 52, 78)
 BOTTOM = (7, 12, 21)
@@ -27,7 +48,30 @@ def diagonal_mask(size: int) -> Image.Image:
     return Image.blend(v, h, 0.5)
 
 
-def render(size: int, bars: int) -> Image.Image:
+def draw_label(draw: ImageDraw.ImageDraw, label: str, cx: float, cy: float, cap: float) -> None:
+    """``label`` in capitals ``cap`` high, its ink centred on (cx, cy), the letters spaced a little apart."""
+    font = ImageFont.truetype(str(FONT), round(cap / 0.714))  # Noto Sans: cap height 0.714 em
+    track = cap * 0.12
+    boxes = [font.getbbox(ch, anchor="ls") for ch in label]
+    widths = [b[2] - b[0] for b in boxes]
+    x = cx - (sum(widths) + track * (len(label) - 1)) / 2
+    top = min(b[1] for b in boxes)
+    for ch, box, w in zip(label, boxes, widths):
+        draw.text((x - box[0], cy - top / 2), ch, font=font, fill=255, anchor="ls")
+        x += w + track
+
+
+def draw_pixel_label(img: Image.Image, label: str, cy: float) -> None:
+    glyphs = PIXEL_GLYPHS if img.width <= 16 else BOLD_GLYPHS
+    rows = [".".join(glyphs[ch][r] for ch in label) for r in range(7)]
+    x0, y0 = (img.width - len(rows[0]) + 1) // 2, round(cy - len(rows) / 2)
+    for y, row in enumerate(rows):
+        for x, cell in enumerate(row):
+            if cell == "#":
+                img.putpixel((x0 + x, y0 + y), BAR + (255,))
+
+
+def render(size: int, bars: int, label: str | None = None) -> Image.Image:
     s = size * 4
     margin = round(s * 0.07)
     box = (margin, margin, s - margin, s - margin)
@@ -75,8 +119,13 @@ def render(size: int, bars: int) -> Image.Image:
     img = Image.alpha_composite(img, Image.merge("RGBA", (
         Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), ring)))
 
+    inner_side = s - 2 * margin
     cx, cy = s / 2, s / 2
-    span = (s - 2 * margin) * 0.58
+    scale = 1.0
+    compact = label is not None and size <= COMPACT_MAX
+    if label and not compact:
+        cy, scale = margin + inner_side * 0.36, 0.62
+    span = inner_side * 0.58
     pitch = span / (bars - 1)
     bar_w = pitch * 0.52
     heights = []
@@ -84,13 +133,16 @@ def render(size: int, bars: int) -> Image.Image:
         t = (i / (bars - 1)) * 2 - 1
         env = math.cos(t * math.pi / 2) ** 1.2   # 0 at the edges, 1 at the centre
         ripple = 0.82 + 0.18 * math.cos(i * 2.1)
-        heights.append(max(0.16, env * ripple) * (s - 2 * margin) * 0.52)
+        heights.append(max(0.16, env * ripple) * inner_side * 0.52 * scale)
 
     wave = Image.new("L", (s, s), 0)
     d = ImageDraw.Draw(wave)
-    for i, h in enumerate(heights):
-        x = cx - span / 2 + i * pitch
-        d.rounded_rectangle((x - bar_w / 2, cy - h / 2, x + bar_w / 2, cy + h / 2), bar_w / 2, fill=255)
+    if not compact:
+        for i, h in enumerate(heights):
+            x = cx - span / 2 + i * pitch
+            d.rounded_rectangle((x - bar_w / 2, cy - h / 2, x + bar_w / 2, cy + h / 2), bar_w / 2, fill=255)
+        if label and size > NATIVE_LABEL_MAX:
+            draw_label(d, label, cx, margin + inner_side * 0.75, inner_side * 0.2)
 
     glow = wave.filter(ImageFilter.GaussianBlur(s * 0.03)).point(lambda p: min(255, int(p * 1.1)))
     img = Image.alpha_composite(img, Image.merge("RGBA", (
@@ -101,7 +153,10 @@ def render(size: int, bars: int) -> Image.Image:
     img = Image.alpha_composite(img, Image.merge("RGBA", (
         Image.new("L", (s, s), BAR[0]), Image.new("L", (s, s), BAR[1]), Image.new("L", (s, s), BAR[2]), bar_alpha)))
 
-    return img.resize((size, size), Image.LANCZOS)
+    img = img.resize((size, size), Image.LANCZOS)
+    if label and size <= NATIVE_LABEL_MAX:
+        draw_pixel_label(img, label, size / 2 if compact else (margin + inner_side * 0.75) * size / s)
+    return img
 
 
 def main() -> None:
@@ -115,6 +170,13 @@ def main() -> None:
 
     images[256].save(OUT / "icon.ico", sizes=[(n, n) for n in (16, 32, 48, 64, 128, 256)])
     images[1024].save(OUT / "icon.icns", sizes=[(n, n) for n in (16, 32, 64, 128, 256, 512, 1024)])
+
+    for name, label in LABELS.items():
+        labelled = {n: render(n, bars=5 if n <= 48 else 7, label=label) for n in LABEL_SIZES}
+        for n, image in labelled.items():
+            image.save(OUT / f"{name}_{n}x{n}.png")
+        labelled[256].save(OUT / f"{name}.ico", sizes=[(n, n) for n in LABEL_SIZES],
+                           append_images=[labelled[n] for n in LABEL_SIZES if n != 256])
     print(f"wrote {len(list(OUT.iterdir()))} files to {OUT}")
 
 

@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ListResourceTemplatesResult, ListResourcesResult,
+    CallToolResult, ContentBlock, Icon, Implementation, ListResourceTemplatesResult, ListResourcesResult,
     PaginatedRequestParams, ProgressNotificationParam, ProgressToken, ReadResourceRequestParams, ReadResourceResponse,
     ReadResourceResult, RequestMetaObject, Resource, ResourceContents, ResourceTemplate, ServerCapabilities,
     ServerConfig,
@@ -37,6 +37,10 @@ const WAIT_TIMEOUT_S: u64 = 300;
 const MAX_TIMEOUT_S: u64 = 3600;
 const RESOURCE_LIST_LIMIT: u64 = 100;
 pub const FILE_URI: &str = "mimvox://file/";
+const ICONS: [(&[u8], &str); 2] = [
+    (include_bytes!("../../../tools/release/icons/mcp_64x64.png"), "64x64"),
+    (include_bytes!("../../../tools/release/icons/mcp_256x256.png"), "256x256"),
+];
 
 const INSTRUCTIONS: &str = "Mimvox clones a voice and speaks text with it, on the user's machine. This server is a \
 client of the Mimvox local HTTP API (on in Mimvox Settings, API, or `mimvox serve`). Paths in requests and answers are \
@@ -843,11 +847,27 @@ impl Mimvox {
     }
 }
 
+fn icons() -> Vec<Icon> {
+    ICONS
+        .iter()
+        .map(|(png, size)| {
+            Icon::new(format!("data:image/png;base64,{}", BASE64.encode(png)))
+                .with_mime_type("image/png")
+                .with_sizes(vec![size.to_string()])
+        })
+        .collect()
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Mimvox {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
-            .with_server_info(Implementation::new("mimvox-mcp", env!("CARGO_PKG_VERSION")))
+            .with_server_info(
+                Implementation::new("mimvox-mcp", env!("CARGO_PKG_VERSION"))
+                    .with_title("Mimvox")
+                    .with_icons(icons())
+                    .with_website_url("https://github.com/tarpetos/mimvox"),
+            )
             .with_instructions(INSTRUCTIONS)
     }
 

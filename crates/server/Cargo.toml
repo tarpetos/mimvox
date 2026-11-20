@@ -25,3 +25,7 @@ futures-util = { version = "0.3.34", default-features = false }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[target.'cfg(windows)'.build-dependencies]
+# Embeds the icon and version info into the Windows executable (see build.rs).
+winresource = "0.1"
