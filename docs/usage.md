@@ -268,6 +268,9 @@ for each other (a second generation while one runs is refused as busy).
   used and shown instead.
 - **Require token**: off, programs on this computer get in without it (web pages never do); on, every request needs
   it. The local network always needs it, so the switch stays on there.
+- **API docs**: the link under the switch (`http://127.0.0.1:8765/docs`, or the network address) opens the interactive
+  reference in your browser, where you can try every endpoint (paste the token under Authentication when one is
+  needed). It works offline; `/openapi.json` is the same description for other tools.
 
 Changes apply at once: the API restarts on the new address without restarting the engine. Use it as an
 OpenAI-compatible speech server with the base URL `http://127.0.0.1:8765/v1` and the token as the API key

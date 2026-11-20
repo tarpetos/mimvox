@@ -42,6 +42,7 @@
 *.safetensors binary
 *.bin binary
 *.zip binary
+*.gz binary
 *.dmg binary
 *.msi binary
 *.exe binary

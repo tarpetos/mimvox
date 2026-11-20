@@ -443,6 +443,78 @@ async fn loopback_without_token_refuses_web_pages() {
 }
 
 #[tokio::test]
+async fn docs_and_openapi() {
+    let setup = Setup::new();
+    let server = setup.start(&["--require-token"], &[("MIMVOX_API_TOKEN", "docs-token")]).await;
+    let client = reqwest::Client::new();
+
+    let res = client.get(server.url("/openapi.json")).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "no token needed");
+    let spec: Value = res.json().await.unwrap();
+    assert!(spec["openapi"].as_str().unwrap().starts_with("3.1."));
+    let paths = spec["paths"].as_object().unwrap();
+    let routes = [
+        ("get", "/health"),
+        ("post", "/rpc"),
+        ("get", "/events"),
+        ("post", "/files"),
+        ("get", "/files"),
+        ("get", "/v1/models"),
+        ("get", "/v1/audio/voices"),
+        ("post", "/v1/audio/speech"),
+        ("get", "/openapi.json"),
+        ("get", "/docs"),
+    ];
+    for (method, path) in routes {
+        assert!(paths.get(path).is_some_and(|p| p.get(method).is_some()), "{method} {path} missing from the spec");
+    }
+    for (path, item) in paths {
+        for method in item.as_object().unwrap().keys() {
+            assert!(
+                routes.contains(&(method.as_str(), path.as_str())),
+                "{method} {path} is in the spec, not the router"
+            );
+        }
+    }
+    let rpc = &spec["paths"]["/rpc"]["post"]["requestBody"]["content"]["application/json"]["schema"]["oneOf"];
+    assert!(rpc.as_array().unwrap().len() > 40);
+    assert_eq!(spec["components"]["securitySchemes"]["bearer"]["scheme"], "bearer");
+
+    let res = client.get(server.url("/docs")).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+    let csp = res.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("default-src 'none'") && csp.contains("connect-src 'self'"), "{csp}");
+    assert!(res.text().await.unwrap().contains("/docs/scalar.js"));
+    for asset in ["/docs/scalar.js", "/docs/init.js"] {
+        let res = client.get(server.url(asset)).send().await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{asset}");
+        assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/javascript"));
+        assert!(!res.bytes().await.unwrap().is_empty());
+    }
+    let res = client.get(server.url("/docs/scalar.js")).header("accept-encoding", "gzip").send().await.unwrap();
+    assert_eq!(res.headers()["content-encoding"], "gzip");
+
+    assert_eq!(client.get(server.url("/health")).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    let res = client.post(server.url("/rpc")).json(&json!({ "method": "voices.list" })).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "try-it calls still need the token");
+}
+
+#[tokio::test]
+async fn docs_on_loopback_without_token_refuse_web_pages() {
+    let setup = Setup::new();
+    let server = setup.start(&[], &[]).await;
+    let client = reqwest::Client::new();
+    for path in ["/docs", "/openapi.json", "/docs/scalar.js"] {
+        let get = |h: &'static str, v: &'static str| client.get(server.url(path)).header(h, v).send();
+        assert_eq!(get("sec-fetch-site", "none").await.unwrap().status(), StatusCode::OK, "{path}");
+        assert_eq!(get("sec-fetch-site", "same-origin").await.unwrap().status(), StatusCode::OK, "{path}");
+        assert_eq!(get("sec-fetch-site", "cross-site").await.unwrap().status(), StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(get("host", "rebound.evil.example:8765").await.unwrap().status(), StatusCode::FORBIDDEN, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn non_loopback_needs_a_token() {
     let setup = Setup::new();
     let (ok, _, err) = setup.run(&["--bind", "0.0.0.0:0"], &[]).await;
@@ -459,6 +531,12 @@ async fn non_loopback_needs_a_token() {
     let client = reqwest::Client::new();
     assert_eq!(client.get(&url).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
     assert_eq!(client.get(&url).bearer_auth("lan-token").send().await.unwrap().status(), StatusCode::OK);
+    let docs = format!("http://127.0.0.1:{port}/docs");
+    let res = client.get(&docs).header("host", "192.168.1.5:8765").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "the docs page needs no token on the network");
+    let rpc = format!("http://127.0.0.1:{port}/rpc");
+    let res = client.post(&rpc).header("host", "192.168.1.5:8765").json(&json!({ "method": "hello" })).send().await;
+    assert_eq!(res.unwrap().status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

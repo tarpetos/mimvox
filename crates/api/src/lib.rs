@@ -1,5 +1,6 @@
 //! The local HTTP API: contract/engine-protocol.md, "HTTP API".
 
+mod docs;
 mod ffmpeg;
 mod files;
 pub mod host;
@@ -108,6 +109,10 @@ pub fn router(hub: Hub, mut cfg: ApiConfig, stop: CancellationToken) -> Router {
         .route("/v1/models", get(openai::models))
         .route("/v1/audio/voices", get(openai::voices))
         .route("/v1/audio/speech", post(openai::speech).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
+        .route("/openapi.json", get(docs::openapi))
+        .route("/docs", get(docs::page))
+        .route("/docs/scalar.js", get(docs::scalar_js))
+        .route("/docs/init.js", get(docs::init_js))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
@@ -186,6 +191,7 @@ fn local_request(headers: &HeaderMap) -> bool {
 
 async fn guard(State(st): State<AppState>, req: Request, next: Next) -> Response {
     match &st.cfg.token {
+        Some(_) if docs::PUBLIC_PATHS.contains(&req.uri().path()) => {}
         Some(expected) => {
             let given = req
                 .headers()
