@@ -13,7 +13,7 @@ from typing import Any
 
 import soundfile as sf
 
-from . import config, media
+from . import config, media, rvcfile
 from .registry import Context, EngineError, method
 
 _LOCK = threading.RLock()
@@ -297,6 +297,8 @@ def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     idx_src = _existing_file(params, "rvc_index")
     if idx_src and not pth_src:
         raise EngineError("bad_request", "'rvc_index' needs 'rvc_model'")
+    if pth_src and (problem := rvcfile.model_problem(pth_src)):
+        raise EngineError("bad_request", problem)
     ds_dir = params.get("dataset_dir")
     parts: list[tuple[int, str]] = []
     if ds_dir not in (None, ""):

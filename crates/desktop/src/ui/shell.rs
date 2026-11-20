@@ -454,6 +454,7 @@ pub fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     on_engine(s, &m);
     super::onboarding::on_engine(s, &m);
     super::voices::on_engine(s, &m);
+    super::voiceimport::on_engine(s, &m);
     super::record::on_engine(s, &m);
     super::train::on_engine(s, &m);
     super::speak::on_engine(s, &m);
@@ -653,6 +654,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     overlays.extend(super::formats::output_overlay(s, p));
     overlays.extend(super::redub::fold_overlay(s, p));
     overlays.extend(super::refclip::more_overlay(s, &p));
+    overlays.extend(super::voiceimport::overlay(s, &p));
     overlays.extend(super::lang::overlay(s, &p)); // after the panels: a language chip inside one opens above it
     overlays.extend(super::record::files_overlay(s, &p));
     let dock =
