@@ -183,6 +183,11 @@ the model at all (the worker held 3.6 GB until its idle exit otherwise), `models
 request gets `no_memory` at once; the momentary check still runs above it. There is no warm-up at start on the CPU (it
 took 321 s with the threshold lowered, and a request sent meanwhile waited behind it).
 
+With the threshold lowered to 6 GB on the 8 GB laptop, the first request's voice-clone prompt took the worker from 3.6
+to 6.8 GB of private memory in about 6 s and the available RAM to 9 MB; the check after it refused the segment, and the
+worker then held 6.4 GB until it was stopped. Now a refusal with the model loaded releases it, and the first prompt
+after a load first needs about 3.2 GB available above the low mark (`MIMVOX_CPU_PROMPT_GB`).
+
 - **The working set is the model.** The worker used to trim its working set after loading and after Whisper, which on a
   GPU gives back pages that only carried the weights to the card. On the CPU they are the weights, read in full at
   every step: a trim right after loading took the working set from 3.7 GB to 0 (all but 0.04 % of the weights' pages)

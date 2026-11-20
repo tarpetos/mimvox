@@ -934,10 +934,18 @@ et pl bs is mt eu fi ta sw fa bn as mn hu ba te ur gl ml ka mr cs pa cy kn tr hi
     `tts: no_memory` with this message as `tts_message`.
   - the available physical memory below 5 % of it (at least 0.5 GB) and at least 1 GB of the weights not in RAM (one
     page in 16 sampled; Windows: not in the working set, so compressed or in the page file; Linux: `mincore`):
-    `no_memory` with "not enough free memory (RAM): ... close other programs and try again".
+    `no_memory` with "not enough free memory (RAM): the speech model needs more RAM than is free on this computer
+    (...); close other programs or use a computer with more RAM".
+  - before the first voice-clone prompt after a load, which grew the worker by about 3.2 GB (`MIMVOX_CPU_PROMPT_GB`):
+    the available physical memory less than that above the same low mark: `no_memory` with "not enough free memory
+    (RAM): the speech model needs about 3.2 GB more to take on a voice ...; close other programs or use a computer
+    with more RAM".
+
+  Most of that memory is the worker's own, so a refusal with the model loaded also releases it (and its voice-clone
+  prompts); the next request loads it again.
 
   The worker's error line for the first one carries `"permanent": true`, as waiting cannot help there: a Book ends at
-  once with `book.error` `no_memory` and that message. After the second one a Book shows `stage: "memory"` and
+  once with `book.error` `no_memory` and that message. After the other two a Book shows `stage: "memory"` and
   retries. `tts.generate` ends with `tts.error` `no_memory` and the message in both cases. On a GPU or MPS neither
   check runs.
 

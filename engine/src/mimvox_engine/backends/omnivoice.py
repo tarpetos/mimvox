@@ -196,6 +196,7 @@ class OmniVoiceBackend(TtsBackend):
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
         except WorkerError as exc:
+            self._forget_on_refusal(exc)
             code = exc.code if exc.code in ("bad_request", "not_found", "no_memory") else "internal"
             raise EngineError(code, f"OmniVoice: {exc.message}") from exc
         except WorkerDied as exc:
@@ -215,6 +216,7 @@ class OmniVoiceBackend(TtsBackend):
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "warm-up cancelled") from exc
         except WorkerError as exc:
+            self._forget_on_refusal(exc)
             raise EngineError("no_memory" if exc.code == "no_memory" else "internal", f"OmniVoice: {exc}") from exc
         except WorkerDied as exc:
             raise EngineError("internal", f"OmniVoice: {exc}") from exc
@@ -230,6 +232,11 @@ class OmniVoiceBackend(TtsBackend):
             log.warning("OmniVoice could not inspect %s: %s", reference, exc)
             return None
         return str(res.get("language") or "") or None
+
+    def _forget_on_refusal(self, exc: WorkerError) -> None:
+        """On the CPU the worker releases the model (and its prompts) when it refuses for lack of RAM."""
+        if exc.code == "no_memory" and self.on_cpu():
+            self._warm.clear()
 
     def _mark_warm(self, ref: str) -> None:
         sig = _sig(ref)
