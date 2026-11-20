@@ -904,11 +904,12 @@ pub fn switch(
     on_toggle: impl Fn(&mut AppState) + 'static,
 ) -> El {
     let (w, h, k) = (38.0, 22.0, 16.0);
+    let gap = (h - k) / 2.0;
     let knob = el()
         .key(format!("{key}-knob"))
         .size(k, k)
         .radius(k / 2.0)
-        .absolute(if on { w - k - 3.0 } else { 3.0 }, (h - k) / 2.0 - 1.0)
+        .absolute(if on { w - k - gap } else { gap }, gap)
         .fill(if on { p.on_accent } else { p.text_dim })
         .motion(motion::UI)
         .inert();
