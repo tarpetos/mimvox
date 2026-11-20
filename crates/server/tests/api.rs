@@ -490,7 +490,8 @@ async fn docs_and_openapi() {
     for (asset, kind) in [
         ("/docs/scalar.js", "text/javascript"),
         ("/docs/init.js", "text/javascript"),
-        ("/docs/icon.svg", "image/svg+xml"),
+        ("/docs/icon.png", "image/png"),
+        ("/docs/icon-32.png", "image/png"),
     ] {
         assert!(page.contains(asset), "{asset} is not on the page");
         let res = client.get(server.url(asset)).send().await.unwrap();
@@ -511,7 +512,7 @@ async fn docs_on_loopback_without_token_refuse_web_pages() {
     let setup = Setup::new();
     let server = setup.start(&[], &[]).await;
     let client = reqwest::Client::new();
-    for path in ["/docs", "/openapi.json", "/docs/scalar.js", "/docs/icon.svg"] {
+    for path in ["/docs", "/openapi.json", "/docs/scalar.js", "/docs/icon.png"] {
         let get = |h: &'static str, v: &'static str| client.get(server.url(path)).header(h, v).send();
         assert_eq!(get("sec-fetch-site", "none").await.unwrap().status(), StatusCode::OK, "{path}");
         assert_eq!(get("sec-fetch-site", "same-origin").await.unwrap().status(), StatusCode::OK, "{path}");

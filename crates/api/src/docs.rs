@@ -7,10 +7,23 @@ use serde_json::{Map, Value, json};
 
 const TABLE: &str = include_str!("../openapi/methods.json");
 const SCALAR_GZ: &[u8] = include_bytes!("../vendor/scalar/standalone.js.gz");
-const ICON: &str = include_str!("../assets/docs-icon.svg");
+/// The approved API icons: (path, PNG).
+pub const ICONS: &[(&str, &[u8])] = &[
+    ("/docs/icon.png", include_bytes!("../../../tools/release/icons/api_256x256.png")),
+    ("/docs/icon-32.png", include_bytes!("../../../tools/release/icons/api_32x32.png")),
+    ("/docs/icon-64.png", include_bytes!("../../../tools/release/icons/api_64x64.png")),
+];
 
 /// Served without the token: they carry no data.
-pub const PUBLIC_PATHS: &[&str] = &["/docs", "/docs/scalar.js", "/docs/init.js", "/docs/icon.svg", "/openapi.json"];
+pub const PUBLIC_PATHS: &[&str] = &[
+    "/docs",
+    "/docs/scalar.js",
+    "/docs/init.js",
+    "/docs/icon.png",
+    "/docs/icon-32.png",
+    "/docs/icon-64.png",
+    "/openapi.json",
+];
 
 pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
 img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; base-uri 'none'; \
@@ -22,7 +35,9 @@ const PAGE: &str = r#"<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mimvox API</title>
-<link rel="icon" type="image/svg+xml" href="/docs/icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/docs/icon-32.png">
+<link rel="icon" type="image/png" sizes="64x64" href="/docs/icon-64.png">
+<link rel="apple-touch-icon" href="/docs/icon.png">
 </head>
 <body>
 <div id="app"></div>
@@ -35,10 +50,9 @@ const PAGE: &str = r#"<!doctype html>
 // Scalar's online extras (fonts, telemetry, AI agent, MCP, its hosted client) are off; the CSP blocks them anyway.
 const INIT: &str = r#"Scalar.createApiReference('#app', {
   url: '/openapi.json',
-  favicon: '/docs/icon.svg',
   customCss: `
     .scalar-app aside::before, .t-doc__header header::after {
-      content: ''; flex: none; background: url(/docs/icon.svg) no-repeat left center / contain;
+      content: ''; flex: none; background: url(/docs/icon.png) no-repeat left center / contain;
     }
     .scalar-app aside::before {
       content: 'Mimvox API'; display: flex; align-items: center; height: 40px; margin: 14px 12px 4px;
@@ -79,8 +93,8 @@ pub async fn page() -> Response {
     res
 }
 
-pub async fn icon() -> Response {
-    let mut res = ([(header::CONTENT_TYPE, "image/svg+xml")], ICON).into_response();
+pub fn icon(png: &'static [u8]) -> Response {
+    let mut res = ([(header::CONTENT_TYPE, "image/png")], png).into_response();
     res.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     res
 }
@@ -587,11 +601,12 @@ mod tests {
     }
 
     #[test]
-    fn the_icon_draws_offline() {
-        assert!(ICON.starts_with("<svg") && ICON.contains("Mimvox API"));
-        let outside = ICON.replace("http://www.w3.org/2000/svg", "");
-        assert!(!outside.contains("http") && !outside.contains("<text") && !outside.contains("font"), "{ICON}");
-        assert!(INIT.contains("/docs/icon.svg") && PAGE.contains("/docs/icon.svg"));
+    fn the_icons_are_public_pngs_the_page_uses() {
+        for (path, png) in ICONS {
+            assert!(png.starts_with(b"\x89PNG"), "{path}");
+            assert!(PUBLIC_PATHS.contains(path), "{path}");
+            assert!(PAGE.contains(path) || INIT.contains(path), "{path} is not used");
+        }
     }
 
     #[test]

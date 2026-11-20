@@ -101,7 +101,7 @@ struct AppState {
 pub fn router(hub: Hub, mut cfg: ApiConfig, stop: CancellationToken) -> Router {
     cfg.data_dir = std::path::absolute(&cfg.data_dir).unwrap_or(cfg.data_dir);
     let state = AppState { hub, cfg: Arc::new(cfg), speech: Arc::default(), stop };
-    Router::new()
+    let mut app = Router::new()
         .route("/health", get(health))
         .route("/rpc", post(rpc).layer(DefaultBodyLimit::max(RPC_BODY_LIMIT)))
         .route("/events", get(events))
@@ -112,10 +112,11 @@ pub fn router(hub: Hub, mut cfg: ApiConfig, stop: CancellationToken) -> Router {
         .route("/openapi.json", get(docs::openapi))
         .route("/docs", get(docs::page))
         .route("/docs/scalar.js", get(docs::scalar_js))
-        .route("/docs/init.js", get(docs::init_js))
-        .route("/docs/icon.svg", get(docs::icon))
-        .layer(middleware::from_fn_with_state(state.clone(), guard))
-        .with_state(state)
+        .route("/docs/init.js", get(docs::init_js));
+    for &(path, png) in docs::ICONS {
+        app = app.route(path, get(move || async move { docs::icon(png) }));
+    }
+    app.layer(middleware::from_fn_with_state(state.clone(), guard)).with_state(state)
 }
 
 #[derive(Debug)]
