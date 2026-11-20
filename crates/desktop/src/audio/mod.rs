@@ -84,12 +84,13 @@ pub enum CaptureEvent {
 /// Called on the audio thread: keep it short.
 pub type MeterSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
 
-pub const PROGRESS_HZ: u32 = 20;
+pub const PROGRESS_HZ: u32 = 30;
 
 /// `track` is the id from [`Player::play`]; reports about a replaced track can still arrive and must be ignored.
+/// `jumped`: the position jumped since the last report (a seek, a start, a loop); otherwise it only moved on.
 #[derive(Clone, Copy, Debug)]
 pub enum PlayEvent {
-    Progress { track: u64, pos_s: f32, len_s: f32 },
+    Progress { track: u64, pos_s: f32, len_s: f32, jumped: bool },
     Ended { track: u64 },
 }
 
@@ -359,6 +360,15 @@ struct Track {
     looped: bool,
     speed: f32,
     stretch: Stretcher,
+    /// Counts the jumps of the position (every `stretch` reset).
+    resets: u64,
+}
+
+impl Track {
+    fn restart(&mut self, pos: f64) {
+        self.stretch.reset(pos);
+        self.resets += 1;
+    }
 }
 
 struct PlayShared {
@@ -375,8 +385,8 @@ pub struct Player {
     thread: Option<JoinHandle<()>>,
 }
 
-/// Returns whether the track reached its end (not looping) this call.
-fn render(t: &mut Track, out: &mut [f32]) -> bool {
+/// Returns the frames filled from the track and whether it reached its end (not looping) this call.
+fn render(t: &mut Track, out: &mut [f32]) -> (usize, bool) {
     let mut filled = 0;
     if t.state == State::Playing {
         loop {
@@ -384,17 +394,82 @@ fn render(t: &mut Track, out: &mut [f32]) -> bool {
             filled += n;
             match flow {
                 Flow::Full | Flow::Starved => break,
-                Flow::End if t.looped && !t.samples.is_empty() => t.stretch.reset(0.0),
+                Flow::End if t.looped && !t.samples.is_empty() => t.restart(0.0),
                 Flow::End => {
                     t.state = State::Ended;
                     out[filled..].iter_mut().for_each(|v| *v = 0.0);
-                    return true;
+                    return (filled, true);
                 }
             }
         }
     }
     out[filled..].iter_mut().for_each(|v| *v = 0.0);
-    false
+    (filled, false)
+}
+
+/// The position reports, `PROGRESS_HZ` times a second of sound. The stretcher's position advances in uneven
+/// blocks, so they count the samples played × speed and resync to it after a jump, or when the two drift more than
+/// `SNAP_S` apart.
+struct Reports {
+    rate: f64,
+    every: usize,
+    since: usize,
+    last_pos: f64,
+    smooth: f64,
+    resets: u64,
+    jumped: bool,
+}
+
+impl Reports {
+    const SNAP_S: f64 = 0.12;
+
+    fn new(rate: u32) -> Self {
+        let every = (rate / PROGRESS_HZ).max(1) as usize;
+        Reports {
+            rate: f64::from(rate),
+            every,
+            since: 0,
+            last_pos: f64::NAN,
+            smooth: 0.0,
+            resets: u64::MAX,
+            jumped: false,
+        }
+    }
+
+    /// One block of `frames`, `filled` of them from the track (a live track waiting for its next part fills none);
+    /// `raw` is the stretcher's position and `len` the track's length, in samples. Returns a report when one is due:
+    /// the position in seconds and whether it jumped.
+    fn played(
+        &mut self,
+        frames: usize,
+        filled: usize,
+        speed: f32,
+        raw: f64,
+        resets: u64,
+        len: f64,
+    ) -> Option<(f32, bool)> {
+        self.since += frames;
+        self.smooth += filled as f64 * f64::from(speed);
+        if self.resets != resets {
+            (self.smooth, self.resets, self.jumped) = (raw, resets, true);
+        } else if (self.smooth - raw).abs() > Self::SNAP_S * self.rate {
+            self.smooth = raw;
+        }
+        if self.since < self.every {
+            return None;
+        }
+        self.since %= self.every;
+        let pos = self.smooth.clamp(0.0, len);
+        if pos == self.last_pos && !self.jumped {
+            return None;
+        }
+        self.last_pos = pos;
+        Some(((pos / self.rate) as f32, std::mem::take(&mut self.jumped)))
+    }
+
+    fn ended(&mut self) {
+        (self.since, self.last_pos) = (0, f64::NAN);
+    }
 }
 
 fn build_output<T>(
@@ -410,12 +485,7 @@ where
     let rate = config.sample_rate.0.max(1);
     let err_shared = shared.clone();
     let mut mono: Vec<f32> = Vec::new();
-    // The stretcher's position advances in uneven blocks, so reports extrapolate by samples played × speed and
-    // resync to it when the two differ by more than `SNAP_S` (a seek, a loop, a new track).
-    const SNAP_S: f64 = 0.12;
-    let every = (rate / PROGRESS_HZ).max(1) as usize;
-    let (mut since, mut last_pos) = (0usize, f64::NAN);
-    let (mut smooth, mut smooth_track) = (0.0f64, u64::MAX);
+    let mut reports = Reports::new(rate);
     device.build_output_stream(
         config,
         move |data: &mut [T], _| {
@@ -428,24 +498,16 @@ where
             {
                 let mut t = lock(&shared.track);
                 let playing = t.state == State::Playing;
-                if render(&mut t, &mut mono[..frames]) {
+                let (filled, end) = render(&mut t, &mut mono[..frames]);
+                if end {
                     ended = Some(t.id);
-                    since = 0;
+                    reports.ended();
                 } else if playing {
-                    since += frames;
-                    let raw = t.stretch.position().min(t.samples.len() as f64);
-                    smooth += frames as f64 * f64::from(t.speed);
-                    if smooth_track != t.id || (smooth - raw).abs() > SNAP_S * f64::from(rate) {
-                        (smooth, smooth_track) = (raw, t.id);
-                    }
-                    if since >= every {
-                        since = 0;
-                        let pos = smooth.clamp(0.0, t.samples.len() as f64);
-                        if pos != last_pos {
-                            last_pos = pos;
-                            report = Some((t.id, (pos / rate as f64) as f32, t.samples.len() as f32 / rate as f32));
-                        }
-                    }
+                    let len = t.samples.len() as f64;
+                    let raw = t.stretch.position().min(len);
+                    report = reports
+                        .played(frames, filled, t.speed, raw, t.resets, len)
+                        .map(|(pos_s, jumped)| (t.id, pos_s, (len / f64::from(rate)) as f32, jumped));
                 }
             }
             for (frame, s) in data.chunks_mut(channels).zip(&mono[..frames]) {
@@ -455,11 +517,10 @@ where
                 }
             }
             if let Some(sink) = &sink {
-                if let Some((track, pos_s, len_s)) = report {
-                    sink(PlayEvent::Progress { track, pos_s, len_s });
+                if let Some((track, pos_s, len_s, jumped)) = report {
+                    sink(PlayEvent::Progress { track, pos_s, len_s, jumped });
                 }
                 if let Some(track) = ended {
-                    last_pos = f64::NAN;
                     sink(PlayEvent::Ended { track });
                 }
             }
@@ -483,6 +544,7 @@ impl Player {
                 looped: false,
                 speed: 1.0,
                 stretch: Stretcher::new(48_000),
+                resets: 0,
             }),
             next_id: AtomicU64::new(1),
             error: Mutex::new(None),
@@ -556,7 +618,7 @@ impl Player {
             t.id = id;
             t.state = State::Playing;
             t.live = live;
-            t.stretch.reset(0.0);
+            t.restart(0.0);
             std::mem::replace(&mut t.samples, samples)
         };
         drop(old); // freed outside the lock
@@ -592,7 +654,7 @@ impl Player {
             let mut t = lock(&self.shared.track);
             t.state = State::Idle;
             t.live = false;
-            t.stretch.reset(0.0);
+            t.restart(0.0);
             std::mem::take(&mut t.samples)
         };
         drop(old);
@@ -611,7 +673,7 @@ impl Player {
         match t.state {
             State::Paused => t.state = State::Playing,
             State::Ended => {
-                t.stretch.reset(0.0);
+                t.restart(0.0);
                 t.state = State::Playing;
             }
             State::Playing => {}
@@ -624,7 +686,7 @@ impl Player {
     pub fn seek(&self, pos_s: f32) {
         let mut t = lock(&self.shared.track);
         let pos = (f64::from(pos_s.max(0.0)) * self.sample_rate as f64).min(t.samples.len() as f64);
-        t.stretch.reset(pos);
+        t.restart(pos);
         if t.state == State::Ended {
             t.state = State::Paused;
         }
@@ -674,5 +736,63 @@ impl Drop for Player {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RATE: u32 = 48_000;
+    const BLOCK: usize = 480;
+
+    #[test]
+    fn reports_come_thirty_times_a_second_of_sound() {
+        let mut r = Reports::new(RATE);
+        let mut raw = 0.0;
+        let mut seen = Vec::new();
+        for _ in 0..100 {
+            raw += BLOCK as f64;
+            seen.extend(r.played(BLOCK, BLOCK, 1.0, raw, 1, 1e9));
+        }
+        assert_eq!(seen.len(), 30);
+        assert!(seen[0].1 && seen[1..].iter().all(|(_, jumped)| !jumped));
+        assert!(seen.windows(2).all(|w| w[1].0 > w[0].0));
+    }
+
+    #[test]
+    fn a_live_track_waiting_for_its_next_part_stays_put() {
+        let mut r = Reports::new(RATE);
+        let len = f64::from(RATE);
+        let mut raw = 0.0;
+        let mut last = None;
+        while raw < len {
+            raw += BLOCK as f64;
+            if let Some((pos, _)) = r.played(BLOCK, BLOCK, 1.0, raw, 1, len) {
+                last = Some(pos);
+            }
+        }
+        for _ in 0..100 {
+            assert_eq!(r.played(BLOCK, 0, 1.0, len, 1, len), None);
+        }
+        assert_eq!(last, Some(1.0));
+    }
+
+    #[test]
+    fn a_seek_or_a_loop_is_reported_as_a_jump() {
+        let mut r = Reports::new(RATE);
+        let mut raw = 0.0;
+        for _ in 0..50 {
+            raw += BLOCK as f64;
+            r.played(BLOCK, BLOCK, 1.0, raw, 1, 1e9);
+        }
+        raw = 1000.0;
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            seen.extend(r.played(BLOCK, BLOCK, 1.0, raw, 2, 1e9));
+            raw += BLOCK as f64;
+        }
+        assert!(seen[0].1, "{seen:?}");
+        assert!(seen[0].0 < 0.1);
     }
 }
