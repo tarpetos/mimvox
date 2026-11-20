@@ -6,6 +6,7 @@ use super::theme::{Palette, motion, radius, ty};
 use crate::state::{AppState, Screen};
 use rune::{Align, Color, Drag, El, Key, Phase, Side, col, el, row, text};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering::Acquire, Ordering::Relaxed, Ordering::Release, fence};
 
 pub const SPEEDS: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -350,17 +351,18 @@ pub fn sink() -> crate::audio::PlaySink {
     let progress = super::events::Latest::new(|s: &mut AppState, (track, pos, len): (u64, f32, f32)| {
         on_progress(s, track, pos, len)
     });
+    epoch();
     // Every report feeds the knob's clock; only one that changes the time shown (`shows`) goes to the UI thread.
-    let sent = std::sync::Mutex::new((0u64, 0.0f32, 0.0f32));
+    let sent = (AtomicU64::new(0), AtomicU64::new(0));
     std::sync::Arc::new(move |ev| match ev {
         crate::audio::PlayEvent::Progress { track, pos_s, len_s, jumped } => {
             report(track, pos_s, len_s, jumped, std::time::Instant::now());
             #[cfg(windows)]
             super::seekstrip::tick();
-            let mut last = sent.lock().unwrap_or_else(|e| e.into_inner());
-            if last.0 != track || (last.2 - len_s).abs() > 1e-3 || shows(last.1, pos_s, len_s) {
-                *last = (track, pos_s, len_s);
-                drop(last);
+            let (last_pos, last_len) = unpack(sent.1.load(Relaxed));
+            if sent.0.load(Relaxed) != track || (last_len - len_s).abs() > 1e-3 || shows(last_pos, pos_s, len_s) {
+                sent.0.store(track, Relaxed);
+                sent.1.store(pack(pos_s, len_s), Relaxed);
                 progress.send((track, pos_s, len_s));
             }
         }
@@ -381,7 +383,7 @@ const GLIDE_HZ: f64 = 30.0;
 /// Windows: the seek strip draws the fill and the knob, so the bar draws neither and does not glide.
 static STRIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Where the audio thread last said the track was, or where a seek or a start put it.
+/// Where the track was at a moment: the audio thread's report, or where a seek or a start put it.
 #[derive(Clone, Copy, Debug)]
 struct Heard {
     track: u64,
@@ -392,31 +394,132 @@ struct Heard {
     jump: u64,
 }
 
-static HEARD: std::sync::Mutex<Option<Heard>> = std::sync::Mutex::new(None);
-/// After a jump made here, reports are left out until this moment: one from before the jump can still be on its
-/// way, and would pull the knob back for a moment.
-static QUIET_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-static JUMPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A seqlock with one writer: the writer never waits (it is the audio callback), a reader retries while a write is
+/// under way.
+struct Slot {
+    seq: AtomicU64,
+    v: [AtomicU64; 6],
+}
 
-pub(super) fn report(track: u64, pos_s: f32, len_s: f32, jumped: bool, at: std::time::Instant) {
-    use std::sync::atomic::Ordering::Relaxed;
-    if QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|until| at < until) {
-        return;
+impl Slot {
+    const fn new() -> Self {
+        Slot { seq: AtomicU64::new(0), v: [const { AtomicU64::new(0) }; 6] }
     }
-    let jump = if jumped { JUMPS.fetch_add(1, Relaxed) + 1 } else { JUMPS.load(Relaxed) };
-    *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(Heard { track, pos_s, len_s, at, jump });
+
+    fn write(&self, v: [u64; 6]) {
+        let seq = self.seq.load(Relaxed);
+        self.seq.store(seq + 1, Relaxed);
+        fence(Release);
+        for (slot, x) in self.v.iter().zip(v) {
+            slot.store(x, Relaxed);
+        }
+        self.seq.store(seq + 2, Release);
+    }
+
+    /// `None` before the first write.
+    fn read(&self) -> Option<[u64; 6]> {
+        loop {
+            let seq = self.seq.load(Acquire);
+            if seq == 0 {
+                return None;
+            }
+            if seq.is_multiple_of(2) {
+                let v = self.v.each_ref().map(|slot| slot.load(Relaxed));
+                fence(Acquire);
+                if self.seq.load(Relaxed) == seq {
+                    return Some(v);
+                }
+            }
+            std::hint::spin_loop();
+        }
+    }
+}
+
+fn epoch() -> std::time::Instant {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(std::time::Instant::now)
+}
+
+fn nanos(at: std::time::Instant) -> u64 {
+    at.saturating_duration_since(epoch()).as_nanos() as u64
+}
+
+fn pack(pos_s: f32, len_s: f32) -> u64 {
+    (u64::from(pos_s.to_bits()) << 32) | u64::from(len_s.to_bits())
+}
+
+fn unpack(v: u64) -> (f32, f32) {
+    (f32::from_bits((v >> 32) as u32), f32::from_bits(v as u32))
+}
+
+/// After a seek, how long a report from before it may still be on its way.
+const QUIET: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// What the knob follows. The audio thread and the UI thread each write a slot of their own, so neither waits for
+/// the other and a report from before a seek cannot overwrite it; `heard` picks the one to follow.
+struct Feed {
+    /// Track, position and length, time, the audio thread's jump count.
+    audio: Slot,
+    /// Track, position and length, time, the seek count, the audio jump count at the seek, quiet until.
+    seek: Slot,
+}
+
+impl Feed {
+    const fn new() -> Self {
+        Feed { audio: Slot::new(), seek: Slot::new() }
+    }
+
+    /// Audio thread only.
+    fn report(&self, track: u64, pos_s: f32, len_s: f32, jumped: bool, at: std::time::Instant) {
+        let jumps = self.audio.read().map_or(0, |v| v[3]) + u64::from(jumped);
+        self.audio.write([track, pack(pos_s, len_s), nanos(at), jumps, 0, 0]);
+    }
+
+    /// UI thread only.
+    fn jump(&self, track: u64, pos_s: f32, len_s: f32, at: std::time::Instant) {
+        let seen = self.audio.read().map_or(0, |v| v[3]);
+        let seeks = self.seek.read().map_or(0, |v| v[3]) + 1;
+        self.seek.write([track, pack(pos_s, len_s), nanos(at), seeks, seen, nanos(at + QUIET)]);
+    }
+
+    /// A report counts once the audio thread has jumped since the last seek (the seek itself, a loop) or once it is
+    /// newer than `QUIET` after it.
+    fn heard(&self) -> Option<Heard> {
+        let seek = self.seek.read();
+        let audio = self.audio.read();
+        let (seeks, seen, quiet) = seek.map_or((0, 0, 0), |v| (v[3], v[4], v[5]));
+        let from = match (audio, seek) {
+            (Some(a), _) if a[3] > seen || a[2] >= quiet => a,
+            (_, Some(s)) => s,
+            (Some(a), None) => a,
+            (None, None) => return None,
+        };
+        let (pos_s, len_s) = unpack(from[1]);
+        let audio_jumps = audio.map_or(0, |a| a[3]);
+        Some(Heard {
+            track: from[0],
+            pos_s,
+            len_s,
+            at: epoch() + std::time::Duration::from_nanos(from[2]),
+            jump: (seeks << 32) | (audio_jumps & 0xffff_ffff),
+        })
+    }
+}
+
+static FEED: Feed = Feed::new();
+
+/// Audio thread: no locks.
+pub(super) fn report(track: u64, pos_s: f32, len_s: f32, jumped: bool, at: std::time::Instant) {
+    FEED.report(track, pos_s, len_s, jumped, at);
 }
 
 /// UI thread. The knob goes to the new position without easing.
 pub(super) fn jump(track: u64, pos_s: f32, len_s: f32) {
-    let at = std::time::Instant::now();
-    *QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(at + std::time::Duration::from_millis(150));
-    let jump = JUMPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(Heard { track, pos_s, len_s, at, jump });
+    FEED.jump(track, pos_s, len_s, std::time::Instant::now());
 }
 
 fn heard() -> Option<Heard> {
-    *HEARD.lock().unwrap_or_else(|e| e.into_inner())
+    FEED.heard()
 }
 
 /// The longest the knob runs on by itself after the audio thread's last report: past it the sound has stalled.
@@ -1161,6 +1264,75 @@ mod tests {
         let h = Heard { track: 1, pos_s: 1.0, len_s: 60.0, at: t0, jump: 1 };
         assert_eq!(glide.at(&h, 2.0, t0), 1.0);
         assert!((glide.at(&h, 2.0, t0 + secs(0.1)) - 1.2).abs() < 1e-3);
+    }
+
+    fn ms(v: u64) -> Duration {
+        Duration::from_millis(v)
+    }
+
+    #[test]
+    fn a_report_from_before_a_seek_does_not_pull_the_knob_back() {
+        let feed = Feed::new();
+        let t0 = epoch() + secs(1.0);
+        feed.report(1, 5.0, 10.0, false, t0);
+        feed.jump(1, 2.0, 10.0, t0 + ms(10));
+        // Reports made before the seek, published after it: one stamped before the seek, one after.
+        feed.report(1, 5.03, 10.0, false, t0 + ms(5));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        feed.report(1, 5.06, 10.0, false, t0 + ms(40));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        // The seek's own report, and the ones after it.
+        feed.report(1, 2.0, 10.0, true, t0 + ms(60));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        feed.report(1, 2.03, 10.0, false, t0 + ms(90));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.03);
+    }
+
+    #[test]
+    fn without_a_jump_from_the_audio_thread_reports_count_again_after_the_quiet_time() {
+        let feed = Feed::new();
+        let t0 = epoch() + secs(1.0);
+        feed.jump(1, 2.0, 10.0, t0);
+        feed.report(1, 2.03, 10.0, false, t0 + ms(30));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        feed.report(1, 2.2, 10.0, false, t0 + QUIET + ms(10));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.2);
+    }
+
+    #[test]
+    fn a_loop_right_after_a_seek_brings_the_knob_back_to_the_start() {
+        let feed = Feed::new();
+        let mut glide = Glide::new();
+        let t0 = epoch() + secs(1.0);
+        feed.report(1, 4.0, 10.0, false, t0);
+        feed.jump(1, 9.97, 10.0, t0 + ms(1));
+        assert!((glide.at(&feed.heard().unwrap(), 1.0, t0 + ms(1)) - 9.97).abs() < 1e-3);
+        feed.report(1, 9.98, 10.0, true, t0 + ms(20));
+        feed.report(1, 0.02, 10.0, true, t0 + ms(50));
+        let h = feed.heard().unwrap();
+        assert_eq!(h.pos_s, 0.02);
+        assert!(glide.at(&h, 1.0, t0 + ms(50)) < 0.05);
+    }
+
+    #[test]
+    fn a_reader_never_sees_half_a_report() {
+        let feed = std::sync::Arc::new(Feed::new());
+        let writer = {
+            let feed = feed.clone();
+            std::thread::spawn(move || {
+                let t0 = epoch();
+                for k in 1..200_000u64 {
+                    feed.report(k, k as f32, 2.0 * k as f32, k % 7 == 0, t0);
+                }
+            })
+        };
+        while !writer.is_finished() {
+            if let Some(h) = feed.heard() {
+                assert_eq!(h.pos_s, h.track as f32);
+                assert_eq!(h.len_s, 2.0 * h.track as f32);
+            }
+        }
+        writer.join().unwrap();
     }
 
     #[test]
