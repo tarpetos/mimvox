@@ -1,8 +1,9 @@
-//! Windows: the seek knob glides in a layered child window, so the main window is not redrawn 60 times a second
-//! while a track plays. Measured on an RTX 4070: about 36 W redrawing the main window, about 14 W with the strip.
+//! Windows: the seek knob glides in a layered child window, so the main window is not redrawn while a track plays.
+//! Measured on an RTX 4070: about 36 W redrawing the main window, about 14 W with the strip. The strip runs on a
+//! thread of its own, ticked by the audio thread, so a UI thread waiting for a busy GPU cannot stop the knob.
 
-use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::Relaxed, Ordering::SeqCst};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -10,20 +11,22 @@ use windows_sys::Win32::Graphics::Gdi::{
     CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, HBITMAP, HDC, SelectObject,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GW_OWNER, GetWindow, GetWindowThreadProcessId,
-    HTTRANSPARENT, IsWindowVisible, KillTimer, RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER,
-    SetTimer, SetWindowPos, ShowWindow, ULW_ALPHA, UpdateLayeredWindow, WM_NCHITTEST, WM_TIMER, WNDCLASSW, WS_CHILD,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GW_OWNER, GetMessageW, GetWindow,
+    GetWindowThreadProcessId, HTTRANSPARENT, IsWindowVisible, MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
+    RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow, ULW_ALPHA,
+    UpdateLayeredWindow, WM_APP, WM_DESTROY, WM_NCHITTEST, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_NOPARENTNOTIFY, WS_EX_TRANSPARENT,
 };
 
-/// The window timer's period, rounded down to whole milliseconds.
-const TICK_MS: u32 = 16;
 /// The knob's radius and its shadow.
 const REACH_PT: f32 = 14.0;
 /// The knob with its shadow.
 const HEIGHT_PT: f32 = 30.0;
+
+const WM_SYNC: u32 = WM_APP + 1;
+const WM_TICK: u32 = WM_APP + 2;
 
 /// Sizes in points, colours as straight sRGB.
 #[derive(Clone, Copy, PartialEq)]
@@ -33,115 +36,223 @@ pub struct Look {
     pub fill_top: [u8; 3],
     pub fill_bottom: [u8; 3],
     pub ring: [u8; 3],
-    pub knob: bool,
 }
 
-static SPEED: AtomicU32 = AtomicU32::new(0);
-static PLAYING: AtomicBool = AtomicBool::new(false);
-static PLACED: AtomicU32 = AtomicU32::new(0);
+/// What the UI thread asks the strip to show. `rect`: x, y, width, height in the main window's pixels; `rail`:
+/// the rail's left edge, width and centre line in the strip's pixels.
+#[derive(Clone, Copy, PartialEq)]
+struct Want {
+    shown: bool,
+    rect: [i32; 4],
+    rail: (f32, f32, f32),
+    scale: f32,
+    look: Look,
+    playing: bool,
+    speed: f32,
+    frac: f32,
+}
+
+static WANT: Mutex<Option<Want>> = Mutex::new(None);
+/// The strip thread's id once its message queue exists.
+static THREAD: AtomicU32 = AtomicU32::new(0);
+static STARTED: AtomicBool = AtomicBool::new(false);
+static FAILED: AtomicBool = AtomicBool::new(false);
+static TICKING: AtomicBool = AtomicBool::new(false);
+static TICK_QUEUED: AtomicBool = AtomicBool::new(false);
+static SYNC_QUEUED: AtomicBool = AtomicBool::new(false);
+/// The strip's window while it exists (it goes with the main window).
+static WINDOW: AtomicIsize = AtomicIsize::new(0);
 
 struct Strip {
     hwnd: HWND,
     dc: HDC,
     bitmap: HBITMAP,
     bits: *mut u32,
-    /// Pixels; `rail` is its left edge, width and centre line.
+    /// Pixels.
     size: (i32, i32),
-    rail: (f32, f32, f32),
-    scale: f32,
-    look: Look,
-    ticking: bool,
+    want: Want,
     shown: bool,
     drawn: f32,
     glide: super::playbar::Glide,
 }
 
-thread_local! {
-    static STRIP: RefCell<Option<Strip>> = const { RefCell::new(None) };
-    static FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 /// `rail_pt`: x, y, width, height in window points. UI thread. False when there is no strip (the bar then draws
 /// its own knob).
-pub fn show(rail_pt: [f32; 4], scale: f32, look: Look, track: u64, playing: bool, speed: f32, frac: f32) -> bool {
-    if FAILED.get() || rail_pt[2] < 4.0 || scale <= 0.0 {
+pub fn show(rail_pt: [f32; 4], scale: f32, look: Look, playing: bool, speed: f32, frac: f32) -> bool {
+    if FAILED.load(Relaxed) || rail_pt[2] < 4.0 || scale <= 0.0 {
+        hide();
         return false;
     }
-    let _ = track;
-    SPEED.store(speed.to_bits(), Relaxed);
-    PLACED.store(frac.to_bits(), Relaxed);
-    PLAYING.store(playing, Relaxed);
     let px = |v: f32| (v * scale).round() as i32;
     let reach = px(REACH_PT);
     let (w, h) = (px(rail_pt[2]) + 2 * reach, px(HEIGHT_PT));
     let x = px(rail_pt[0]) - reach;
     let y = ((rail_pt[1] + rail_pt[3] / 2.0) * scale - h as f32 / 2.0).round() as i32;
-    STRIP.with_borrow_mut(|slot| {
-        if slot.as_ref().is_some_and(|s| s.size != (w, h)) {
-            destroy(slot.take());
+    let want = Want {
+        shown: true,
+        rect: [x, y, w, h],
+        rail: (reach as f32, rail_pt[2] * scale, h as f32 / 2.0),
+        scale,
+        look,
+        playing,
+        speed,
+        frac,
+    };
+    TICKING.store(playing, Relaxed);
+    {
+        let mut asked = WANT.lock().unwrap_or_else(|e| e.into_inner());
+        if *asked == Some(want) {
+            return true;
         }
-        if slot.is_none() {
-            match create(x, y, w, h) {
-                Some(strip) => *slot = Some(strip),
-                None => {
-                    FAILED.set(true);
-                    return false;
-                }
-            }
-        }
-        let s = slot.as_mut().expect("just made");
-        s.rail = (reach as f32, rail_pt[2] * scale, h as f32 / 2.0);
-        (s.scale, s.look) = (scale, look);
-        // SAFETY: the strip's own window, on its thread.
-        unsafe {
-            SetWindowPos(s.hwnd, std::ptr::null_mut(), x, y, w, h, SWP_NOACTIVATE | SWP_NOZORDER);
-            if !s.shown {
-                ShowWindow(s.hwnd, SW_SHOWNA);
-                s.shown = true;
-            }
-            if playing != s.ticking {
-                if playing {
-                    SetTimer(s.hwnd, 1, TICK_MS, None);
-                } else {
-                    KillTimer(s.hwnd, 1);
-                }
-                s.ticking = playing;
-            }
-        }
-        s.drawn = f32::NAN;
-        paint(s);
-        true
-    })
+        *asked = Some(want);
+    }
+    if !STARTED.swap(true, SeqCst) && std::thread::Builder::new().name("seek-strip".into()).spawn(run).is_err() {
+        FAILED.store(true, Relaxed);
+        return false;
+    }
+    post(WM_SYNC, &SYNC_QUEUED);
+    true
 }
 
 /// UI thread.
 pub fn hide() {
-    STRIP.with_borrow_mut(|slot| {
+    TICKING.store(false, Relaxed);
+    let mut asked = WANT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(w) = asked.as_mut().filter(|w| w.shown) {
+        w.shown = false;
+        drop(asked);
+        post(WM_SYNC, &SYNC_QUEUED);
+    }
+}
+
+/// Audio thread: one more frame of the knob while the track plays.
+pub fn tick() {
+    if TICKING.load(Relaxed) {
+        post(WM_TICK, &TICK_QUEUED);
+    }
+}
+
+/// At most one of each message waits in the strip's queue.
+fn post(msg: u32, queued: &AtomicBool) {
+    let thread = THREAD.load(SeqCst);
+    if thread == 0 || queued.swap(true, SeqCst) {
+        return;
+    }
+    // SAFETY: posting a message with no pointers in it to a thread of this process.
+    if unsafe { PostThreadMessageW(thread, msg, 0, 0) } == 0 {
+        queued.store(false, SeqCst);
+    }
+}
+
+/// The strip thread: its window, its message loop.
+fn run() {
+    // SAFETY: `msg` is written by the message calls before it is read; the queue belongs to this thread.
+    unsafe {
+        let mut msg: MSG = std::mem::zeroed();
+        PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE); // makes this thread's queue
+        THREAD.store(GetCurrentThreadId(), SeqCst);
+        let mut strip = None;
+        sync(&mut strip);
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            match msg.message {
+                WM_SYNC if msg.hwnd.is_null() => {
+                    SYNC_QUEUED.store(false, SeqCst);
+                    sync(&mut strip);
+                }
+                WM_TICK if msg.hwnd.is_null() => {
+                    TICK_QUEUED.store(false, SeqCst);
+                    if let Some(s) = strip.as_mut().filter(|s| s.shown && s.want.playing && alive(s)) {
+                        paint(s);
+                    }
+                }
+                _ => {
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+    }
+}
+
+fn fail() {
+    FAILED.store(true, Relaxed);
+    TICKING.store(false, Relaxed);
+    super::events::post(|_| {}); // the view runs again and the bar draws its own knob
+}
+
+fn alive(s: &Strip) -> bool {
+    WINDOW.load(SeqCst) == s.hwnd as isize
+}
+
+fn sync(slot: &mut Option<Strip>) {
+    let Some(want) = *WANT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+    if slot.as_ref().is_some_and(|s| !alive(s)) {
+        release(slot.take());
+    }
+    if !want.shown {
         if let Some(s) = slot.as_mut().filter(|s| s.shown) {
             // SAFETY: the strip's own window, on its thread.
-            unsafe {
-                KillTimer(s.hwnd, 1);
-                ShowWindow(s.hwnd, SW_HIDE);
-            }
-            (s.shown, s.ticking) = (false, false);
+            unsafe { ShowWindow(s.hwnd, SW_HIDE) };
+            s.shown = false;
+            s.glide.rest();
         }
-    });
+        return;
+    }
+    if slot.is_none() {
+        *slot = create(&want);
+        if slot.is_none() {
+            fail();
+            return;
+        }
+    }
+    let Some(s) = slot.as_mut() else { return };
+    let [x, y, w, h] = want.rect;
+    if s.size != (w, h) {
+        // SAFETY: the strip's memory DC; the old bitmap is released once the new one is selected.
+        match unsafe { surface(s.dc, w, h) } {
+            Some((bitmap, bits)) => {
+                // SAFETY: as above.
+                unsafe { DeleteObject(std::mem::replace(&mut s.bitmap, bitmap)) };
+                (s.bits, s.size) = (bits, (w, h));
+            }
+            None => {
+                release(slot.take());
+                fail();
+                return;
+            }
+        }
+    }
+    if s.want.rect != want.rect || !s.shown {
+        // SAFETY: the strip's own window, on its thread.
+        unsafe { SetWindowPos(s.hwnd, std::ptr::null_mut(), x, y, w, h, SWP_NOACTIVATE | SWP_NOZORDER) };
+    }
+    if !want.playing {
+        s.glide.rest();
+    }
+    s.want = want;
+    s.drawn = f32::NAN;
+    paint(s);
+    if !s.shown {
+        // SAFETY: as above.
+        unsafe { ShowWindow(s.hwnd, SW_SHOWNA) };
+        s.shown = true;
+    }
 }
 
-fn fraction(glide: &mut super::playbar::Glide) -> f32 {
-    if PLAYING.load(Relaxed) {
-        if let Some(frac) = glide.step(f32::from_bits(SPEED.load(Relaxed))) {
-            return frac.clamp(0.0, 1.0);
-        }
-    } else {
-        glide.rest();
+fn fraction(s: &mut Strip) -> f32 {
+    if s.want.playing
+        && let Some(frac) = s.glide.step(s.want.speed)
+    {
+        return frac.clamp(0.0, 1.0);
     }
-    f32::from_bits(PLACED.load(Relaxed)).clamp(0.0, 1.0)
+    s.want.frac.clamp(0.0, 1.0)
 }
+
+#[cfg(test)]
+static PAINTS: AtomicU32 = AtomicU32::new(0);
 
 fn paint(s: &mut Strip) {
-    let frac = fraction(&mut s.glide);
-    let (x0, rail_w, cy) = s.rail;
+    let frac = fraction(s);
+    let (x0, rail_w, cy) = s.want.rail;
     let at = x0 + frac * rail_w;
     if (at - s.drawn).abs() < 0.05 {
         return;
@@ -151,11 +262,11 @@ fn paint(s: &mut Strip) {
     // SAFETY: the DIB section's pixels, `w * h` of them, owned by this strip and touched only on its thread.
     let pixels = unsafe { std::slice::from_raw_parts_mut(s.bits, w * h) };
     pixels.fill(0);
-    let look = s.look;
-    let half = look.track_pt * s.scale / 2.0;
-    let radius = look.knob_pt * s.scale / 2.0;
-    let shadow_reach = 5.0 * s.scale;
-    let shadow_drop = 2.0 * s.scale;
+    let look = s.want.look;
+    let half = look.track_pt * s.want.scale / 2.0;
+    let radius = look.knob_pt * s.want.scale / 2.0;
+    let shadow_reach = 5.0 * s.want.scale;
+    let shadow_drop = 2.0 * s.want.scale;
     let x_end = ((at + radius + shadow_reach + 2.0).ceil() as usize).min(w);
     for y in 0..h {
         let py = y as f32 + 0.5;
@@ -169,7 +280,7 @@ fn paint(s: &mut Strip) {
             mix(look.fill_top[2], look.fill_bottom[2], t),
         ];
         let (a, b) = (x0 + half, (at).max(x0 + half));
-        let knob_left = if look.knob { at - radius - shadow_reach - 2.0 } else { x0 };
+        let knob_left = at - radius - shadow_reach - 2.0;
         let x_start = (x0 - 1.0).min(knob_left).floor().max(0.0) as usize;
         for (x, out) in row.iter_mut().enumerate().take(x_end).skip(x_start) {
             let pxc = x as f32 + 0.5;
@@ -182,25 +293,23 @@ fn paint(s: &mut Strip) {
                     c = [fill_rgb[0] * cover, fill_rgb[1] * cover, fill_rgb[2] * cover, cover];
                 }
             }
-            if look.knob {
-                let dx = pxc - at;
-                let ds = (dx * dx + (dy - shadow_drop).powi(2)).sqrt() - radius;
-                let shade = 0.45 * (1.0 - (ds / shadow_reach).clamp(0.0, 1.0)).powi(2);
-                if shade > 0.0 {
-                    c = over([0.0, 0.0, 0.0, shade], c);
-                }
-                let d = (dx * dx + dy * dy).sqrt() - radius;
-                let cover = (0.5 - d).clamp(0.0, 1.0);
-                if cover > 0.0 {
-                    let ring = (1.0 - ((d + s.scale).abs() / s.scale.max(1.0))).clamp(0.0, 1.0) * 0.6;
-                    let face = [
-                        mixf(0.93, f32::from(look.ring[0]) / 255.0, ring),
-                        mixf(0.95, f32::from(look.ring[1]) / 255.0, ring),
-                        mixf(0.98, f32::from(look.ring[2]) / 255.0, ring),
-                    ];
-                    let alpha = 0.92 * cover;
-                    c = over([face[0] * alpha, face[1] * alpha, face[2] * alpha, alpha], c);
-                }
+            let dx = pxc - at;
+            let ds = (dx * dx + (dy - shadow_drop).powi(2)).sqrt() - radius;
+            let shade = 0.45 * (1.0 - (ds / shadow_reach).clamp(0.0, 1.0)).powi(2);
+            if shade > 0.0 {
+                c = over([0.0, 0.0, 0.0, shade], c);
+            }
+            let d = (dx * dx + dy * dy).sqrt() - radius;
+            let cover = (0.5 - d).clamp(0.0, 1.0);
+            if cover > 0.0 {
+                let ring = (1.0 - ((d + s.want.scale).abs() / s.want.scale.max(1.0))).clamp(0.0, 1.0) * 0.6;
+                let face = [
+                    mixf(0.93, f32::from(look.ring[0]) / 255.0, ring),
+                    mixf(0.95, f32::from(look.ring[1]) / 255.0, ring),
+                    mixf(0.98, f32::from(look.ring[2]) / 255.0, ring),
+                ];
+                let alpha = 0.92 * cover;
+                c = over([face[0] * alpha, face[1] * alpha, face[2] * alpha, alpha], c);
             }
             if c[3] > 0.0 {
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
@@ -217,8 +326,12 @@ fn paint(s: &mut Strip) {
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
     // SAFETY: the strip's window and its memory DC with the DIB section selected; the structs live through the call.
-    unsafe {
-        UpdateLayeredWindow(s.hwnd, std::ptr::null_mut(), std::ptr::null(), &size, s.dc, &origin, 0, &blend, ULW_ALPHA);
+    let _done = unsafe {
+        UpdateLayeredWindow(s.hwnd, std::ptr::null_mut(), std::ptr::null(), &size, s.dc, &origin, 0, &blend, ULW_ALPHA)
+    };
+    #[cfg(test)]
+    if _done != 0 {
+        PAINTS.fetch_add(1, Relaxed);
     }
 }
 
@@ -239,20 +352,24 @@ fn over(top: [f32; 4], bottom: [f32; 4]) -> [f32; 4] {
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_NCHITTEST => HTTRANSPARENT as LRESULT,
-        WM_TIMER => {
-            // `try_borrow_mut`: a timer message dispatched while `show` holds the strip waits for the next one.
-            STRIP.with(|slot| {
-                if let Ok(mut slot) = slot.try_borrow_mut()
-                    && let Some(s) = slot.as_mut().filter(|s| s.hwnd == hwnd && s.shown)
-                {
-                    paint(s);
-                }
-            });
+        WM_DESTROY => {
+            let _ = WINDOW.compare_exchange(hwnd as isize, 0, SeqCst, SeqCst);
             0
         }
         // SAFETY: the default handling of this window's own message.
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
+}
+
+#[cfg(test)]
+static TEST_PARENT: AtomicIsize = AtomicIsize::new(0);
+
+fn parent() -> Option<HWND> {
+    #[cfg(test)]
+    if TEST_PARENT.load(SeqCst) != 0 {
+        return Some(TEST_PARENT.load(SeqCst) as HWND);
+    }
+    main_window()
 }
 
 fn main_window() -> Option<HWND> {
@@ -274,9 +391,44 @@ fn main_window() -> Option<HWND> {
     (!found.is_null()).then_some(found)
 }
 
-fn create(x: i32, y: i32, w: i32, h: i32) -> Option<Strip> {
-    let parent = main_window()?;
+/// A 32-bit top-down DIB section selected into `dc`, and its pixels.
+///
+/// # Safety
+/// `dc` is a valid memory DC.
+unsafe fn surface(dc: HDC, w: i32, h: i32) -> Option<(HBITMAP, *mut u32)> {
+    // SAFETY: plain GDI calls on the caller's DC; the info struct lives through the call.
+    unsafe {
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        if bitmap.is_null() || bits.is_null() {
+            if !bitmap.is_null() {
+                DeleteObject(bitmap);
+            }
+            return None;
+        }
+        SelectObject(dc, bitmap);
+        Some((bitmap, bits.cast()))
+    }
+}
+
+fn create(want: &Want) -> Option<Strip> {
+    let parent = parent()?;
     let class: Vec<u16> = "MimvoxSeekStrip\0".encode_utf16().collect();
+    let [x, y, w, h] = want.rect;
     // SAFETY: plain Win32 window and GDI object creation; every handle made here is owned by the returned strip (or
     // released before returning None).
     unsafe {
@@ -297,8 +449,9 @@ fn create(x: i32, y: i32, w: i32, h: i32) -> Option<Strip> {
             };
             RegisterClassW(&wc);
         }
+        // No parent notification: it would be sent to the UI thread and wait for it.
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_NOPARENTNOTIFY,
             class.as_ptr(),
             std::ptr::null(),
             WS_CHILD,
@@ -315,50 +468,22 @@ fn create(x: i32, y: i32, w: i32, h: i32) -> Option<Strip> {
             return None; // no layered child windows here: the bar draws its own knob
         }
         let dc = CreateCompatibleDC(std::ptr::null_mut());
-        let mut info: BITMAPINFO = std::mem::zeroed();
-        info.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: w,
-            biHeight: -h,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        };
-        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-        let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
-        if dc.is_null() || bitmap.is_null() || bits.is_null() {
-            if !bitmap.is_null() {
-                DeleteObject(bitmap);
-            }
+        let made = if dc.is_null() { None } else { surface(dc, w, h) };
+        let Some((bitmap, bits)) = made else {
             if !dc.is_null() {
                 DeleteDC(dc);
             }
             DestroyWindow(hwnd);
             return None;
-        }
-        SelectObject(dc, bitmap);
+        };
+        WINDOW.store(hwnd as isize, SeqCst);
         Some(Strip {
             hwnd,
             dc,
             bitmap,
-            bits: bits.cast(),
+            bits,
             size: (w, h),
-            rail: (0.0, 1.0, h as f32 / 2.0),
-            scale: 1.0,
-            look: Look {
-                track_pt: 5.0,
-                knob_pt: 14.0,
-                fill_top: [0; 3],
-                fill_bottom: [0; 3],
-                ring: [0; 3],
-                knob: true,
-            },
-            ticking: false,
+            want: Want { shown: false, ..*want },
             shown: false,
             drawn: f32::NAN,
             glide: super::playbar::Glide::new(),
@@ -366,14 +491,102 @@ fn create(x: i32, y: i32, w: i32, h: i32) -> Option<Strip> {
     }
 }
 
-fn destroy(strip: Option<Strip>) {
+fn release(strip: Option<Strip>) {
     if let Some(s) = strip {
-        // SAFETY: the strip's own handles, released once.
+        // SAFETY: the strip's own window (unless the main window took it along) and GDI handles, released once.
         unsafe {
-            KillTimer(s.hwnd, 1);
-            DestroyWindow(s.hwnd);
+            if alive(&s) {
+                WINDOW.store(0, SeqCst);
+                DestroyWindow(s.hwnd);
+            }
             DeleteDC(s.dc);
             DeleteObject(s.bitmap);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PM_REMOVE, WS_POPUP};
+
+    fn pump(how_long: Duration) {
+        let end = Instant::now() + how_long;
+        // SAFETY: `msg` is written by PeekMessageW before it is dispatched.
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            while Instant::now() < end {
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    DispatchMessageW(&msg);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    #[test]
+    fn the_knob_moves_on_while_the_ui_thread_is_busy() {
+        let class: Vec<u16> = "MimvoxSeekStripTest\0".encode_utf16().collect();
+        // SAFETY: a hidden window of this test, made and destroyed on this thread.
+        let parent = unsafe {
+            let instance = GetModuleHandleW(std::ptr::null());
+            let wc = WNDCLASSW {
+                style: 0,
+                lpfnWndProc: Some(DefWindowProcW),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: instance,
+                hIcon: std::ptr::null_mut(),
+                hCursor: std::ptr::null_mut(),
+                hbrBackground: std::ptr::null_mut(),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: class.as_ptr(),
+            };
+            RegisterClassW(&wc);
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP,
+                0,
+                0,
+                800,
+                100,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                instance,
+                std::ptr::null(),
+            )
+        };
+        assert!(!parent.is_null());
+        TEST_PARENT.store(parent as isize, SeqCst);
+        super::super::playbar::jump(1, 0.0, 30.0);
+        let look = Look { track_pt: 5.0, knob_pt: 14.0, fill_top: [120; 3], fill_bottom: [90; 3], ring: [90; 3] };
+        assert!(show([20.0, 40.0, 600.0, 5.0], 1.0, look, true, 1.0, 0.0));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while PAINTS.load(SeqCst) == 0 && !FAILED.load(SeqCst) && Instant::now() < deadline {
+            pump(Duration::from_millis(10));
+        }
+        assert!(!FAILED.load(SeqCst), "no strip");
+        assert!(PAINTS.load(SeqCst) > 0, "the strip never drew");
+        let before = PAINTS.load(SeqCst);
+        // This thread stands for a busy UI thread: it handles no messages while the audio thread ticks.
+        let audio = std::thread::spawn(|| {
+            let start = Instant::now();
+            for _ in 0..15 {
+                super::super::playbar::report(1, start.elapsed().as_secs_f32(), 30.0, false, Instant::now());
+                tick();
+                std::thread::sleep(Duration::from_millis(33));
+            }
+        });
+        std::thread::sleep(Duration::from_millis(500));
+        audio.join().unwrap();
+        let drawn = PAINTS.load(SeqCst) - before;
+        assert!(drawn >= 8, "{drawn} frames in half a second");
+        hide();
+        pump(Duration::from_millis(50));
+        // SAFETY: the window made above, on its thread.
+        unsafe { DestroyWindow(parent) };
     }
 }

@@ -408,6 +408,7 @@ pub fn settle(s: &mut AppState, tx: &mut Tx) -> bool {
     changed |= super::playbar::settle(s, tx);
     changed |= super::update::settle(s, tx);
     changed |= super::api::settle(s);
+    changed |= super::settings::settle(s);
 
     let before = s.shell.toasts.len();
     s.shell.toasts.retain(|t| t.expires > now);
@@ -771,8 +772,7 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
         .center_y()
         .window_drag()
         .child(engine_pill(s, p, fit.tight))
-        .child(voice_pill(s, p))
-        .child(icon_button(p, "settings-open", &icons::SLIDERS, "Settings", super::settings::open));
+        .child(voice_pill(s, p));
     col()
         .key("header")
         .w_full()
@@ -923,44 +923,67 @@ fn train_badge(p: Palette, line: &str, on_lens: bool, compact: bool) -> El {
     pill.child(text(label).font(ty::CAPTION).color(p.accent).a11y_hidden())
 }
 
-fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
-    let (tone, label, pulse, retry) = match &s.shell.engine {
-        EngineStatus::Idle | EngineStatus::Starting { .. } => {
-            (Tone::Warning, "Starting engine…".to_owned(), true, false)
-        }
+pub struct EngineLook {
+    pub tone: Tone,
+    pub label: &'static str,
+    pub pulse: bool,
+    pub retry: bool,
+}
+
+/// RVC is "missing" by design when voice training is not installed.
+pub fn models_missing(s: &AppState) -> bool {
+    let EngineStatus::Ready { tts, rvc, .. } = &s.shell.engine else { return false };
+    tts.as_deref() == Some("missing") || (super::setuprun::has(s, "training") && rvc.as_deref() == Some("missing"))
+}
+
+pub fn engine_look(s: &AppState) -> EngineLook {
+    let look = |tone, label, pulse, retry| EngineLook { tone, label, pulse, retry };
+    match &s.shell.engine {
+        EngineStatus::Idle | EngineStatus::Starting { .. } => look(Tone::Warning, "Starting engine…", true, false),
         EngineStatus::Ready { tts, rvc, .. } => {
-            let loading = [tts, rvc].iter().any(|m| m.as_deref() == Some("loading"));
-            let paused = [tts, rvc].iter().any(|m| m.as_deref() == Some("paused"));
-            // RVC is "missing" by design when voice training is not installed.
-            let rvc_needed = super::setuprun::has(s, "training");
-            let missing = tts.as_deref() == Some("missing") || (rvc_needed && rvc.as_deref() == Some("missing"));
+            let any = |want: &str| [tts, rvc].iter().any(|m| m.as_deref() == Some(want));
             if tts.as_deref() == Some("no_memory") {
-                (Tone::Danger, "Not enough memory".to_owned(), false, false)
-            } else if missing {
-                (Tone::Danger, "Models missing".to_owned(), false, false)
-            } else if paused {
-                (Tone::Neutral, "Training · speech paused".to_owned(), false, false)
-            } else if loading {
-                (Tone::Warning, "Loading models…".to_owned(), true, false)
+                look(Tone::Danger, "Not enough memory", false, false)
+            } else if models_missing(s) {
+                look(Tone::Danger, "Models missing", false, false)
+            } else if any("paused") {
+                look(Tone::Neutral, "Training · speech paused", false, false)
+            } else if any("loading") {
+                look(Tone::Warning, "Loading models…", true, false)
             } else {
-                (Tone::Success, "Ready".to_owned(), false, false)
+                look(Tone::Success, "Ready", false, false)
             }
         }
         EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED => {
-            (Tone::Neutral, "Not installed".to_owned(), false, false)
+            look(Tone::Neutral, "Not installed", false, false)
         }
         EngineStatus::Stopped { .. } | EngineStatus::Unavailable { .. } => {
-            (Tone::Danger, "Engine stopped".to_owned(), false, true)
+            look(Tone::Danger, "Engine stopped", false, true)
         }
-    };
-    let mut pill = glass_edge(
+    }
+}
+
+pub fn engine_details(s: &AppState) -> (String, Vec<String>) {
+    engine_help(&s.shell.engine, super::setuprun::has(s, "training"), s.shell.tts_message.as_deref())
+}
+
+fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
+    let look = engine_look(s);
+    let (summary, facts) = engine_details(s);
+    let mut help = summary;
+    for f in facts {
+        help.push('\n');
+        help.push_str(&f);
+    }
+    glass_edge(
         p,
         row()
             .key("engine-pill")
-            .role("status")
-            .label(label.clone())
+            .role("button")
+            .label(format!("Engine status and settings: {}", look.label))
             .h(32.0)
-            .px(13.0)
+            .pl(13.0)
+            .pr(11.0)
             .gap(8.0)
             .center()
             .radius(16.0)
@@ -970,22 +993,16 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
             .shadow(3.0, 10.0, p.shadow_soft),
     )
     .motion(motion::UI)
-    .child(status_dot(p, tone, pulse))
-    .children((!tight).then(|| text(label.clone()).font(ty::LABEL).color(p.text).a11y_hidden()));
-    pill = pill.help(engine_help(&s.shell.engine, super::setuprun::has(s, "training"), s.shell.tts_message.as_deref()));
-    if retry {
-        pill = pill.hover(p.glass_hover).focusable(true).on_press(|s: &mut AppState| restart_engine(s)).child(icon_el(
-            &icons::REFRESH,
-            14.0,
-            p.text_dim,
-        ));
-    } else if matches!(s.shell.engine, EngineStatus::Ready { .. } | EngineStatus::Starting { .. }) {
-        pill = pill.role("button").hover(p.glass_hover).focusable(true).on_press_tx(super::settings::open_modules);
-    }
-    pill
+    .hover(p.glass_hover)
+    .focusable(true)
+    .help(help)
+    .on_press(super::settings::open)
+    .child(status_dot(p, look.tone, look.pulse))
+    .children((!tight).then(|| text(look.label).font(ty::LABEL).color(p.text).a11y_hidden()))
+    .child(icon_el(&icons::SLIDERS, 14.0, p.text_dim).a11y_hidden())
 }
 
-fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>) -> String {
+fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>) -> (String, Vec<String>) {
     let model = |m: &Option<String>| match m.as_deref() {
         Some("ready") => "ready".to_owned(),
         Some("loading") => "loading…".to_owned(),
@@ -997,7 +1014,7 @@ fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>)
     };
     match engine {
         EngineStatus::Idle | EngineStatus::Starting { .. } => {
-            "Starting the speech engine. Speak and Redub are available in a few seconds.".to_owned()
+            ("Starting the speech engine. Speak and Redub are available in a few seconds.".to_owned(), Vec::new())
         }
         EngineStatus::Ready { device, tts, rvc } => {
             let any = |want: &str| [tts, rvc].iter().any(|m| m.as_deref() == Some(want));
@@ -1018,16 +1035,18 @@ fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>)
             if let Some(why) = tts_message.filter(|_| no_memory) {
                 t.push_str(&format!("\n{}", sentence(why)));
             }
+            let mut facts = Vec::new();
             if let Some(d) = device {
-                t.push_str(&format!("\nDevice: {d}"));
+                facts.push(format!("Device: {d}"));
             }
             let conversion = if training {
                 model(rvc)
             } else {
                 "not installed (voice training is not part of this install)".to_owned()
             };
-            t.push_str(&format!("\nSpeech model: {}\nVoice conversion: {conversion}", model(tts)));
-            t
+            facts.push(format!("Speech model: {}", model(tts)));
+            facts.push(format!("Voice conversion: {conversion}"));
+            (t, facts)
         }
         EngineStatus::Stopped { code, detail } => {
             let mut t = match code {
@@ -1038,10 +1057,12 @@ fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>)
             if !last.is_empty() {
                 t.push_str(&format!("\n{last}"));
             }
-            t.push_str("\nClick to restart it. Details are in logs/engine.log in the data folder.");
-            t
+            (t, vec!["Details are in logs/engine.log in the data folder.".to_owned()])
         }
-        EngineStatus::Unavailable { reason } => format!("The engine cannot run: {reason}"),
+        EngineStatus::Unavailable { reason } if reason == NOT_INSTALLED => {
+            (format!("{NOT_INSTALLED} Run setup on the start screen."), Vec::new())
+        }
+        EngineStatus::Unavailable { reason } => (format!("The engine cannot run: {reason}"), Vec::new()),
     }
 }
 
@@ -1219,10 +1240,10 @@ mod tests {
         let models = json!({"tts": "no_memory", "rvc": "ready", "tts_message": WHY});
         on_engine(&mut s, &EngineMsg::Event(Event { event: "models".into(), job: None, data: models }));
         assert_eq!(s.shell.tts_message.as_deref(), Some(WHY));
-        let help = engine_help(&s.shell.engine, true, s.shell.tts_message.as_deref());
+        let (help, facts) = engine_help(&s.shell.engine, true, s.shell.tts_message.as_deref());
         assert!(help.starts_with("Speech cannot run on this computer"), "{help}");
-        assert!(help.contains("\nNot enough memory (RAM) for speech on the processor: it needs 11 GB.\n"), "{help}");
-        assert!(help.ends_with("Speech model: not enough memory (RAM)\nVoice conversion: ready"), "{help}");
+        assert!(help.ends_with("\nNot enough memory (RAM) for speech on the processor: it needs 11 GB."), "{help}");
+        assert_eq!(facts, ["Device: CPU", "Speech model: not enough memory (RAM)", "Voice conversion: ready"]);
         let ready = json!({"tts": "ready", "rvc": "ready"});
         on_engine(&mut s, &EngineMsg::Event(Event { event: "models".into(), job: None, data: ready }));
         assert_eq!(s.shell.tts_message, None);

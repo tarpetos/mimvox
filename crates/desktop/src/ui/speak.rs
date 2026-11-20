@@ -125,6 +125,16 @@ fn can_start(buffered_s: f32, rtf: f32, remaining_s: &[f32]) -> bool {
     true
 }
 
+/// The part of the text generated so far, weighted by characters when the segments are known.
+fn generated(a: &Active) -> Option<f32> {
+    let total_chars: u32 = a.seg_chars.iter().sum();
+    if a.seg_chars.len() == a.total && total_chars > 0 {
+        Some((a.seg_chars.iter().take(a.chunks).sum::<u32>() as f32 / total_chars as f32).max(0.03))
+    } else {
+        (a.total > 1).then(|| (a.chunks as f32 / a.total as f32).max(0.03))
+    }
+}
+
 fn should_start(a: &Active) -> bool {
     if a.chunks >= a.total || a.rtf <= 0.0 || a.audio_s <= 0.0 {
         return true;
@@ -505,6 +515,7 @@ fn on_chunk(s: &mut AppState, mut a: Active, chunk: TtsChunk) {
     }
     if a.audible {
         release(s, &mut a);
+        playbar::loading(s, generated(&a));
     }
     s.speak.gen_ = Gen::Active(a);
 }
@@ -741,10 +752,12 @@ fn text_panel(s: &AppState, p: Palette, cx: &mut Cx<AppState>) -> El {
         s.speak.text.redo();
         s.speak.text.focused = true;
     });
+    // Set apart from undo and redo: it is the destructive one.
     let clear = (!s.speak.text.text.is_empty()).then(|| {
         icon_button(p, "speak-clear", &icons::TRASH, "Clear the text", |s: &mut AppState| {
             replace_text(&mut s.speak.text, "")
         })
+        .ml(8.0)
     });
     let head = row()
         .key("speak-head")
@@ -803,12 +816,7 @@ fn action_bar(s: &AppState, p: Palette) -> El {
             } else {
                 (format!("Generating part {k} of {of}"), "Playing as it arrives.".to_owned())
             };
-            let total_chars: u32 = a.seg_chars.iter().sum();
-            let frac = if a.seg_chars.len() == a.total && total_chars > 0 {
-                Some((a.seg_chars.iter().take(a.chunks).sum::<u32>() as f32 / total_chars as f32).max(0.03))
-            } else {
-                (a.total > 1).then(|| (a.chunks as f32 / a.total as f32).max(0.03))
-            };
+            let frac = generated(a);
             let info = col()
                 .grow(1.0)
                 .min_w(0.0)
@@ -1515,8 +1523,9 @@ pub fn scene_generating(s: &mut AppState) {
     a.job = Some("job1".into());
     (a.chunks, a.total, a.exact, a.audible, a.began, a.audio_s) = (1, 3, true, true, true, 9.0);
     a.seg_chars = vec![80, 70, 60];
+    let loaded = generated(&a);
     s.speak.gen_ = Gen::Active(a);
-    super::playbar::scene_live(s, &one_line(SAMPLE), 3.4, 9.0);
+    super::playbar::scene_live(s, &one_line(SAMPLE), 3.4, 9.0, loaded);
 }
 
 pub fn scene_buffering(s: &mut AppState) {
@@ -1601,6 +1610,20 @@ pub fn scene_engine_stopped(s: &mut AppState) {
         code: Some(1),
         detail: "CUDA out of memory while loading the speech model.".into(),
     });
+}
+
+pub fn models_missing() -> EngineStatus {
+    EngineStatus::Ready {
+        device: Some("NVIDIA GeForce RTX 4070".into()),
+        tts: Some("missing".into()),
+        rvc: Some("ready".into()),
+    }
+}
+
+pub fn scene_engine_models_missing(s: &mut AppState) {
+    demo_voice(s, true);
+    s.speak.text = TextEdit::new("Hello there.");
+    s.shell.set_engine(models_missing());
 }
 
 pub fn scene_engine_no_memory(s: &mut AppState) {

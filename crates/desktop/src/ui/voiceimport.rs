@@ -173,7 +173,7 @@ fn submit(s: &mut AppState) {
         }
         None => {
             s.voiceimport.error =
-                Some("The voice engine is not running. Check the status at the top and press Retry.".into())
+                Some("The voice engine is not running: press the status at the top right, then Retry.".into())
         }
     }
 }

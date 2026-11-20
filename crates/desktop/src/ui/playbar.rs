@@ -6,6 +6,7 @@ use super::theme::{Palette, motion, radius, ty};
 use crate::state::{AppState, Screen};
 use rune::{Align, Color, Drag, El, Key, Phase, Side, col, el, row, text};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering::Acquire, Ordering::Relaxed, Ordering::Release, fence};
 
 pub const SPEEDS: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -37,6 +38,8 @@ pub struct Now {
     pub pos_s: f32,
     pub len_s: f32,
     pub live: bool,
+    /// While `live`: the part of the text generated so far (0..1), `None` when not known.
+    pub loaded: Option<f32>,
     /// The audio player's id of this track (reports about another one are ignored).
     track: u64,
 }
@@ -101,6 +104,7 @@ fn start(s: &mut AppState, path: &Path, title: String, what: String, source: Sou
         pos_s: 0.0,
         len_s,
         live,
+        loaded: None,
         track,
     });
     s.playbar.watch = Some((track, shell::clock_now(s) + STALL_S));
@@ -192,22 +196,41 @@ pub fn enqueue(s: &mut AppState, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// With `take` (the finished take's playback file and title) the bar shows the track as that take.
+/// While streaming: how much of the text has been generated (0..1), `None` when not known. It only grows.
+pub fn loading(s: &mut AppState, part: Option<f32>) {
+    if let Some(n) = s.playbar.now.as_mut().filter(|n| n.live) {
+        n.loaded = match (n.loaded, part) {
+            (Some(was), Some(now)) => Some(was.max(now.clamp(0.0, 1.0))),
+            (was, now) => now.map(|v| v.clamp(0.0, 1.0)).or(was),
+        };
+    }
+}
+
+/// With `take` (the finished take's playback file and title) the bar shows the track as that take. The length is
+/// final now, so the knob appears where the sound is.
 pub fn finish_live(s: &mut AppState, take: Option<(&Path, String)>) {
     if !s.playbar.now.as_ref().is_some_and(|n| n.live) {
         return;
     }
     player_do(s, |p| p.set_live(false));
     let len = s.player.as_ref().and_then(|p| shell::guard(|| p.duration_s()).ok());
+    let pos = s.player.as_ref().and_then(|p| shell::guard(|| p.position_s()).ok());
     if let Some(n) = s.playbar.now.as_mut() {
         n.live = false;
+        n.loaded = None;
         n.what = "Speak · result".into();
         if let Some(l) = len {
             n.len_s = l;
         }
+        if let Some(p) = pos {
+            n.pos_s = p.min(n.len_s);
+        }
         if let Some((path, title)) = take {
             n.path = path.to_path_buf();
             n.title = title;
+        }
+        if n.len_s > 0.0 {
+            place(n.pos_s / n.len_s, true);
         }
     }
 }
@@ -328,15 +351,18 @@ pub fn sink() -> crate::audio::PlaySink {
     let progress = super::events::Latest::new(|s: &mut AppState, (track, pos, len): (u64, f32, f32)| {
         on_progress(s, track, pos, len)
     });
-    // Every report feeds the glide; only one that changes the clock (`shows`) goes to the UI thread.
-    let sent = std::sync::Mutex::new((0u64, 0.0f32, 0.0f32));
+    epoch();
+    // Every report feeds the knob's clock; only one that changes the time shown (`shows`) goes to the UI thread.
+    let sent = (AtomicU64::new(0), AtomicU64::new(0));
     std::sync::Arc::new(move |ev| match ev {
-        crate::audio::PlayEvent::Progress { track, pos_s, len_s } => {
-            report(track, pos_s, len_s);
-            let mut last = sent.lock().unwrap_or_else(|e| e.into_inner());
-            if last.0 != track || (last.2 - len_s).abs() > 1e-3 || shows(last.1, pos_s, len_s) {
-                *last = (track, pos_s, len_s);
-                drop(last);
+        crate::audio::PlayEvent::Progress { track, pos_s, len_s, jumped } => {
+            report(track, pos_s, len_s, jumped, std::time::Instant::now());
+            #[cfg(windows)]
+            super::seekstrip::tick();
+            let (last_pos, last_len) = unpack(sent.1.load(Relaxed));
+            if sent.0.load(Relaxed) != track || (last_len - len_s).abs() > 1e-3 || shows(last_pos, pos_s, len_s) {
+                sent.0.store(track, Relaxed);
+                sent.1.store(pack(pos_s, len_s), Relaxed);
                 progress.send((track, pos_s, len_s));
             }
         }
@@ -353,90 +379,217 @@ static RAIL_W: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(
 static SHOWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// A fraction of a pixel, so the knob glides also on a long track.
 const KNOB_STEP_PT: f32 = 0.05;
-const GLIDE_HZ: f64 = 60.0;
+const GLIDE_HZ: f64 = 30.0;
 /// Windows: the seek strip draws the fill and the knob, so the bar draws neither and does not glide.
 static STRIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[derive(Clone, Copy)]
+/// Where the track was at a moment: the audio thread's report, or where a seek or a start put it.
+#[derive(Clone, Copy, Debug)]
 struct Heard {
     track: u64,
     pos_s: f32,
     len_s: f32,
     at: std::time::Instant,
+    /// Changes when the position jumped (a seek, a start, a loop): the knob follows at once, backwards too.
+    jump: u64,
 }
 
-static HEARD: std::sync::Mutex<Option<Heard>> = std::sync::Mutex::new(None);
-/// After the position jumped (a seek, a start), the audio thread's reports are left out until this moment: one from
-/// before the jump can still be on its way, and would pull the knob back for a moment.
-static QUIET_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-/// Counts the jumps, so a glider takes the new place at once instead of easing towards it.
-static JUMPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A seqlock with one writer: the writer never waits (it is the audio callback), a reader retries while a write is
+/// under way.
+struct Slot {
+    seq: AtomicU64,
+    v: [AtomicU64; 6],
+}
 
-fn report(track: u64, pos_s: f32, len_s: f32) {
-    let now = std::time::Instant::now();
-    if QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|until| now < until) {
-        return;
+impl Slot {
+    const fn new() -> Self {
+        Slot { seq: AtomicU64::new(0), v: [const { AtomicU64::new(0) }; 6] }
     }
-    *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(Heard { track, pos_s, len_s, at: now });
+
+    fn write(&self, v: [u64; 6]) {
+        let seq = self.seq.load(Relaxed);
+        self.seq.store(seq + 1, Relaxed);
+        fence(Release);
+        for (slot, x) in self.v.iter().zip(v) {
+            slot.store(x, Relaxed);
+        }
+        self.seq.store(seq + 2, Release);
+    }
+
+    /// `None` before the first write.
+    fn read(&self) -> Option<[u64; 6]> {
+        loop {
+            let seq = self.seq.load(Acquire);
+            if seq == 0 {
+                return None;
+            }
+            if seq.is_multiple_of(2) {
+                let v = self.v.each_ref().map(|slot| slot.load(Relaxed));
+                fence(Acquire);
+                if self.seq.load(Relaxed) == seq {
+                    return Some(v);
+                }
+            }
+            std::hint::spin_loop();
+        }
+    }
+}
+
+fn epoch() -> std::time::Instant {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(std::time::Instant::now)
+}
+
+fn nanos(at: std::time::Instant) -> u64 {
+    at.saturating_duration_since(epoch()).as_nanos() as u64
+}
+
+fn pack(pos_s: f32, len_s: f32) -> u64 {
+    (u64::from(pos_s.to_bits()) << 32) | u64::from(len_s.to_bits())
+}
+
+fn unpack(v: u64) -> (f32, f32) {
+    (f32::from_bits((v >> 32) as u32), f32::from_bits(v as u32))
+}
+
+/// After a seek, how long a report from before it may still be on its way.
+const QUIET: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// What the knob follows. The audio thread and the UI thread each write a slot of their own, so neither waits for
+/// the other and a report from before a seek cannot overwrite it; `heard` picks the one to follow.
+struct Feed {
+    /// Track, position and length, time, the audio thread's jump count.
+    audio: Slot,
+    /// Track, position and length, time, the seek count, the audio jump count at the seek, quiet until.
+    seek: Slot,
+}
+
+impl Feed {
+    const fn new() -> Self {
+        Feed { audio: Slot::new(), seek: Slot::new() }
+    }
+
+    /// Audio thread only.
+    fn report(&self, track: u64, pos_s: f32, len_s: f32, jumped: bool, at: std::time::Instant) {
+        let jumps = self.audio.read().map_or(0, |v| v[3]) + u64::from(jumped);
+        self.audio.write([track, pack(pos_s, len_s), nanos(at), jumps, 0, 0]);
+    }
+
+    /// UI thread only.
+    fn jump(&self, track: u64, pos_s: f32, len_s: f32, at: std::time::Instant) {
+        let seen = self.audio.read().map_or(0, |v| v[3]);
+        let seeks = self.seek.read().map_or(0, |v| v[3]) + 1;
+        self.seek.write([track, pack(pos_s, len_s), nanos(at), seeks, seen, nanos(at + QUIET)]);
+    }
+
+    /// A report counts once the audio thread has jumped since the last seek (the seek itself, a loop) or once it is
+    /// newer than `QUIET` after it.
+    fn heard(&self) -> Option<Heard> {
+        let seek = self.seek.read();
+        let audio = self.audio.read();
+        let (seeks, seen, quiet) = seek.map_or((0, 0, 0), |v| (v[3], v[4], v[5]));
+        let from = match (audio, seek) {
+            (Some(a), _) if a[3] > seen || a[2] >= quiet => a,
+            (_, Some(s)) => s,
+            (Some(a), None) => a,
+            (None, None) => return None,
+        };
+        let (pos_s, len_s) = unpack(from[1]);
+        let audio_jumps = audio.map_or(0, |a| a[3]);
+        Some(Heard {
+            track: from[0],
+            pos_s,
+            len_s,
+            at: epoch() + std::time::Duration::from_nanos(from[2]),
+            jump: (seeks << 32) | (audio_jumps & 0xffff_ffff),
+        })
+    }
+}
+
+static FEED: Feed = Feed::new();
+
+/// Audio thread: no locks.
+pub(super) fn report(track: u64, pos_s: f32, len_s: f32, jumped: bool, at: std::time::Instant) {
+    FEED.report(track, pos_s, len_s, jumped, at);
 }
 
 /// UI thread. The knob goes to the new position without easing.
-fn jump(track: u64, pos_s: f32, len_s: f32) {
-    let now = std::time::Instant::now();
-    *QUIET_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(now + std::time::Duration::from_millis(150));
-    *HEARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(Heard { track, pos_s, len_s, at: now });
-    JUMPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+pub(super) fn jump(track: u64, pos_s: f32, len_s: f32) {
+    FEED.jump(track, pos_s, len_s, std::time::Instant::now());
 }
 
-/// A report only corrects the glide gently (reports arrive in bursts a few ms early or late; following each one
-/// made the knob hop back and forth), except after a jump or when it is far off.
+fn heard() -> Option<Heard> {
+    FEED.heard()
+}
+
+/// The longest the knob runs on by itself after the audio thread's last report: past it the sound has stalled.
+const AHEAD_S: f32 = 0.25;
+/// How far the knob may run ahead of the audio clock while it takes up a difference.
+const LEAD_S: f32 = 0.05;
+/// The knob is this far behind the audio clock only after it stood still: it catches up at once.
+const BEHIND_S: f32 = 0.5;
+/// How fast the knob takes up the difference to the audio clock (time constant).
+const CATCH_S: f32 = 0.3;
+
+/// The knob's clock: it moves on by a monotonic clock, eases towards the audio clock and never goes back unless
+/// the position jumped, so late frames and uneven reports neither stop it nor make it hop.
 pub(super) struct Glide {
     shown_s: f32,
-    last: Option<std::time::Instant>,
+    at: Option<std::time::Instant>,
     track: u64,
-    jumps: u64,
+    jump: u64,
 }
 
 impl Glide {
     pub(super) const fn new() -> Self {
-        Glide { shown_s: 0.0, last: None, track: 0, jumps: 0 }
+        Glide { shown_s: 0.0, at: None, track: 0, jump: 0 }
     }
 
-    /// `None` before any report.
+    /// The position (seconds) to show at `now`.
+    fn at(&mut self, h: &Heard, speed: f32, now: std::time::Instant) -> f32 {
+        let speed = speed.max(0.0);
+        let target = h.pos_s + now.saturating_duration_since(h.at).as_secs_f32().min(AHEAD_S) * speed;
+        let shown = match self.at {
+            Some(last) if self.track == h.track && self.jump == h.jump => {
+                let dt = now.saturating_duration_since(last).as_secs_f32();
+                let moved = self.shown_s + dt * speed;
+                let behind = target - moved;
+                let next = if behind > BEHIND_S { target } else { moved + behind * (1.0 - (-dt / CATCH_S).exp()) };
+                next.min(target + LEAD_S).max(self.shown_s)
+            }
+            _ => target,
+        };
+        self.shown_s = shown.clamp(0.0, h.len_s.max(0.0));
+        (self.track, self.jump, self.at) = (h.track, h.jump, Some(now));
+        self.shown_s
+    }
+
+    /// The fraction of the track to show now; `None` before any report.
     pub(super) fn step(&mut self, speed: f32) -> Option<f32> {
-        let h = (*HEARD.lock().unwrap_or_else(|e| e.into_inner())).filter(|h| h.len_s > 0.0)?;
-        let now = std::time::Instant::now();
-        let target = h.pos_s + now.duration_since(h.at).as_secs_f32() * speed;
-        let jumps = JUMPS.load(std::sync::atomic::Ordering::Relaxed);
-        let dt = self.last.map_or(f32::INFINITY, |last| now.duration_since(last).as_secs_f32());
-        let moved_on = self.shown_s + dt * speed;
-        let at_once = self.track != h.track || self.jumps != jumps || dt > 0.5 || (target - moved_on).abs() > 0.3;
-        self.shown_s = if at_once { target } else { moved_on + (target - moved_on) * 0.06 }.clamp(0.0, h.len_s);
-        (self.track, self.jumps, self.last) = (h.track, jumps, Some(now));
-        Some(self.shown_s / h.len_s)
+        let h = heard().filter(|h| h.len_s > 0.0)?;
+        Some(self.at(&h, speed, std::time::Instant::now()) / h.len_s)
     }
 
     /// Nothing plays: the next step starts from the report, not from where the glide was.
     pub(super) fn rest(&mut self) {
-        self.last = None;
+        self.at = None;
     }
 }
 
 fn glide(s: &mut AppState, tx: &mut rune::Tx) {
     static GLIDE: std::sync::Mutex<Glide> = std::sync::Mutex::new(Glide::new());
     let mut glide = GLIDE.lock().unwrap_or_else(|e| e.into_inner());
-    if STRIP.load(std::sync::atomic::Ordering::Relaxed) {
-        glide.rest();
-        return; // the seek strip moves the knob (Windows): the window has nothing to draw
-    }
-    let Some(n) = s.playbar.now.as_ref().filter(|n| n.status == Status::Playing) else {
+    // The seek strip moves the knob (Windows); a scripted run keeps its knob where the scene put it.
+    let strip = STRIP.load(std::sync::atomic::Ordering::Relaxed);
+    let Some(n) =
+        s.playbar.now.as_ref().filter(|n| n.status == Status::Playing && !n.live && !strip && !s.shell.scripted())
+    else {
         glide.rest();
         return;
     };
     let track = n.track;
-    if let Some(frac) = glide
-        .step(s.playbar.speed)
-        .filter(|_| HEARD.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|h| h.track == track))
+    if heard().is_some_and(|h| h.track == track)
+        && let Some(frac) = glide.step(s.playbar.speed)
     {
         place(frac, false);
     }
@@ -529,6 +682,11 @@ fn clock(secs: f32) -> String {
     format!("{}:{:02}", t / 60, t % 60)
 }
 
+/// Rounds like the result cards' lengths (a 3.8 s take is "0:04" on its card and here); unknown while generated.
+fn total(n: &Now) -> String {
+    if n.live { "…".to_owned() } else { clock(n.len_s.round()) }
+}
+
 fn speed_label(v: f32) -> String {
     let t = format!("{v:.2}");
     let t = t.trim_end_matches('0').trim_end_matches('.');
@@ -571,8 +729,11 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
     };
     let on = n.status == Status::Playing;
     let frac = if n.len_s > 0.0 { (n.pos_s / n.len_s).clamp(0.0, 1.0) } else { 0.0 };
-    let native =
-        strip(rail.filter(|_| !covered && !s.shell.scripted()).map(|rail| (rail, scale, p, n, s.playbar.speed, frac)));
+    // While the speech is still generated the bar is a loading bar of its own, without the strip.
+    let native = strip(
+        rail.filter(|_| !covered && !n.live && !s.shell.scripted())
+            .map(|rail| (rail, scale, p, n, s.playbar.speed, frac)),
+    );
     sync_rail(rail.map(|r| r[2]), (!on || s.shell.scripted()).then_some(frac)); // (a scripted run has no audio thread)
     let play = el()
         .key("pb-play")
@@ -595,8 +756,7 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
         .gap(1.0)
         .child(text(n.title.clone()).font(ty::LABEL).color(p.text).truncate())
         .child(text(n.what.clone()).font(ty::CAPTION).color(p.text_faint).truncate());
-    // The total rounds like the result cards' lengths (a 3.8 s take is "0:04" on its card and here).
-    let total = if n.live { format!("{}…", clock(n.len_s.round())) } else { clock(n.len_s.round()) };
+    let total = total(n);
     let looped = s.playbar.looped;
     let loop_b = round_button(p, "pb-loop", &LOOP, if looped { "Loop: on" } else { "Loop: off" }, looped, move |s| {
         set_loop(s, !looped)
@@ -647,7 +807,7 @@ pub fn view(s: &AppState, p: Palette, rail: Option<[f32; 4]>, scale: f32, covere
         .child(title)
         .child(text(clock(n.pos_s)).font(ty::NUM).color(p.text_dim))
         .child(seek_bar(p, n, native))
-        .child(text(total).font(ty::NUM).color(p.text_dim))
+        .child(text(total).font(ty::NUM).color(p.text_dim).min_w(24.0))
         .child(loop_b)
         .child(chip)
         .child(close);
@@ -672,9 +832,8 @@ fn strip(over: Option<StripView>) -> bool {
                 fill_top: rgb(p.accent_top),
                 fill_bottom: rgb(p.accent),
                 ring: rgb(p.accent),
-                knob: !n.live,
             };
-            super::seekstrip::show(rail, scale, look, n.track, n.status == Status::Playing, speed, frac)
+            super::seekstrip::show(rail, scale, look, n.status == Status::Playing, speed, frac)
         }
         None => {
             super::seekstrip::hide();
@@ -692,6 +851,9 @@ pub const RAIL: &str = "pb-rail";
 fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
     const TRACK: f32 = 5.0;
     const KNOB: f32 = 14.0;
+    if n.live {
+        return loading_bar(p, n.loaded, TRACK, KNOB);
+    }
     let len = n.len_s;
     let knob = el()
         .key("pb-knob")
@@ -726,7 +888,7 @@ fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
     } else {
         groove
     };
-    let track = el().key(RAIL).w_full().h(TRACK).child(groove).children((!n.live && !native).then_some(knob));
+    let track = el().key(RAIL).w_full().h(TRACK).child(groove).children((!native).then_some(knob));
     let hit = col()
         .key("pb-seek")
         .role("slider")
@@ -740,9 +902,6 @@ fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
         .range_value(f64::from(n.pos_s), 0.0, f64::from(len.max(0.01)))
         .a11y_value(format!("{} of {}", clock(n.pos_s), clock(len)))
         .child(track);
-    if n.live {
-        return hit.opacity(0.55).help("Seeking works once the whole text is generated");
-    }
     let pos = n.pos_s;
     hit.focusable(true)
         .cursor(rune::Cursor::Pointer)
@@ -768,6 +927,41 @@ fn seek_bar(p: Palette, n: &Now, native: bool) -> El {
                 }
             }
         })
+}
+
+/// The length is not known until the whole text is generated: the rail fills as it is, with no knob.
+fn loading_bar(p: Palette, loaded: Option<f32>, track: f32, knob: f32) -> El {
+    let part = el().key("pb-loaded").h(track).radius(track / 2.0).gradient(p.accent_top, p.accent).opacity(0.6);
+    let part = match loaded {
+        Some(v) => part.w_frac(v),
+        None => part.w_frac(0.32).looping(rune::LoopSpec::slide(1.5, [-1.0, 0.0], [3.2, 0.0])),
+    };
+    let groove = el()
+        .key("pb-track")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .radius(track / 2.0)
+        .fill(p.well)
+        .border(1.0, p.well_rim)
+        .clip_rounded(track / 2.0)
+        .child(part);
+    let bar = col()
+        .key("pb-seek")
+        .role("progressbar")
+        .label("Generating")
+        .help("Seeking works once the whole text is generated")
+        .w_full()
+        .h(28.0)
+        .px(knob / 2.0)
+        .justify_center()
+        .grow(1.0)
+        .min_w(60.0)
+        .child(el().key(RAIL).w_full().h(track).child(groove));
+    match loaded {
+        Some(v) => {
+            bar.range_value(f64::from((v * 100.0).round()), 0.0, 100.0).a11y_value(format!("{:.0} %", v * 100.0))
+        }
+        None => bar,
+    }
 }
 
 pub fn overlay(s: &AppState, p: Palette) -> Option<El> {
@@ -845,11 +1039,12 @@ pub fn scene_now(
         pos_s,
         len_s,
         live: false,
+        loaded: None,
         track: 0,
     });
 }
 
-pub fn scene_live(s: &mut AppState, title: &str, pos_s: f32, len_s: f32) {
+pub fn scene_live(s: &mut AppState, title: &str, pos_s: f32, len_s: f32, loaded: Option<f32>) {
     scene_now(
         s,
         "/tmp/job1/chunk0.wav",
@@ -862,6 +1057,7 @@ pub fn scene_live(s: &mut AppState, title: &str, pos_s: f32, len_s: f32) {
     );
     if let Some(n) = s.playbar.now.as_mut() {
         n.live = true;
+        n.loaded = loaded;
     }
 }
 
@@ -905,14 +1101,22 @@ fn scene_speed_menu(s: &mut AppState) {
     s.playbar.speed_menu = true;
 }
 
-fn scene_live_bar(s: &mut AppState) {
+const LIVE_TITLE: &str = "Welcome back. In a few seconds this paragraph will be read in my own voice, one sentence…";
+
+fn scene_generating(s: &mut AppState) {
     super::speak::scene_generating(s);
-    scene_live(
-        s,
-        "Welcome back. In a few seconds this paragraph will be read in my own voice, one sentence…",
-        3.4,
-        9.0,
-    );
+    scene_live(s, LIVE_TITLE, 3.4, 9.0, Some(0.38));
+}
+
+fn scene_generating_unknown(s: &mut AppState) {
+    super::speak::scene_generating(s);
+    scene_live(s, LIVE_TITLE, 1.2, 4.0, None);
+}
+
+fn scene_finished(s: &mut AppState) {
+    super::speak::scene_done(s);
+    scene_live(s, LIVE_TITLE, 6.1, 14.2, Some(1.0));
+    finish_live(s, Some((Path::new("/tmp/out3.wav"), TAKE3.to_owned())));
 }
 
 fn scene_record(s: &mut AppState) {
@@ -927,7 +1131,235 @@ pub fn scenes() -> &'static [super::Scene] {
         ("player_looped", scene_looped),
         ("player_speed", scene_speed),
         ("player_speed_menu", scene_speed_menu),
-        ("player_live", scene_live_bar),
+        ("player_generating", scene_generating),
+        ("player_generating_unknown", scene_generating_unknown),
+        ("player_finished", scene_finished),
         ("player_record", scene_record),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn secs(s: f32) -> Duration {
+        Duration::from_secs_f32(s)
+    }
+
+    /// Reports every 33 ms, each stamped up to 8 ms late or early (callbacks are not on time), of a track playing
+    /// from `t0` at normal speed: the latest one at `now`.
+    fn report_at(t0: Instant, now: Instant, stall: Option<(f32, f32)>) -> Heard {
+        let t = now.duration_since(t0).as_secs_f32();
+        let mut k = (t / 0.033).floor() as i32;
+        loop {
+            let nominal = k as f32 * 0.033;
+            let jitter = [0.0, 0.008, -0.006, 0.003, -0.008, 0.005][k.rem_euclid(6) as usize];
+            let pos = match stall {
+                Some((from, to)) if nominal >= from && nominal < to => None,
+                Some((from, to)) if nominal >= to => Some(from + (nominal - to)),
+                _ => Some(nominal),
+            };
+            let at = (nominal + jitter).max(0.0);
+            if let Some(pos_s) = pos.filter(|_| at <= t) {
+                return Heard { track: 1, pos_s, len_s: 600.0, at: t0 + secs(at), jump: 1 };
+            }
+            k -= 1;
+        }
+    }
+
+    fn truth(t: f32, stall: Option<(f32, f32)>) -> f32 {
+        match stall {
+            Some((from, to)) if t >= from && t < to => from,
+            Some((from, to)) if t >= to => from + (t - to),
+            _ => t,
+        }
+    }
+
+    #[test]
+    fn the_knob_follows_the_sound_and_never_steps_back() {
+        let t0 = Instant::now();
+        let mut glide = Glide::new();
+        let mut last = 0.0;
+        for frame in 1..600 {
+            let t = frame as f32 / 60.0;
+            let now = t0 + secs(t);
+            let shown = glide.at(&report_at(t0, now, None), 1.0, now);
+            assert!(shown >= last, "back from {last} to {shown} at {t}");
+            assert!((shown - t).abs() < 0.02, "{shown} shown at {t}");
+            last = shown;
+        }
+    }
+
+    #[test]
+    fn late_frames_land_where_the_sound_is() {
+        let t0 = Instant::now();
+        let mut glide = Glide::new();
+        let mut last = 0.0;
+        // A busy UI thread: frames 16 ms apart, then gaps of 0.4, 0.9 and 1.6 s.
+        for t in [0.5, 0.516, 0.533, 0.933, 0.95, 1.85, 1.866, 3.466, 3.483, 3.5] {
+            let now = t0 + secs(t);
+            let shown = glide.at(&report_at(t0, now, None), 1.0, now);
+            assert!(shown >= last);
+            assert!((shown - t).abs() < 0.02, "{shown} shown at {t}");
+            last = shown;
+        }
+    }
+
+    #[test]
+    fn the_same_moment_shows_the_same_place_at_any_frame_rate() {
+        let t0 = Instant::now();
+        let (mut fast, mut slow) = (Glide::new(), Glide::new());
+        for frame in 1..=300 {
+            let t = frame as f32 / 60.0;
+            let now = t0 + secs(t);
+            let a = fast.at(&report_at(t0, now, None), 1.0, now);
+            if frame % 6 == 0 {
+                let b = slow.at(&report_at(t0, now, None), 1.0, now);
+                assert!((a - b).abs() < 0.01, "{a} at 60 fps, {b} at 10 fps, at {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_stalled_sound_holds_the_knob_without_going_back() {
+        let t0 = Instant::now();
+        let stall = Some((1.0, 2.0));
+        let mut glide = Glide::new();
+        let mut last = 0.0;
+        for frame in 1..300 {
+            let t = frame as f32 / 60.0;
+            let now = t0 + secs(t);
+            let shown = glide.at(&report_at(t0, now, stall), 1.0, now);
+            assert!(shown >= last, "back from {last} to {shown} at {t}");
+            if t < 2.0 {
+                assert!(shown <= 1.0 + AHEAD_S + LEAD_S, "{shown} ran on at {t}");
+            }
+            if t > 3.0 {
+                assert!((shown - truth(t, stall)).abs() < 0.02, "{shown} shown at {t}");
+            }
+            last = shown;
+        }
+    }
+
+    #[test]
+    fn a_seek_or_a_loop_moves_the_knob_at_once_backwards_too() {
+        let t0 = Instant::now();
+        let mut glide = Glide::new();
+        let now = t0 + secs(3.0);
+        let h = report_at(t0, now, None);
+        assert!(glide.at(&h, 1.0, now) > 2.9);
+        let seek = Heard { pos_s: 0.5, at: now, jump: h.jump + 1, ..h };
+        assert_eq!(glide.at(&seek, 1.0, now), 0.5);
+        let later = now + secs(0.1);
+        assert!((glide.at(&seek, 1.0, later) - 0.6).abs() < 1e-3);
+        let other = Heard { track: 2, pos_s: 0.0, at: later, ..seek };
+        assert_eq!(glide.at(&other, 1.0, later), 0.0);
+    }
+
+    #[test]
+    fn a_faster_speed_moves_the_knob_faster() {
+        let t0 = Instant::now();
+        let mut glide = Glide::new();
+        let h = Heard { track: 1, pos_s: 1.0, len_s: 60.0, at: t0, jump: 1 };
+        assert_eq!(glide.at(&h, 2.0, t0), 1.0);
+        assert!((glide.at(&h, 2.0, t0 + secs(0.1)) - 1.2).abs() < 1e-3);
+    }
+
+    fn ms(v: u64) -> Duration {
+        Duration::from_millis(v)
+    }
+
+    #[test]
+    fn a_report_from_before_a_seek_does_not_pull_the_knob_back() {
+        let feed = Feed::new();
+        let t0 = epoch() + secs(1.0);
+        feed.report(1, 5.0, 10.0, false, t0);
+        feed.jump(1, 2.0, 10.0, t0 + ms(10));
+        // Reports made before the seek, published after it: one stamped before the seek, one after.
+        feed.report(1, 5.03, 10.0, false, t0 + ms(5));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        feed.report(1, 5.06, 10.0, false, t0 + ms(40));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        // The seek's own report, and the ones after it.
+        feed.report(1, 2.0, 10.0, true, t0 + ms(60));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        feed.report(1, 2.03, 10.0, false, t0 + ms(90));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.03);
+    }
+
+    #[test]
+    fn without_a_jump_from_the_audio_thread_reports_count_again_after_the_quiet_time() {
+        let feed = Feed::new();
+        let t0 = epoch() + secs(1.0);
+        feed.jump(1, 2.0, 10.0, t0);
+        feed.report(1, 2.03, 10.0, false, t0 + ms(30));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.0);
+        feed.report(1, 2.2, 10.0, false, t0 + QUIET + ms(10));
+        assert_eq!(feed.heard().unwrap().pos_s, 2.2);
+    }
+
+    #[test]
+    fn a_loop_right_after_a_seek_brings_the_knob_back_to_the_start() {
+        let feed = Feed::new();
+        let mut glide = Glide::new();
+        let t0 = epoch() + secs(1.0);
+        feed.report(1, 4.0, 10.0, false, t0);
+        feed.jump(1, 9.97, 10.0, t0 + ms(1));
+        assert!((glide.at(&feed.heard().unwrap(), 1.0, t0 + ms(1)) - 9.97).abs() < 1e-3);
+        feed.report(1, 9.98, 10.0, true, t0 + ms(20));
+        feed.report(1, 0.02, 10.0, true, t0 + ms(50));
+        let h = feed.heard().unwrap();
+        assert_eq!(h.pos_s, 0.02);
+        assert!(glide.at(&h, 1.0, t0 + ms(50)) < 0.05);
+    }
+
+    #[test]
+    fn a_reader_never_sees_half_a_report() {
+        let feed = std::sync::Arc::new(Feed::new());
+        let writer = {
+            let feed = feed.clone();
+            std::thread::spawn(move || {
+                let t0 = epoch();
+                for k in 1..200_000u64 {
+                    feed.report(k, k as f32, 2.0 * k as f32, k % 7 == 0, t0);
+                }
+            })
+        };
+        while !writer.is_finished() {
+            if let Some(h) = feed.heard() {
+                assert_eq!(h.pos_s, h.track as f32);
+                assert_eq!(h.len_s, 2.0 * h.track as f32);
+            }
+        }
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn generating_shows_how_much_is_loaded_then_the_track_with_its_length() {
+        let mut s = AppState::default();
+        scene_live(&mut s, "Hello", 1.5, 4.0, None);
+        let n = s.playbar.now.as_ref().unwrap();
+        assert!(n.live && n.loaded.is_none());
+        assert_eq!(total(n), "…");
+        loading(&mut s, Some(0.4));
+        loading(&mut s, Some(0.3));
+        assert_eq!(s.playbar.now.as_ref().unwrap().loaded, Some(0.4));
+        loading(&mut s, None);
+        assert_eq!(s.playbar.now.as_ref().unwrap().loaded, Some(0.4));
+        loading(&mut s, Some(1.0));
+        if let Some(n) = s.playbar.now.as_mut() {
+            n.len_s = 13.6;
+        }
+        finish_live(&mut s, Some((Path::new("/tmp/take.wav"), "Hello there".into())));
+        let n = s.playbar.now.as_ref().unwrap();
+        assert!(!n.live && n.loaded.is_none());
+        assert_eq!(
+            (n.path.as_path(), n.title.as_str(), n.what.as_str()),
+            (Path::new("/tmp/take.wav"), "Hello there", "Speak · result")
+        );
+        assert_eq!(total(n), "0:14");
+        loading(&mut s, Some(0.5));
+        assert!(s.playbar.now.as_ref().unwrap().loaded.is_none());
+    }
 }

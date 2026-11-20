@@ -91,6 +91,7 @@ pub const SCENES: &[Scene] = &[
     ("engine_starting", speak::scene_engine_starting),
     ("engine_stopped", speak::scene_engine_stopped),
     ("engine_no_memory", speak::scene_engine_no_memory),
+    ("engine_models_missing", speak::scene_engine_models_missing),
 ];
 
 type Scene = (&'static str, fn(&mut AppState));
