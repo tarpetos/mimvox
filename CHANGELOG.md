@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.5.0
+
+* **Local API:** other programs can now use Mimvox over HTTP. Turn it on in **Settings** > **API**; it is off by
+  default and stops with the app.
+  * **OpenAI-compatible speech:** `POST /v1/audio/speech` at `http://127.0.0.1:8765/v1` speaks text in one of your
+    voices (by id or name) as MP3, WAV, FLAC, Opus, AAC or 24 kHz PCM, so tools made for OpenAI's speech API work
+    with your own voice.
+  * **Everything else too:** `POST /rpc` runs any engine method (voices, Speak, books, Redub, training),
+    `GET /events` streams the engine's progress events, and `/files` uploads files and downloads results.
+  * **Interactive docs** at `http://127.0.0.1:8765/docs` list every endpoint and engine method with examples and let
+    you try them; `/openapi.json` is the same description for other tools. They work offline.
+  * **Token and network:** programs on this computer get in without a token unless **Require token** is on; web pages
+    never do. **Local network** makes the API reachable from other computers and always needs the token. The
+    token is shown, copied or replaced in Settings.
+  * The API uses the app's own engine, so the app and the API share one engine and wait for each other.
+* **Without the window:** `mimvox-server`, installed next to the app, runs the engine and the API with no window, for
+  a server or a script; `mimvox serve` starts it too (also from the AppImage). `mimvox-server token show` prints the
+  token. Only one engine runs per data folder: the app and the server cannot use the same one at once.
+* **MCP server for AI assistants:** `mimvox-mcp` (or `mimvox mcp`) lets Claude Desktop, Claude Code and other
+  Model Context Protocol clients use Mimvox through the API: list voices, speak text and get the audio back, read a
+  document as an audiobook, pause and resume it, follow long jobs with progress, upload and download files, and call
+  any engine method. The usage guide has ready-made configs for each system. `mimvox-server` and `mimvox-mcp` have
+  icons of their own.
+* **For programs that publish audiobooks (through the API):**
+  * Each finished chapter gets a timing file with the text and start and end time of every sentence group, for
+    subtitles (`segments_path`, served by `GET /files`).
+  * Importing a book also returns its authors, description, language tag, date and cover (EPUB, FB2, DOCX, ODT).
+  * `text.import` with `"split": "auto"` cuts very long chapters into parts at once.
+  * `book.start` with a `ref` is safe to repeat: the same ref finds the book already started, resumes it or reports
+    it done, instead of starting it twice.
+  * A voice can be exported as one `.mimvoice` file with a content hash (`voices.export`) and imported on another
+    computer (`voices.import` with `bundle`).
+* **Settings:** the status button at the top right (*Ready*, with a small sliders icon) now opens **Settings**, with
+  three folding sections: **Modules** (what was the Modules window), **Data folder** (the folder, its free space and
+  **Move data…**, which used to be at the bottom of Voices) and **API**. The engine's state is at the top of
+  Settings, with the reason when speech cannot run and **Retry** when the engine has stopped. Settings opens on the
+  section you left open, also after a restart, or on **Modules** when models are missing or the current screen's part
+  is turned off.
+* **Import an existing RVC model:** **Import voice model…** on Voices turns an RVC or Applio model (`.pth`, with an
+  optional `.index`) and a short clip of the same voice into a trained voice, with no training. Only your own voice
+  or one you have permission for: the dialog asks you to confirm. A file that is not such a model (a `.zip`, a
+  training checkpoint) is refused with the reason; it is checked without running anything in it.
+* **Undo and redo in Speak:** two buttons next to the trash button, also Ctrl+Z and Ctrl+Shift+Z (Cmd on macOS).
+  Clearing the text and opening a text file can be undone too.
+* **A steady player:** the knob moves smoothly and no longer stops or jumps back while the computer is busy
+  generating. While Speak is still generating, the bar is a loading bar with the part made so far and the total shows
+  *…*; the knob and seeking come when the whole text is ready.
+* **Smoother tab switches:** a tab switch now animates for about 0.3 s instead of 0.7 s, and on displays of 120 Hz and
+  more animations draw at about 60 frames a second, so a click no longer drives the graphics card at the display's
+  full rate.
+* **Speech on the processor (no supported GPU):**
+  * Slow speech is no longer cut off after 5 minutes: as long as the model keeps working, it is given the time it
+    needs.
+  * Mimvox checks the memory before each step. A computer with less than 11 GB of RAM cannot hold the speech model:
+    the model is not loaded at all, the status button says *Not enough memory* and Speak explains why, instead of
+    swapping for minutes per sentence. When the memory is only full at the moment, speech stops with a plain message
+    and frees the model, and a book waits and goes on. Programs get the error code `no_memory` for both.
+  * Whisper takes 3.8 GB instead of 5.5 GB, and the speech model is no longer pushed out of RAM right after it loads,
+    which made the first sentences slower.
+* **Setup:**
+  * An install made with `--cpu` stays on the processor in later runs, including the app's own; `--gpu` switches to
+    the graphics card.
+  * The check (`--quick-check`, also after `--move-to`) looks only at the parts you installed, so a speech-only install
+    passes.
+  * The Pythons the engine runs on now live in the data folder (`runtime/python`), so deleting the data folder, or
+    uninstalling the speech engine, removes them too. Setup moves an existing install's environments onto them, from
+    the packages it already has, and keeps the old ones if that fails.
+* **Windows installer:** an update no longer fails while an AI assistant keeps `mimvox-mcp` running (it is closed
+  first), and waits for a running `mimvox-server` like it does for the app. Uninstalling with **Everything** now also
+  removes the API's files and the last few files the app keeps in the data folder.
+* **Fixes:**
+  * A book chapter whose last part was made right before a pause or a crash is finished on resume; it used to be left
+    out of the book.
+  * A book with a plain-text table of contents right before chapter 1 keeps chapter 1, a short sentence that repeats
+    a chapter's title is no longer dropped as a heading, and Belarusian books are no longer taken for Russian ones.
+  * The engine says *Ready* only once the speech model is warmed up, so a first request no longer waits behind the
+    warm-up (there is none on the processor).
+  * The switches in Settings have their knob in the middle.
+
 ## 0.4.3
 
 * **Updates download on a slow connection:** the download of a new version was cut off after 30 seconds, so below

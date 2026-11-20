@@ -8,6 +8,24 @@ interpreter) and the **zero-shot converter worker** (Seed-VC, the native accent 
 interpreter, started on first use; Seed-VC itself is fetched by setup into `runtime/seed-vc`). RVC **training** is run by the engine
 as a job in the second environment (Applio's CLI).
 
+Other programs reach the same engine through the **local HTTP API**, served by the app (Settings, API) or, without
+the window, by **`mimvox-server`**, which starts the engine itself. **`mimvox-mcp`**, the MCP server for AI
+assistants, is a client of that API and never touches an engine. Only one engine runs per data folder.
+
+## Crates
+
+The Rust side is one Cargo workspace (`Cargo.toml` at the root):
+
+| Crate | Binary | What it is |
+| --- | --- | --- |
+| `crates/desktop` | `mimvox` | the desktop app: Rune UI, audio, setup runner, updater; `mimvox serve` and `mimvox mcp` run the two binaries below |
+| `crates/engine-client` | | starts the engine process, speaks its JSON lines, holds `engine.lock`; the protocol types (`protocol.rs`) |
+| `crates/api` | | the HTTP API as a library (axum): routes, token, OpenAI-compatible speech, `/docs` and `/openapi.json`, and `host`, which the app serves it with |
+| `crates/server` | `mimvox-server` | the HTTP API without the window: finds the data folder as the app does, starts and restarts the engine |
+| `crates/mcp` | `mimvox-mcp` | the MCP server (`rmcp`), over stdio or streamable HTTP, a client of the HTTP API |
+
+All three binaries ship in every installer. The engine stays Python (`engine/`), for the ML work.
+
 ## Overview
 
 ```mermaid
@@ -108,6 +126,39 @@ the stdin reader thread was always waiting, so `load_asr` (which imports torch) 
 in isolation: a request that imports torch never finished until a second line was written, with either stdin reader).
 The engine and both workers therefore move the protocol pipe to a private descriptor and point fd 0 /
 `STD_INPUT_HANDLE` at NUL before any thread reads it. The engine's own model loading had the same latent stall.
+
+## Local HTTP API and MCP
+
+```mermaid
+flowchart LR
+    P["Scripts, OpenAI clients"] -- "HTTP" --> H
+    M["mimvox-mcp"] -- "HTTP" --> H
+    A["AI assistant"] -- "MCP: stdio or HTTP" --> M
+    subgraph HOST["the app (Settings, API) or mimvox-server"]
+        H["crates/api<br/>routes, token, Hub"] --- C["Engine client"]
+    end
+    C <-- "JSON lines" --> E["Engine"]
+```
+
+- **One engine, two clients.** In the app the API's `Hub` sees every engine message first (`Hub::tee_sink`): it takes
+  the answers to its own requests and fans events out to `/events`, and passes everything else to the UI as before.
+  Both sides share the engine's request ids, so neither sees the other's answers. Changing the address, port or token
+  restarts only the listener (`api::host`), never the engine. `mimvox-server` is the same library around an engine it
+  starts itself (and starts again after a crash).
+- **One engine per data folder.** Whoever starts an engine holds an OS lock on `<data>/engine.lock` (on Unix the
+  engine inherits it; on Windows a job object ends the engine with its client), so the app and the server never
+  drive two engines on the same voices.
+- **Endpoints.** `POST /rpc` runs any engine method, `GET /events` streams its events (Server-Sent Events, a
+  broadcast channel, no polling), `/files` uploads and downloads inside a few data folders only,
+  `POST /v1/audio/speech` is OpenAI-compatible (it runs `tts.generate` and waits for `tts.done`). `/openapi.json` is
+  built from `crates/api/openapi/methods.json`, which unit tests keep equal to the engine's methods and to the
+  contract; `/docs` serves a bundled interactive reference (Scalar) from the binary.
+- **Access.** Loopback by default; a token (`<data>/api/token`) is required off loopback, optional on it. Without a
+  token, requests whose `Host`, `Origin` or `Sec-Fetch-Site` show a web page are refused.
+- **MCP.** `mimvox-mcp` keeps one `/events` stream open to follow jobs, turns their progress into MCP progress
+  notifications, and maps every tool to API calls (`engine_call` is `/rpc` itself).
+
+Details, limits and error codes: [the contract](../contract/engine-protocol.md#http-api).
 
 ## TTS backends (multilingual seam)
 
@@ -242,7 +293,10 @@ The engine owns the data folder; the app reads only the files the engine names. 
 <data>/voices/<voice_id>/rvc/model.index
 <data>/outputs/<timestamp>.<ext>             generated speech and redubs, one file each in the chosen format
 <data>/outputs/books/<book>/<NN> - <title>.<ext>  audiobook chapters (+ <book>.m4b)
-<data>/books/<id>/                           an audiobook's project: book.json, state.json, work/ (the chapter in progress), stats/
+<data>/books/<id>/                           an audiobook's project: book.json, state.json, work/ (the chapter in progress), stats/,
+                                             segments/<NNN>.json (each finished chapter's text and timing, for subtitles)
+<data>/api/token, <data>/api/uploads/        the HTTP API's token and uploaded files
+<data>/engine.lock                           held by the app or mimvox-server while its engine runs
 <data>/tmp/                                  scratch (incl. tmp/play: playback WAVs of non-WAV results, tmp/separate-<job>:
                                              the file being separated), safe to delete
 ```
@@ -282,12 +336,12 @@ exchange absolute file paths.
 | Area | Methods and events |
 | --- | --- |
 | Engine | `hello`, `shutdown` |
-| Voices | `voices.list`, `voices.create`, `voices.rename`, `voices.delete` |
+| Voices | `voices.list`, `voices.create`, `voices.rename`, `voices.delete`, `voices.import` (an existing RVC model, or a bundle), `voices.export` (one `.mimvoice` bundle with a content hash) |
 | Presets and text | `presets.list`, `text.analyze` |
 | Recording and dataset | `recording.check`, `dataset.add`, `dataset.remove`, `dataset.summary` |
 | Training | `train.start`, `train.cancel`; events `train.progress`, `train.done`, `train.error` |
 | Generation | `tts.generate`, `tts.cancel`; events `tts.chunk`, `tts.done`, `tts.error` |
-| Audiobooks | `text.import`, `book.start`, `book.resume`, `book.pause`, `book.cancel`, `book.list`, `book.get`, `book.delete`, `book.play`; events `book.progress`, `book.chapter`, `book.done`, `book.paused`, `book.error` |
+| Audiobooks | `text.import` (`split: "auto"`, document `meta`), `book.start` (idempotent with a `ref`), `book.resume`, `book.pause`, `book.cancel`, `book.list`, `book.get`, `book.delete`, `book.play`; events `book.progress`, `book.chapter`, `book.done`, `book.paused`, `book.error` |
 | Media references | `voices.reference_from_media` (`remove_music`), `voices.media_cancel`, `voices.clear_media`, `media.combine`; events `voices.media.progress` (stages `decode`, `separate`, `combine`, `analyse`, `apply`), `voices.media.done`, `voices.media.error` |
 
 The full parameters and results are in [contract/engine-protocol.md](../contract/engine-protocol.md). That file is the
