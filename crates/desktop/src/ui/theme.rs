@@ -115,4 +115,8 @@ pub mod motion {
     pub const SNAP: Spring = Spring::new(0.22, 0.0);
     pub const SOFT: Spring = Spring::new(0.45, 0.0);
     pub const BOUNCY: Spring = Spring::new(0.4, 0.2);
+    // A tab switch: Rune's default fade (0.3 s) kept a 4K window drawing for 0.7 s, its last 0.3 s invisible.
+    pub const SCREEN: Spring = Spring::new(0.1, 0.0);
+    pub const SCREEN_EXIT: Spring = Spring::new(0.08, 0.0);
+    pub const TAB_LEAD: Spring = Spring::new(0.13, 0.0);
 }

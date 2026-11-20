@@ -639,7 +639,16 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if let Some(b) = engine_banner(s, p) {
         body = body.child(b);
     }
-    body = body.child(col().key(format!("screen-{:?}", s.screen)).w_full().grow(1.0).min_h(0.0).child(page));
+    let fade = rune::Transition::opacity().springs(rune::SpringPair::new(motion::SCREEN, motion::SCREEN_EXIT));
+    body = body.child(
+        col()
+            .key(format!("screen-{:?}", s.screen))
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .transition(fade)
+            .child(page.transition(fade)),
+    );
     // Header, background and glass panels are cached textures (`El::cache`): uncached, hovering across the window
     // on a 165 Hz display drew whole frames at 36 W on the GPU against 12 W idle.
     let mut overlays: Vec<El> = Vec::new();
@@ -845,7 +854,10 @@ fn tabs(s: &AppState, p: Palette, compact: bool) -> El {
             .center()
             .radius(h / 2.0)
             .hover(if on { Color::TRANSPARENT } else { p.glass_hover })
-            .on_press(move |s: &mut AppState| set_screen(s, screen))
+            .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
+                set_screen(s, screen);
+                tx.color_motion(motion::SCREEN);
+            })
             .child(icon_el(glyph, 15.0, ink).a11y_hidden())
             .children((!compact).then(|| text(*name).font(ty::LABEL).color(ink).a11y_hidden()));
         if compact {
@@ -865,7 +877,7 @@ fn tabs(s: &AppState, p: Palette, compact: bool) -> El {
         .radius(h / 2.0)
         .opacity(if idx.is_some() { 1.0 } else { 0.0 })
         .motion(motion::BOUNCY)
-        .lead(motion::SNAP, motion::UI)
+        .lead(motion::TAB_LEAD, motion::SCREEN)
         .a11y_hidden();
     let lens = accent_glass(p, lens);
     let bar = el()

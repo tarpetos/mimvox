@@ -194,6 +194,18 @@ pub(crate) const TIMEOUT_RETRY: Duration = Duration::from_millis(16);
 /// Motion's frame interval when no display link paces a surface.
 pub(crate) const TIMER_FRAME: Duration = Duration::from_micros(16_667);
 
+/// PATCH: the wait between two frames of motion on a display of `hz`: a whole number of refreshes about `TIMER_FRAME`
+/// long (52-82 Hz), or `None` below 105 Hz, where vsync alone paces them. An unknown rate takes `TIMER_FRAME`.
+pub(crate) fn motion_interval(hz: Option<f64>) -> Option<Duration> {
+    match hz.filter(|hz| hz.is_finite() && *hz > 0.0) {
+        None => Some(TIMER_FRAME),
+        Some(hz) => {
+            let refreshes = (hz * TIMER_FRAME.as_secs_f64() + 0.25).floor();
+            (refreshes >= 2.0).then(|| Duration::from_secs_f64(refreshes / hz))
+        }
+    }
+}
+
 impl Missed {
     pub(super) fn of(status: wgpu::CurrentSurfaceTexture) -> Result<wgpu::SurfaceTexture, Missed> {
         use wgpu::CurrentSurfaceTexture as S;
@@ -279,3 +291,4 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu:
         }
     }
 }
+

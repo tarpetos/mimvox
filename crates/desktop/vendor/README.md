@@ -62,7 +62,7 @@ Every window is also hidden that way just before it is dropped at exit (`AnyHost
 `exiting` in `src/window.rs`). The app itself never blocks the UI thread on quit: it only asks the engine to exit and
 waits for it after the loop has ended (`ui::train::quit_now`, `main`).
 
-### Patch 2: a pointer move does not draw a frame that changes nothing
+### Patch 5: a pointer move does not draw a frame that changes nothing
 
 Upstream asks for a redraw on every `CursorMoved` and draws and presents it, even when the frame is identical to the
 one on screen (the pointer moved inside one element). On a 165 Hz display that was 165 whole-window frames a second
@@ -72,3 +72,17 @@ path upstream already has for timer wakes: the frame is built, compared with the
 (`Presented::unchanged`), and drawn only when it differs (a hover change, an animation, pending input).
 
 Touched: `src/window/pacing.rs`, `src/window/events.rs`. Lines are marked `PATCH`.
+
+### Patch 6: motion on a fast display draws about 60 frames a second (Windows, Linux)
+
+Upstream asks for the next frame as soon as one presents while anything animates, so motion runs at the display's
+refresh rate: on a 165 Hz display a tab switch (a 0.72 s fade) took about 118 whole-window frames (0.72 s x 165), a short burst
+of GPU load on every click that the owner heard as coil whine from the graphics card. With the patch, a frame that
+only moves things waits for the next step of `motion_interval` (`src/window/pacing.rs`): a whole number of
+refreshes about 1/60 s long (55 Hz at 165 Hz, 72 Hz at 144 Hz, 60 Hz at 120 or 240 Hz; displays below 105 Hz keep
+vsync pacing; an unknown rate takes 60 Hz). The window sleeps until then (`Win::motion_at`, a `wake_deadline`);
+input, state changes, live values and window moves still draw at once, and a pointer move rides on the frame already
+on its way unless a press drags. The same tab switch is about 40 frames at 165 Hz.
+
+Touched: `src/window/pacing.rs`, `src/window/draw.rs`, `src/window/any_host.rs`, `src/window/events.rs`,
+`src/window/win.rs`, `src/window/create.rs`. Lines are marked `PATCH`.

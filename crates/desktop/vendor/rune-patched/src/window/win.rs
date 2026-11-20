@@ -88,6 +88,8 @@ pub(super) struct Win {
     /// The window's steady run after a change (`STEADY`).
     #[cfg(target_os = "windows")]
     pub(super) steady: Steady,
+    /// PATCH: when the next frame of motion draws, on a display faster than motion needs (`motion_interval`).
+    pub(super) motion_at: Option<Instant>,
     /// Its next frame (`redraw`).
     pub(super) redraw: std::cell::Cell<Redraw>,
 }
