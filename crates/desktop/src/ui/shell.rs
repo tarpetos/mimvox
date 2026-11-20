@@ -275,12 +275,6 @@ pub fn active_voice(s: &AppState) -> Option<&VoiceInfo> {
     s.shell.voices.iter().find(|v| v.id == id)
 }
 
-/// Temporary diagnostic: `MIMVOX_DIAG_NO_MOTION=1` switches tabs in one frame, to compare by ear.
-fn diag_no_motion() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("MIMVOX_DIAG_NO_MOTION").is_some_and(|v| v == "1"))
-}
-
 pub fn set_screen(s: &mut AppState, screen: Screen) {
     s.screen = if screen != Screen::Onboarding && !s.shell.scripted && super::onboarding::needed(s) {
         Screen::Onboarding
@@ -862,11 +856,7 @@ fn tabs(s: &AppState, p: Palette, compact: bool) -> El {
             .hover(if on { Color::TRANSPARENT } else { p.glass_hover })
             .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
                 set_screen(s, screen);
-                if diag_no_motion() {
-                    tx.instant();
-                } else {
-                    tx.color_motion(motion::SCREEN);
-                }
+                tx.color_motion(motion::SCREEN);
             })
             .child(icon_el(glyph, 15.0, ink).a11y_hidden())
             .children((!compact).then(|| text(*name).font(ty::LABEL).color(ink).a11y_hidden()));

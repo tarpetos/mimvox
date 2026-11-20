@@ -197,20 +197,12 @@ pub(crate) const TIMER_FRAME: Duration = Duration::from_micros(16_667);
 /// PATCH: the wait between two frames of motion on a display of `hz`: a whole number of refreshes about `TIMER_FRAME`
 /// long (52-82 Hz), or `None` below 105 Hz, where vsync alone paces them. An unknown rate takes `TIMER_FRAME`.
 pub(crate) fn motion_interval(hz: Option<f64>) -> Option<Duration> {
-    let own = match hz.filter(|hz| hz.is_finite() && *hz > 0.0) {
+    match hz.filter(|hz| hz.is_finite() && *hz > 0.0) {
         None => Some(TIMER_FRAME),
         Some(hz) => {
             let refreshes = (hz * TIMER_FRAME.as_secs_f64() + 0.25).floor();
             (refreshes >= 2.0).then(|| Duration::from_secs_f64(refreshes / hz))
         }
-    };
-    // PATCH (temporary diagnostic): `MIMVOX_DIAG_MOTION_FPS=n` holds motion to at most n frames a second.
-    static CAP: std::sync::OnceLock<Option<Duration>> = std::sync::OnceLock::new();
-    let cap = *CAP.get_or_init(|| std::env::var("MIMVOX_DIAG_MOTION_FPS").ok()
-        .and_then(|v| v.trim().parse::<f64>().ok()).filter(|fps| *fps >= 1.0).map(|fps| Duration::from_secs_f64(1.0 / fps)));
-    match (own, cap) {
-        (Some(own), Some(cap)) => Some(own.max(cap)),
-        (own, cap) => own.or(cap),
     }
 }
 
