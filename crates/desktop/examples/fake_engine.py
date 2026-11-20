@@ -7,6 +7,7 @@ sine-tone WAV chunks (one per sentence) and emitting tts.chunk / tts.done.
 import json
 import math
 import os
+import re
 import struct
 import sys
 import threading
@@ -81,6 +82,31 @@ def tts_job(data_dir, job, params):
                                                     "duration_s": total, "elapsed_s": time.time() - started}})
 
 
+def import_voice(params):
+    """Like the engine's, without audio work: a model file that is not a zip is refused as not a voice model."""
+    for key in ("rvc_model", "rvc_index", "reference_path"):
+        if params.get(key) and not os.path.isfile(params[key]):
+            raise KeyError(f"{key}: file not found: {params[key]}")
+    if not params.get("reference_path"):
+        raise ValueError("give a 'reference_path'")
+    model = params.get("rvc_model")
+    if model:
+        with open(model, "rb") as f:
+            if f.read(2) != b"PK":
+                raise BadRequest("The model file is not a .pth model. If it came in a .zip, unpack it and choose "
+                                 "the .pth inside.")
+    epochs = re.search(r"_(\d+)e(?:_|\.)", os.path.basename(model or ""))
+    v = {"id": "v%d" % (len(VOICES) + 1), "name": params["name"], "created": "now", "preset": None,
+         "language": params.get("language") or "en", "dataset_minutes": 0.0, "parts": 0, "trained": bool(model),
+         "trained_epochs": int(epochs.group(1)) if epochs else None}
+    VOICES.append(v)
+    return v
+
+
+class BadRequest(Exception):
+    pass
+
+
 def next_job():
     JOB_COUNTER[0] += 1
     return "job%d" % JOB_COUNTER[0]
@@ -149,6 +175,8 @@ def handle(data_dir, req):
                  "dataset_minutes": 0.0, "parts": 0, "trained": False, "trained_epochs": None}
             VOICES.append(v)
             result = {"voice": v}
+        elif method == "voices.import":
+            result = {"voice": import_voice(params)}
         elif method == "presets.list":
             result = {"presets": [{"id": "quick", "title": "Quick", "description": "1 minute", "target_minutes": 1,
                                    "trains_rvc": False,
@@ -206,6 +234,8 @@ def handle(data_dir, req):
         send({"id": rid, "result": result})
     except KeyError as e:
         send({"id": rid, "error": {"code": "not_found", "message": f"not found: {e}"}})
+    except BadRequest as e:
+        send({"id": rid, "error": {"code": "bad_request", "message": str(e)}})
     except Exception as e:  # noqa: BLE001
         send({"id": rid, "error": {"code": "internal", "message": str(e)}})
 

@@ -329,6 +329,10 @@ language, e.g. when the first texts read into a still empty voice are in another
   `..._<N>e_...` file name when present and `"imported":true` in `voice.json`.
 - Needs at least a `reference_path` or a `dataset_dir`; `rvc_index` needs `rvc_model`. Errors: `bad_request`,
   `not_found` (a path is missing). On any failure the half-made voice is removed again.
+- `rvc_model` must be an RVC v1/v2 or Applio voice model: a PyTorch file (zip or the legacy format) whose pickle names
+  `weight`, `config` and `emb_g.weight`. Only the pickle's opcodes are read (`pickletools`), nothing is unpickled;
+  anything else (a `.zip` holding the model, a G_/D_ training checkpoint, another kind of `.pth`) is `bad_request`
+  with a message for the user, before the voice is made.
 - `{"bundle","name"?}` imports a voice bundle instead (see [Voice bundles](#voice-bundles-voicesexport--voicesimport-bundle)); `bundle`
   cannot be combined with the four paths above.
 

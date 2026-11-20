@@ -184,7 +184,19 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
     let v = &s.voices;
 
-    let create_card = kit::card(&p).gap(12.0).child(text("New voice").font(ty::TITLE).color(p.text)).child(
+    let import = Button::new("Import voice model…")
+        .small()
+        .secondary()
+        .key("voices-import")
+        .on_press(crate::ui::voiceimport::open)
+        .build(p);
+    let title = row()
+        .w_full()
+        .gap(10.0)
+        .center_y()
+        .child(text("New voice").font(ty::TITLE).color(p.text).grow(1.0))
+        .child(import);
+    let create_card = kit::card(&p).gap(12.0).child(title).child(
         row()
             .w_full()
             .gap(10.0)
@@ -228,7 +240,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if let Some(err) = &v.error {
         body = body.child(kit::notice(&p, Tone::Danger, err));
     }
-    body = body.child(create_card).child(list).child(crate::ui::relocate::footer(s, &p));
+    body = body.child(create_card).child(list);
     kit::page(body)
 }
 

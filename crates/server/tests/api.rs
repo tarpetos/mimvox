@@ -449,6 +449,10 @@ async fn non_loopback_needs_a_token() {
     assert!(!ok);
     assert!(err.contains("refusing to listen on 0.0.0.0:0 without a token"), "{err}");
 
+    // On Windows a listener outside loopback raises a firewall prompt for every newly built test binary.
+    if cfg!(windows) {
+        return;
+    }
     let server = setup.start(&["--bind", "0.0.0.0:0"], &[("MIMVOX_API_TOKEN", "lan-token")]).await;
     let port = server.base.rsplit(':').next().unwrap().to_string();
     let url = format!("http://127.0.0.1:{port}/health");

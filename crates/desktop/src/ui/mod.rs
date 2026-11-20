@@ -25,6 +25,7 @@ pub mod theme;
 pub mod train;
 pub mod trash;
 pub mod update;
+pub mod voiceimport;
 pub mod voices;
 pub mod winplace;
 
@@ -101,13 +102,13 @@ pub fn all_scenes() -> &'static [Scene] {
         all.extend_from_slice(caption::scenes());
         all.extend_from_slice(onboarding::scenes());
         all.extend_from_slice(voices::scenes());
+        all.extend_from_slice(voiceimport::scenes());
         all.extend_from_slice(refclip::scenes());
         all.extend_from_slice(refmedia::scenes());
         all.extend_from_slice(train::scenes());
         all.extend_from_slice(redub::scenes());
         all.extend_from_slice(playbar::scenes());
         all.extend_from_slice(book::scenes());
-        all.extend_from_slice(modules::scenes());
         all.extend_from_slice(update::scenes());
         all.extend_from_slice(settings::scenes());
         all

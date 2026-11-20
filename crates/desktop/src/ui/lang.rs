@@ -150,6 +150,7 @@ pub enum Target {
     RedubTo,
     Reference,
     MediaRef,
+    Import,
 }
 
 #[derive(Default)]
@@ -180,6 +181,7 @@ fn pick(s: &mut AppState, target: Target, code: &str) {
         Target::RedubTo => super::redub::set_to(s, code),
         Target::Reference => super::refclip::start_language(s, code),
         Target::MediaRef => super::refmedia::set_language(s, code),
+        Target::Import => super::voiceimport::set_language(s, code),
     }
 }
 
@@ -190,6 +192,7 @@ fn current(s: &AppState, target: Target) -> String {
         Target::RedubTo => s.redub.to.clone(),
         Target::Reference => String::new(),
         Target::MediaRef => super::refmedia::language(s),
+        Target::Import => super::voiceimport::language(s),
     }
 }
 
@@ -282,6 +285,7 @@ pub fn overlay(s: &AppState, p: &Palette) -> Option<El> {
         Target::RedubTo => "Translate to",
         Target::Reference => "Add a reference for",
         Target::MediaRef => "Media reference for",
+        Target::Import => "Voice language",
     };
     let search = kit::submit_field(
         p,

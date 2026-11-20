@@ -454,6 +454,7 @@ pub fn on_engine_msg(s: &mut AppState, client: u64, m: EngineMsg) {
     on_engine(s, &m);
     super::onboarding::on_engine(s, &m);
     super::voices::on_engine(s, &m);
+    super::voiceimport::on_engine(s, &m);
     super::record::on_engine(s, &m);
     super::train::on_engine(s, &m);
     super::speak::on_engine(s, &m);
@@ -644,16 +645,16 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     if s.shell.voice_menu_open {
         overlays.push(voice_menu(s, p));
     }
-    overlays.extend(super::relocate::overlay(s, &p));
     overlays.extend(super::update::overlay(s, &p));
-    overlays.extend(super::modules::overlay(s, &p));
     overlays.extend(super::settings::overlay(s, &p));
+    overlays.extend(super::relocate::overlay(s, &p));
     overlays.extend(super::train::close_overlay(s, &p));
     overlays.extend(super::formats::overlay(s, p));
     overlays.extend(super::book::voice_overlay(s, p));
     overlays.extend(super::formats::output_overlay(s, p));
     overlays.extend(super::redub::fold_overlay(s, p));
     overlays.extend(super::refclip::more_overlay(s, &p));
+    overlays.extend(super::voiceimport::overlay(s, &p));
     overlays.extend(super::lang::overlay(s, &p)); // after the panels: a language chip inside one opens above it
     overlays.extend(super::record::files_overlay(s, &p));
     let dock =
@@ -967,7 +968,7 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
             p.text_dim,
         ));
     } else if matches!(s.shell.engine, EngineStatus::Ready { .. } | EngineStatus::Starting { .. }) {
-        pill = pill.role("button").hover(p.glass_hover).focusable(true).on_press(super::modules::open);
+        pill = pill.role("button").hover(p.glass_hover).focusable(true).on_press_tx(super::settings::open_modules);
     }
     pill
 }
