@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+* **Choose the voice-cloning models:** OmniVoice is now an optional part like VoxCPM2 and Chatterbox. Setup and
+  **Settings** > **Modules** install any of the three, at least one; the speech engine itself is 9.3 GB instead of
+  12.6 GB. Speak, Book and Redub offer the languages the installed models speak, and with a model picked in Speak
+  (now a dropdown) only that model's languages. Existing installs keep OmniVoice.
+
 ## 0.6.0
 
 * **More voice-cloning models:** two optional parts add other models beside OmniVoice: **VoxCPM2** (6 GB, 30
