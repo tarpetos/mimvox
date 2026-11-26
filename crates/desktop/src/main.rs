@@ -1,6 +1,8 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod audio;
+#[cfg(target_os = "linux")]
+mod desktop;
 mod state;
 mod ui;
 mod update;
@@ -134,6 +136,13 @@ fn main() {
     }
     // Before `run`, so every window opened afterwards shows it.
     let _ = rune::set_app_icon(ICON_PNG);
+    #[cfg(target_os = "linux")]
+    {
+        rune::set_app_id(desktop::app_id());
+        if !rune::is_headless() {
+            desktop::integrate();
+        }
+    }
     let opening = if rune::is_headless() { ui::winplace::Opening::default() } else { ui::winplace::opening() };
     let spec = AppSpec::<AppState> {
         min_size: Some((1040.0, 620.0)),
