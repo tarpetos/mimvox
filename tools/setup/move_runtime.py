@@ -92,15 +92,16 @@ def existing_parent(path: Path) -> Path:
 NOT_MOVED = ("cache", "tmp")
 
 
-def _prune_top(root: Path, dirpath: Path, dirs: list[str]) -> None:
+def _prune_top(root: Path, dirpath: Path, dirs: list[str], files: list[str]) -> None:
     if dirpath == root:
         dirs[:] = [d for d in dirs if d not in NOT_MOVED]
+        files[:] = [f for f in files if f not in NOT_MOVED or not (root / f).is_dir()]
 
 
 def tree_size(root: Path) -> int:
     total = 0
     for dirpath, dirs, files in root.walk():
-        _prune_top(root, dirpath, dirs)
+        _prune_top(root, dirpath, dirs, files)
         for name in files:
             with contextlib.suppress(OSError):
                 total += (dirpath / name).lstat().st_size
@@ -115,7 +116,7 @@ def _inside(child: Path, parent: Path) -> bool:
 def _walk_files(root: Path) -> Iterator[tuple[Path, bool | None]]:
     """``(rel, is_symlink)`` of every file and symlink; directories as ``(rel, None)``."""
     for dirpath, dirs, files in root.walk():
-        _prune_top(root, dirpath, dirs)
+        _prune_top(root, dirpath, dirs, files)
         rel_dir = dirpath.relative_to(root)
         yield rel_dir, None
         for name in files:

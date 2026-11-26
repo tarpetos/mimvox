@@ -469,11 +469,18 @@ def has_runtime(data_dir: Path) -> bool:
     )
 
 
+def _drive_exists(root: str) -> bool:
+    try:
+        return Path(root).exists()
+    except OSError:
+        return False
+
+
 def volumes(plat: str) -> list[tuple[str, float]]:
     """``(mount point or drive, free GB)`` of the volumes worth offering for the install."""
     roots: list[str] = []
     if plat == "windows":
-        roots = [f"{c}:\\" for c in "CDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{c}:\\").exists()]
+        roots = [f"{c}:\\" for c in "CDEFGHIJKLMNOPQRSTUVWXYZ" if _drive_exists(f"{c}:\\")]
     else:
         roots = ["/", str(Path.home())]
         for base in ("/mnt", "/media", "/run/media", "/Volumes"):

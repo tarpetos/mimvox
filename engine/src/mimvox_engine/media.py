@@ -545,7 +545,7 @@ def export(path: str | Path, fmt: str, dest: str | Path | None = None, quality: 
             raise EngineError("bad_request", "'dest' must be an absolute file path")
         if dest.is_dir():
             raise EngineError("bad_request", "'dest' must be a file path, not a folder")
-    if dest.absolute() == path:
+    if dest.resolve() == path.resolve():
         raise EngineError("bad_request", "'dest' must differ from the source file")
     dest.parent.mkdir(parents=True, exist_ok=True)
     # keeps the extension so ffmpeg picks the muxer
