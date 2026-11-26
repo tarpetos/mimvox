@@ -1,21 +1,15 @@
 use std::path::{Path, PathBuf};
 
-// The id the window gives the system, which finds the app's entry by it: its icon in the dock and the list of apps.
-// The .deb installs mimvox.desktop; an AppImage writes an entry of its own, under another name, so that one never
-// hides the other.
 pub fn app_id() -> &'static str {
     if std::env::var_os("APPIMAGE").is_some() { APPIMAGE_ID } else { "mimvox" }
 }
 
 const APPIMAGE_ID: &str = "mimvox-appimage";
 
-// An AppImage is one file that nothing installs: at each start it puts its icon and an entry for the list of apps in
-// the user's folders, pointing at where it is now, and shows the icon on the file itself in the file manager.
 pub fn integrate() {
     let (Some(image), Some(data)) = (std::env::var_os("APPIMAGE").map(PathBuf::from), dirs::data_dir()) else {
         return;
     };
-    // Before the window opens: the system matches a window to an entry when it appears.
     if let Err(e) = add_entry(&image, &data) {
         eprintln!("mimvox: the AppImage was not added to the list of apps: {e}");
         return;
@@ -27,8 +21,6 @@ fn icon_path(data: &Path) -> PathBuf {
     data.join("icons/hicolor/512x512/apps").join(format!("{APPIMAGE_ID}.png"))
 }
 
-// The entry starts a link that each start points at the AppImage, wherever it is now: an update renames the file,
-// and the system keeps an entry it has read, so an entry that named the file would start one that is gone.
 fn link_path(data: &Path) -> PathBuf {
     data.join(APPIMAGE_ID).join("mimvox")
 }
@@ -49,7 +41,6 @@ fn add_entry(image: &Path, data: &Path) -> std::io::Result<()> {
     write_if_changed(&entry, desktop_entry(&link).as_bytes())
 }
 
-// The file manager shows a file's own icon from GIO's metadata; where gio is missing the file keeps its icon.
 fn show_icon(image: &Path, data: &Path) {
     let uri = format!("file://{}", icon_path(data).display());
     let shown = std::process::Command::new("gio").args(["info", "-a", "metadata::custom-icon"]).arg(image).output();
@@ -62,7 +53,6 @@ fn show_icon(image: &Path, data: &Path) {
     }
 }
 
-// Written beside and renamed into place, so that what reads the folder never sees half a file.
 fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if std::fs::read(path).is_ok_and(|old| old == bytes) {
         return Ok(());
@@ -76,7 +66,6 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn desktop_entry(image: &Path) -> String {
-    // The quoting of an Exec key: the path in double quotes, with these four characters escaped.
     let mut quoted = String::new();
     for c in image.to_string_lossy().chars() {
         if matches!(c, '"' | '`' | '$' | '\\') {
@@ -112,7 +101,6 @@ mod tests {
             std::fs::read(data.join("icons/hicolor/512x512/apps/mimvox-appimage.png")).unwrap(),
             crate::ICON_PNG
         );
-        // Renamed, as an update does: the link follows, the entry stays as it was.
         let moved = image.with_file_name("Mimvox_0.6.1_x86_64.AppImage");
         std::fs::rename(&image, &moved).unwrap();
         add_entry(&moved, &data).unwrap();
