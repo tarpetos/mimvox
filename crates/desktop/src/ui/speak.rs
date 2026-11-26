@@ -1038,8 +1038,8 @@ pub fn model(s: &AppState) -> String {
 fn model_help(id: &str) -> &'static str {
     match id {
         "omnivoice" => "OmniVoice: about 60 languages, the fastest",
-        "voxcpm" => "VoxCPM2: 30 languages, stays closest to the voice in another language; about 6 times slower",
-        "chatterbox" => "Chatterbox: 23 languages, very close to the voice in English; about 5 times slower",
+        "voxcpm" => "VoxCPM2: 30 languages, stays closest to the voice in another language; about 7 times slower",
+        "chatterbox" => "Chatterbox: 23 languages, very close to the voice in English; about 3 times slower",
         _ => "",
     }
 }
