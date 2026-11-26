@@ -92,3 +92,35 @@ def test_setup_installs_what_the_engine_looks_for():
         assert setup.CLONE_STAMP == clone.STAMP
         assert b.name in setup.COMPONENTS
         assert spec["revision"] and len(spec["revision"]) == 40
+
+
+@pytest.fixture
+def no_omnivoice(monkeypatch):
+    from mimvox_engine.backends.omnivoice import OMNIVOICE
+
+    monkeypatch.setattr(OMNIVOICE, "_status", "missing")
+    monkeypatch.setattr(OMNIVOICE, "_absent", True)
+
+
+def test_without_omnivoice_another_model_speaks_its_own_languages(tmp_path, no_omnivoice):
+    assert tts.speech_status() == "missing"
+    probe(install(tmp_path, "chatterbox"))
+    assert tts.speech_status() == "ready"
+    assert backends.languages() == set(clone.CHATTERBOX.languages)
+    assert tts.speech_language({"language": "en"}) == ("en", clone.CHATTERBOX)
+    with pytest.raises(EngineError):
+        tts.speech_language({"language": "uk"})
+
+
+def test_the_last_voice_model_stays_on(tmp_path, no_omnivoice):
+    import asyncio
+    from types import SimpleNamespace
+
+    from mimvox_engine import components
+
+    probe(install(tmp_path, "chatterbox", "voxcpm"))
+    ctx = SimpleNamespace(data_dir=tmp_path)
+    asyncio.run(components.components_set(ctx, {"id": "voxcpm", "on": False}))
+    with pytest.raises(EngineError) as e:
+        asyncio.run(components.components_set(ctx, {"id": "chatterbox", "on": False}))
+    assert e.value.code == "bad_request"

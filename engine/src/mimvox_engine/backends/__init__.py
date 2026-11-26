@@ -37,7 +37,7 @@ class TtsBackend(abc.ABC):
         return None
 
     def available(self) -> bool:
-        """The main backend always; an optional one only while ready, so its languages fall through otherwise."""
+        """While installed and not failed, so its languages fall through to another backend otherwise."""
         return True
 
     async def load(self, runtime: dict[str, Any]) -> None:  # noqa: B027 - optional hook, a no-op by default
@@ -90,19 +90,12 @@ def for_language(lang: str, skip: tuple[str, ...] = ()) -> TtsBackend | None:
 
 
 def languages() -> set[str]:
-    """What the main model speaks plus what an installed extra model adds."""
+    """What the installed models speak."""
     out: set[str] = set()
     for b in all_backends():
-        if b.name == "omnivoice" or b.status() != "missing":
+        if b.status() != "missing":
             out |= set(b.languages)
     return out
-
-
-def primary() -> TtsBackend:
-    from .omnivoice import OMNIVOICE
-
-    all_backends()
-    return OMNIVOICE
 
 
 def _builtin() -> None:

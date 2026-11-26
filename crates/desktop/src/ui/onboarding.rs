@@ -404,7 +404,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         "Clone your own voice on this computer, then type any text and hear it spoken the way you would say it. \
          Drop in recordings you already have, or read a short guided text for about 6 minutes: the voice speaks at \
          once, and about an hour of training on an RTX-class GPU makes it closer to you. It speaks English, Ukrainian \
-         and 60+ other languages. Everything stays on your machine.",
+         and many other languages, about 60 with OmniVoice. Everything stays on your machine.",
     )
     .font(ty::BODY)
     .color(p.text_dim)
@@ -415,7 +415,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         .gap(12.0)
         .child(step(&p, 1, "Record", "Your recordings, or 6 minutes of guided reading"))
         .child(step(&p, 2, "Train", "Optional: about 1 hour on an RTX-class GPU"))
-        .child(step(&p, 3, "Speak", "Any text in 60+ languages, in your voice"));
+        .child(step(&p, 3, "Speak", "Any text in many languages, in your voice"));
 
     let mut page = col().w_full().gap(18.0).child(kit::panel(&p).gap(18.0).child(hero).child(intro).child(steps));
     page = page.child(engine_card(&p, s));

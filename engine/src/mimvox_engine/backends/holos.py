@@ -55,6 +55,7 @@ class HolosBackend(TtsBackend):
     def __init__(self) -> None:
         self._client: WorkerClient | None = None
         self._status = "missing"
+        self._loaded_once = False
         self._warm: OrderedDict[tuple, None] = OrderedDict()
         self.last_load: dict[str, Any] = {}
 
@@ -63,6 +64,10 @@ class HolosBackend(TtsBackend):
 
     def available(self) -> bool:
         return self._status == "ready"
+
+    def probe(self, runtime: dict[str, Any]) -> None:
+        if not self._loaded_once and installed(runtime):
+            self._status = "loading"
 
     def _ensure_client(self, runtime: dict[str, Any]) -> WorkerClient:
         if self._client is None:
@@ -85,9 +90,10 @@ class HolosBackend(TtsBackend):
         return self._client
 
     async def load(self, runtime: dict[str, Any]) -> None:
+        self._loaded_once = True
         if not installed(runtime):
             self._status = "missing"
-            log.info("Ukrainian speech (HolosTTS) is not installed: Ukrainian is spoken by OmniVoice")
+            log.info("Ukrainian speech (HolosTTS) is not installed: OmniVoice speaks Ukrainian when installed")
             return
         self._status = "loading"
         client = self._ensure_client(runtime)
@@ -95,7 +101,7 @@ class HolosBackend(TtsBackend):
             self.last_load = await client.call("load", timeout=LOAD_TIMEOUT_S)
         except (WorkerError, WorkerDied, WorkerCancelled) as exc:
             self._status = "missing"
-            log.error("HolosTTS failed to load (Ukrainian falls back to OmniVoice): %s", exc)
+            log.error("HolosTTS failed to load (OmniVoice speaks Ukrainian when installed): %s", exc)
             return
         self._status = "ready"
         log.info("HolosTTS ready: %s", self.last_load)

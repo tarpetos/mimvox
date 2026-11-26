@@ -11,7 +11,9 @@ from .registry import EngineError, method
 log = logging.getLogger("mimvox.components")
 
 FILE = "components.json"
+SPEECH_MODELS = ("omnivoice", "voxcpm", "chatterbox")
 OPTIONAL = (
+    "omnivoice",
     "training",
     "translation",
     "better_translation",
@@ -73,5 +75,11 @@ async def components_set(ctx, params):  # noqa: ANN001, ANN201 - registry handle
 
     names = await aio.run_io(_read, ctx.data_dir)
     names = (names - {name}) if on else (names | {name})
+    if name in SPEECH_MODELS and not on:
+        from . import backends
+
+        left = {b.name for b in backends.selectable()} & set(SPEECH_MODELS) - names
+        if not left:
+            raise EngineError("bad_request", "at least one voice-cloning model has to stay on")
     await aio.run_io(_save, ctx.data_dir, names)
     return {"off": [c for c in OPTIONAL if c in names], "restart": True}

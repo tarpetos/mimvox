@@ -243,7 +243,7 @@ OMNIVOICE_REQUIRED = (
 
 MIN_RUST = (1, 97)
 RUNTIME_GB = 30
-ENGINE_GB = 11  # engine venv (torch 2.11 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + OmniVoice (3.3 GB)
+OMNIVOICE_GB = 3.3
 APPLIO_GB = 12
 SPEECH_GB = 4.5  # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
 BETTER_TRANSLATION_GB = 2.7  # NLLB-200 1.3B in fp16 (a 5.5 GB download), with a GPU or --better-translation yes
@@ -253,7 +253,8 @@ DISK_NEEDED_GB = 34
 # "speech" is always installed; the rest are chosen in the app (or --components / --add) and recorded in runtime.toml.
 # Sizes on disk in GB, also in COMPONENTS in crates/desktop/src/ui/setuprun.rs.
 COMPONENTS = {
-    "speech": 12.6,  # engine venv + OmniVoice (11) + Whisper turbo (1.6): Speak, Book, Redub's Re-speak
+    "speech": 9.3,  # engine venv (7.7) + Whisper turbo (1.6)
+    "omnivoice": OMNIVOICE_GB,
     "training": APPLIO_GB,  # Applio/RVC: Train, voice match for trained voices, Redub's Convert voice
     "translation": 2.5,  # NLLB-200 600M: Redub's Translate & dub
     "better_translation": BETTER_TRANSLATION_GB,  # NLLB-200 1.3B (a 5.5 GB download)
@@ -263,6 +264,7 @@ COMPONENTS = {
     "voxcpm": 6.0,
     "chatterbox": 4.3,
 }
+SPEECH_MODELS = ("omnivoice", "voxcpm", "chatterbox")
 # Portable ffmpeg for Windows when Applio (which brings one) is not installed.
 FFMPEG_WINDOWS_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-{}-gpl.zip"
 UV_HTTP_TIMEOUT = "600"
@@ -919,6 +921,10 @@ class Setup:
             chosen.discard("better_translation")
         if args.no_zero_shot_vc:
             chosen.discard("native_accent")
+        if previous is not None and self._has(self.omnivoice_model, OMNIVOICE_REQUIRED):
+            chosen.add("omnivoice")
+        if not chosen & set(SPEECH_MODELS):
+            chosen.add("omnivoice")
         chosen.add("speech")
         self.components = chosen
         say("Components: " + ", ".join(c for c in COMPONENTS if c in chosen))
@@ -975,12 +981,12 @@ class Setup:
                     f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
                     "now: the native accent for voices that are not trained (--no-zero-shot-vc leaves it out)."
                 )
-            if not self._has(self.omnivoice_model, OMNIVOICE_REQUIRED) and not self.skip_models:
-                say(
-                    f"The OmniVoice speech model (every language, Ukrainian included) will be installed now: about "
-                    f"{ENGINE_GB} GB (the engine environment in <data>/runtime/engine, the model in "
-                    "<data>/runtime/models/omnivoice)."
-                )
+            if (
+                "omnivoice" in self.components
+                and not self._has(self.omnivoice_model, OMNIVOICE_REQUIRED)
+                and not self.skip_models
+            ):
+                say(f"The OmniVoice voice-cloning model (about {OMNIVOICE_GB} GB) will be installed now.")
             if self.legacy_indextts.is_dir():
                 say(
                     f"{self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used; setup offers to delete it "
@@ -988,7 +994,8 @@ class Setup:
                 )
         else:
             labels = {
-                "speech": "speech engine, OmniVoice and Whisper",
+                "speech": "speech engine and Whisper",
+                "omnivoice": "OmniVoice voice cloning",
                 "training": "voice training (Applio/RVC)",
                 "translation": "translation for Redub",
                 "better_translation": "better translation",
@@ -1599,6 +1606,7 @@ class Setup:
         """What ``--remove`` deletes for an optional component."""
         return {
             "training": [self.applio],
+            "omnivoice": [self.omnivoice_model],
             "translation": [self.models_dir / NLLB_DIR],
             "better_translation": [self.models_dir / NLLB_BIG_DIR],
             "native_accent": [self.seed_vc, self.seed_vc_models],
@@ -2060,8 +2068,8 @@ class Setup:
             + "".join(f"{n} = {toml_str(self.clone_python(n))}\n" for n in clones)
             + "\n[paths]\n"
             + (f"applio = {toml_str(self.applio)}\n" if training else "")
-            + f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
-            f"seed_vc = {toml_str(self.seed_vc)}\n"
+            + (f"omnivoice_model = {toml_str(self.omnivoice_model)}\n" if "omnivoice" in self.components else "")
+            + f"seed_vc = {toml_str(self.seed_vc)}\n"
             f"seed_vc_models = {toml_str(self.seed_vc_models)}\n"
             + (f"holos_model = {toml_str(self.holos_models)}\n" if ukrainian else "")
             + "".join(f"{n}_model = {toml_str(self.clone_models_dir(n))}\n" for n in clones)
@@ -2161,7 +2169,9 @@ class Setup:
                 problems.append(
                     f"Applio is not at the pinned commit {APPLIO_COMMIT[:9]} (found {head[:9] or 'nothing'})."
                 )
-        checks = [("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)]
+        checks = (
+            [("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)] if "omnivoice" in self.components else []
+        )
         if training:
             checks.insert(0, ("Applio prerequisites", self.applio, self.applio_required()))
         if "ukrainian" in self.components:
@@ -2566,8 +2576,12 @@ def remove_components(setup: Setup, value: str) -> int:
             f"{', '.join(c for c in COMPONENTS if c != 'speech')})."
         )
         return 1
+    if not (setup.components & set(SPEECH_MODELS)) - set(items):
+        say("Failed: at least one voice-cloning model (OmniVoice, VoxCPM2 or Chatterbox) has to stay installed.")
+        return 1
     labels = {
         "training": "Voice training",
+        "omnivoice": "OmniVoice voice cloning",
         "translation": "Translation",
         "better_translation": "Better translation",
         "native_accent": "Native accent",
@@ -2734,7 +2748,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         plan.append(("applio_source", "Voice training: source"))
     plan.append(("engine_env", "Speech engine"))
     if models:
-        plan += [("omnivoice", "Speech model"), ("whisper", "Speech recognition (Whisper)")]
+        if has("omnivoice"):
+            plan.append(("omnivoice", "OmniVoice: model"))
+        plan.append(("whisper", "Speech recognition (Whisper)"))
         if has("translation"):
             plan.append(("speech_models", "Translation model"))
         if better:
@@ -2785,7 +2801,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if attempt("engine_env", setup.engine_env):
         if models:
-            attempt("omnivoice", setup.omnivoice_models)
+            if has("omnivoice"):
+                attempt("omnivoice", setup.omnivoice_models)
             attempt("whisper", setup.whisper_model)
             if has("translation"):
                 attempt("speech_models", setup.speech_models)

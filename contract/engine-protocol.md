@@ -266,7 +266,7 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 "components":["speech","training","translation","better_translation","native_accent","music_removal","ukrainian"],
 "components_off":[],"speech_models":[{"id":"omnivoice","name":"OmniVoice","languages":["ar","as",...]},
 {"id":"voxcpm","name":"VoxCPM2","languages":[...]}]}`
-- `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
+- `languages`: every language the installed speech models speak (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl ro it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
   `tts.languages {}` -> `{"languages":[...]}`.
@@ -284,24 +284,25 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 - `zero_shot_vc`: setup installed the zero-shot voice converter (Seed-VC), so `accent: "native-us"` also works for an
   untrained voice (see [Native accent](#native-accent-accent)). Read at engine start.
 - `components`: the parts of the runtime that are installed, from the files on disk (setup's `COMPONENTS`): `speech`
-  (engine, OmniVoice, Whisper: always there in a complete runtime), `training` (Applio/RVC: Train, voice match, Redub's
+  (the engine environment and Whisper: always there in a complete runtime), `omnivoice` (the OmniVoice weights), `training` (Applio/RVC: Train, voice match, Redub's
   Convert voice), `translation` (NLLB-200 600M: Redub's Translate & dub), `better_translation` (NLLB-200 1.3B),
   `native_accent` (Seed-VC), `music_removal` (Hybrid Demucs) and `ukrainian` (HolosTTS: Ukrainian with exact word
   stress, see [Ukrainian with exact stress](#ukrainian-with-exact-stress-holostts)). The app offers to install a missing one where it is
-  needed (setup `--add <component>`). `voxcpm` and `chatterbox` are more voice-cloning models (see
+  needed (setup `--add <component>`). `omnivoice`, `voxcpm` and `chatterbox` are the voice-cloning models, at least one of
+  them installed (see
   [Other voice-cloning models](#other-voice-cloning-models-voxcpm2-chatterbox)). Without `training` runtime.toml has no `[python] rvc` / `[paths] applio` and
   `models.rvc` is `missing`. Read at engine start.
-- `speech_models`: the voice-cloning models `tts.generate` and `book.start` may name in `model`, OmniVoice first, then
-  the installed and turned-on `voxcpm` and `chatterbox`, each with the language codes it speaks. `languages` also
-  lists what only one of those speaks (Hebrew, Malay, Tagalog, ...).
+- `speech_models`: the installed and turned-on voice-cloning models `tts.generate` and `book.start` may name in
+  `model` (`omnivoice`, `voxcpm`, `chatterbox`, in that order), each with the language codes it speaks. `languages` is
+  their union, plus Ukrainian with HolosTTS.
 - `components_off`: installed parts the user turned off (`<data>/components.json`, `{"off":[...]}`). They are left
   out of `components`, `translators` and `zero_shot_vc`, and the engine does not use them: no HolosTTS, no Seed-VC,
   no RVC worker, no translator, no music removal. Read at engine start.
 
 ### `components.set`
 `{"id":"<optional component>","on":true|false}` -> `{"off":[...],"restart":true}`: turns an installed part on or off
-in `components.json`. It takes effect when the engine starts again, so the app restarts it. `speech` cannot be turned
-off (`bad_request`). Removing a part is setup's job: `setup --remove <component>` deletes its folders and rewrites
+in `components.json`. It takes effect when the engine starts again, so the app restarts it. `speech` and the last
+voice-cloning model that is on cannot be turned off (`bad_request`); setup refuses to remove the last one too. Removing a part is setup's job: `setup --remove <component>` deletes its folders and rewrites
 runtime.toml; the app stops the engine first, since running workers keep the files open.
 
 ### `voices.list`
@@ -884,17 +885,18 @@ for OmniVoice. Measured on an RTX 4070: about 0.1 s per second of speech (10x Om
   HolosTTS is installed. A book keeps the value it started with.
 
 When the component is not installed, failed to load or is paused for a training, Ukrainian goes to OmniVoice as before
-(`backends.for_language` skips a backend that is not `available()`). The `tts` entry of `models` stays OmniVoice's.
+(`backends.for_language` skips a backend that is not `available()`). The `tts` entry of `models` is OmniVoice's
+while it is installed, else that of the other voice-cloning models (`ready` once one of them is installed).
 
 ### Other voice-cloning models (VoxCPM2, Chatterbox)
 
 The optional `voxcpm` (VoxCPM2, OpenBMB, Apache-2.0) and `chatterbox` (Chatterbox Multilingual, Resemble AI, MIT)
-components are voice-cloning models beside OmniVoice. Each runs in a worker process with the interpreter of its own
+components are voice-cloning models beside OmniVoice, which is optional as well. Each runs in a worker process with the interpreter of its own
 environment (`backends/voxcpm_worker.py`, `backends/chatterbox_worker.py`, sharing `backends/clone_worker.py`; ops
 `load`, `synth`, `release`, `status`).
 
-- **`model`** (`tts.generate`, `book.start`; default `"auto"`): `"auto"` is OmniVoice (HolosTTS for Ukrainian with
-  `exact_stress`), or the first installed model that speaks a language OmniVoice does not; `"omnivoice"`, `"voxcpm"`
+- **`model`** (`tts.generate`, `book.start`; default `"auto"`): `"auto"` is the first installed model that speaks the
+  language, OmniVoice first (HolosTTS for Ukrainian with `exact_stress`); `"omnivoice"`, `"voxcpm"`
   or `"chatterbox"` names one. A named model that is not installed is `not_ready`, one that does not speak
   `language` is `bad_request`, any other value is `bad_request`. A book keeps the value it started with. The reply
   of `tts.generate` and `tts.done` say which model spoke (`model`). Redub always speaks with `"auto"`.
@@ -905,8 +907,9 @@ environment (`backends/voxcpm_worker.py`, `backends/chatterbox_worker.py`, shari
   released their models (`no_vram`), the idle worker processes end too and the request is tried once more; they start
   again on their next request. On a 12 GB card a switch between models costs 10-20 s.
 - **Reference.** The worker clones from the clip (`reference_<lang>.wav` when it exists). VoxCPM2 clones best from the
-  clip together with what it says: it uses the stretch of the clip OmniVoice transcribed (its `.omnivoice.json`), and
-  asks OmniVoice to transcribe the clip first when there is no transcript yet. With `accent: "native-us"` it speaks
+  clip together with what it says: it uses the stretch of the clip Whisper transcribed (its `.omnivoice.json`), and
+  asks the OmniVoice worker to transcribe the clip first when there is no transcript yet (Whisper only: the worker
+  runs without the OmniVoice weights, and hosts Seed-VC either way). With `accent: "native-us"` it speaks
   from the native clip and its transcript, and the converter gives it the user's timbre as for OmniVoice.
 - **Controls.** Neither model has a speed control: the engine stretches the result to `speed` with ffmpeg (pitch
   kept). `quality` is VoxCPM2's diffusion steps (10 Best, 6 Fast); `expressiveness` is Chatterbox's exaggeration

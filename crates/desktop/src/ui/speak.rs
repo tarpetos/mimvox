@@ -1,8 +1,9 @@
 //! Speak screen: type text, press Generate, hear it in your voice while it is still being made.
 
 use super::components::{
-    Button, Slider, TextArea, Tone, accent_glass, badge, empty_state, glass_card, glass_panel, icon_button,
-    icon_button_if, icon_el, icons, progress_bar, section_panel, segmented_fill, segmented_help, status_dot,
+    Button, Slider, TextArea, Tone, accent_glass, badge, dropdown_chip, empty_state, glass_card, glass_edge,
+    glass_panel, icon_button, icon_button_if, icon_el, icons, progress_bar, section_panel, segmented_fill,
+    segmented_help, status_dot,
 };
 use super::lang;
 use super::playbar;
@@ -12,7 +13,7 @@ use super::trash;
 use crate::engine::EngineMsg;
 use crate::engine::protocol::{self, EngineEvent, NativeVoice, Quality, TtsChunk, TtsStarted};
 use crate::state::{AppState, Screen};
-use rune::{Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, row, text};
+use rune::{Align, Color, Cx, El, Key, KeyEvent, ScrollSpec, Side, TextEdit, Tx, col, el, row, text};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -171,6 +172,7 @@ pub struct SpeakState {
     pub exact_stress: bool,
     pub model: String,
     model_dirty: bool,
+    model_menu: bool,
     speed_loaded: bool,
     /// What `speak-text.txt` holds, so the text is written only when it changed.
     text_saved: Option<String>,
@@ -203,6 +205,7 @@ impl Default for SpeakState {
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_else(|| "auto".into()),
             model_dirty: false,
+            model_menu: false,
             speed_loaded: false,
             text_saved: None,
             speed_dirty: false,
@@ -1037,46 +1040,45 @@ pub fn model(s: &AppState) -> String {
 
 fn model_help(id: &str) -> &'static str {
     match id {
-        "omnivoice" => "OmniVoice: about 60 languages, the fastest",
-        "voxcpm" => "VoxCPM2: 30 languages, stays closest to the voice in another language; about 7 times slower",
-        "chatterbox" => "Chatterbox: 23 languages, very close to the voice in English; about 3 times slower",
+        "omnivoice" => "About 60 languages, the fastest",
+        "voxcpm" => "30 languages, stays closest to the voice in another language; about 7 times slower",
+        "chatterbox" => "23 languages, very close to the voice in English; about 3 times slower",
         _ => "",
     }
 }
 
+fn model_label(s: &AppState, id: &str) -> String {
+    if id == "auto" {
+        return "Auto".to_owned();
+    }
+    s.shell.speech_models.iter().find(|m| m.id == id).map_or_else(|| id.to_owned(), |m| m.name.clone())
+}
+
+fn auto_help(s: &AppState) -> &'static str {
+    if s.shell.speech_models.iter().any(|m| m.id == "omnivoice") {
+        "OmniVoice (HolosTTS for Ukrainian with exact stress), or another model for a language OmniVoice does not speak"
+    } else {
+        "The first installed model that speaks the language (HolosTTS for Ukrainian with exact stress)"
+    }
+}
+
 fn model_row(s: &AppState, p: Palette) -> Option<El> {
+    if s.shell.speech_models.len() < 2 {
+        return None;
+    }
     let code = language(s);
-    let models: Vec<(String, String)> = s
-        .shell
-        .speech_models
-        .iter()
-        .filter(|m| m.id != "omnivoice" && m.languages.contains(&code))
-        .map(|m| (m.id.clone(), if m.name.is_empty() { m.id.clone() } else { m.name.clone() }))
-        .collect();
-    let mut ids = vec!["auto".to_owned()];
-    ids.extend(models.iter().map(|(id, _)| id.clone()));
-    let mut labels = vec!["Auto"];
-    labels.extend(models.iter().map(|(_, name)| name.as_str()));
-    let mut helps = vec![
-        "OmniVoice (HolosTTS for Ukrainian with exact stress), or another model for a language OmniVoice does not speak",
-    ];
-    helps.extend(models.iter().map(|(id, _)| model_help(id)));
     let chosen = model(s);
     let unsupported = (s.speak.model != "auto" && chosen == "auto")
         .then(|| s.shell.speech_models.iter().find(|m| m.id == s.speak.model))
         .flatten()
         .map(|m| format!("{} does not speak {}: Auto reads it.", m.name, lang::name(&code)));
-    if models.is_empty() {
-        return unsupported.map(|note| {
-            el().key("speak-model").w_full().child(text(note).font(ty::CAPTION).color(p.text_faint).wrap())
-        });
-    }
-    let selected = ids.iter().position(|id| *id == chosen).unwrap_or(0);
-    let pick_ids = ids.clone();
-    let mut c = col()
+    let label = model_label(s, &chosen);
+    let head = row()
         .key("speak-model")
         .w_full()
-        .gap(8.0)
+        .center_y()
+        .justify_between()
+        .gap(10.0)
         .child(
             col()
                 .gap(1.0)
@@ -1084,16 +1086,111 @@ fn model_row(s: &AppState, p: Palette) -> Option<El> {
                 .child(text("Model").font(ty::LABEL).color(p.text))
                 .child(text("What clones the voice").font(ty::CAPTION).color(p.text_faint)),
         )
-        .child(segmented_help(p, "speak-model-pick", &labels, &helps, selected, move |s, i| {
-            if let Some(id) = pick_ids.get(i) {
-                s.speak.model = id.clone();
-                s.speak.model_dirty = true;
-            }
-        }));
+        .child(dropdown_chip(
+            p,
+            "speak-model-chip",
+            &icons::SPARKLE,
+            &label,
+            format!("Model: {label}"),
+            true,
+            |s: &mut AppState| s.speak.model_menu = !s.speak.model_menu,
+        ));
+    let mut c = col().w_full().gap(8.0).child(head);
     if let Some(note) = unsupported {
         c = c.child(text(note).font(ty::CAPTION).color(p.text_faint).wrap());
     }
     Some(c)
+}
+
+pub fn model_overlay(s: &AppState, p: Palette) -> Option<El> {
+    if !s.speak.model_menu || s.screen != Screen::Speak {
+        return None;
+    }
+    let scrim = el()
+        .key("speak-model-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .on_press(|s: &mut AppState| s.speak.model_menu = false);
+    let chosen = model(s);
+    let mut ids = vec!["auto".to_owned()];
+    ids.extend(s.shell.speech_models.iter().map(|m| m.id.clone()));
+    let mut list = col().w_full().gap(2.0);
+    for id in ids {
+        let on = chosen == id;
+        let help = if id == "auto" { auto_help(s) } else { model_help(&id) };
+        let label = model_label(s, &id);
+        let pick = id.clone();
+        list = list.child(
+            row()
+                .key(format!("speak-model-{id}"))
+                .role("button")
+                .label(label.clone())
+                .checked(on)
+                .w_full()
+                .min_h(40.0)
+                .px(12.0)
+                .py(6.0)
+                .gap(10.0)
+                .center_y()
+                .radius(16.0)
+                .fill(if on { p.accent.alpha(0.16) } else { Color::TRANSPARENT })
+                .hover(p.glass_hover)
+                .focusable(true)
+                .motion(motion::UI)
+                .on_press(move |s: &mut AppState| {
+                    s.speak.model_menu = false;
+                    pick_model(s, &pick);
+                })
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(1.0)
+                        .child(text(label).font(ty::LABEL).color(p.text).a11y_hidden())
+                        .child(text(help).font(ty::CAPTION).color(p.text_faint).wrap().a11y_hidden()),
+                )
+                .child(el().w(16.0).children(on.then(|| icon_el(&icons::CHECK, 14.0, p.accent)))),
+        );
+    }
+    let panel = col()
+        .key("speak-model-menu")
+        .w(340.0)
+        .padding(10.0)
+        .radius(theme::radius::PANEL + 4.0)
+        .fill(rune::oklcha(0.2, 0.03, 255.0, 0.97))
+        .gradient(p.glass_top, p.glass_bottom)
+        .border_gradient(1.0, p.rim_top, p.rim_bottom)
+        .shadow(18.0, 50.0, p.shadow)
+        .backdrop_blur(28.0)
+        .anchored_fit("speak-model-chip", Side::Bottom, Align::End, 8.0)
+        .transition(rune::Transition::scale(0.98))
+        .child(list);
+    Some(
+        el().key("speak-model-layer")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .child(scrim)
+            .child(glass_edge(p, panel)),
+    )
+}
+
+pub fn model_languages(s: &AppState) -> Option<&[String]> {
+    s.shell.speech_models.iter().find(|m| m.id == s.speak.model).map(|m| m.languages.as_slice())
+}
+
+fn pick_model(s: &mut AppState, id: &str) {
+    s.speak.model = id.to_owned();
+    s.speak.model_dirty = true;
+    let Some(langs) = model_languages(s).map(<[String]>::to_vec) else { return };
+    if langs.contains(&language(s)) {
+        return;
+    }
+    let own = shell::active_voice(s).map(|v| v.lang().to_owned());
+    let next = own
+        .filter(|v| langs.contains(v))
+        .or_else(|| langs.iter().find(|l| *l == "en").cloned())
+        .or_else(|| langs.first().cloned());
+    if let Some(next) = next {
+        set_language(s, &next);
+    }
 }
 
 fn language_row(s: &AppState, p: Palette) -> El {
@@ -1527,6 +1624,11 @@ pub fn scene_models(s: &mut AppState) {
     s.speak.model = "voxcpm".into();
 }
 
+pub fn scene_model_menu(s: &mut AppState) {
+    scene_models(s);
+    s.speak.model_menu = true;
+}
+
 pub fn scene_model_unsupported(s: &mut AppState) {
     scene_language_uk(s);
     demo_models(s);
@@ -1535,8 +1637,9 @@ pub fn scene_model_unsupported(s: &mut AppState) {
 
 pub fn scene_language_uk_no_extension(s: &mut AppState) {
     scene_language_uk(s);
-    s.shell.components =
-        Some(["speech", "training", "translation", "native_accent", "music_removal"].map(String::from).to_vec());
+    s.shell.components = Some(
+        ["speech", "omnivoice", "training", "translation", "native_accent", "music_removal"].map(String::from).to_vec(),
+    );
 }
 
 fn demo_voice_uk(s: &mut AppState, trained: bool) {

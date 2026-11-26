@@ -153,19 +153,18 @@ class WorkerBackend(TtsBackend):
         log.info("%s loaded in %.1fs: %s", self.label, time.time() - t0, self.last_load)
 
     async def _prompt(self, reference: str, lang: str, params: SynthParams) -> dict[str, Any]:
-        """The clip and, when known, the stretch of it that OmniVoice transcribed (start, end, text)."""
+        """The clip and, when known, the stretch of it Whisper transcribed (start, end, text)."""
         if params.reference_text:
             return {"ref": reference, "ref_text": params.reference_text}
         from .omnivoice import OMNIVOICE, reference_for
 
         ref = reference_for(reference, lang)
         side = reflang.read_sidecar(ref)
-        if self.transcript and side is None and OMNIVOICE.status() == "ready":
-            try:
-                await OMNIVOICE.warm(ref, lang)
-            except EngineError as exc:
-                log.warning("%s: no transcript of %s (%s); cloning from the audio only", self.label, ref, exc.message)
+        if self.transcript and side is None:
+            await OMNIVOICE.inspect(str(ref), detect=False)
             side = reflang.read_sidecar(ref)
+            if side is None:
+                log.warning("%s: no transcript of %s; cloning from the audio only", self.label, ref)
         prompt: dict[str, Any] = {"ref": ref}
         if side and side.get("text") and side.get("end"):
             prompt.update(ref_text=str(side["text"]), start=float(side.get("start") or 0.0), end=float(side["end"]))

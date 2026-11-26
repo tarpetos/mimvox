@@ -283,7 +283,8 @@ def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list
     from .backends.clone import CHATTERBOX, VOXCPM
 
     found = {
-        "speech": omnivoice.installed(ctx.runtime),
+        "speech": omnivoice.core_installed(ctx.runtime),
+        "omnivoice": omnivoice.installed(ctx.runtime, honour_off=False),
         "training": rvc.available(ctx.runtime, honour_off=False),
         "translation": "nllb-600m" in translators,
         "better_translation": "nllb-1.3b" in translators,

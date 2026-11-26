@@ -69,6 +69,7 @@ pub const SCENES: &[Scene] = &[
     ("speak_language_uk_no_extension", speak::scene_language_uk_no_extension),
     ("speak_language_picker", speak::scene_language_picker),
     ("speak_models", speak::scene_models),
+    ("speak_model_menu", speak::scene_model_menu),
     ("speak_model_unsupported", speak::scene_model_unsupported),
     ("speak_accent_native", speak::scene_accent_native),
     ("speak_accent_own", speak::scene_accent_own),

@@ -446,3 +446,26 @@ def test_refresh_venv_launchers_makes_each_venv_again_over_itself(tmp_path, monk
         ],
         ["uv", "venv", "--python", "3.14", "--managed-python", "--allow-existing", "--offline", str(plain)],
     ]
+
+
+def test_an_older_runtime_keeps_its_omnivoice(tmp_path):
+    s = make(tmp_path / "data")
+    fake_runtime(s, components=("speech", "training"))
+    s.resolve_components(setup.parse_args([]))
+    assert "omnivoice" in s.components
+
+
+def test_omnivoice_is_installed_when_no_voice_model_is_chosen(tmp_path):
+    s = make(tmp_path / "data")
+    s.resolve_components(setup.parse_args(["--components", "speech,training"]))
+    assert {"speech", "omnivoice", "training"} <= s.components
+    s.resolve_components(setup.parse_args(["--components", "speech,chatterbox"]))
+    assert s.components == {"speech", "chatterbox"}
+
+
+def test_the_last_voice_model_is_not_removed(tmp_path):
+    s = make(tmp_path / "data")
+    fake_runtime(s, components=("speech", "omnivoice"))
+    s.components = {"speech", "omnivoice"}
+    assert setup.remove_components(s, "omnivoice") == 1
+    assert (s.omnivoice_model / "model.safetensors").is_file()

@@ -139,10 +139,9 @@ def get(runtime: dict[str, Any], data_root: str | Path) -> ZsvcWorker | None:
     if not installed(runtime, data_root):
         return None
     if _WORKER is None:
-        from .backends.omnivoice import OMNIVOICE
-        from .backends.omnivoice import installed as speech_installed
+        from .backends.omnivoice import OMNIVOICE, core_installed
 
-        if not speech_installed(runtime):
+        if not core_installed(runtime):
             return None
         code, models = paths(runtime, data_root)
         _WORKER = ZsvcWorker(code, models, OMNIVOICE._ensure_client(runtime))

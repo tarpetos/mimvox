@@ -18,6 +18,7 @@ from . import audio_util as au
 from .backends import SynthParams, names
 from .backends.holos import HOLOS
 from .backends.omnivoice import OMNIVOICE
+from .backends.omnivoice import installed as omnivoice_installed
 from .registry import Context, EngineError, method
 
 log = logging.getLogger("mimvox.tts")
@@ -41,8 +42,19 @@ _WARMING: set[str] = set()
 _SETTLED: asyncio.Event | None = None  # set while no model is "loading"
 
 
+def speech_status() -> str:
+    own = OMNIVOICE.status()
+    if own != "missing":
+        return own
+    others = {b.status() for b in backends.selectable() if b is not OMNIVOICE}
+    for state in ("ready", "idle", "loading", "paused"):
+        if state in others:
+            return "ready" if state == "idle" else state
+    return "missing"
+
+
 def models_status() -> dict[str, str]:
-    snap = {"tts": OMNIVOICE.status(), "rvc": _RVC_STATUS[0]}
+    snap = {"tts": speech_status(), "rvc": _RVC_STATUS[0]}
     why = OMNIVOICE.status_message()
     if why:
         snap["tts_message"] = why
@@ -289,8 +301,8 @@ async def load_models(ctx: Context) -> None:
     async def do_tts() -> None:
         try:
             await OMNIVOICE.load(ctx.runtime)
-            if OMNIVOICE.status() == "missing":
-                errors["tts"] = "OmniVoice is not installed or failed to load (see the log); run setup"
+            if OMNIVOICE.status() == "missing" and omnivoice_installed(ctx.runtime):
+                errors["tts"] = "OmniVoice failed to load (see the log); run setup"
             elif OMNIVOICE.status() == "no_memory":
                 errors["tts"] = OMNIVOICE.status_message() or "not enough memory (RAM)"
         except Exception as exc:
@@ -315,7 +327,9 @@ async def load_models(ctx: Context) -> None:
         log.info("model loading stopped: the engine is shutting down")
         return
     tts_state = "ready" if "tts" not in errors else "no_memory" if OMNIVOICE.status() == "no_memory" else "missing"
-    if tts_state == "ready" and not OMNIVOICE.on_cpu():
+    if OMNIVOICE.status() == "missing" and speech_status() == "missing":
+        errors["tts"] = "no voice-cloning model is installed; run setup"
+    if tts_state == "ready" and OMNIVOICE.status() != "missing" and not OMNIVOICE.on_cpu():
         await _warm_up(data)
     if aio.closing():
         return
@@ -427,9 +441,16 @@ def _named_model(model: Any, lang: str) -> backends.TtsBackend:
 
 
 def check_backend_ready(backend: backends.TtsBackend) -> None:
-    state = backend.status()
+    _check_state(backend.status(), backend.status_message())
+
+
+def check_speech_ready() -> None:
+    _check_state(speech_status(), OMNIVOICE.status_message())
+
+
+def _check_state(state: str, message: str | None) -> None:
     if state == "no_memory":
-        raise EngineError("no_memory", backend.status_message() or "not enough memory (RAM) for speech")
+        raise EngineError("no_memory", message or "not enough memory (RAM) for speech")
     if state not in ("ready", "idle"):
         raise EngineError(
             "not_ready",
@@ -809,7 +830,16 @@ async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     has_ref, has_pth = await aio.run_io(lambda: (ref.is_file(), pth.is_file()))
     if not has_ref:
         raise EngineError("not_found", "this voice has no recording yet (reference.wav is missing)")
-    check_backend_ready(OMNIVOICE)
+    check_speech_ready()
+    if OMNIVOICE.status() == "missing":
+        if (await aio.run_io(reflang.detected, ref))[0] is not None:
+            return {"warming": False, "reason": "already_warm"}
+        if _ACTIVE[0] is not None:
+            return {"warming": False, "reason": "busy"}
+        if vid not in _WARMING:
+            _WARMING.add(vid)
+            aio.spawn(_warm(ctx, data, vid, ref, lang, None, pth, idx), name=f"warm-{vid}")
+        return {"warming": True}
     worker = rvc.get(ctx.runtime) if has_pth else None
     if worker is not None and (models_status()["rvc"] != "ready" or OMNIVOICE.on_cpu()):
         worker = None
@@ -855,19 +885,20 @@ async def _warm(
     try:
         await aio.run_io(warm_dir.mkdir, parents=True, exist_ok=True)
         speak_lang = lang if lang in OMNIVOICE.languages else "en"
-        if OMNIVOICE.on_cpu():  # a sentence takes minutes there: only the prompt, which the first generation needs too
-            await OMNIVOICE.warm(ref, speak_lang)
-        else:
-            # The shortest real inference: builds the voice-clone prompt (and, the first time for a clip, its
-            # transcript).
-            src = await OMNIVOICE.synthesize(
-                _WARM_TEXT.get(lang, _WARM_TEXT["en"]),
-                speak_lang,
-                ref,
-                SynthParams(out_path=warm_dir / "in.wav", first=True),
-            )
-            if worker is not None:  # load the voice's RVC model and index too (about 16 s cold, 1.7 s warm)
-                await worker.convert(src, warm_dir / "out.wav", pth, idx, 1.0)
+        if OMNIVOICE.status() != "missing":
+            if OMNIVOICE.on_cpu():  # a sentence takes minutes there: only the prompt, which the first generation needs
+                await OMNIVOICE.warm(ref, speak_lang)
+            else:
+                # The shortest real inference: builds the voice-clone prompt (and, the first time for a clip, its
+                # transcript).
+                src = await OMNIVOICE.synthesize(
+                    _WARM_TEXT.get(lang, _WARM_TEXT["en"]),
+                    speak_lang,
+                    ref,
+                    SynthParams(out_path=warm_dir / "in.wav", first=True),
+                )
+                if worker is not None:  # load the voice's RVC model and index too (about 16 s cold, 1.7 s warm)
+                    await worker.convert(src, warm_dir / "out.wav", pth, idx, 1.0)
         if lang == "uk" and HOLOS.available():  # Ukrainian with exact stress: the voice's style vector (~0.2 s)
             await HOLOS.warm(ref)
         if choice is not None and choice.accent == "native-us":

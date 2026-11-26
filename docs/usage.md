@@ -73,19 +73,21 @@ the app itself on the first start, in its window; there is no script to run and 
 
 1. **Engine and device** says *Runtime missing*.
 2. **What to install.** Choose the parts you want; everything is ticked at first, **Only what is required** keeps
-   just Speech (about 13 GB), **Everything** ticks all again:
+   the speech engine and one voice-cloning model, **Everything** ticks all again. At least one of the three
+   voice-cloning models stays ticked; the languages Speak, Book and Redub offer are the ones the installed models speak:
 
    | Part | Size (about) | Gives you |
    | --- | --- | --- |
-   | **Speech** (always) | 12.6 GB | Speak and Book in about 60 languages, Redub's Re-speak (engine, OmniVoice, Whisper) |
+   | **Speech engine** (always) | 9.3 GB | the engine and Whisper, which the voice models and Redub use |
+   | OmniVoice | 3.3 GB | Voice cloning in about 60 languages, the fastest |
+   | VoxCPM2 | 6.0 GB | Voice cloning in 30 languages, closest to your voice in other languages |
+   | Chatterbox | 4.3 GB | Voice cloning in 23 languages, very close to your voice in English |
    | Voice training | 12 GB | Train; voice match for trained voices; Redub's Convert voice (Applio/RVC) |
    | Translation | 2.5 GB | Redub's Translate & dub (NLLB-200 600M) |
    | Better translation | 2.7 GB | fewer mistranslations (NLLB-200 1.3B); installed only with an NVIDIA or AMD GPU |
    | Native accent | 2 GB | English with a native accent for voices that are not trained (Seed-VC) |
    | Music removal | 0.3 GB | Redub keeps a video's background music; clean references from videos (Hybrid Demucs) |
    | Ukrainian speech | 1.5 GB | Ukrainian with exact word stress in Speak, Book and Redub (HolosTTS) |
-   | VoxCPM2 | 6.0 GB | Another voice-cloning model for Speak and Book: 30 languages, closest to your voice in other languages |
-   | Chatterbox | 4.3 GB | Another voice-cloning model for Speak and Book: 23 languages, very close to your voice in English |
 
    A part left out can be added later in one click: Train shows **Install** when voice training is missing, Redub
    under **Mode** for Translate & dub and Convert voice, and the same small **Install** appears next to Native accent,
@@ -96,7 +98,7 @@ the app itself on the first start, in its window; there is no script to run and 
    **Modules:** open **Settings** (the status button at the top right, *Ready*) > **Modules** to see every optional
    part with its size and state.
    **Install** adds a missing one, **Turn off** keeps its files but stops using it (for example to compare Ukrainian
-   with and without exact stress), **Turn on** brings it back, and **Remove** deletes it to free the disk. Turning a
+   with and without exact stress), **Turn on** brings it back, and **Remove** deletes it to free the disk. The last voice-cloning model cannot be turned off or removed. Turning a
    part on or off restarts the engine, so it waits while a book is read, a voice trains or speech is made.
 3. **Install location** is where everything goes (the data folder). The default:
 
