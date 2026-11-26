@@ -19,6 +19,7 @@ args = common.parse_args()
 
 SPEECH_TOKENS_PER_S = 25
 _conds = {"key": None}
+_fast = {"module": None, "decoder": None}
 
 
 def _patch(model_dir):
@@ -46,11 +47,50 @@ def _patch(model_dir):
 
 
 def load(model_dir, device):
+    import torch
     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
     _patch(model_dir)
     _conds["key"] = None
-    return ChatterboxMultilingualTTS.from_local(model_dir, device)
+    model = ChatterboxMultilingualTTS.from_local(model_dir, device)
+    _fast["decoder"] = None
+    if device == "cuda":
+        # fp16 gave the same speech tokens as fp32 on every test sentence; the decoder to audio stays fp32.
+        model.t3.tfmr.to(torch.float16)
+        model.t3.speech_head.to(torch.float16)
+        _fast["module"] = common.load_by_path("mimvox_chatterbox_fast", HERE / "chatterbox_fast.py")
+        _fast["decoder"] = _fast["module"].Decoder(model.t3)
+    return model
+
+
+def _slow_inference(model, kw):
+    """The library's own loop, which needs the fp32 weights."""
+    import torch
+
+    half = next(model.t3.tfmr.parameters()).dtype == torch.float16
+    if half:
+        model.t3.tfmr.float()
+        model.t3.speech_head.float()
+    try:
+        return type(model.t3).inference(model.t3, **kw)
+    finally:
+        if half:
+            model.t3.tfmr.half()
+            model.t3.speech_head.half()
+
+
+def _inference(model, cap):
+    def run(**kw):
+        kw["max_new_tokens"] = cap
+        fast, decoder = _fast["module"], _fast["decoder"]
+        if decoder is not None:
+            try:
+                return fast.inference(model.t3, decoder, **kw)
+            except fast.Unsupported:
+                pass
+        return _slow_inference(model, kw)
+
+    return run
 
 
 def speak(model, text, lang, prompt, req):
@@ -62,8 +102,7 @@ def speak(model, text, lang, prompt, req):
         _conds["key"] = key
     # A slow reading of the text with some room: on a word or two it otherwise ran on for up to 10 s of babble.
     cap = min(1000, int(SPEECH_TOKENS_PER_S * (0.12 * len(text) + 0.8)))
-    inference = model.t3.inference
-    model.t3.inference = lambda **kw: inference(**{**kw, "max_new_tokens": cap})
+    model.t3.inference = _inference(model, cap)
     try:
         wav = model.generate(text, language_id=lang, exaggeration=exaggeration)
     finally:
@@ -71,5 +110,5 @@ def speak(model, text, lang, prompt, req):
     return wav.squeeze().float().cpu().numpy(), model.sr
 
 
-common.run("chatterbox", INP, OUT, args, load, speak)
+common.run("chatterbox", INP, OUT, args, load, speak, release=lambda: _fast.update(decoder=None))
 os._exit(0)

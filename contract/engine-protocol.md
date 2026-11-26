@@ -914,8 +914,14 @@ environment (`backends/voxcpm_worker.py`, `backends/chatterbox_worker.py`, shari
   most about 0.12 s per character plus 0.8 s: on a word or two it otherwise went on babbling.
 - **Measured** (RTX 4070, the same 9.8 s English clip; ECAPA speaker similarity to held-out audio of the speaker,
   Whisper WER): OmniVoice 0.72-0.76 in English, RTF 0.09, 4.8 GB; VoxCPM2 0.73-0.75, de/pl 0.65-0.69, RTF 0.66,
-  5.7 GB; Chatterbox 0.74-0.80 in English, 0.72 de, 0.46 pl, RTF 0.5, 3.6 GB. WER was 0 for nearly every sentence.
+  5.7 GB; Chatterbox 0.74-0.80 in English, 0.72 de, 0.46 pl, RTF 0.25, 3.0 GB. WER was 0 for nearly every sentence.
   Chatterbox's output carries Resemble AI's inaudible Perth watermark.
+- **Chatterbox's decoding loop.** On CUDA its language model runs in fp16 (the same speech tokens as fp32 on every
+  test sentence) through `backends/chatterbox_fast.py`: a static KV cache, SDPA attention and one CUDA-graph replay per
+  token, over the smallest of a few cache lengths that holds the tokens so far. The library's own loop turns every layer
+  to eager attention to read the three heads its alignment check uses (15.6 ms per token); here those heads are
+  computed on their own (4-5 ms per token), and the check, the sampling and the stops are the library's. A prompt
+  that does not fit 2048 positions takes the library's loop (in fp32).
 
 ### `text.stress`
 `{"text"}` -> `{"stressed","unsure":[...]}`: the text as HolosTTS would speak it, U+0301 after each stressed vowel

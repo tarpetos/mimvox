@@ -729,7 +729,7 @@ typed is still there after a restart.
 | Control | What it does |
 | --- | --- |
 | **Language** | The language the text is written in. Any of the about 60 languages; the common ones are listed first and you can search. It defaults to the language the voice was recorded in, and the choice is remembered per voice. |
-| **Model** | Shown when VoxCPM2 or Chatterbox is installed (Settings, Components). **Auto** is OmniVoice; VoxCPM2 often stays closer to your voice in another language and Chatterbox in English, but both take 5-6 times longer and the first sentence waits 10-20 s while the model loads. Only the models that speak the chosen language are offered. Book uses the same choice. |
+| **Model** | Shown when VoxCPM2 or Chatterbox is installed (Settings, Components). **Auto** is OmniVoice; VoxCPM2 often stays closer to your voice in another language and Chatterbox in English, but they take longer (VoxCPM2 about 7 times, Chatterbox about 3 times) and the first sentence waits 10-20 s while the model loads. Only the models that speak the chosen language are offered. Book uses the same choice. |
 | **Speed** | 0.8x (*Slower*) to 1.3x (*Faster*), default 1.00x. Relative to the pace of the reference clip. |
 | **Expressiveness** | *Steady* to *Lively*, default 0.80. Lower is flatter and steadier, higher varies phrasing and pauses more. |
 | **Voice match** | *Natural* to *Closest to me*, default 1.00. How strongly the trained timbre model pulls the sound towards your recordings. Applies only to a trained voice. In a language the voice was not recorded in it is capped at 0.3 so the words stay clear. |

@@ -42,9 +42,9 @@ def parse_args():
     return args
 
 
-def run(name, inp, out, args, load, speak):
+def run(name, inp, out, args, load, speak, release=None):
     """``load(model_dir, device)`` -> model; ``speak(model, text, lang, prompt, req)`` -> (float32 audio, sample rate),
-    with ``prompt`` = {"wav", "text"?}."""
+    with ``prompt`` = {"wav", "text"?}; ``release()`` drops what the worker keeps beside the model."""
     import numpy as np
     import soundfile as sf
     import torch
@@ -80,6 +80,8 @@ def run(name, inp, out, args, load, speak):
 
     def op_release(_req=None):
         state["model"] = None
+        if release is not None:
+            release()
         import gc
 
         gc.collect()
