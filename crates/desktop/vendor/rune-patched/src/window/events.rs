@@ -455,7 +455,7 @@ impl<S: 'static> Host<S> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // PATCH: the edges of a frameless window resize it (`chrome::resize_edge`).
+                // PATCH
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if chrome::frameless(titlebar) && !rt.pressing() {
                     let edge = chrome::resize_edge(&l.window, (position.x, position.y));

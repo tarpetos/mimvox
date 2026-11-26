@@ -49,7 +49,6 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
             (false, true, false) => (p.glass_hover, p.text),
             _ => (Color::TRANSPARENT, p.text_dim),
         };
-        // On Linux the pointer reaches the buttons as ordinary input, so they hover and press as elements do.
         let (hover, press, hover_ink) = if close {
             (p.bad.alpha(0.82), p.bad.alpha(0.55), Color::WHITE)
         } else {

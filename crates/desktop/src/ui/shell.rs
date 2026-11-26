@@ -676,7 +676,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let mut root = el().key("root").w_full().h_full().fill(p.bg_top).child(background(p)).child(
         col().key("chrome").w_full().h_full().child(header(s, p, insets, fit).cache()).child(body).children(dock),
     );
-    // Linux gives a window without its frame square corners: the window is transparent and rounds them itself.
     let rounded = cfg!(target_os = "linux")
         && s.shell.caption_preview.is_none()
         && insets.trailing > 0.0

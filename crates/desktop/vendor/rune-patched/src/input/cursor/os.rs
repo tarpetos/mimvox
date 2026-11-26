@@ -64,7 +64,7 @@ impl OsCursor {
         }
     }
 
-    /// PATCH: something else set the cursor; the next `apply` sets it again.
+    // PATCH
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     pub(crate) fn forget(&mut self) {
         self.applied = (false, Cursor::Default);

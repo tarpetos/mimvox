@@ -67,7 +67,7 @@ mod tests;
 #[derive(Default)]
 pub(super) struct Native {
     pub(super) activator: Option<crate::platform::activation::Activator>,
-    /// PATCH: the edge of a frameless window under the pointer (`chrome::resize_edge`).
+    // PATCH
     pub(super) resize_edge: Option<winit::window::ResizeDirection>,
 }
 

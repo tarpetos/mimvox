@@ -47,7 +47,7 @@ pub(super) fn sync_chrome<S: 'static>(rt: &mut Runtime<S>, w: &Win, chrome: Chro
 }
 
 /// Whether Rune replaced the native title bar: macOS draws the app's titlebar under its
-/// transparent one; Windows has the custom frame; Linux has no frame (PATCH, `frameless`).
+/// transparent one; Windows has the custom frame.
 fn custom_frame(w: &Win, titlebar: Option<crate::Titlebar>) -> bool {
     #[cfg(target_os = "windows")]
     { let _ = titlebar; w.native.frame.is_some() }
@@ -59,14 +59,12 @@ fn custom_frame(w: &Win, titlebar: Option<crate::Titlebar>) -> bool {
     { let _ = (w, titlebar); false }
 }
 
-/// PATCH, Linux: a window whose app draws its caption buttons (`Titlebar::custom_caption`) opens
-/// without the system's frame, which GNOME's Wayland session would otherwise draw as a second title bar.
+// PATCH
 pub(super) fn frameless(titlebar: Option<crate::Titlebar>) -> bool {
     titlebar.is_some_and(|t| t.custom_caption_width().is_some())
 }
 
-/// PATCH, Linux: the edge of a frameless window at `(x, y)` (physical pixels from its top-left)
-/// that a press resizes, as the frame's border would. None for a maximized or full-screen window.
+// PATCH
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(super) fn resize_edge(window: &Window, (x, y): (f64, f64)) -> Option<winit::window::ResizeDirection> {
     use winit::window::ResizeDirection as D;
@@ -115,7 +113,7 @@ fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar
         if let Some(t) = &titlebar { f.set_titlebar(t); }
         f.caption(&w.window)
     });
-    // PATCH: Linux has the buttons the app draws, as ordinary elements under the pointer.
+    // PATCH
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     return titlebar.filter(|t| frameless(Some(*t))).map(|t| {
         let mut caption = crate::titlebar::Caption::of(&t);

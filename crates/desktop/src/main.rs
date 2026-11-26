@@ -95,7 +95,6 @@ fn run_sibling(name: &str, args: impl Iterator<Item = std::ffi::OsString>) -> ! 
 
 const APP_ID: &str = "io.github.tarpetos.mimvox";
 
-// A tiling window manager places, sizes and frames the window itself and has no minimize or maximize.
 fn tiling_wm() -> bool {
     if !cfg!(target_os = "linux") {
         return false;
@@ -146,8 +145,6 @@ fn main() {
         on_key: Some(ui::on_key),
         ..AppSpec::new("Mimvox", opening.size, AppState::default, ui::view)
     };
-    // The app draws its caption buttons (`ui::caption`) on Windows and Linux, where the window then has no system
-    // frame; macOS insets the traffic lights.
     let titlebar =
         Titlebar::new(ui::shell::HEADER_HEIGHT).traffic_lights(18.0, (ui::shell::HEADER_HEIGHT - 14.0) / 2.0);
     let titlebar = if tiling_wm() { titlebar } else { titlebar.custom_caption(ui::caption::CELL) };
