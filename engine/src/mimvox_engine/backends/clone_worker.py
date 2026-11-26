@@ -53,7 +53,7 @@ def run(name, inp, out, args, load, speak):
         print(f"[{name}] {msg}", file=sys.stderr, flush=True)
 
     def vram_gb():
-        if torch.cuda.is_available():
+        if state["device"] != "cpu" and torch.cuda.is_available():  # asking CUDA makes a context, even for the CPU
             free, total = torch.cuda.mem_get_info()
             return round((total - free) / 2**30, 2)
         return 0.0
