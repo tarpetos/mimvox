@@ -58,7 +58,7 @@ def load(model_dir, device):
         # fp16 gave the same speech tokens as fp32 on every test sentence; the decoder to audio stays fp32.
         model.t3.tfmr.to(torch.float16)
         model.t3.speech_head.to(torch.float16)
-        _fast["module"] = common.load_by_path("mimvox_chatterbox_fast", os.path.join(HERE, "chatterbox_fast.py"))
+        _fast["module"] = common.load_by_path("mimvox_chatterbox_fast", HERE / "chatterbox_fast.py")
         _fast["decoder"] = _fast["module"].Decoder(model.t3)
     return model
 
@@ -89,6 +89,7 @@ def _inference(model, cap):
             except fast.Unsupported:
                 pass
         return _slow_inference(model, kw)
+
     return run
 
 

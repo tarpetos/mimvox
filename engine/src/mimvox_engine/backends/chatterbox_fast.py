@@ -1,6 +1,7 @@
 """Faster Chatterbox decoding: the same model and sampling, one token per CUDA-graph replay over a static KV cache with
 SDPA attention. The library turns every layer to eager attention to read three heads for its alignment check
 (15.6 ms per token on an RTX 4070); here those heads are computed on their own."""
+
 import torch
 import torch.nn.functional as F
 
@@ -32,7 +33,7 @@ class Decoder:
         self.ar = torch.arange(max_len, device=p.device)
         self.dtype = p.dtype
         self.spy_at = {layer: i for i, (layer, _h) in enumerate(SPY)}
-        self.graphs = {}  # bucket -> (graph, logits, rows)
+        self.graphs = {}
 
     def prefill(self, embeds):
         out = self.tfmr(inputs_embeds=embeds.to(self.dtype), use_cache=True)
@@ -105,8 +106,20 @@ def _analyzer(hp, text_slice):
 
 
 @torch.inference_mode()
-def inference(t3, decoder, *, t3_cond, text_tokens, max_new_tokens=1000, temperature=0.8, top_p=0.95, min_p=0.05,
-              repetition_penalty=1.2, cfg_weight=0.5, **_kw):
+def inference(
+    t3,
+    decoder,
+    *,
+    t3_cond,
+    text_tokens,
+    max_new_tokens=1000,
+    temperature=0.8,
+    top_p=0.95,
+    min_p=0.05,
+    repetition_penalty=1.2,
+    cfg_weight=0.5,
+    **_kw,
+):
     """``T3.inference`` with the same sampling, alignment check and stops, on ``decoder``."""
     from chatterbox.models.t3.t3 import _ensure_BOT_EOT
     from transformers.generation.logits_process import (
@@ -119,19 +132,20 @@ def inference(t3, decoder, *, t3_cond, text_tokens, max_new_tokens=1000, tempera
     _ensure_BOT_EOT(text_tokens, hp)
     text_tokens = torch.atleast_2d(text_tokens).to(dtype=torch.long, device=t3.device)
     start = hp.start_speech_token * torch.ones_like(text_tokens[:, :1])
-    embeds, len_cond = t3.prepare_input_embeds(t3_cond=t3_cond, text_tokens=text_tokens, speech_tokens=start,
-                                               cfg_weight=cfg_weight)
-    j = len_cond + text_tokens.size(-1)  # the speech start token follows the text
+    embeds, len_cond = t3.prepare_input_embeds(
+        t3_cond=t3_cond, text_tokens=text_tokens, speech_tokens=start, cfg_weight=cfg_weight
+    )
+    j = len_cond + text_tokens.size(-1)
     if embeds.shape[0] != 2 or embeds.shape[1] != j + 1 or j + 2 + max_new_tokens > decoder.max_len:
         raise Unsupported(f"prompt {embeds.shape} with {max_new_tokens} new tokens")
     decoder.prefill(embeds[:, :j])
-    _logits, rows_start = decoder.step(embeds[:, j:j + 1], j)
+    _logits, rows_start = decoder.step(embeds[:, j : j + 1], j)
     rows_start = rows_start[:, 0].float().cpu()
     bos = torch.tensor([[hp.start_speech_token]], dtype=torch.long, device=t3.device)
     bos_embed = t3.speech_emb(bos) + t3.speech_pos_emb.get_fixed_embedding(0)
     logits_both, rows = decoder.step(torch.cat([bos_embed, bos_embed]), j + 1)
     analyzer = _analyzer(hp, (len_cond, j)) if hp.is_multilingual else None
-    if analyzer is not None:  # the first frame is the prompt's own rows: the speech start and BOS tokens
+    if analyzer is not None:
         for b in range(len(SPY)):
             first = torch.zeros(j + 2, decoder.max_len)
             first[j], first[j + 1] = rows_start[b], rows[b, 0].float().cpu()
@@ -147,7 +161,7 @@ def inference(t3, decoder, *, t3_cond, text_tokens, max_new_tokens=1000, tempera
             if i > 0:
                 spied = rows[:, 0].float().cpu()
                 for b in range(len(SPY)):
-                    analyzer.last_aligned_attns[b] = spied[b:b + 1]
+                    analyzer.last_aligned_attns[b] = spied[b : b + 1]
             logits = analyzer.step(logits, next_token=int(generated[0, -1]))
         ids = generated[:1]
         logits = repetition(ids, logits)
