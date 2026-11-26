@@ -113,6 +113,7 @@ pub struct ShellState {
     pub gpu: bool,
     pub voices: Vec<VoiceInfo>,
     pub languages: Vec<crate::engine::protocol::SpeechLanguage>,
+    pub speech_models: Vec<crate::engine::protocol::SpeechModel>,
     pub translators: Vec<String>,
     pub zero_shot_vc: bool,
     /// `None` until the engine says.
@@ -190,6 +191,7 @@ impl Default for ShellState {
             voices: Vec::new(),
             languages: Vec::new(),
             translators: Vec::new(),
+            speech_models: Vec::new(),
             zero_shot_vc: false,
             components: None,
             components_off: Vec::new(),
@@ -482,6 +484,7 @@ pub fn on_engine(s: &mut AppState, msg: &EngineMsg) {
                 s.shell.languages = hello.languages.clone();
             }
             s.shell.translators = hello.translators.clone();
+            s.shell.speech_models = hello.speech_models.clone();
             s.shell.zero_shot_vc = hello.zero_shot_vc;
             s.shell.components = Some(hello.components.clone());
             s.shell.components_off = hello.components_off.clone();

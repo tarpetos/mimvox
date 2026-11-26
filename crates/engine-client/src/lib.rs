@@ -182,7 +182,7 @@ fn read_engine_python(runtime_toml: &Path) -> anyhow::Result<PathBuf> {
 
 #[derive(Debug)]
 pub enum EngineMsg {
-    Ready(protocol::Hello),
+    Ready(Box<protocol::Hello>),
     Response { id: u64, result: Result<serde_json::Value, protocol::EngineError> },
     Event(protocol::Event),
     Exited { code: Option<i32>, stderr_tail: String },
@@ -563,7 +563,7 @@ fn parse_line(line: &str) -> Result<Option<EngineMsg>, ()> {
         if name == "ready" {
             let mut hello: protocol::Hello = serde_json::from_value(data.clone()).unwrap_or_default();
             hello.raw = data;
-            return Ok(Some(EngineMsg::Ready(hello)));
+            return Ok(Some(EngineMsg::Ready(Box::new(hello))));
         }
         return Ok(Some(EngineMsg::Event(protocol::Event {
             event: name.to_string(),

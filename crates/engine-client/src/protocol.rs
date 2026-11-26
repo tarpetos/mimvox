@@ -157,6 +157,16 @@ pub struct SpeechLanguage {
     pub common: bool,
 }
 
+/// A voice-cloning model `tts.generate` and `book.start` may name in `model`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpeechModel {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Hello {
     #[serde(default)]
@@ -177,6 +187,9 @@ pub struct Hello {
     /// Installed but turned off.
     #[serde(default)]
     pub components_off: Vec<String>,
+    /// The installed voice-cloning models, OmniVoice first.
+    #[serde(default)]
+    pub speech_models: Vec<SpeechModel>,
     /// The `ready` data exactly as the engine sent it.
     #[serde(skip)]
     pub raw: Value,
@@ -908,12 +921,14 @@ pub fn tts_generate(
     output_format: &str,
     accent: Option<NativeVoice>,
     exact_stress: bool,
+    model: &str,
 ) -> Request {
     (
         "tts.generate",
         with_accent(
             json!({
                 "exact_stress": exact_stress,
+                "model": model,
                 "voice_id": voice_id,
                 "text": text,
                 "expressiveness": expressiveness,
@@ -1295,12 +1310,15 @@ pub struct BookParams<'a> {
     pub read_titles: bool,
     pub exact_stress: bool,
     pub keep_voice: bool,
+    /// `auto` or a `SpeechModel` id.
+    pub model: &'a str,
 }
 
 pub fn book_start(p: &BookParams<'_>) -> Request {
     let params = json!({
         "exact_stress": p.exact_stress,
         "keep_voice": p.keep_voice,
+        "model": p.model,
         "title": p.title,
         "source": p.source,
         "format": p.format,

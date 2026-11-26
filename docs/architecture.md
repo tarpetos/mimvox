@@ -192,6 +192,12 @@ SynthParams(out_path, temperature=0.8, quality="best", duration_factor=1.0, firs
   the stress is decided by the text front-end, not guessed by the model. Its worker runs with the interpreter of its
   own environment (`runtime/holos/.venv`): patriotyk's fork of `ukrainian-word-stress` has the name of the lang-uk
   package in the engine venv. Not installed, failed or paused, it is skipped and OmniVoice speaks Ukrainian.
+- VoxCPM2 and Chatterbox (`backends/clone.py`, the optional `voxcpm` and `chatterbox` components) are registered after
+  OmniVoice, so `model: "auto"` reaches them only for a language OmniVoice does not speak; a request names one with
+  `model`. Each has its own environment (`runtime/<id>/.venv`: Chatterbox pins transformers 5.2) and a worker that
+  loads on first use. Only one of them is loaded at a time, and when the card is still short after `make_room`
+  (`no_vram`), `workerproc.stop_idle` ends the idle workers: a released model still leaves its process's CUDA
+  context and allocator cache (2.2 GB for OmniVoice's worker).
 - Another backend is a module in `backends/` with a `TtsBackend` subclass, registered in `backends._builtin()`.
   In-process GPU work goes through `aio.run_gpu`, a model in another process behind a `workerproc.WorkerClient`, CPU
   work through `aio.run_io`;

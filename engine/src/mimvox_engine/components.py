@@ -10,7 +10,8 @@ from .registry import EngineError, method
 log = logging.getLogger("mimvox.components")
 
 FILE = "components.json"
-OPTIONAL = ("training", "translation", "better_translation", "native_accent", "music_removal", "ukrainian")
+OPTIONAL = ("training", "translation", "better_translation", "native_accent", "music_removal", "ukrainian", "voxcpm",
+            "chatterbox")
 
 _off: set[str] = set()
 

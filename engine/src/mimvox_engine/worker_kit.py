@@ -92,7 +92,7 @@ def vram_message(exc):
     """On Windows a GPU allocation is charged to the system commit too: CUDA reports it as out of memory while the card
     still has room, and then the RAM is what has to be freed."""
     m = re.search(r"of which ([\d.]+) GiB is free", str(exc))
-    return NO_COMMIT if m and float(m.group(1)) >= 1.0 else NO_VRAM
+    return NO_COMMIT if sys.platform == "win32" and m and float(m.group(1)) >= 1.0 else NO_VRAM
 
 
 def is_vram_error(exc):

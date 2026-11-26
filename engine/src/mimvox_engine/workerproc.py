@@ -70,6 +70,20 @@ async def make_room(asking: WorkerClient) -> list[str]:
     return freed
 
 
+async def stop_idle(asking: WorkerClient) -> list[str]:
+    """Every other running, idle worker ends; each starts again on its next request. A released model still leaves its
+    process's CUDA context and allocator cache on the card (2.2 GB measured for the OmniVoice worker)."""
+    stopped = []
+    for other in _CLIENTS[:]:
+        if other is asking or not other.alive() or other.busy():
+            continue
+        await other.stop()
+        stopped.append(other.name)
+        for hook in other.on_release:
+            hook()
+    return stopped
+
+
 class WorkerClient:
     def __init__(self, name: str, argv: list[str], env: dict[str, str], start_timeout: float = 240.0) -> None:
         _CLIENTS.append(self)

@@ -1203,6 +1203,11 @@
               "null"
             ],
             "description": "The client's own name for the project; an existing project with it is reused"
+          },
+          "model": {
+            "type": "string",
+            "description": "Voice-cloning model: auto (OmniVoice, or an installed model for a language OmniVoice does not speak), or the id of an installed one in hello speech_models (omnivoice, voxcpm, chatterbox)",
+            "default": "auto"
           }
         },
         "required": [
@@ -1326,7 +1331,9 @@
               "better_translation",
               "native_accent",
               "music_removal",
-              "ukrainian"
+              "ukrainian",
+              "voxcpm",
+              "chatterbox"
             ]
           },
           "on": {
@@ -1979,7 +1986,9 @@
                 "better_translation",
                 "native_accent",
                 "music_removal",
-                "ukrainian"
+                "ukrainian",
+                "voxcpm",
+                "chatterbox"
               ]
             }
           },
@@ -1989,6 +1998,42 @@
             "items": {
               "type": "string",
               "description": "Component"
+            }
+          },
+          "speech_models": {
+            "type": "array",
+            "description": "Installed voice-cloning models a request may name in model, OmniVoice first",
+            "items": {
+              "type": "object",
+              "description": "A voice-cloning model",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Model id",
+                  "enum": [
+                    "omnivoice",
+                    "voxcpm",
+                    "chatterbox"
+                  ]
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name"
+                },
+                "languages": {
+                  "type": "array",
+                  "description": "ISO 639-1 codes it speaks",
+                  "items": {
+                    "type": "string",
+                    "description": "ISO 639-1 code"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "languages"
+              ]
             }
           }
         },
@@ -2000,7 +2045,8 @@
           "translators",
           "zero_shot_vc",
           "components",
-          "components_off"
+          "components_off",
+          "speech_models"
         ]
       }
     },
@@ -3863,6 +3909,11 @@
             "type": "boolean",
             "description": "false speaks Ukrainian with OmniVoice even when HolosTTS is installed",
             "default": true
+          },
+          "model": {
+            "type": "string",
+            "description": "Voice-cloning model: auto (OmniVoice, or an installed model for a language OmniVoice does not speak), or the id of an installed one in hello speech_models (omnivoice, voxcpm, chatterbox)",
+            "default": "auto"
           }
         },
         "required": [
@@ -3887,6 +3938,16 @@
               "type": "integer"
             },
             "description": "Characters per segment, to estimate remaining speech"
+          },
+          "model": {
+            "type": "string",
+            "description": "The model that spoke",
+            "enum": [
+              "omnivoice",
+              "voxcpm",
+              "chatterbox",
+              "holos"
+            ]
           },
           "accent": {
             "type": "string",
@@ -5446,7 +5507,9 @@
                 "better_translation",
                 "native_accent",
                 "music_removal",
-                "ukrainian"
+                "ukrainian",
+                "voxcpm",
+                "chatterbox"
               ]
             }
           },
@@ -5456,6 +5519,42 @@
             "items": {
               "type": "string",
               "description": "Component"
+            }
+          },
+          "speech_models": {
+            "type": "array",
+            "description": "Installed voice-cloning models a request may name in model, OmniVoice first",
+            "items": {
+              "type": "object",
+              "description": "A voice-cloning model",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Model id",
+                  "enum": [
+                    "omnivoice",
+                    "voxcpm",
+                    "chatterbox"
+                  ]
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name"
+                },
+                "languages": {
+                  "type": "array",
+                  "description": "ISO 639-1 codes it speaks",
+                  "items": {
+                    "type": "string",
+                    "description": "ISO 639-1 code"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "languages"
+              ]
             }
           }
         },
@@ -5467,7 +5566,8 @@
           "translators",
           "zero_shot_vc",
           "components",
-          "components_off"
+          "components_off",
+          "speech_models"
         ]
       }
     },
@@ -6115,6 +6215,16 @@
           "elapsed_s": {
             "type": "number",
             "description": "Wall time of the job in seconds"
+          },
+          "model": {
+            "type": "string",
+            "description": "The model that spoke",
+            "enum": [
+              "omnivoice",
+              "voxcpm",
+              "chatterbox",
+              "holos"
+            ]
           },
           "accent": {
             "type": "string",

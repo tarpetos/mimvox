@@ -452,6 +452,7 @@ fn start(s: &mut AppState) {
         read_titles: s.book.read_titles,
         exact_stress: s.speak.exact_stress,
         keep_voice: s.book.keep_voice,
+        model: &super::speak::model(s),
     });
     shell::stop_audio(s);
     match shell::request(s, req.0, req.1) {

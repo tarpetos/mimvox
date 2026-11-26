@@ -40,10 +40,14 @@ impl IntoResponse for OpenAiError {
     }
 }
 
+/// The engine's voice-cloning models; any other `model` (OpenAI's tts-1, ...) means the engine's choice.
+const ENGINE_MODELS: [&str; 3] = ["omnivoice", "voxcpm", "chatterbox"];
+
 #[derive(Deserialize)]
 pub struct SpeechRequest {
     input: String,
     voice: Value,
+    model: Option<String>,
     response_format: Option<String>,
     speed: Option<f64>,
     /// Not in OpenAI's API: the language of `input`; the voice's own language by default.
@@ -51,9 +55,9 @@ pub struct SpeechRequest {
 }
 
 pub async fn models() -> Json<Value> {
-    Json(
-        json!({ "object": "list", "data": [{ "id": "mimvox", "object": "model", "created": 0, "owned_by": "mimvox" }] }),
-    )
+    Json(json!({ "object": "list", "data": std::iter::once("mimvox").chain(ENGINE_MODELS).map(|id| {
+            json!({ "id": id, "object": "model", "created": 0, "owned_by": "mimvox" })
+        }).collect::<Vec<_>>() }))
 }
 
 pub async fn voices(State(st): State<AppState>) -> Result<Json<Value>, OpenAiError> {
@@ -176,6 +180,9 @@ pub async fn speech(
     });
     if let Some(speed) = req.speed {
         params["speed"] = json!(speed);
+    }
+    if let Some(model) = req.model.as_deref().filter(|m| ENGINE_MODELS.contains(m)) {
+        params["model"] = json!(model);
     }
 
     // OpenAI's aac is raw ADTS; the engine only writes AAC in MP4.

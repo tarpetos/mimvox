@@ -79,6 +79,7 @@ def installed(runtime: dict[str, Any]) -> bool:
 
 class OmniVoiceBackend(TtsBackend):
     name = "omnivoice"
+    label = "OmniVoice"
     languages = frozenset(LANGS)
 
     def __init__(self, unload_after_s: float = UNLOAD_AFTER_S) -> None:

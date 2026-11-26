@@ -14,7 +14,7 @@ import numpy as np
 
 from . import accent, aio, backends, config, media, reflang, results, rvc, speech, voices, zsvc
 from . import audio_util as au
-from .backends import SynthParams
+from .backends import SynthParams, names
 from .backends.holos import HOLOS
 from .backends.omnivoice import OMNIVOICE
 from .registry import Context, EngineError, method
@@ -368,6 +368,9 @@ def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str,
     exact = params.get("exact_stress", True)
     if not isinstance(exact, bool):
         raise EngineError("bad_request", "'exact_stress' must be true or false")
+    model = params.get("model") or "auto"
+    if model != "auto":
+        return lang, _named_model(model, lang)
     backend = backends.for_language(lang, skip=() if exact else ("holos",))
     if backend is None:
         raise EngineError("bad_request", f"no voice model speaks {lang!r} (available: "
@@ -375,11 +378,23 @@ def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str,
     return lang, backend
 
 
+def _named_model(model: Any, lang: str) -> backends.TtsBackend:
+    backend = backends.by_name(model) if isinstance(model, str) else None
+    if backend is None or backend.name == "holos":
+        raise EngineError("bad_request", f"'model' must be \"auto\" or one of: "
+                                         f"{', '.join(b.name for b in backends.all_backends() if b.name != 'holos')}")
+    if backend.status() == "missing":
+        raise EngineError("not_ready", f"{backend.label} is not installed (add it in Settings or run setup)")
+    if lang not in backend.languages:
+        raise EngineError("bad_request", f"{backend.label} does not speak {names.name(lang)} ({lang!r})")
+    return backend
+
+
 def check_backend_ready(backend: backends.TtsBackend) -> None:
     state = backend.status()
     if state == "no_memory":
         raise EngineError("no_memory", backend.status_message() or "not enough memory (RAM) for speech")
-    if state != "ready":
+    if state not in ("ready", "idle"):
         raise EngineError("not_ready", "the speech model is still loading" if state == "loading"
                           else "speech is paused while a voice trains" if state == "paused"
                           else "the speech model is not available")
@@ -449,8 +464,8 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                                                    idx, rvc_rate, worker, duration_factor_for(speed), out_fmt,
                                                    choice, index_rate, zs, about),
                           "another generation is running")
-    return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], **choice.fields(),
-            **ref_fields}
+    return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], "model": backend.name,
+            **choice.fields(), **ref_fields}
 
 
 async def holos_timbre(ctx: Context, backend: backends.TtsBackend, data: config.DataDir, ref: str,
@@ -573,7 +588,7 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         duration_s, elapsed_s = au.duration_s(full), round(time.time() - t_start, 2)
         await aio.run_io(results.record, saved, {**(about or {"kind": "speak"}), "accent": choice.accent,
                                                  "duration_s": duration_s, "elapsed_s": elapsed_s})
-        finish("tts.done", {**saved, "duration_s": duration_s, "elapsed_s": elapsed_s,
+        finish("tts.done", {**saved, "duration_s": duration_s, "elapsed_s": elapsed_s, "model": backend.name,
                             **choice.fields(), **(native.fields() if native else {}), **ref_fields})
         log.info("job %s done in %.1fs (first chunk %.1fs)", job, time.time() - t_start,
                  first_chunk_at[0] if first_chunk_at else -1)

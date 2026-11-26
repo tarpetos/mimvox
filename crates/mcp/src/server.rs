@@ -112,6 +112,9 @@ pub struct SpeakArgs {
     /// ISO 639-1 code of the text (en, uk, de, ...); default: the voice's language.
     #[serde(default)]
     pub language: Option<String>,
+    /// Voice-cloning model: omnivoice, voxcpm or chatterbox when installed; default: the engine's choice.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Format of the saved file; default wav.
     #[serde(default)]
     pub format: Option<AudioFormat>,
@@ -182,6 +185,9 @@ pub struct StartBookArgs {
     /// "best" (default) or "fast".
     #[serde(default)]
     pub quality: Option<Quality>,
+    /// Voice-cloning model: omnivoice, voxcpm or chatterbox when installed; default: the engine's choice.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -476,6 +482,9 @@ impl Mimvox {
         if let Some(format) = args.format {
             params["output_format"] = json!(format.as_str());
         }
+        if let Some(model) = args.model {
+            params["model"] = json!(model);
+        }
         if let Some(speed) = args.speed {
             params["speed"] = json!(speed);
         }
@@ -595,6 +604,7 @@ impl Mimvox {
             ("speed", args.speed.map(Value::from)),
             ("expressiveness", args.expressiveness.map(Value::from)),
             ("quality", args.quality.map(|q| json!(if matches!(q, Quality::Fast) { "fast" } else { "best" }))),
+            ("model", args.model.map(Value::from)),
         ];
         for (key, value) in optional {
             if let Some(v) = value {

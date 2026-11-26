@@ -47,6 +47,7 @@ def installed(runtime: dict[str, Any], honour_off: bool = True) -> bool:
 
 class HolosBackend(TtsBackend):
     name = "holos"
+    label = "HolosTTS"
     languages = frozenset({"uk"})
 
     def __init__(self) -> None:

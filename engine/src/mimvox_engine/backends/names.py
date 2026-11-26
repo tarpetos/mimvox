@@ -24,7 +24,8 @@ NAMES: dict[str, tuple[str, str]] = {
     "ka": ("Georgian", "ქართული"), "mr": ("Marathi", "मराठी"), "pa": ("Punjabi", "ਪੰਜਾਬੀ"),
     "cy": ("Welsh", "Cymraeg"), "kn": ("Kannada", "ಕನ್ನಡ"), "tr": ("Turkish", "Türkçe"),
     "hi": ("Hindi", "हिन्दी"), "uz": ("Uzbek", "Oʻzbek"), "ne": ("Nepali", "नेपाली"),
-    "ro": ("Romanian", "Română"),
+    "ro": ("Romanian", "Română"), "he": ("Hebrew", "עברית"), "ms": ("Malay", "Bahasa Melayu"),
+    "my": ("Burmese", "မြန်မာ"), "km": ("Khmer", "ខ្មែរ"), "lo": ("Lao", "ລາວ"), "tl": ("Tagalog", "Tagalog"),
 }
 
 COMMON = ("en", "uk", "de", "fr", "es", "pl", "ro", "it", "pt", "cs", "ru")
