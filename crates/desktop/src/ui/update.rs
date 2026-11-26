@@ -860,6 +860,7 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
 const NOTES_030: &str = "\n* **Romanian:** Speak, Book and Redub now offer Romanian. Record has Romanian reading texts too (Quick,\n  Standard and Pro), so a voice can be recorded and trained in Romanian from start to finish.\n* **A voice from recordings you already have:** Record's start page now begins with a card for audio or video\n  files of one person: no reading and no preset.\n* **Player:** no Stop button any more (pause, the knob and Close cover it).\n";
 const NOTES_020: &str = "\n* **Installers for every platform:** Windows x64 (setup .exe), Linux x64 (AppImage and .deb) and macOS on Apple\n  Silicon (.dmg), built by GitHub Actions for every release.\n* **Updates from inside the app:** a new version shows a banner under the header.\n* **Install only what you need:** the welcome screen lists the parts of the runtime with their sizes.\n";
 
+const NOTES_060: &str = "\n* **More voice-cloning models:** VoxCPM2 and Chatterbox, optional parts you choose per text in Speak and\n  Book.\n* **A newer speech engine** on Python 3.14 and PyTorch 2.11.\n* **Moving the data folder on Windows** no longer breaks the speech engine.\n";
 const NOTES_050: &str = "\n* **Local API and MCP:** Settings > API serves an OpenAI-compatible speech endpoint and every engine method,\n  with docs at /docs; mimvox-mcp lets Claude and other AI assistants use your voices.\n* **One status button** opens Settings: Modules, Data folder and API.\n* **Import an RVC model,** undo and redo in Speak, a steady player, and CPU speech that checks memory first.\n";
 const NOTES_043: &str = "\n* **Updates download on a slow connection:** they were cut off after 30 seconds.\n* **Settings survive a crash** while they are saved.\n* **Setup and engine fixes:** moving a partial runtime, the portable ffmpeg, very long input.\n";
 const NOTES_042: &str = "\n* **Modules:** the status pill opens every optional part: install it, turn it off or on, or remove it.\n* **Ukrainian with exact stress keeps the voice,** and books stay at full speed.\n* **Speak keeps your text** after a restart, with a button to clear it.\n";
@@ -872,10 +873,11 @@ fn demo(s: &mut AppState, newer: bool) {
     let current = env!("CARGO_PKG_VERSION");
     let mut list = Vec::new();
     if newer {
-        list.push(Release { version: "0.5.1".into(), date: "2026-12-01".into(), notes: "\n* **Updates window:** every version with its notes; install any of them, older ones too.\n* **Check for updates** whenever you like, from the version in the header.\n".into() });
+        list.push(Release { version: "0.6.1".into(), date: "2026-12-08".into(), notes: "\n* **Updates window:** every version with its notes; install any of them, older ones too.\n* **Check for updates** whenever you like, from the version in the header.\n".into() });
     }
-    list.push(Release { version: current.into(), date: "2026-11-20".into(), notes: NOTES_050.into() });
+    list.push(Release { version: current.into(), date: "2026-11-26".into(), notes: NOTES_060.into() });
     for (version, date, notes) in [
+        ("0.5.0", "2026-11-20", NOTES_050),
         ("0.4.3", "2026-11-18", NOTES_043),
         ("0.4.2", "2026-11-16", NOTES_042),
         ("0.4.1", "2026-11-15", NOTES_041),
@@ -900,9 +902,9 @@ pub fn scene_docs(s: &mut AppState) {
 
 pub fn scene_newer(s: &mut AppState) {
     demo(s, true);
-    s.update.found = Some(Found::preview("0.5.1", Some("\n* **Updates window:** every version with its notes.\n")));
-    s.update.selected = Some("0.5.1".into());
-    s.update.checked = Some((Tone::Accent, "Mimvox 0.5.1 is available.".into()));
+    s.update.found = Some(Found::preview("0.6.1", Some("\n* **Updates window:** every version with its notes.\n")));
+    s.update.selected = Some("0.6.1".into());
+    s.update.checked = Some((Tone::Accent, "Mimvox 0.6.1 is available.".into()));
 }
 
 pub fn scene_older(s: &mut AppState) {
@@ -912,14 +914,14 @@ pub fn scene_older(s: &mut AppState) {
 
 pub fn scene_downloading(s: &mut AppState) {
     demo(s, true);
-    s.update.found = Some(Found::preview("0.5.1", None));
+    s.update.found = Some(Found::preview("0.6.1", None));
     s.update.phase = Phase::Downloading { got: 96_468_992, total: Some(214_958_080) };
 }
 
 pub fn scene_waiting(s: &mut AppState) {
     super::speak::scene_idle(s);
     s.update.kind = Some(Kind::Auto);
-    s.update.found = Some(Found::preview("0.5.1", Some("\n* **Updates window:** every version with its notes.\n")));
+    s.update.found = Some(Found::preview("0.6.1", Some("\n* **Updates window:** every version with its notes.\n")));
 }
 
 pub fn scene_loading(s: &mut AppState) {

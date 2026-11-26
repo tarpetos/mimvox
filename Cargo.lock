@@ -2416,7 +2416,7 @@ checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 
 [[package]]
 name = "mimvox"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cargo-packager-updater",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "mimvox-api"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2462,7 +2462,7 @@ dependencies = [
 
 [[package]]
 name = "mimvox-engine-client"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -2475,7 +2475,7 @@ dependencies = [
 
 [[package]]
 name = "mimvox-mcp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2498,7 +2498,7 @@ dependencies = [
 
 [[package]]
 name = "mimvox-server"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",

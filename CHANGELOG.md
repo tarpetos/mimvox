@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0
+
+* **More voice-cloning models:** two optional parts add other models beside OmniVoice: **VoxCPM2** (6 GB, 30
+  languages), which often stays closer to your voice in another language, and **Chatterbox** (4.3 GB, 23 languages),
+  very close to your voice in English. Install them in **Settings** > **Modules** (or with setup's `voxcpm` and
+  `chatterbox` components); Speak's Style panel then shows **Model** (*Auto*, *VoxCPM2*, *Chatterbox*), and Book uses
+  the same choice.
+  * Only the models that speak the chosen language are offered. *Auto* is OmniVoice; with one of the new models
+    installed it also speaks Hebrew, Malay, Tagalog, Burmese, Khmer and Lao.
+  * They take longer than OmniVoice (VoxCPM2 about 7 times, Chatterbox about 3 times), and the first sentence waits
+    10-20 s while the model loads. Only one of them is kept in memory at a time.
+* **For programs:** `tts.generate` and `book.start` take `model`, `hello` lists `speech_models`, and every result
+  says which model spoke. `/v1/audio/speech` takes `voxcpm` or `chatterbox` as `model` (OpenAI's `tts-1` and others
+  mean *Auto*), and the MCP tools `speak` and `start_book` take `model` too.
+* **Newer speech engine:** the engine and Ukrainian speech now run on Python 3.14 and PyTorch 2.11 (AMD GPUs: ROCm
+  7.2), and the models start faster (9.5 s instead of 15 s on an RTX 4070). After the update a banner asks to run
+  setup again: it makes the engine's environments again (a few GB of packages; the models stay) and keeps the old
+  ones if that fails.
+* **Moving the data folder on Windows** (**Settings** > **Data folder** > **Move data…**, or `setup --move-to`) no
+  longer breaks the speech engine: the engine's Python still pointed to the old folder after the move.
+* **Fixes:**
+  * Installing Ukrainian speech failed with *Connection refused*: its packages now come from GitHub itself instead of
+    a mirror that stopped answering.
+  * The engine no longer logs an error about the native accent's converter at every shutdown.
+  * The Windows-only message *no memory left to back it* no longer shows on Linux.
+
 ## 0.5.0
 
 * **Local API:** other programs can now use Mimvox over HTTP. Turn it on in **Settings** > **API**; it is off by
