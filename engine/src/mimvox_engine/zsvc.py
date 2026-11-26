@@ -89,7 +89,9 @@ class ZsvcWorker:
         self.warm_refs.clear()
         try:
             await self._call("release", {}, 60.0, start=False)
-        except ZsvcError:
+        except ZsvcError as exc:
+            if isinstance(exc.__cause__, WorkerDied):
+                return  # the process ended (shutdown, training hand-over), and its GPU memory with it
             log.exception("could not release the converter's GPU memory")
 
     async def stop(self) -> None:
