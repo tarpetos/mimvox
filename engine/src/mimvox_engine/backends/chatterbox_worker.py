@@ -55,7 +55,7 @@ def load(model_dir, device):
     model = ChatterboxMultilingualTTS.from_local(model_dir, device)
     _fast["decoder"] = None
     if device == "cuda":
-        # fp16 gave the same speech tokens as fp32 on every test sentence; the decoder (speech tokens to audio) stays fp32.
+        # fp16 gave the same speech tokens as fp32 on every test sentence; the decoder to audio stays fp32.
         model.t3.tfmr.to(torch.float16)
         model.t3.speech_head.to(torch.float16)
         _fast["module"] = common.load_by_path("mimvox_chatterbox_fast", os.path.join(HERE, "chatterbox_fast.py"))
