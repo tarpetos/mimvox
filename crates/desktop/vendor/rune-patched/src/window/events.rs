@@ -455,6 +455,21 @@ impl<S: 'static> Host<S> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // PATCH: the edges of a frameless window resize it (`chrome::resize_edge`).
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if chrome::frameless(titlebar) && !rt.pressing() {
+                    let edge = chrome::resize_edge(&l.window, (position.x, position.y));
+                    if edge != l.native.resize_edge {
+                        l.native.resize_edge = edge;
+                        match edge {
+                            Some(edge) => l.window.set_cursor(chrome::resize_cursor(edge)),
+                            None => {
+                                l.cursor.forget();
+                                l.apply_cursor(rt, l.window.has_focus());
+                            }
+                        }
+                    }
+                }
                 rt.pointer_move(position.x as f32 / rt.input_scale(), position.y as f32 / rt.input_scale());
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = rt.take_drag_out() {
@@ -476,6 +491,8 @@ impl<S: 'static> Host<S> {
                 if l.motion_at.is_none() || rt.pressing() { l.request_redraw(); }
             }
             WindowEvent::CursorLeft { .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if l.native.resize_edge.take().is_some() { l.cursor.forget(); }
                 rt.pointer_leave();
                 l.request_redraw();
             }
@@ -484,6 +501,12 @@ impl<S: 'static> Host<S> {
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                // PATCH
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if state == ElementState::Pressed && let Some(edge) = l.native.resize_edge {
+                    let _ = l.window.drag_resize_window(edge);
+                    return;
+                }
                 if state == ElementState::Pressed {
                     self.control_click = cfg!(target_os = "macos") && self.mods.control_key();
                 }

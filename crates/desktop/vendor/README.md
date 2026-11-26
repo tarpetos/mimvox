@@ -86,3 +86,15 @@ on its way unless a press drags. The same tab switch is about 40 frames at 165 H
 
 Touched: `src/window/pacing.rs`, `src/window/draw.rs`, `src/window/any_host.rs`, `src/window/events.rs`,
 `src/window/win.rs`, `src/window/create.rs`. Lines are marked `PATCH`.
+
+### Patch 7: no system frame on Linux for an app that draws its caption buttons
+
+On GNOME's Wayland session there are no server-side decorations, so winit drew its own Adwaita title bar above the
+app's header: two title bars, one of them out of place. A window whose `Titlebar` has `custom_caption` now opens
+without decorations on Linux (`chrome::frameless`), as on Windows: `ChromeInsets` report the titlebar's height and
+the caption cells' width, and the app's buttons are ordinary elements under the pointer (`CaptionView` carries only
+`maximized`). A press within 6 pt of an edge (16 pt along a corner) resizes the window through
+`Window::drag_resize_window`, with the matching cursor, unless it is maximized or full screen (`chrome::resize_edge`).
+
+Touched: `src/window/chrome.rs`, `src/window/create.rs`, `src/window/events.rs`, `src/window/native.rs`,
+`src/input/cursor/os.rs` (`OsCursor::forget`). Lines are marked `PATCH`.

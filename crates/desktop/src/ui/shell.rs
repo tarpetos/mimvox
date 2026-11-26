@@ -604,7 +604,7 @@ fn apply_voice_list(s: &mut AppState, list: Vec<VoiceInfo>) {
 
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let p = theme::palette(s, cx);
-    // Room for the window controls: macOS traffic lights (leading), Windows caption buttons (trailing), none on Linux.
+    // Room for the window controls: macOS traffic lights (leading), the caption buttons (trailing).
     let mut insets = cx.chrome_insets();
     if let Some(preview) = s.shell.caption_preview {
         insets.trailing = 3.0 * super::caption::CELL;
@@ -676,14 +676,35 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let mut root = el().key("root").w_full().h_full().fill(p.bg_top).child(background(p)).child(
         col().key("chrome").w_full().h_full().child(header(s, p, insets, fit).cache()).child(body).children(dock),
     );
+    // Linux gives a window without its frame square corners: the window is transparent and rounds them itself.
+    let rounded = cfg!(target_os = "linux")
+        && s.shell.caption_preview.is_none()
+        && insets.trailing > 0.0
+        && !insets.caption.maximized;
+    if rounded {
+        root = root.radius(WINDOW_RADIUS).clip_rounded(WINDOW_RADIUS);
+    }
     for overlay in overlays {
         root = root.child(overlay);
     }
     if let Some(menu) = super::playbar::overlay(s, p) {
         root = root.child(menu);
     }
-    super::formats::window_drops(root, s).child(toast_stack(p, &s.shell.toasts, toasts_at))
+    let root = super::formats::window_drops(root, s).child(toast_stack(p, &s.shell.toasts, toasts_at));
+    if rounded {
+        root.child(
+            el().key("window-rim")
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .radius(WINDOW_RADIUS)
+                .border(1.0, Color::WHITE.alpha(0.08))
+                .inert(),
+        )
+    } else {
+        root
+    }
 }
+
+const WINDOW_RADIUS: f32 = 12.0;
 
 fn body_page(s: &AppState, cx: &mut Cx<AppState>) -> El {
     match s.screen {

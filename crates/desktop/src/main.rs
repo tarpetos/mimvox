@@ -95,6 +95,24 @@ fn run_sibling(name: &str, args: impl Iterator<Item = std::ffi::OsString>) -> ! 
 
 const APP_ID: &str = "io.github.tarpetos.mimvox";
 
+// A tiling window manager places, sizes and frames the window itself and has no minimize or maximize.
+fn tiling_wm() -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let socket = ["I3SOCK", "SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE", "NIRI_SOCKET"]
+        .iter()
+        .any(|v| std::env::var_os(v).is_some());
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_ascii_lowercase();
+    socket
+        || desktop.split(':').any(|d| {
+            matches!(
+                d,
+                "i3" | "sway" | "hyprland" | "niri" | "bspwm" | "dwm" | "awesome" | "qtile" | "river" | "xmonad"
+            )
+        })
+}
+
 fn main() {
     leave_appimage_env();
     let mut args = std::env::args_os().skip(1).peekable();
@@ -128,14 +146,15 @@ fn main() {
         on_key: Some(ui::on_key),
         ..AppSpec::new("Mimvox", opening.size, AppState::default, ui::view)
     };
-    // Windows draws its caption buttons itself (`ui::caption`, cells Rune hit-tests as the system's); macOS insets
-    // the traffic lights; Linux keeps the native frame.
-    let titlebar = Titlebar::new(ui::shell::HEADER_HEIGHT)
-        .traffic_lights(18.0, (ui::shell::HEADER_HEIGHT - 14.0) / 2.0)
-        .custom_caption(ui::caption::CELL);
+    // The app draws its caption buttons (`ui::caption`) on Windows and Linux, where the window then has no system
+    // frame; macOS insets the traffic lights.
+    let titlebar =
+        Titlebar::new(ui::shell::HEADER_HEIGHT).traffic_lights(18.0, (ui::shell::HEADER_HEIGHT - 14.0) / 2.0);
+    let titlebar = if tiling_wm() { titlebar } else { titlebar.custom_caption(ui::caption::CELL) };
     // Rune cannot veto a close: the window only hides and `train::on_close` decides.
     // A maximized window is created at its saved place and never moved: moving it un-maximizes it.
-    let mut options = rune::WindowOptions::default();
+    let mut options =
+        rune::WindowOptions { transparent: cfg!(target_os = "linux") && !tiling_wm(), ..Default::default() };
     if opening.maximized {
         options.position = opening.position;
     }
