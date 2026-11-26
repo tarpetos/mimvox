@@ -159,6 +159,7 @@ fn run() -> anyhow::Result<()> {
                         "wav",
                         None,
                         false,
+                        "auto",
                     )));
                 }
                 EngineMsg::Response { id, result } if Some(id) == tts_req => {

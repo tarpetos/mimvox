@@ -105,6 +105,8 @@ Job events of the Redub feature (`redub.progress`, `redub.transcript`, `redub.do
 engine = "/abs/path/runtime/engine/.venv/bin/python"   # runs the engine, the OmniVoice worker and the speech worker
 rvc    = "/abs/path/runtime/applio/.venv/bin/python"   # runs the RVC worker and training (only with "training")
 holos  = "/abs/path/runtime/holos/.venv/bin/python"    # runs the HolosTTS worker (only with "ukrainian")
+voxcpm = "/abs/path/runtime/voxcpm/.venv/bin/python"   # runs the VoxCPM2 worker (only with "voxcpm")
+chatterbox = "/abs/path/runtime/chatterbox/.venv/bin/python"  # runs the Chatterbox worker (only with "chatterbox")
 
 [paths]
 applio          = "/abs/path/runtime/applio"           # Applio repo with prerequisites downloaded
@@ -112,6 +114,8 @@ omnivoice_model = "/abs/path/runtime/models/omnivoice" # k2-fsa/OmniVoice snapsh
 seed_vc         = "/abs/path/runtime/seed-vc"          # Seed-VC source checkout (zero-shot native accent)
 seed_vc_models  = "/abs/path/runtime/models/seed-vc"   # its weights (dit/, bigvgan/, whisper-small/, 1.8 GB)
 holos_model     = "/abs/path/runtime/models/holos"     # HolosTTS weights + stanza/ (only with "ukrainian", 0.9 GB)
+voxcpm_model    = "/abs/path/runtime/models/voxcpm"    # openbmb/VoxCPM2 snapshot (only with "voxcpm", 4.7 GB)
+chatterbox_model = "/abs/path/runtime/models/chatterbox" # ResembleAI/chatterbox files (only with "chatterbox", 3.0 GB)
 
 [device]
 backend = "cuda"   # cuda | mps | cpu (detected by setup)
@@ -260,7 +264,8 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
 "languages":[{"code":"en","name":"English","native":"English","common":true},{"code":"uk","name":"Ukrainian",
 "native":"Українська","common":true},...],"translators":["nllb-1.3b","nllb-600m"],"zero_shot_vc":true,
 "components":["speech","training","translation","better_translation","native_accent","music_removal","ukrainian"],
-"components_off":[]}`
+"components_off":[],"speech_models":[{"id":"omnivoice","name":"OmniVoice","languages":["ar","as",...]},
+{"id":"voxcpm","name":"VoxCPM2","languages":[...]}]}`
 - `languages`: every language the speech model speaks (see [Speech model and languages](#speech-model-and-languages-omnivoice)),
   `name` in English, `native` in the language itself, the common ones first (`common: true`, in the order
   `en uk de fr es pl ro it pt cs ru`), then the rest by English name. The same list is in the `ready` line and answers
@@ -283,8 +288,12 @@ letters, Latin accents dropped (`Zoë` -> `zoe`, `ß` -> `ss`); a name with noth
   Convert voice), `translation` (NLLB-200 600M: Redub's Translate & dub), `better_translation` (NLLB-200 1.3B),
   `native_accent` (Seed-VC), `music_removal` (Hybrid Demucs) and `ukrainian` (HolosTTS: Ukrainian with exact word
   stress, see [Ukrainian with exact stress](#ukrainian-with-exact-stress-holostts)). The app offers to install a missing one where it is
-  needed (setup `--add <component>`). Without `training` runtime.toml has no `[python] rvc` / `[paths] applio` and
+  needed (setup `--add <component>`). `voxcpm` and `chatterbox` are more voice-cloning models (see
+  [Other voice-cloning models](#other-voice-cloning-models-voxcpm2-chatterbox)). Without `training` runtime.toml has no `[python] rvc` / `[paths] applio` and
   `models.rvc` is `missing`. Read at engine start.
+- `speech_models`: the voice-cloning models `tts.generate` and `book.start` may name in `model`, OmniVoice first, then
+  the installed and turned-on `voxcpm` and `chatterbox`, each with the language codes it speaks. `languages` also
+  lists what only one of those speaks (Hebrew, Malay, Tagalog, ...).
 - `components_off`: installed parts the user turned off (`<data>/components.json`, `{"off":[...]}`). They are left
   out of `components`, `translators` and `zero_shot_vc`, and the engine does not use them: no HolosTTS, no Seed-VC,
   no RVC worker, no translator, no music removal. Read at engine start.
@@ -718,8 +727,10 @@ pair is removed so that Applio picks the older valid one. At most 4 epochs of wo
 
 ### `tts.generate` / `tts.cancel`
 `{"voice_id","text","expressiveness":0.8,"voice_match":1.0,"quality":"best","speed":1.0,"language"?:"en",
-"output_format"?:"wav"}` ->
-`{"job","segments":3,"segment_chars":[64,150,92]}`; `tts.cancel {"job"}` -> `{}`
+"output_format"?:"wav","model"?:"auto"}` ->
+`{"job","segments":3,"segment_chars":[64,150,92],"model":"omnivoice"}`; `tts.cancel {"job"}` -> `{}`
+- `model`: which voice-cloning model speaks, see [Other voice-cloning models](#other-voice-cloning-models-voxcpm2-chatterbox).
+  The settings below are OmniVoice's; that section says what they mean for the others.
 - `expressiveness` (0.1-1.5, default 0.8) maps to OmniVoice's sampling: `position_temperature = 5.0 * e / 0.8` (how
   freely the order of the unmasked tokens, i.e. phrasing and pauses, varies; 5.0 is the model default) and
   `class_temperature = max(0, e - 0.8)` (token sampling; 0 = greedy, the default). 0.8 gives the model's defaults, lower
@@ -874,6 +885,37 @@ for OmniVoice. Measured on an RTX 4070: about 0.1 s per second of speech (10x Om
 
 When the component is not installed, failed to load or is paused for a training, Ukrainian goes to OmniVoice as before
 (`backends.for_language` skips a backend that is not `available()`). The `tts` entry of `models` stays OmniVoice's.
+
+### Other voice-cloning models (VoxCPM2, Chatterbox)
+
+The optional `voxcpm` (VoxCPM2, OpenBMB, Apache-2.0) and `chatterbox` (Chatterbox Multilingual, Resemble AI, MIT)
+components are voice-cloning models beside OmniVoice. Each runs in a worker process with the interpreter of its own
+environment (`backends/voxcpm_worker.py`, `backends/chatterbox_worker.py`, sharing `backends/clone_worker.py`; ops
+`load`, `synth`, `release`, `status`).
+
+- **`model`** (`tts.generate`, `book.start`; default `"auto"`): `"auto"` is OmniVoice (HolosTTS for Ukrainian with
+  `exact_stress`), or the first installed model that speaks a language OmniVoice does not; `"omnivoice"`, `"voxcpm"`
+  or `"chatterbox"` names one. A named model that is not installed is `not_ready`, one that does not speak
+  `language` is `bad_request`, any other value is `bad_request`. A book keeps the value it started with. The reply
+  of `tts.generate` and `tts.done` say which model spoke (`model`). Redub always speaks with `"auto"`.
+- **Languages.** VoxCPM2: ar da de el en es fi fr he hi id it ja km ko lo ms my nl no pl pt ru sv sw th tl tr vi zh.
+  Chatterbox: ar da de el en es fi fr he hi it ja ko ms nl no pl pt ru sv sw tr zh.
+- **Loading.** A model loads on its first use (the `models` event does not cover it), and only one of the two is
+  loaded at a time: the other's worker ends first. When the card is still short of memory after the idle workers
+  released their models (`no_vram`), the idle worker processes end too and the request is tried once more; they start
+  again on their next request. On a 12 GB card a switch between models costs 10-20 s.
+- **Reference.** The worker clones from the clip (`reference_<lang>.wav` when it exists). VoxCPM2 clones best from the
+  clip together with what it says: it uses the stretch of the clip OmniVoice transcribed (its `.omnivoice.json`), and
+  asks OmniVoice to transcribe the clip first when there is no transcript yet. With `accent: "native-us"` it speaks
+  from the native clip and its transcript, and the converter gives it the user's timbre as for OmniVoice.
+- **Controls.** Neither model has a speed control: the engine stretches the result to `speed` with ffmpeg (pitch
+  kept). `quality` is VoxCPM2's diffusion steps (10 Best, 6 Fast); `expressiveness` is Chatterbox's exaggeration
+  (0.8 -> its default 0.5, at most 1.0). Numbers and symbols are spelled out as for OmniVoice. Chatterbox's speech is at
+  most about 0.12 s per character plus 0.8 s: on a word or two it otherwise went on babbling.
+- **Measured** (RTX 4070, the same 9.8 s English clip; ECAPA speaker similarity to held-out audio of the speaker,
+  Whisper WER): OmniVoice 0.72-0.76 in English, RTF 0.09, 4.8 GB; VoxCPM2 0.73-0.75, de/pl 0.65-0.69, RTF 0.66,
+  5.7 GB; Chatterbox 0.74-0.80 in English, 0.72 de, 0.46 pl, RTF 0.5, 3.6 GB. WER was 0 for nearly every sentence.
+  Chatterbox's output carries Resemble AI's inaudible Perth watermark.
 
 ### `text.stress`
 `{"text"}` -> `{"stressed","unsure":[...]}`: the text as HolosTTS would speak it, U+0301 after each stressed vowel
@@ -1194,7 +1236,7 @@ only shows it.
 ### `book.start`
 `{"title","source"?,"format"?,"chapters":[{"title","text"}],"voice_id","language"?,"expressiveness"?:0.6,
 "voice_match"?:1.0,"quality"?:"best","speed"?:1.0,"accent"?,"native_voice"?,"output_format"?:"wav","m4b"?:false,
-"read_titles"?:true,"ref"?}` -> `{"id","job","folder","chapters","words","ref","existing","status", ...accent and reference
+"read_titles"?:true,"ref"?,"model"?:"auto"}` -> `{"id","job","folder","chapters","words","ref","existing","status", ...accent and reference
 fields as tts.generate}`
 - Creates a book project and starts reading it at once. The voice settings mean what they mean for `tts.generate` and
   are checked the same way (`not_found`, `not_ready`, `bad_request`), before anything is written. `expressiveness`

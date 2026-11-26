@@ -169,6 +169,9 @@ pub struct SpeakState {
     pub speed: f32,
     /// Ukrainian through HolosTTS when it is installed; off reads Ukrainian with OmniVoice like other languages.
     pub exact_stress: bool,
+    /// `auto` or the id of an installed voice-cloning model (`hello` `speech_models`).
+    pub model: String,
+    model_dirty: bool,
     speed_loaded: bool,
     /// What `speak-text.txt` holds, so the text is written only when it changed.
     text_saved: Option<String>,
@@ -197,6 +200,10 @@ impl Default for SpeakState {
             quality: Quality::Best,
             speed: 1.0,
             exact_stress: super::onboarding::setting("exact_stress").and_then(|v| v.as_bool()).unwrap_or(true),
+            model: super::onboarding::setting("speak_model")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "auto".into()),
+            model_dirty: false,
             speed_loaded: false,
             text_saved: None,
             speed_dirty: false,
@@ -345,6 +352,7 @@ pub fn generate(s: &mut AppState) {
         &out,
         accent,
         s.speak.exact_stress,
+        &model(s),
     );
     shell::stop_audio(s);
     let Some(req) = shell::request(s, method, params) else {
@@ -603,6 +611,10 @@ pub fn settle(s: &mut AppState) -> bool {
             if s.speak.languages_dirty {
                 s.speak.languages_dirty = false;
                 super::onboarding::save_setting("speak_languages", json!(s.speak.languages));
+            }
+            if s.speak.model_dirty {
+                s.speak.model_dirty = false;
+                super::onboarding::save_setting("speak_model", json!(s.speak.model));
             }
             if s.speak.accent_dirty {
                 s.speak.accent_dirty = false;
@@ -993,6 +1005,9 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     // Redub shares this panel but chooses its languages itself.
     if s.screen == Screen::Speak {
         c = c.child(language_row(s, p));
+        if let Some(row) = model_row(s, p) {
+            c = c.child(row);
+        }
         if accent_applies(s, &language(s)) {
             c = c.child(accent_block(s, p, "speak-accent"));
         }
@@ -1013,6 +1028,75 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
         c = c.child(super::setuprun::install_line(s, p, "training", "Voice match"));
     }
     c
+}
+
+/// The chosen model when it is installed and speaks the language, else `auto`.
+pub fn model(s: &AppState) -> String {
+    let code = language(s);
+    let ok = s.shell.speech_models.iter().any(|m| m.id == s.speak.model && m.languages.contains(&code));
+    if ok { s.speak.model.clone() } else { "auto".into() }
+}
+
+fn model_help(id: &str) -> &'static str {
+    match id {
+        "omnivoice" => "OmniVoice: about 60 languages, the fastest",
+        "voxcpm" => "VoxCPM2: 30 languages, stays closest to the voice in another language; about 6 times slower",
+        "chatterbox" => "Chatterbox: 23 languages, very close to the voice in English; about 5 times slower",
+        _ => "",
+    }
+}
+
+/// None when no model but OmniVoice speaks the language and none was chosen.
+fn model_row(s: &AppState, p: Palette) -> Option<El> {
+    let code = language(s);
+    let models: Vec<(String, String)> = s
+        .shell
+        .speech_models
+        .iter()
+        .filter(|m| m.id != "omnivoice" && m.languages.contains(&code))
+        .map(|m| (m.id.clone(), if m.name.is_empty() { m.id.clone() } else { m.name.clone() }))
+        .collect();
+    let mut ids = vec!["auto".to_owned()];
+    ids.extend(models.iter().map(|(id, _)| id.clone()));
+    let mut labels = vec!["Auto"];
+    labels.extend(models.iter().map(|(_, name)| name.as_str()));
+    let mut helps = vec![
+        "OmniVoice (HolosTTS for Ukrainian with exact stress), or another model for a language OmniVoice does not speak",
+    ];
+    helps.extend(models.iter().map(|(id, _)| model_help(id)));
+    let chosen = model(s);
+    let unsupported = (s.speak.model != "auto" && chosen == "auto")
+        .then(|| s.shell.speech_models.iter().find(|m| m.id == s.speak.model))
+        .flatten()
+        .map(|m| format!("{} does not speak {}: Auto reads it.", m.name, lang::name(&code)));
+    if models.is_empty() {
+        return unsupported.map(|note| {
+            el().key("speak-model").w_full().child(text(note).font(ty::CAPTION).color(p.text_faint).wrap())
+        });
+    }
+    let selected = ids.iter().position(|id| *id == chosen).unwrap_or(0);
+    let pick_ids = ids.clone();
+    let mut c = col()
+        .key("speak-model")
+        .w_full()
+        .gap(8.0)
+        .child(
+            col()
+                .gap(1.0)
+                .min_w(0.0)
+                .child(text("Model").font(ty::LABEL).color(p.text))
+                .child(text("What clones the voice").font(ty::CAPTION).color(p.text_faint)),
+        )
+        .child(segmented_help(p, "speak-model-pick", &labels, &helps, selected, move |s, i| {
+            if let Some(id) = pick_ids.get(i) {
+                s.speak.model = id.clone();
+                s.speak.model_dirty = true;
+            }
+        }));
+    if let Some(note) = unsupported {
+        c = c.child(text(note).font(ty::CAPTION).color(p.text_faint).wrap());
+    }
+    Some(c)
 }
 
 fn language_row(s: &AppState, p: Palette) -> El {
@@ -1423,6 +1507,33 @@ pub fn scene_language_uk(s: &mut AppState) {
     demo_voice(s, true);
     s.speak.text = TextEdit::new(SAMPLE_UK);
     s.speak.languages.insert("me".into(), "uk".into());
+}
+
+fn demo_models(s: &mut AppState) {
+    use crate::engine::protocol::SpeechModel;
+    let model = |id: &str, name: &str, langs: &[&str]| SpeechModel {
+        id: id.into(),
+        name: name.into(),
+        languages: langs.iter().map(|c| (*c).to_owned()).collect(),
+    };
+    s.shell.speech_models = vec![
+        model("omnivoice", "OmniVoice", &["en", "uk", "de", "pl"]),
+        model("voxcpm", "VoxCPM2", &["en", "de", "pl"]),
+        model("chatterbox", "Chatterbox", &["en", "de", "pl"]),
+    ];
+}
+
+pub fn scene_models(s: &mut AppState) {
+    demo_voice(s, true);
+    demo_models(s);
+    s.speak.text = TextEdit::new(SAMPLE);
+    s.speak.model = "voxcpm".into();
+}
+
+pub fn scene_model_unsupported(s: &mut AppState) {
+    scene_language_uk(s);
+    demo_models(s);
+    s.speak.model = "chatterbox".into();
 }
 
 pub fn scene_language_uk_no_extension(s: &mut AppState) {

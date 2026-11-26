@@ -242,6 +242,31 @@ def test_a_failed_python_upgrade_keeps_the_old_venv(fake_uv):
     assert sorted(p.name for p in s.engine_venv.parent.iterdir()) == [".venv"]
 
 
+def test_runtime_toml_names_an_installed_clone_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "location_file", lambda plat: tmp_path / "location.toml")
+    s = make(tmp_path / "data")
+    s.components = {"speech", "voxcpm", "chatterbox"}
+    for py in (s.engine_python(), s.clone_python("voxcpm")):
+        py.parent.mkdir(parents=True, exist_ok=True)
+        py.write_bytes(b"")
+    s.write_runtime_toml()
+    text = s.runtime_toml.read_text(encoding="utf-8")
+    assert f"voxcpm = {setup.toml_str(s.clone_python('voxcpm'))}" in text
+    assert f"voxcpm_model = {setup.toml_str(s.clone_models_dir('voxcpm'))}" in text
+    assert "chatterbox" not in text.split("[setup]")[0]  # no interpreter yet: left out until it is installed
+    assert s.component_paths("voxcpm") == [s.runtime / "voxcpm", s.runtime / "models" / "voxcpm"]
+
+
+def test_a_clone_model_an_older_setup_left_out_is_kept(tmp_path):
+    s = make(tmp_path / "data")
+    write_runtime(s, components=("speech", "ukrainian"))
+    (s.clone_models_dir("chatterbox")).mkdir(parents=True)
+    (s.clone_models_dir("chatterbox") / setup.CLONE_STAMP).write_text("x", encoding="utf-8")
+    (s.clone_models_dir("voxcpm")).mkdir(parents=True)  # an interrupted download: no stamp
+    s.resolve_components(setup.parse_args([]))
+    assert s.components == {"speech", "ukrainian", "chatterbox"}
+
+
 def test_pythons_no_environment_uses_are_removed(fake_uv, capsys):
     s, _uv = fake_uv
     running = f"{sys.version_info.major}.{sys.version_info.minor}"

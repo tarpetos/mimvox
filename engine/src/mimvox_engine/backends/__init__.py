@@ -20,6 +20,7 @@ class TtsBackend(abc.ABC):
     """One text-to-speech model. All methods are called on the engine's event loop."""
 
     name: str = "?"
+    label: str = "?"
     languages: frozenset[str] = frozenset()
 
     @abc.abstractmethod
@@ -69,6 +70,15 @@ def all_backends() -> list[TtsBackend]:
     return list(_BACKENDS)
 
 
+def by_name(name: str) -> TtsBackend | None:
+    return next((b for b in all_backends() if b.name == name), None)
+
+
+def selectable() -> list[TtsBackend]:
+    """The voice-cloning models a request may name in ``model`` (HolosTTS is chosen by ``exact_stress`` instead)."""
+    return [b for b in all_backends() if b.name != "holos" and b.status() != "missing"]
+
+
 def for_language(lang: str, skip: tuple[str, ...] = ()) -> TtsBackend | None:
     lang = (lang or "").lower()
     for b in all_backends():
@@ -78,9 +88,11 @@ def for_language(lang: str, skip: tuple[str, ...] = ()) -> TtsBackend | None:
 
 
 def languages() -> set[str]:
+    """What the main model speaks plus what an installed extra model adds."""
     out: set[str] = set()
     for b in all_backends():
-        out |= set(b.languages)
+        if b.name == "omnivoice" or b.status() != "missing":
+            out |= set(b.languages)
     return out
 
 
@@ -91,7 +103,10 @@ def primary() -> "TtsBackend":
 
 
 def _builtin() -> None:
+    from .clone import CHATTERBOX, VOXCPM  # noqa: PLC0415
     from .holos import HOLOS  # noqa: PLC0415
     from .omnivoice import OMNIVOICE  # noqa: PLC0415
     register(HOLOS)
     register(OMNIVOICE)
+    register(VOXCPM)
+    register(CHATTERBOX)

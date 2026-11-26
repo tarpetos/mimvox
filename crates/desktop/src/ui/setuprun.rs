@@ -62,7 +62,7 @@ pub struct Component {
     pub what: &'static str,
 }
 
-pub const COMPONENTS: [Component; 7] = [
+pub const COMPONENTS: [Component; 9] = [
     Component {
         id: "speech",
         label: "Speech",
@@ -99,6 +99,18 @@ pub const COMPONENTS: [Component; 7] = [
         label: "Ukrainian speech",
         gb: 1.5,
         what: "Ukrainian with exact word stress in Speak, Book and Redub (HolosTTS): every word as the dictionary and the sentence say.",
+    },
+    Component {
+        id: "voxcpm",
+        label: "VoxCPM2",
+        gb: 6.0,
+        what: "Another voice-cloning model for Speak and Book: 30 languages, closest to your voice in other languages, slower.",
+    },
+    Component {
+        id: "chatterbox",
+        label: "Chatterbox",
+        gb: 4.3,
+        what: "Another voice-cloning model for Speak and Book: 23 languages, very close to your voice in English, slower.",
     },
 ];
 

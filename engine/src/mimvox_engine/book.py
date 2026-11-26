@@ -281,6 +281,7 @@ def _settings(params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(m4b, bool) or not isinstance(titles, bool) or not isinstance(keep_voice, bool):
         raise EngineError("bad_request", "'m4b', 'read_titles' and 'keep_voice' must be true or false")
     return {"voice_id": voice_id, "language": lang, "exact_stress": params.get("exact_stress", True),
+            "model": params.get("model") or "auto",
             "expressiveness": tts._num(params, "expressiveness", narration.EXPRESSIVENESS, 0.1, 1.5),
             "voice_match": tts._num(params, "voice_match", 1.0, 0.0, 1.0),
             "speed": tts._num(params, "speed", 1.0, tts.SPEED_MIN, tts.SPEED_MAX), "quality": quality,

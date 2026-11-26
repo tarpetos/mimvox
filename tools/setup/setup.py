@@ -120,6 +120,22 @@ HOLOS_STANZA = "stanza"                # <runtime>/models/holos/stanza: STANZA_R
 HOLOS_STANZA_PROCESSORS = "tokenize,pos,mwt"
 HOLOS_STAMP = ".mimvox-setup-ok"       # in <runtime>/models/holos: the engine uses HolosTTS only once it is there
 UKRAINIAN_GB = 1.5   # weights 0.9 GB + the packages the engine venv does not share (Stanza, ipa-uk, ...)
+# More voice-cloning models, each in its own venv (<runtime>/<id>/.venv, weights in <runtime>/models/<id>): Chatterbox
+# pins transformers 5.2, VoxCPM2 brings funasr, modelscope and datasets. Chatterbox's watermarker imports pkg_resources,
+# which setuptools 82 drops.
+CLONE_MODELS = {
+    "voxcpm": {"label": "VoxCPM2", "packages": ("voxcpm==2.0.3", "num2words==0.5.14"),
+               "repo": "openbmb/VoxCPM2", "revision": "7936080b41163874f38610f46f438e2c0757f9fd", "files": (),
+               "required": ("model.safetensors", "audiovae.pth", "config.json"), "download_gb": 4.7},
+    "chatterbox": {"label": "Chatterbox", "packages": ("chatterbox-tts==0.1.7", "num2words==0.5.14", "setuptools==81.0.0"),
+                   "repo": "ResembleAI/chatterbox", "revision": "5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18",
+                   "files": ("ve.pt", "t3_mtl23ls_v2.safetensors", "s3gen.pt", "grapheme_mtl_merged_expanded_v1.json",
+                             "conds.pt", "Cangjie5_TC.json"),
+                   "required": ("t3_mtl23ls_v2.safetensors", "s3gen.pt", "ve.pt", "conds.pt"), "download_gb": 3.0,
+                   # Its Chinese word segmenter downloads its model on first use: fetched here, into the weights folder.
+                   "after": "from spacy_pkuseg import pkuseg; pkuseg()"},
+}
+CLONE_STAMP = ".mimvox-setup-ok"   # in the weights folder: the engine uses the model only once it is there
 
 WHISPER_MODEL = "turbo"
 # The checkpoint openai-whisper downloads for "turbo" (whisper._MODELS; the SHA-256 is part of the URL). Fetched by
@@ -174,6 +190,8 @@ COMPONENTS = {
     "native_accent": ZERO_SHOT_GB,                 # Seed-VC: the native accent of voices that are not trained
     "music_removal": SEPARATION_GB,                # Hybrid Demucs: background music out of media files
     "ukrainian": UKRAINIAN_GB,                     # HolosTTS: Ukrainian with exact word stress
+    "voxcpm": 6.0,                                 # VoxCPM2: weights 4.7 GB + its packages
+    "chatterbox": 4.3,                             # Chatterbox Multilingual: weights 3.0 GB + its packages
 }
 # Portable ffmpeg for Windows when Applio (which brings one) is not installed.
 FFMPEG_WINDOWS_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-{}-gpl.zip"
@@ -540,6 +558,15 @@ class Setup:
     def holos_models(self) -> Path:
         return self.runtime / "models" / HOLOS_DIR
 
+    def clone_venv(self, name: str) -> Path:
+        return self.runtime / name / ".venv"
+
+    def clone_models_dir(self, name: str) -> Path:
+        return self.runtime / "models" / name
+
+    def clone_python(self, name: str) -> Path:
+        return venv_python(self.clone_venv(name), self.plat)
+
     def holos_python(self) -> Path:
         return venv_python(self.holos_venv, self.plat)
 
@@ -697,7 +724,9 @@ class Setup:
         if args.components:
             chosen = parse(args.components)
         elif previous is not None:
-            chosen = set(previous)
+            # An older setup (after the app was downgraded) rewrites runtime.toml without the components it does not
+            # know: a model whose weights are complete on disk is still installed.
+            chosen = set(previous) | {n for n in CLONE_MODELS if (self.clone_models_dir(n) / CLONE_STAMP).is_file()}
         else:
             chosen = set(COMPONENTS)
         if "better_translation" in chosen and self.gpu.backend != "cuda" and args.better_translation != "yes" \
@@ -743,6 +772,10 @@ class Setup:
             if "ukrainian" in self.components and not (self.holos_models / HOLOS_STAMP).is_file() \
                     and not self.skip_models:
                 say(f"Ukrainian speech (HolosTTS, exact word stress, about {UKRAINIAN_GB} GB) will be installed now.")
+            for name, spec in CLONE_MODELS.items():
+                if name in self.components and not (self.clone_models_dir(name) / CLONE_STAMP).is_file() \
+                        and not self.skip_models:
+                    say(f"The {spec['label']} voice-cloning model (about {COMPONENTS[name]:g} GB) will be installed now.")
             if self.zero_shot_vc and not self.has_zero_shot_vc() and not self.skip_models:
                 say(f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
                     "now: the native accent for voices that are not trained (--no-zero-shot-vc leaves it out).")
@@ -757,7 +790,8 @@ class Setup:
             labels = {"speech": "speech engine, OmniVoice and Whisper", "training": "voice training (Applio/RVC)",
                       "translation": "translation for Redub", "better_translation": "better translation",
                       "native_accent": "native accent (Seed-VC, GPL-3.0)", "music_removal": "music removal",
-                      "ukrainian": "Ukrainian speech (HolosTTS)"}
+                      "ukrainian": "Ukrainian speech (HolosTTS)", "voxcpm": "VoxCPM2 voice cloning",
+                      "chatterbox": "Chatterbox voice cloning"}
             chosen = [c for c in COMPONENTS if c in self.components]
             parts = ", ".join(f"{labels[c]} ~{COMPONENTS[c]:g} GB" for c in chosen)
             say(f"This will download and install about {self.install_gb():.0f} GB ({parts}) plus ~0.1 GB per voice.")
@@ -1166,7 +1200,7 @@ class Setup:
         if not self.python_dir.is_dir():
             return
         keep = {f"{sys.version_info.major}.{sys.version_info.minor}"}
-        for venv in (self.engine_venv, self.holos_venv, self.applio / ".venv"):
+        for venv in (self.engine_venv, self.holos_venv, self.applio / ".venv", *map(self.clone_venv, CLONE_MODELS)):
             if (venv / "pyvenv.cfg").is_file():
                 version = venv_version(venv)
                 if version is None:
@@ -1294,6 +1328,7 @@ class Setup:
             "native_accent": [self.seed_vc, self.seed_vc_models],
             "music_removal": [self.models_dir / DEMUCS_DIR],
             "ukrainian": [self.holos_venv.parent, self.holos_models],
+            **{name: [self.clone_venv(name).parent, self.clone_models_dir(name)] for name in CLONE_MODELS},
         }[component]
 
     def whisper_model(self) -> None:
@@ -1488,6 +1523,49 @@ class Setup:
                   "Installing the Ukrainian stress dictionary", cwd=self.runtime)
         return True
 
+    def clone_env(self, name: str) -> None:
+        spec = CLONE_MODELS[name]
+        label = f"{spec['label']} environment"
+        stamp_value = f"{' '.join(ENGINE_TORCH)} {' '.join(spec['packages'])} {self.gpu.build} {self.plat}"
+
+        def install(py: Path, extra: Sequence[str]) -> bool:
+            note = self._build_note()
+            say(f"{label}: installing torch 2.11{f' ({note})' if note else ''} and {spec['packages'][0]}...")
+            command = self.uv("pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *spec["packages"],
+                              *extra)
+            command += self._torch_args()
+            self.must(command, f"Installing the {label}", cwd=self.runtime)
+            return True
+
+        self._venv_step(label, self.clone_venv(name), ENGINE_PYTHON, stamp_value, install, self.runtime)
+
+    def clone_models_step(self, name: str) -> None:
+        spec = CLONE_MODELS[name]
+        py = self.clone_python(name)
+        if not py.exists():
+            raise SetupError(f"The {spec['label']} environment is missing, so its model cannot be fetched.")
+        target = self.clone_models_dir(name)
+        stamp = target / CLONE_STAMP
+        stamp_value = f"{spec['repo']}@{spec['revision']}{' + ' + spec['after'] if spec.get('after') else ''}"
+        if self._has(target, spec["required"]) and stamp.is_file() \
+                and stamp.read_text(encoding="utf-8").strip() == stamp_value:
+            say(f"{spec['label']} model: present.")
+            return
+        target.mkdir(parents=True, exist_ok=True)
+        say(f"{spec['label']}: downloading {spec['repo']} (about {spec['download_gb']} GB, resumable)...")
+        script = ("import sys; from huggingface_hub import snapshot_download\n"
+                  "snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3], "
+                  "allow_patterns=sys.argv[4:] or None)")
+        self.must([py, "-I", "-c", script, spec["repo"], spec["revision"], target, *spec["files"]],
+                  f"Downloading {spec['repo']}", cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+        if not self._has(target, spec["required"]):
+            raise SetupError(f"The {spec['repo']} download finished but files are missing; run this again.")
+        if spec.get("after"):
+            self.must([py, "-I", "-c", spec["after"]], f"Preparing {spec['label']}", cwd=self.runtime,
+                      extra_env={"PKUSEG_HOME": str(target / "pkuseg"), "HF_HOME": str(target / "hf-home")})
+        stamp.write_text(stamp_value, encoding="utf-8")
+        say(f"{spec['label']}: ready.")
+
     def holos_models_step(self) -> None:
         py = self.holos_python()
         if not py.exists():
@@ -1562,6 +1640,7 @@ class Setup:
             raise SetupError(f"runtime.toml not written: the engine interpreter {self.engine_python()} does not exist.")
         training = "training" in self.components and self.rvc_python().exists()
         ukrainian = "ukrainian" in self.components and self.holos_python().exists()
+        clones = [n for n in CLONE_MODELS if n in self.components and self.clone_python(n).exists()]
         if "training" in self.components and not training:
             warn(f"Voice training is not ready (no {self.rvc_python()}): runtime.toml leaves it out; run setup again.")
         text = (
@@ -1570,12 +1649,14 @@ class Setup:
             f"engine = {toml_str(self.engine_python())}\n"
             + (f"rvc = {toml_str(self.rvc_python())}\n" if training else "")
             + (f"holos = {toml_str(self.holos_python())}\n" if ukrainian else "")
+            + "".join(f"{n} = {toml_str(self.clone_python(n))}\n" for n in clones)
             + "\n[paths]\n"
             + (f"applio = {toml_str(self.applio)}\n" if training else "")
             + f"omnivoice_model = {toml_str(self.omnivoice_model)}\n"
             f"seed_vc = {toml_str(self.seed_vc)}\n"
             f"seed_vc_models = {toml_str(self.seed_vc_models)}\n"
             + (f"holos_model = {toml_str(self.holos_models)}\n" if ukrainian else "")
+            + "".join(f"{n}_model = {toml_str(self.clone_models_dir(n))}\n" for n in clones)
             + "\n[device]\n"
             f'backend = "{self.gpu.backend}"\n'
         )
@@ -1647,6 +1728,9 @@ class Setup:
             pythons.append(("rvc", "Applio", self.rvc_python()))
         if "ukrainian" in self.components:
             pythons.append(("holos", "Ukrainian speech", self.holos_python()))
+        for name, spec in CLONE_MODELS.items():
+            if name in self.components:
+                pythons.append((name, spec["label"], self.clone_python(name)))
         if not self.runtime_toml.is_file():
             problems.append(f"{self.runtime_toml} is missing.")
         else:
@@ -1670,6 +1754,9 @@ class Setup:
             checks.insert(0, ("Applio prerequisites", self.applio, self.applio_required()))
         if "ukrainian" in self.components:
             checks.append(("Ukrainian speech models", self.holos_models, (*HOLOS_FILES, HOLOS_STAMP)))
+        for name, spec in CLONE_MODELS.items():
+            if name in self.components:
+                checks.append((f"{spec['label']} model", self.clone_models_dir(name), (*spec["required"], CLONE_STAMP)))
         for label, folder, files in checks:
             missing = [f for f in files if not (folder / f).is_file()]
             if missing:
@@ -1998,7 +2085,8 @@ def remove_components(setup: Setup, value: str) -> int:
             f"{', '.join(c for c in COMPONENTS if c != 'speech')}).")
         return 1
     labels = {"training": "Voice training", "translation": "Translation", "better_translation": "Better translation",
-              "native_accent": "Native accent", "music_removal": "Music removal", "ukrainian": "Ukrainian speech"}
+              "native_accent": "Native accent", "music_removal": "Music removal", "ukrainian": "Ukrainian speech",
+              **{name: f"{spec['label']} voice cloning" for name, spec in CLONE_MODELS.items()}}
     plan = [(f"remove_{c}", f"Removing {labels[c].lower()}") for c in items] + [("runtime_toml", "Finishing")]
     event(event="plan", steps=[{"id": i, "label": label} for i, label in plan])
     failed: list[str] = []
@@ -2154,6 +2242,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         plan.append(("holos_env", "Ukrainian speech: environment"))
         if models:
             plan.append(("holos_models", "Ukrainian speech: models"))
+    clones = [name for name in CLONE_MODELS if has(name)]
+    for name in clones:
+        plan.append((f"{name}_env", f"{CLONE_MODELS[name]['label']}: environment"))
+        if models:
+            plan.append((f"{name}_models", f"{CLONE_MODELS[name]['label']}: model"))
     if training:
         plan.append(("applio_env", "Voice training: environment"))
         if models:
@@ -2204,6 +2297,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             attempt("holos_models", setup.holos_models_step)
     else:
         skipped("holos_models")
+    for name in clones:
+        if attempt(f"{name}_env", lambda n=name: setup.clone_env(n)):
+            if models:
+                attempt(f"{name}_models", lambda n=name: setup.clone_models_step(n))
+        else:
+            skipped(f"{name}_models")
     if applio_cloned and attempt("applio_env", setup.applio_venv):
         if models:
             attempt("applio_models", setup.applio_models)

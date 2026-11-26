@@ -77,6 +77,29 @@ none of it is part of this repository or of the app's installers.
 - **ipa-uk** (patriotyk, MIT, commit `3faf05e`): Ukrainian text with stress marks to IPA phonemes.
 - **num2words** (LGPL-2.1, as in the engine environment), for numbers in the Ukrainian text front-end.
 
+### VoxCPM2 (the optional "VoxCPM2" component)
+
+Installed by setup into `<data>/runtime/voxcpm` and `<data>/runtime/models/voxcpm` only when the component is chosen;
+none of it is part of this repository or of the app's installers.
+
+- **VoxCPM2** (OpenBMB; `voxcpm` 2.0.3 on PyPI and the `openbmb/VoxCPM2` weights on Hugging Face, revision
+  `7936080`): Apache-2.0 for the code and the weights.
+- Its dependencies include **FunASR** (MIT), **ModelScope** (Apache-2.0) and **WeTextProcessing** (`wetext`, Apache-2.0).
+- **num2words** (LGPL-2.1), for numbers in the text front-end.
+
+### Chatterbox Multilingual (the optional "Chatterbox" component)
+
+Installed by setup into `<data>/runtime/chatterbox` and `<data>/runtime/models/chatterbox` only when the component is
+chosen; none of it is part of this repository or of the app's installers.
+
+- **Chatterbox** (Resemble AI; `chatterbox-tts` 0.1.7 on PyPI and the `ResembleAI/chatterbox` multilingual weights
+  on Hugging Face, revision `5bb1f6e`): MIT for the code and the weights.
+- **Perth** (`resemble-perth`, MIT): Resemble AI's inaudible watermark, which Chatterbox puts into every result.
+- Its dependencies include **S3Tokenizer** (Apache-2.0), **diffusers** (Apache-2.0), **conformer** (MIT),
+  **spacy-pkuseg** (MIT) and **pykakasi** (GPL-3.0-or-later, for Japanese), each installed from PyPI into that
+  environment and not redistributed by the project.
+- **num2words** (LGPL-2.1), for numbers in the text front-end.
+
 ### Hybrid Demucs (Remove background music)
 
 - **Model code:** `torchaudio.models.hdemucs_high` in torchaudio (BSD-2-Clause, the `LICENSE` of `pytorch/audio`), a port

@@ -257,6 +257,7 @@ def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list
     """Setup's COMPONENTS found on disk, turned off or not."""
     from . import rvc, speech  # noqa: PLC0415
     from .backends import holos, omnivoice  # noqa: PLC0415
+    from .backends.clone import CHATTERBOX, VOXCPM  # noqa: PLC0415
     found = {
         "speech": omnivoice.installed(ctx.runtime),
         "training": rvc.available(ctx.runtime, honour_off=False),
@@ -265,18 +266,31 @@ def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list
         "native_accent": zero_shot_vc,
         "music_removal": os.path.isfile(speech.separator_path(ctx.data_dir)),
         "ukrainian": holos.installed(ctx.runtime, honour_off=False),
+        "voxcpm": VOXCPM.installed(ctx.runtime, honour_off=False),
+        "chatterbox": CHATTERBOX.installed(ctx.runtime, honour_off=False),
     }
     return [name for name, ok in found.items() if ok]
+
+
+def speech_models(ctx: Server) -> list[dict[str, Any]]:
+    """The models a request may name in ``model`` (besides ``auto``), the main one first."""
+    from . import backends  # noqa: PLC0415
+    for b in backends.all_backends():
+        probe = getattr(b, "probe", None)
+        if probe is not None:
+            probe(ctx.runtime)
+    return [{"id": b.name, "name": b.label, "languages": sorted(b.languages)} for b in backends.selectable()]
 
 
 def hello_info(ctx: Server) -> dict[str, Any]:
     from . import components  # noqa: PLC0415
     zero_shot_vc = _zero_shot_vc(ctx)
+    models = speech_models(ctx)
     found = _components(ctx, _translators(ctx, honour_off=False), zero_shot_vc)
     off = [c for c in found if components.off(c)]
     return {"version": __version__, "device": ctx.device, "models": _models(), "languages": speech_languages(),
             "translators": _translators(ctx), "zero_shot_vc": zero_shot_vc and not components.off("native_accent"),
-            "components": [c for c in found if c not in off], "components_off": off}
+            "components": [c for c in found if c not in off], "components_off": off, "speech_models": models}
 
 
 @method("hello")
