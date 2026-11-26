@@ -2659,14 +2659,6 @@ def run_move(args: argparse.Namespace) -> int:
         if windows:
             for venv in setup.refresh_venv_launchers():
                 mv.out(f"warning: could not make the launchers of {venv} again")
-            stale, fixer.unfixed = fixer.unfixed, []
-            for path in stale:
-                fixer.launcher(Path(path))
-        for path in fixer.unfixed:
-            mv.out(
-                f"warning: could not update {path}; it still points to the old place (reinstall that package to "
-                f"refresh it)"
-            )
         setup.write_runtime_toml()  # also writes (or removes) location.toml
         mv.out("Rewrote runtime.toml and the location pointer")
         if not args.no_check:

@@ -216,10 +216,7 @@ class PathFixer:
         self.pairs = _forms(old, new)
         flags = re.IGNORECASE if windows else 0
         self.rx = [(re.compile(re.escape(a), flags), b) for a, b in self.pairs]
-        self.old_b = str(old).encode("utf-8")
-        self.new_b = str(new).encode("utf-8")
         self.fixed: list[str] = []
-        self.unfixed: list[str] = []
 
     def replace(self, data: bytes) -> bytes:
         for rx, b in self.rx:
@@ -244,16 +241,6 @@ class PathFixer:
             return
         path.write_bytes(self.replace(data))
         self.fixed.append(str(path))
-
-    def launcher(self, path: Path) -> None:
-        """The PE resource holding the python path cannot change size in place; the engine never starts these
-        launchers (it runs ``python.exe``), so they are only reported."""
-        try:
-            data = path.read_bytes()
-        except OSError:
-            return
-        if self.has_old(data) or any(a.decode("utf-8").encode("utf-16le") in data for a, _ in self.pairs):
-            self.unfixed.append(str(path))
 
 
 def _link_target(path: Path) -> str | None:
@@ -298,7 +285,7 @@ def fix_venv_paths(root: Path, old: Path, windows: bool) -> PathFixer:
             for f in sorted((venv / sub).glob("*")) if (venv / sub).is_dir() else []:
                 fix_link(f, old, root, fixer)
                 if f.is_file() and not f.is_symlink():
-                    (fixer.launcher if f.suffix.lower() == ".exe" else fixer.text_file)(f)
+                    fixer.text_file(f)
         sites = list(venv.glob("Lib/site-packages")) + list(venv.glob("lib/python*/site-packages"))
         for site in sites:
             for pattern in ("*.pth", "*.egg-link", "__editable__*.py", "_editable_impl*.py"):
