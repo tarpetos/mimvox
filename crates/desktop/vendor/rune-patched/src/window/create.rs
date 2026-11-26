@@ -23,6 +23,8 @@ impl<S: 'static> Host<S> {
                 attrs = winit::platform::x11::WindowAttributesExtX11::with_name(attrs, id, id);
             }
             if self.float_on_open { attrs = float_on_open::fixed(attrs, &self.options, size); }
+            // PATCH
+            if chrome::frameless(self.titlebar) { attrs = attrs.with_decorations(false); }
             if let Some(token) = token {
                 let token = winit::window::ActivationToken::from_raw(token);
                 attrs = winit::platform::startup_notify::WindowAttributesExtStartupNotify::with_activation_token(attrs, token);

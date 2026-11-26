@@ -49,6 +49,11 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
             (false, true, false) => (p.glass_hover, p.text),
             _ => (Color::TRANSPARENT, p.text_dim),
         };
+        let (hover, press, hover_ink) = if close {
+            (p.bad.alpha(0.82), p.bad.alpha(0.55), Color::WHITE)
+        } else {
+            (p.glass_hover, p.glass_press, p.text)
+        };
         let disc = glass_edge(
             p,
             el().key(format!("{key}-disc"))
@@ -58,7 +63,9 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
                 .fill(p.glass)
                 .gradient(p.glass_top, p.glass_bottom)
                 .border_gradient(1.0, p.rim_top, p.rim_bottom)
-                .shadow(3.0, 10.0, p.shadow_soft),
+                .shadow(3.0, 10.0, p.shadow_soft)
+                .hover(hover)
+                .press(press),
         )
         .child(
             el().key(format!("{key}-wash"))
@@ -68,13 +75,14 @@ pub fn buttons(p: Palette, view: CaptionView, height: f32) -> El {
                 .inert()
                 .motion(motion::UI),
         )
-        .child(icon_el(glyph, 16.0, ink).motion(motion::UI).a11y_hidden());
+        .child(icon_el(glyph, 16.0, ink).group_color(hover_ink).motion(motion::UI).a11y_hidden());
         // The system presses these (non-client hits); assistive technology invokes them.
         col()
             .key(key)
             .role("button")
             .label(label)
             .focusable(false)
+            .hover_group()
             .w(CELL)
             .h(height)
             .justify_center()

@@ -64,6 +64,12 @@ impl OsCursor {
         }
     }
 
+    // PATCH
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    pub(crate) fn forget(&mut self) {
+        self.applied = (false, Cursor::Default);
+    }
+
     /// When to set the image cursor again: while one holds the pointer, on macOS.
     pub(crate) fn reassert_at(&self, now: Instant) -> Option<Instant> {
         (cfg!(target_os = "macos") && holds_image(self.applied)).then(|| now + REASSERT)

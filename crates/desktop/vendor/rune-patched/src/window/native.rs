@@ -67,6 +67,8 @@ mod tests;
 #[derive(Default)]
 pub(super) struct Native {
     pub(super) activator: Option<crate::platform::activation::Activator>,
+    // PATCH
+    pub(super) resize_edge: Option<winit::window::ResizeDirection>,
 }
 
 #[cfg(target_os = "windows")]

@@ -41,20 +41,69 @@ pub(super) fn sync_chrome<S: 'static>(rt: &mut Runtime<S>, w: &Win, chrome: Chro
     let height = titlebar.map(|t| t.height());
     let caption = caption(w, titlebar);
     let scale = w.window.scale_factor() as f32;
-    let height = height.filter(|_| custom_frame(w)).unwrap_or(0.0);
+    let height = height.filter(|_| custom_frame(w, titlebar)).unwrap_or(0.0);
     rt.set_chrome_insets(crate::ChromeInsets::new(leading, caption.map_or(0.0, |c| c.width(scale)), height).with_caption(caption.map(|c| c.view()).unwrap_or_default()));
     rt.set_caption(caption);
 }
 
 /// Whether Rune replaced the native title bar: macOS draws the app's titlebar under its
 /// transparent one; Windows has the custom frame.
-fn custom_frame(w: &Win) -> bool {
+fn custom_frame(w: &Win, titlebar: Option<crate::Titlebar>) -> bool {
     #[cfg(target_os = "windows")]
-    return w.native.frame.is_some();
+    { let _ = titlebar; w.native.frame.is_some() }
     #[cfg(target_os = "macos")]
-    { let _ = w; true }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    { let _ = w; false }
+    { let _ = (w, titlebar); true }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    { let _ = w; frameless(titlebar) }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+    { let _ = (w, titlebar); false }
+}
+
+// PATCH
+pub(super) fn frameless(titlebar: Option<crate::Titlebar>) -> bool {
+    titlebar.is_some_and(|t| t.custom_caption_width().is_some())
+}
+
+// PATCH
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(super) fn resize_edge(window: &Window, (x, y): (f64, f64)) -> Option<winit::window::ResizeDirection> {
+    use winit::window::ResizeDirection as D;
+    if !window.is_resizable() || window.is_maximized() || window.fullscreen().is_some() {
+        return None;
+    }
+    let scale = window.scale_factor();
+    let (edge, corner) = (6.0 * scale, 16.0 * scale);
+    let size = window.inner_size();
+    let (w, h) = (f64::from(size.width), f64::from(size.height));
+    let near = |at: f64, end: f64, reach: f64| (at < reach, at >= end - reach);
+    let ((left, right), (top, bottom)) = (near(x, w, edge), near(y, h, edge));
+    let ((left_c, right_c), (top_c, bottom_c)) = (near(x, w, corner), near(y, h, corner));
+    Some(match () {
+        () if (left && top_c) || (top && left_c) => D::NorthWest,
+        () if (right && top_c) || (top && right_c) => D::NorthEast,
+        () if (left && bottom_c) || (bottom && left_c) => D::SouthWest,
+        () if (right && bottom_c) || (bottom && right_c) => D::SouthEast,
+        () if left => D::West,
+        () if right => D::East,
+        () if top => D::North,
+        () if bottom => D::South,
+        () => return None,
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(super) fn resize_cursor(edge: winit::window::ResizeDirection) -> winit::window::CursorIcon {
+    use winit::window::{CursorIcon as C, ResizeDirection as D};
+    match edge {
+        D::NorthWest => C::NwResize,
+        D::NorthEast => C::NeResize,
+        D::SouthWest => C::SwResize,
+        D::SouthEast => C::SeResize,
+        D::West => C::WResize,
+        D::East => C::EResize,
+        D::North => C::NResize,
+        D::South => C::SResize,
+    }
 }
 
 /// The caption buttons a custom frame draws `height` points tall; none in full screen.
@@ -64,7 +113,16 @@ fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar
         if let Some(t) = &titlebar { f.set_titlebar(t); }
         f.caption(&w.window)
     });
-    #[cfg(not(target_os = "windows"))]
+    // PATCH
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    return titlebar.filter(|t| frameless(Some(*t))).map(|t| {
+        let mut caption = crate::titlebar::Caption::of(&t);
+        caption.maximized = w.window.is_maximized();
+        caption.maximizable = w.window.is_resizable();
+        caption.hidden = w.window.fullscreen().is_some();
+        caption
+    });
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = (w, titlebar); None }
 }
 
