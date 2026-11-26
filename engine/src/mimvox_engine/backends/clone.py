@@ -65,10 +65,14 @@ class WorkerBackend(TtsBackend):
 
     def _ensure_client(self) -> WorkerClient:
         if self._client is None:
+            model_dir = self.model_dir(self._runtime)
             argv = [self.python(self._runtime), *isolated(), os.path.join(HERE, f"{self.name}_worker.py"),
-                    "--model-dir", self.model_dir(self._runtime), "--device", self._device()]
-            self._client = WorkerClient(self.name, argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"),
-                                        start_timeout=240.0)
+                    "--model-dir", model_dir, "--device", self._device()]
+            # Their libraries write caches into the user's home (diffusers in ~/.cache/huggingface, pkuseg in
+            # ~/.pkuseg); setup puts what they need there.
+            env = child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HOME=os.path.join(model_dir, "hf-home"),
+                            PKUSEG_HOME=os.path.join(model_dir, "pkuseg"))
+            self._client = WorkerClient(self.name, argv, env, start_timeout=240.0)
             self._client.on_release.append(self._unloaded)
         return self._client
 

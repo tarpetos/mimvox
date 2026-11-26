@@ -131,7 +131,9 @@ CLONE_MODELS = {
                    "repo": "ResembleAI/chatterbox", "revision": "5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18",
                    "files": ("ve.pt", "t3_mtl23ls_v2.safetensors", "s3gen.pt", "grapheme_mtl_merged_expanded_v1.json",
                              "conds.pt", "Cangjie5_TC.json"),
-                   "required": ("t3_mtl23ls_v2.safetensors", "s3gen.pt", "ve.pt", "conds.pt"), "download_gb": 3.0},
+                   "required": ("t3_mtl23ls_v2.safetensors", "s3gen.pt", "ve.pt", "conds.pt"), "download_gb": 3.0,
+                   # Its Chinese word segmenter downloads its model on first use: fetched here, into the weights folder.
+                   "after": "from spacy_pkuseg import pkuseg; pkuseg()"},
 }
 CLONE_STAMP = ".mimvox-setup-ok"   # in the weights folder: the engine uses the model only once it is there
 
@@ -1544,7 +1546,7 @@ class Setup:
             raise SetupError(f"The {spec['label']} environment is missing, so its model cannot be fetched.")
         target = self.clone_models_dir(name)
         stamp = target / CLONE_STAMP
-        stamp_value = f"{spec['repo']}@{spec['revision']}"
+        stamp_value = f"{spec['repo']}@{spec['revision']}{' + ' + spec['after'] if spec.get('after') else ''}"
         if self._has(target, spec["required"]) and stamp.is_file() \
                 and stamp.read_text(encoding="utf-8").strip() == stamp_value:
             say(f"{spec['label']} model: present.")
@@ -1558,6 +1560,9 @@ class Setup:
                   f"Downloading {spec['repo']}", cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
         if not self._has(target, spec["required"]):
             raise SetupError(f"The {spec['repo']} download finished but files are missing; run this again.")
+        if spec.get("after"):
+            self.must([py, "-I", "-c", spec["after"]], f"Preparing {spec['label']}", cwd=self.runtime,
+                      extra_env={"PKUSEG_HOME": str(target / "pkuseg"), "HF_HOME": str(target / "hf-home")})
         stamp.write_text(stamp_value, encoding="utf-8")
         say(f"{spec['label']}: ready.")
 
