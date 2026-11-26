@@ -65,7 +65,7 @@ none of it is part of this repository or of the app's installers.
 - **HolosTTS** (`holos-tts` 0.4 on PyPI and the `patriotyk/HolosTTS` weights `holos.pt`, `voice_encoder.pt`,
   `voices.pt` on Hugging Face): MIT (the repository's `LICENSE` and the licence field of the model card). Ukrainian
   speech from IPA phonemes, with voice cloning from the voice's reference clip.
-- **ukrainian-word-stress**, patriotyk's fork (<https://gh.ali360.cloudns.ch/patriotyk/ukrainian-word-stress>, commit
+- **ukrainian-word-stress**, patriotyk's fork (<https://github.com/patriotyk/ukrainian-word-stress>, commit
   `d5b37ea`): MIT, with lang-uk's stress dictionary in the package. It chooses between the readings of a word with
   **Stanza** (Stanford NLP, Apache-2.0).
 - **Stanza's Ukrainian models** (tokenizer, part-of-speech tagger, multi-word tokens; `stanfordnlp/stanza-uk`), trained
