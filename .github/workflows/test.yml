@@ -76,5 +76,5 @@ jobs:
       - name: pytest
         working-directory: engine
         env:
-          UV_PYTHON: "3.11"
+          UV_PYTHON: "3.14"
         run: uv run --group test pytest

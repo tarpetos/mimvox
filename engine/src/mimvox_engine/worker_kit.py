@@ -322,11 +322,22 @@ def open_channels():
     return os.fdopen(fd, "rb"), out
 
 
+def _thread_lock_for_tqdm():
+    # tqdm's default lock holds a multiprocessing semaphore; workers end with os._exit, so on Python 3.14 (forkserver)
+    # the resource tracker reports it as leaked at every exit.
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        return
+    tqdm.set_lock(threading.RLock())
+
+
 class Worker:
     """``idle``: ``(seconds, action)`` pairs; an action is ``"exit"`` or a callable run on the op thread that returns an
     event dict to send or None."""
 
     def __init__(self, name, inp, out, ops, idle=()):
+        _thread_lock_for_tqdm()
         self.name = name
         self.inp, self.out = inp, out
         self.ops = dict(ops)

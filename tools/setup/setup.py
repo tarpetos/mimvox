@@ -44,9 +44,7 @@ BIN_NAME = "mimvox"
 APPLIO_URL = "https://github.com/IAHispano/Applio.git"
 APPLIO_COMMIT = "6d5d9511b7e719b1f613362bc767e841ad72fa72"
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
-# AMD GPUs on Linux: the two environments pin different torch versions, and each has wheels for another ROCm.
-ENGINE_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.4"
-APPLIO_ROCM_INDEX = "https://download.pytorch.org/whl/rocm7.2"
+TORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm7.2"
 AMD_PCI_VENDOR = "0x1002"
 # Integrated Radeon GPUs report a small VRAM carve-out; below this the card is not used.
 AMD_MIN_VRAM_GB = 4.0
@@ -103,7 +101,7 @@ ZERO_SHOT_GB = 2.0   # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, B
 # HolosTTS (MIT): Ukrainian with exact word stress, in its own venv because its ukrainian-word-stress fork has the
 # package name of the lang-uk one the engine venv uses for OmniVoice's stress hints.
 HOLOS_DIR = "holos"                    # <runtime>/holos/.venv and <runtime>/models/holos
-HOLOS_PYTHON = "3.11"
+HOLOS_PYTHON = "3.14"
 HOLOS_PACKAGES = (
     "holos-tts==0.4", "stanza==1.15.1", "transformers==5.23.0", "huggingface-hub==2.4.0", "marisa-trie==1.4.1",
     "librosa==0.11.0", "soundfile==0.14.0", "numpy==2.4.6", "scipy==1.17.1", "num2words==0.5.14",
@@ -138,9 +136,9 @@ DEMUCS_SIZE = 334_697_255
 DEMUCS_SHA256 = "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816"
 ENGINE_DIR = "engine"
 UV_PYTHON_DIR = "python"   # <runtime>/python, also in move_runtime.fix_venv_paths and crates/desktop/src/ui/setuprun.rs
-ENGINE_PYTHON = "3.11"
+ENGINE_PYTHON = "3.14"
 PIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;@]+$")   # a `uv pip freeze` line of a registry package
-ENGINE_TORCH = ("torch==2.8.0", "torchaudio==2.8.0")
+ENGINE_TORCH = ("torch==2.11.0", "torchaudio==2.11.0")
 # pypdf (BSD-3-Clause, pure Python): PDF books; every other book format is read with the standard library.
 ENGINE_PACKAGES = ("omnivoice==0.2.1", "openai-whisper==20250625", "num2words==0.5.14", "sentencepiece", "g2p_en==2.1.0",
                    "soundfile", "librosa", "scipy", "numpy", "marisa-trie==1.4.1", "pypdf==6.21.4")
@@ -159,7 +157,7 @@ OMNIVOICE_REQUIRED = ("config.json", "model.safetensors", "tokenizer.json", "tok
 
 MIN_RUST = (1, 97)
 RUNTIME_GB = 30
-ENGINE_GB = 11    # engine venv (torch 2.8 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + the OmniVoice model (3.3 GB)
+ENGINE_GB = 11    # engine venv (torch 2.11 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + the OmniVoice model (3.3 GB)
 APPLIO_GB = 12
 SPEECH_GB = 4.5   # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
 BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with a GPU or --better-translation yes
@@ -369,6 +367,23 @@ def venv_home(venv: Path) -> Path | None:
         if sep and key.strip() == "home":
             return Path(value.strip())
     return None
+
+
+def venv_version(venv: Path) -> str | None:
+    """pyvenv.cfg ``version_info`` as ``major.minor``."""
+    try:
+        lines = (venv / "pyvenv.cfg").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "version_info":
+            return ".".join(value.strip().split(".")[:2])
+    return None
+
+
+def _is_junction(path: Path) -> bool:
+    return getattr(path, "is_junction", lambda: False)()
 
 
 def _inside(child: Path, parent: Path) -> bool:
@@ -1100,12 +1115,12 @@ class Setup:
     def _build_note(self) -> str:
         return {"cuda": "CUDA 12.8 build; a few GB", "rocm": "ROCm build; a few GB"}.get(self.gpu.build, "")
 
-    def _torch_args(self, rocm_index: str) -> list[str]:
+    def _torch_args(self) -> list[str]:
         """unsafe-best-match: the PyTorch index also lists older copies of other packages (requests, numpy). The
-        reinstall replaces a torch of another build: torch==2.8.0 also matches an installed 2.8.0+cpu."""
+        reinstall replaces a torch of another build: torch==2.11.0 also matches an installed 2.11.0+cpu."""
         args = ["--reinstall-package", "torch", "--reinstall-package", "torchaudio"]
         if self.gpu.build in ("cuda", "rocm"):
-            index = rocm_index if self.gpu.build == "rocm" else TORCH_CUDA_INDEX
+            index = TORCH_ROCM_INDEX if self.gpu.build == "rocm" else TORCH_CUDA_INDEX
             return [*args, "--extra-index-url", index, "--index-strategy", "unsafe-best-match"]
         if self.gpu.backend == "cpu" and self.plat != "macos":
             return [*args, "--torch-backend", "cpu"]
@@ -1131,8 +1146,9 @@ class Setup:
         restore_swapped(venv)
         py = venv_python(venv, self.plat)
         stamped = self._stamped(venv, stamp_value)
-        if py.exists() and not self.on_runtime_python(venv):
-            self._rebuild(label, venv, version, stamp_value, stamped, install, cwd)
+        why = self._rebuild_reason(venv, version) if py.exists() else None
+        if why:
+            self._rebuild(label, venv, version, stamp_value, stamped, install, cwd, why)
             return
         if stamped:
             say(f"{label}: ready.")
@@ -1144,14 +1160,50 @@ class Setup:
         if install(py, []):
             self._stamp(venv).write_text(stamp_value, encoding="utf-8")
 
+    def remove_unused_pythons(self) -> None:
+        """Pythons in <runtime>/python that no environment and not this setup run on (one an engine venv left when it
+        moved to a newer Python)."""
+        if not self.python_dir.is_dir():
+            return
+        keep = {f"{sys.version_info.major}.{sys.version_info.minor}"}
+        for venv in (self.engine_venv, self.holos_venv, self.applio / ".venv"):
+            if (venv / "pyvenv.cfg").is_file():
+                version = venv_version(venv)
+                if version is None:
+                    return
+                keep.add(version)
+        found: dict[str, list[Path]] = {}
+        for entry in self.python_dir.iterdir():
+            match = re.match(r"cpython-(\d+\.\d+)[.-]", entry.name)
+            if match and match.group(1) not in keep:
+                found.setdefault(match.group(1), []).append(entry)
+        for version, entries in sorted(found.items()):
+            say(f"Removing Python {version} from {self.python_dir}: no environment uses it any more.")
+            try:
+                for entry in sorted(entries, key=lambda p: not (p.is_symlink() or _is_junction(p))):
+                    if entry.is_symlink() or _is_junction(entry):
+                        os.rmdir(entry) if self.plat == "windows" else entry.unlink()
+                    elif entry.is_dir():
+                        _rmtree(entry)
+            except OSError as error:
+                warn(f"Python {version} could not be removed ({error}); it only takes some disk space.")
+
+    def _rebuild_reason(self, venv: Path, version: str) -> str | None:
+        if not self.on_runtime_python(venv):
+            return f"made from {venv_home(venv)}, outside {self.python_dir}"
+        old = venv_version(venv)
+        if old is not None and old != version:
+            return f"on Python {old}, needs {version}"
+        return None
+
     def _rebuild(self, label: str, venv: Path, version: str, stamp_value: str, keep: bool,
-                 install: Callable[[Path, Sequence[str]], bool], cwd: Path) -> None:
+                 install: Callable[[Path, Sequence[str]], bool], cwd: Path, why: str) -> None:
         """Builds the venv again next to it, from the cache first (``keep``: pinned to the packages it has), and swaps
         it in only once that worked: the old venv stays otherwise."""
         pins = self._frozen(venv) if keep else []
         constraints = self.temp_dir() / f"{venv.parent.name}-constraints.txt"
         constraints.write_text("".join(f"{line}\n" for line in pins), encoding="utf-8")
-        say(f"{label}: made from {venv_home(venv)}, outside {self.python_dir}; making it again from a Python there"
+        say(f"{label}: {why}; making it again on Python {version} in {self.python_dir}"
             f"{', with the same packages' if pins else ''}...")
         new = venv.with_name(venv.name + ".new")
         if not (self._runtime_python(label, version, cwd)
@@ -1159,9 +1211,9 @@ class Setup:
             if new.exists():
                 _rmtree(new)
             if not keep:
-                raise SetupError(f"{label}: making it again on a Python in {self.python_dir} failed.")
-            warn(f"{label}: could not be made again on a Python in {self.python_dir}; the old environment is kept and "
-                 "still works (the next setup run tries again).")
+                raise SetupError(f"{label}: making it again on Python {version} in {self.python_dir} failed.")
+            warn(f"{label}: could not be made again on Python {version} in {self.python_dir}; the old environment is "
+                 "kept and still works (the next setup run tries again).")
             return
         if pins:
             now = {line.split("==")[0] for line in self._frozen(new)}
@@ -1218,7 +1270,7 @@ class Setup:
         note = self._build_note()
         say(f"Applio environment: installing requirements (torch 2.11{' ' + note if note else ''})...")
         command = self.uv("pip", "install", "--python", py, "-r", "requirements.txt", *extra)
-        command += self._torch_args(APPLIO_ROCM_INDEX)
+        command += self._torch_args()
         self.must(command, "Installing the Applio requirements", cwd=self.applio)
         return True
 
@@ -1376,9 +1428,9 @@ class Setup:
     def _engine_install(self, py: Path, extra: Sequence[str]) -> bool:
         """False when only the Ukrainian stress dictionary is missing."""
         note = self._build_note()
-        say(f"Engine environment: installing torch 2.8{f' ({note})' if note else ''}, OmniVoice, Whisper...")
-        command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *ENGINE_PACKAGES, *extra)
-        command += self._torch_args(ENGINE_ROCM_INDEX)
+        say(f"Engine environment: installing torch 2.11{f' ({note})' if note else ''}, OmniVoice, Whisper...")
+        command = self.uv("pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *ENGINE_PACKAGES, *extra)
+        command += self._torch_args()
         self.must(command, "Installing the engine environment", cwd=self.runtime)
         if self.run(self.uv("pip", "install", "--python", py, "--no-deps", *ENGINE_NO_DEPS, *extra), cwd=self.runtime) != 0:
             warn("The Ukrainian stress dictionary could not be installed (the next setup run tries again); Ukrainian "
@@ -1428,9 +1480,9 @@ class Setup:
 
     def _holos_install(self, py: Path, extra: Sequence[str]) -> bool:
         note = self._build_note()
-        say(f"Ukrainian speech environment: installing torch 2.8{f' ({note})' if note else ''}, HolosTTS, Stanza...")
-        command = self.uv("pip", "install", "--python", py, *ENGINE_TORCH, *HOLOS_PACKAGES, *extra)
-        command += self._torch_args(ENGINE_ROCM_INDEX)
+        say(f"Ukrainian speech environment: installing torch 2.11{f' ({note})' if note else ''}, HolosTTS, Stanza...")
+        command = self.uv("pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *HOLOS_PACKAGES, *extra)
+        command += self._torch_args()
         self.must(command, "Installing the Ukrainian speech environment", cwd=self.runtime)
         self.must(self.uv("pip", "install", "--python", py, "--no-deps", *HOLOS_NO_DEPS, *extra),
                   "Installing the Ukrainian stress dictionary", cwd=self.runtime)
@@ -2161,6 +2213,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         skipped("applio_models")
     attempt("runtime_toml", setup.write_runtime_toml)
     if not failed:
+        setup.remove_unused_pythons()
         setup.offer_legacy_removal(args.remove_indextts)
     if args.skip_models:
         warn("--skip-models: no model files were downloaded; run setup again without it before using the app.")
