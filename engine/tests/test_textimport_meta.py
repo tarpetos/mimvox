@@ -1,5 +1,5 @@
 import hashlib
-import os
+from pathlib import Path
 
 import pytest
 from factories import JPEG, PNG, docx, epub, fb2, fb2_binary, odt, text_file
@@ -33,13 +33,18 @@ def image_item(ident, href, media_type="image/jpeg", props=""):
 
 
 def cover_bytes(meta):
-    with open(meta["cover"]["path"], "rb") as fh:
-        return fh.read()
+    return Path(meta["cover"]["path"]).read_bytes()
 
 
 def test_epub2_meta(tmp_path, import_book):
-    path = epub(tmp_path / "e2.epub", version="2.0", toc="ncx", metadata=EPUB2_META,
-                extra_items=image_item("cimg", "images/front.jpeg"), files={"OEBPS/images/front.jpeg": JPEG})
+    path = epub(
+        tmp_path / "e2.epub",
+        version="2.0",
+        toc="ncx",
+        metadata=EPUB2_META,
+        extra_items=image_item("cimg", "images/front.jpeg"),
+        files={"OEBPS/images/front.jpeg": JPEG},
+    )
     meta = import_book(path)["meta"]
     assert meta["authors"] == ["Jane Doe", "John Roe"]
     assert meta["description"] == "A bold story of things. Second & last."
@@ -51,8 +56,12 @@ def test_epub2_meta(tmp_path, import_book):
 
 def test_epub3_meta(tmp_path, import_book):
     items = image_item("x1", "img/c.png", "image/png", "cover-image") + image_item("cover", "img/other.jpg")
-    path = epub(tmp_path / "e3.epub", metadata=EPUB3_META, extra_items=items,
-                files={"OEBPS/img/c.png": PNG, "OEBPS/img/other.jpg": JPEG})
+    path = epub(
+        tmp_path / "e3.epub",
+        metadata=EPUB3_META,
+        extra_items=items,
+        files={"OEBPS/img/c.png": PNG, "OEBPS/img/other.jpg": JPEG},
+    )
     meta = import_book(path)["meta"]
     assert meta["authors"] == ["Ann Author", "Bob Writer"]
     assert meta["description"] == "Plain description over lines."
@@ -67,10 +76,12 @@ def test_epub_without_metadata(tmp_path, import_book):
 
 
 def test_epub_without_author_roles_keeps_every_creator(tmp_path, import_book):
-    md = ('<dc:creator opf:role="edt">Ed Editor</dc:creator><dc:creator opf:role="ill">Ill Ustrator</dc:creator>'
-          '<dc:description><p xmlns="http://www.w3.org/1999/xhtml">Nested</p>'
-          '<p xmlns="http://www.w3.org/1999/xhtml">XHTML desc</p></dc:description>'
-          '<dc:date opf:event="modification">2020</dc:date>')
+    md = (
+        '<dc:creator opf:role="edt">Ed Editor</dc:creator><dc:creator opf:role="ill">Ill Ustrator</dc:creator>'
+        '<dc:description><p xmlns="http://www.w3.org/1999/xhtml">Nested</p>'
+        '<p xmlns="http://www.w3.org/1999/xhtml">XHTML desc</p></dc:description>'
+        '<dc:date opf:event="modification">2020</dc:date>'
+    )
     meta = import_book(epub(tmp_path / "e.epub", version="2.0", toc="ncx", metadata=md))["meta"]
     assert meta["authors"] == ["Ed Editor", "Ill Ustrator"]
     assert meta["description"] == "Nested XHTML desc"
@@ -79,22 +90,33 @@ def test_epub_without_author_roles_keeps_every_creator(tmp_path, import_book):
 
 def test_epub2_cover_meta_naming_the_image_href(tmp_path, import_book):
     md = '<dc:title>Old Book</dc:title><meta name="cover" content="images/front.jpeg"/>'
-    path = epub(tmp_path / "e.epub", version="2.0", toc="ncx", metadata=md,
-                extra_items=image_item("img1", "images/front.jpeg"), files={"OEBPS/images/front.jpeg": JPEG})
+    path = epub(
+        tmp_path / "e.epub",
+        version="2.0",
+        toc="ncx",
+        metadata=md,
+        extra_items=image_item("img1", "images/front.jpeg"),
+        files={"OEBPS/images/front.jpeg": JPEG},
+    )
     assert cover_bytes(import_book(path)["meta"]) == JPEG
 
 
 def test_epub_cover_found_by_name(tmp_path, import_book):
-    path = epub(tmp_path / "e.epub", extra_items=image_item("img9", "pics/Cover_Art.jpg"),
-                files={"OEBPS/pics/Cover_Art.jpg": JPEG})
+    path = epub(
+        tmp_path / "e.epub",
+        extra_items=image_item("img9", "pics/Cover_Art.jpg"),
+        files={"OEBPS/pics/Cover_Art.jpg": JPEG},
+    )
     assert cover_bytes(import_book(path)["meta"]) == JPEG
 
 
 @pytest.mark.parametrize(
     ("items", "files"),
     [
-        (image_item("x1", "img/c.svg", "image/svg+xml", "cover-image"),
-         {"OEBPS/img/c.svg": "<svg xmlns='http://www.w3.org/2000/svg'/>"}),
+        (
+            image_item("x1", "img/c.svg", "image/svg+xml", "cover-image"),
+            {"OEBPS/img/c.svg": "<svg xmlns='http://www.w3.org/2000/svg'/>"},
+        ),
         (image_item("cover", "missing.jpg"), {}),
         (image_item("cover", "fake.png", "image/png"), {"OEBPS/fake.png": b"not an image"}),
         (image_item("x1", "big.jpg", props="cover-image"), {"OEBPS/big.jpg": JPEG + b"\0" * (21 * 1024 * 1024)}),
@@ -108,16 +130,18 @@ def test_unusable_epub_cover_is_null(tmp_path, import_book, items, files):
 
 
 def test_cover_file_is_named_by_content_hash(tmp_path, ctx, import_book):
-    a = epub(tmp_path / "a.epub", extra_items=image_item("x", "c.jpg", props="cover-image"),
-             files={"OEBPS/c.jpg": JPEG})
+    a = epub(
+        tmp_path / "a.epub", extra_items=image_item("x", "c.jpg", props="cover-image"), files={"OEBPS/c.jpg": JPEG}
+    )
     b = epub(tmp_path / "b.epub", extra_items=image_item("y", "cover.jpg"), files={"OEBPS/cover.jpg": JPEG})
     first, second = import_book(a)["meta"]["cover"], import_book(b)["meta"]["cover"]
     assert first == second
-    assert os.path.isabs(first["path"])
-    assert os.path.basename(first["path"]) == hashlib.sha256(JPEG).hexdigest()[:32] + ".jpg"
-    folder = os.path.join(ctx.data_dir, "tmp", "covers")
-    assert os.path.dirname(first["path"]) == os.path.abspath(folder)
-    assert os.listdir(folder) == [os.path.basename(first["path"])]
+    cover = Path(first["path"])
+    assert cover.is_absolute()
+    assert cover.name == hashlib.sha256(JPEG).hexdigest()[:32] + ".jpg"
+    folder = Path(ctx.data_dir) / "tmp" / "covers"
+    assert cover.parent == folder.absolute()
+    assert [p.name for p in folder.iterdir()] == [cover.name]
 
 
 FB2_INFO = """<genre>prose</genre>
@@ -142,8 +166,10 @@ def test_fb2_meta(tmp_path, import_book):
 
 
 def test_fb2_date_value_and_broken_cover(tmp_path, import_book):
-    info = ('<author><last-name>Only</last-name></author><date value="2001-02-03"/>'
-            '<coverpage><image l:href="#c"/></coverpage>')
+    info = (
+        '<author><last-name>Only</last-name></author><date value="2001-02-03"/>'
+        '<coverpage><image l:href="#c"/></coverpage>'
+    )
     broken = '<binary id="c" content-type="image/jpeg">!!!===A</binary>'
     r = import_book(fb2(tmp_path / "x.fb2", info, SECTIONS, broken))
     assert r["meta"]["authors"] == ["Only"]
@@ -153,18 +179,27 @@ def test_fb2_date_value_and_broken_cover(tmp_path, import_book):
 
 
 def test_docx_meta(tmp_path, import_book):
-    core = ("<dc:title>Doc T</dc:title><dc:creator>Alice; Bob</dc:creator><dc:description>Docx  desc</dc:description>"
-            "<dc:language>de-DE</dc:language>")
+    core = (
+        "<dc:title>Doc T</dc:title><dc:creator>Alice; Bob</dc:creator><dc:description>Docx  desc</dc:description>"
+        "<dc:language>de-DE</dc:language>"
+    )
     r = import_book(docx(tmp_path / "d.docx", [(None, "Hello world text. " * 30)], core))
     assert r["title"] == "Doc T"
-    assert r["meta"] == {"authors": ["Alice", "Bob"], "description": "Docx desc", "language_tag": "de-DE",
-                         "date": None, "cover": None}
+    assert r["meta"] == {
+        "authors": ["Alice", "Bob"],
+        "description": "Docx desc",
+        "language_tag": "de-DE",
+        "date": None,
+        "cover": None,
+    }
 
 
 def test_odt_meta_prefers_initial_creator(tmp_path, import_book):
-    meta = ("<dc:title>Odt T</dc:title><meta:initial-creator>Orig Author</meta:initial-creator>"
-            "<dc:creator>Last Editor</dc:creator><dc:description>Odt desc</dc:description>"
-            "<dc:language>fr</dc:language>")
+    meta = (
+        "<dc:title>Odt T</dc:title><meta:initial-creator>Orig Author</meta:initial-creator>"
+        "<dc:creator>Last Editor</dc:creator><dc:description>Odt desc</dc:description>"
+        "<dc:language>fr</dc:language>"
+    )
     r = import_book(odt(tmp_path / "o.odt", [(None, "Odt text here. " * 30)], meta))
     assert r["title"] == "Odt T"
     assert r["meta"]["authors"] == ["Orig Author"]

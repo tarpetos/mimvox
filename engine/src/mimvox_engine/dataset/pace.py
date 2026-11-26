@@ -1,5 +1,6 @@
 """Pick reference-clip windows by SNR, speaking rate and long pauses: the speech model copies the tempo and manner
 of ``reference.wav``, so a slow, halting clip makes the cloned voice slow."""
+
 from __future__ import annotations
 
 import math
@@ -11,24 +12,24 @@ import numpy as np
 from ._audio import HOP_S, frame_db
 
 WIN_MIN_S, WIN_MAX_S, WIN_FALLBACK_MAX_S, WIN_IDEAL_S = 15.0, 20.0, 30.0, 17.5
-CUT_PAUSE_FRAMES = 20          # a pause of 200 ms is a safe place to cut
-LONG_GAP_FRAMES = 40           # a gap of 400 ms or more counts as a "pause" (the speaker stopped)
+CUT_PAUSE_FRAMES = 20  # a pause of 200 ms is a safe place to cut
+LONG_GAP_FRAMES = 40  # a gap of 400 ms or more counts as a "pause" (the speaker stopped)
 PEAK_PROMINENCE_DB = 3.0
-PEAK_DISTANCE_FRAMES = 7       # 70 ms: at most about 14 syllables per second
-SMOOTH_FRAMES = 5              # 50 ms moving average of the dB envelope
-MIN_ACTIVE_S = 3.0             # less speech than this in a window: no usable rate
+PEAK_DISTANCE_FRAMES = 7  # 70 ms: at most about 14 syllables per second
+SMOOTH_FRAMES = 5  # 50 ms moving average of the dB envelope
+MIN_ACTIVE_S = 3.0  # less speech than this in a window: no usable rate
 MAX_CANDIDATES_PER_PART = 10
-MAX_OVERLAP = 0.35             # two candidates of one part may share at most this fraction of the shorter one
+MAX_OVERLAP = 0.35  # two candidates of one part may share at most this fraction of the shorter one
 
 # Score weights (score units are roughly "dB of SNR / 2"; a perfect studio clip scores about 20).
 SNR_CAP_DB, SNR_WEIGHT = 40.0, 0.5
-PAUSE_WEIGHT = 50.0            # 10 % of the window in long gaps costs 5
-RATE_WEIGHT = 30.0             # 20 % off the median rate costs about 5.5
-DURATION_WEIGHT = 0.2          # per second away from WIN_IDEAL_S
+PAUSE_WEIGHT = 50.0  # 10 % of the window in long gaps costs 5
+RATE_WEIGHT = 30.0  # 20 % off the median rate costs about 5.5
+DURATION_WEIGHT = 0.2  # per second away from WIN_IDEAL_S
 TITLE_PENALTY = 10.0
 CLIP_PENALTY = 40.0
 
-RATE_SLOW, RATE_FAST = 0.88, 1.12   # ratio to the voice's median rate for the "slow" / "fast" hints
+RATE_SLOW, RATE_FAST = 0.88, 1.12  # ratio to the voice's median rate for the "slow" / "fast" hints
 MANY_PAUSES = 0.12
 
 # English plus the words the other preset languages use for those parts (uk, de, fr, es, pl).
@@ -38,7 +39,9 @@ _BAD_TITLE = re.compile(
     r"|zungenbrecher|frage|zahlen|daten\b|uhrzeit"
     r"|virelangue|chiffre|nombres\b|heures\b"
     r"|trabalengua|pregunta|número|fechas?\b|horas\b|abecedario|alfabet"
-    r"|łamań|pytani|liczb|daty\b|godziny\b", re.IGNORECASE)
+    r"|łamań|pytani|liczb|daty\b|godziny\b",
+    re.IGNORECASE,
+)
 
 
 def title_penalty(title: str | None) -> float:
@@ -46,10 +49,9 @@ def title_penalty(title: str | None) -> float:
 
 
 class PartAnalysis:
-
     def __init__(self, y: np.ndarray, sr: int) -> None:
-        from scipy.ndimage import uniform_filter1d  # noqa: PLC0415
-        from scipy.signal import find_peaks  # noqa: PLC0415
+        from scipy.ndimage import uniform_filter1d
+        from scipy.signal import find_peaks
 
         self.sr = sr
         self.total_s = len(y) / sr if sr else 0.0
@@ -98,13 +100,21 @@ class PartAnalysis:
         lv = w[w > -90.0]
         snr = float(np.percentile(lv, 90) - np.percentile(lv, 10)) if lv.size >= 10 else 0.0
         return {
-            "start_s": a * HOP_S, "end_s": min(b * HOP_S, self.total_s), "duration_s": n * HOP_S,
+            "start_s": a * HOP_S,
+            "end_s": min(b * HOP_S, self.total_s),
+            "duration_s": n * HOP_S,
             "rate": syll / active_s if active_s >= MIN_ACTIVE_S else 0.0,
-            "pauses": gap / n, "snr_db": snr,
+            "pauses": gap / n,
+            "snr_db": snr,
         }
 
-    def windows(self, lo_s: float = WIN_MIN_S, hi_s: float = WIN_MAX_S, fallback_hi_s: float = WIN_FALLBACK_MAX_S,
-                ideal_s: float = WIN_IDEAL_S) -> list[tuple[int, int]]:
+    def windows(
+        self,
+        lo_s: float = WIN_MIN_S,
+        hi_s: float = WIN_MAX_S,
+        fallback_hi_s: float = WIN_FALLBACK_MAX_S,
+        ideal_s: float = WIN_IDEAL_S,
+    ) -> list[tuple[int, int]]:
         """Pause-aligned windows; widened to ``fallback_hi_s``, then fixed ``ideal_s`` ones, when the part has none."""
         n, cuts = len(self.fdb), self.cuts
         for lo, hi in ((lo_s, hi_s), (lo_s, fallback_hi_s)):
@@ -131,15 +141,20 @@ def part_rate(an: PartAnalysis) -> float:
     return an.measure(0, len(an.fdb))["rate"]
 
 
-def window_score(m: dict[str, float], median_rate: float, title_pen: float = 0.0, clip_pen: float = 0.0,
-                 ideal_s: float = WIN_IDEAL_S) -> float:
+def window_score(
+    m: dict[str, float], median_rate: float, title_pen: float = 0.0, clip_pen: float = 0.0, ideal_s: float = WIN_IDEAL_S
+) -> float:
     rate = m["rate"]
-    if rate > 0 and median_rate > 0:
-        rate_pen = RATE_WEIGHT * abs(math.log(rate / median_rate))
-    else:
-        rate_pen = RATE_WEIGHT * 0.5
-    return round(SNR_WEIGHT * min(m["snr_db"], SNR_CAP_DB) - PAUSE_WEIGHT * m["pauses"] - rate_pen
-                 - DURATION_WEIGHT * abs(m["duration_s"] - ideal_s) - title_pen - clip_pen, 2)
+    rate_pen = RATE_WEIGHT * abs(math.log(rate / median_rate)) if rate > 0 and median_rate > 0 else RATE_WEIGHT * 0.5
+    return round(
+        SNR_WEIGHT * min(m["snr_db"], SNR_CAP_DB)
+        - PAUSE_WEIGHT * m["pauses"]
+        - rate_pen
+        - DURATION_WEIGHT * abs(m["duration_s"] - ideal_s)
+        - title_pen
+        - clip_pen,
+        2,
+    )
 
 
 def _overlap(a: dict[str, Any], b: dict[str, Any]) -> float:
@@ -183,12 +198,17 @@ def analyse_part(y: np.ndarray, sr: int, proxy_median: float = 0.0, clip_pen: fl
 
 
 def voice_median_rate(parts_meta: dict[str, dict[str, Any]], usable: set[int] | None = None) -> float:
-    rates = [float(i["rate"]) for k, i in parts_meta.items()
-             if isinstance(i.get("rate"), (int, float)) and i["rate"] > 0 and (usable is None or int(k) in usable)]
+    rates = [
+        float(i["rate"])
+        for k, i in parts_meta.items()
+        if isinstance(i.get("rate"), (int, float)) and i["rate"] > 0 and (usable is None or int(k) in usable)
+    ]
     return float(np.median(rates)) if rates else 0.0
 
 
-def rank(parts_meta: dict[str, dict[str, Any]], titles: dict[int, str], usable: set[int]) -> tuple[list[dict[str, Any]], float]:
+def rank(
+    parts_meta: dict[str, dict[str, Any]], titles: dict[int, str], usable: set[int]
+) -> tuple[list[dict[str, Any]], float]:
     """``(candidates best first, median_rate)``; each candidate has ``part``, ``start_s``, ``end_s``, ``duration_s``,
     ``rate``, ``pauses``, ``snr_db``, ``score`` and ``hint``."""
     median = voice_median_rate(parts_meta, usable)
@@ -201,7 +221,9 @@ def rank(parts_meta: dict[str, dict[str, Any]], titles: dict[int, str], usable: 
         t_pen = title_penalty(titles.get(n))
         for c in info.get("cands", []):
             m = {k: float(c[k]) for k in ("start_s", "end_s", "duration_s", "rate", "pauses", "snr_db")}
-            out.append({"part": n, **c, "score": window_score(m, median, t_pen, clip_pen), "hint": hint(c["rate"], median)})
+            out.append(
+                {"part": n, **c, "score": window_score(m, median, t_pen, clip_pen), "hint": hint(c["rate"], median)}
+            )
     out.sort(key=lambda c: -c["score"])
     return out, median
 

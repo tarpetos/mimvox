@@ -1,4 +1,5 @@
 """German grapheme-cluster heuristic, good enough to measure phoneme coverage (no G2P model or lexicon is shipped)."""
+
 from __future__ import annotations
 
 from ._common import words
@@ -8,33 +9,180 @@ NAME = "German"
 NATIVE = "Deutsch"
 
 PHONEMES = [
-    "iː", "ɪ", "yː", "ʏ", "eː", "ɛ", "øː", "œ", "uː", "ʊ", "oː", "ɔ", "aː", "a", "ə", "ɐ", "aɪ", "aʊ", "ɔʏ",
-    "p", "b", "t", "d", "k", "g", "f", "v", "s", "z", "ʃ", "ç", "x", "h", "j", "m", "n", "ŋ", "l", "ʁ", "pf",
-    "ts", "tʃ",
+    "iː",
+    "ɪ",
+    "yː",
+    "ʏ",
+    "eː",
+    "ɛ",
+    "øː",
+    "œ",
+    "uː",
+    "ʊ",
+    "oː",
+    "ɔ",
+    "aː",
+    "a",
+    "ə",
+    "ɐ",
+    "aɪ",
+    "aʊ",
+    "ɔʏ",
+    "p",
+    "b",
+    "t",
+    "d",
+    "k",
+    "g",
+    "f",
+    "v",
+    "s",
+    "z",
+    "ʃ",
+    "ç",
+    "x",
+    "h",
+    "j",
+    "m",
+    "n",
+    "ŋ",
+    "l",
+    "ʁ",
+    "pf",
+    "ts",
+    "tʃ",
 ]
 EXAMPLES = {
-    "iː": "Liebe", "ɪ": "Mitte", "yː": "über", "ʏ": "Glück", "eː": "See", "ɛ": "Bett", "øː": "schön", "œ": "können",
-    "uː": "gut", "ʊ": "Mutter", "oː": "Boot", "ɔ": "Sonne", "aː": "Tag", "a": "Stadt", "ə": "Rose", "ɐ": "Vater",
-    "aɪ": "Zeit", "aʊ": "Haus", "ɔʏ": "heute", "p": "Post", "b": "Ball", "t": "Tisch", "d": "Dach", "k": "Kalt",
-    "g": "gehen", "f": "Fisch", "v": "Wasser", "s": "Haus", "z": "Sonne", "ʃ": "Schule", "ç": "ich", "x": "Bach",
-    "h": "Hund", "j": "ja", "m": "Mond", "n": "Nase", "ŋ": "lang", "l": "Licht", "ʁ": "rot", "pf": "Apfel",
-    "ts": "Zeit", "tʃ": "Deutsch",
+    "iː": "Liebe",
+    "ɪ": "Mitte",
+    "yː": "über",
+    "ʏ": "Glück",
+    "eː": "See",
+    "ɛ": "Bett",
+    "øː": "schön",
+    "œ": "können",
+    "uː": "gut",
+    "ʊ": "Mutter",
+    "oː": "Boot",
+    "ɔ": "Sonne",
+    "aː": "Tag",
+    "a": "Stadt",
+    "ə": "Rose",
+    "ɐ": "Vater",
+    "aɪ": "Zeit",
+    "aʊ": "Haus",
+    "ɔʏ": "heute",
+    "p": "Post",
+    "b": "Ball",
+    "t": "Tisch",
+    "d": "Dach",
+    "k": "Kalt",
+    "g": "gehen",
+    "f": "Fisch",
+    "v": "Wasser",
+    "s": "Haus",
+    "z": "Sonne",
+    "ʃ": "Schule",
+    "ç": "ich",
+    "x": "Bach",
+    "h": "Hund",
+    "j": "ja",
+    "m": "Mond",
+    "n": "Nase",
+    "ŋ": "lang",
+    "l": "Licht",
+    "ʁ": "rot",
+    "pf": "Apfel",
+    "ts": "Zeit",
+    "tʃ": "Deutsch",
 }
-DIGITS = "null eins zwei drei vier fünf sechs sieben acht neun".split()
+DIGITS = ["null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun"]
 
 _V = set("aeiouäöüy")
 _LONG = {"a": "aː", "e": "eː", "i": "iː", "o": "oː", "u": "uː", "ä": "eː", "ö": "øː", "ü": "yː", "y": "yː"}
 _SHORT = {"a": "a", "e": "ɛ", "i": "ɪ", "o": "ɔ", "u": "ʊ", "ä": "ɛ", "ö": "œ", "ü": "ʏ", "y": "ʏ"}
 _SHORT_WORDS = {
-    "an", "am", "im", "in", "um", "mit", "das", "des", "es", "man", "ob", "ab", "bis", "hat", "was", "von", "vom",
-    "zum", "ins", "ums", "wann", "dann", "denn", "wenn", "bin", "hin", "drin", "weg", "ich", "mich", "dich", "sich",
-    "nicht", "doch", "noch", "ist", "und", "mal", "ganz", "jetzt", "uns", "kann", "will",
+    "an",
+    "am",
+    "im",
+    "in",
+    "um",
+    "mit",
+    "das",
+    "des",
+    "es",
+    "man",
+    "ob",
+    "ab",
+    "bis",
+    "hat",
+    "was",
+    "von",
+    "vom",
+    "zum",
+    "ins",
+    "ums",
+    "wann",
+    "dann",
+    "denn",
+    "wenn",
+    "bin",
+    "hin",
+    "drin",
+    "weg",
+    "ich",
+    "mich",
+    "dich",
+    "sich",
+    "nicht",
+    "doch",
+    "noch",
+    "ist",
+    "und",
+    "mal",
+    "ganz",
+    "jetzt",
+    "uns",
+    "kann",
+    "will",
 }
-_CONS_CLUSTERS = [("tsch", ["tʃ"]), ("sch", ["ʃ"]), ("chs", ["k", "s"]), ("ck", ["k"]), ("tz", ["ts"]),
-                  ("pf", ["pf"]), ("dt", ["t"]), ("ph", ["f"]), ("th", ["t"]), ("qu", ["k", "v"]), ("ng", ["ŋ"]), ("nk", ["ŋ", "k"]),
-                  ("ss", ["s"]), ("ß", ["s"])]
-_SINGLE = {"b": "b", "c": "k", "d": "d", "f": "f", "g": "g", "h": "h", "j": "j", "k": "k", "l": "l", "m": "m",
-           "n": "n", "p": "p", "r": "ʁ", "s": "s", "t": "t", "v": "f", "w": "v", "x": "ks", "z": "ts"}
+_CONS_CLUSTERS = [
+    ("tsch", ["tʃ"]),
+    ("sch", ["ʃ"]),
+    ("chs", ["k", "s"]),
+    ("ck", ["k"]),
+    ("tz", ["ts"]),
+    ("pf", ["pf"]),
+    ("dt", ["t"]),
+    ("ph", ["f"]),
+    ("th", ["t"]),
+    ("qu", ["k", "v"]),
+    ("ng", ["ŋ"]),
+    ("nk", ["ŋ", "k"]),
+    ("ss", ["s"]),
+    ("ß", ["s"]),
+]
+_SINGLE = {
+    "b": "b",
+    "c": "k",
+    "d": "d",
+    "f": "f",
+    "g": "g",
+    "h": "h",
+    "j": "j",
+    "k": "k",
+    "l": "l",
+    "m": "m",
+    "n": "n",
+    "p": "p",
+    "r": "ʁ",
+    "s": "s",
+    "t": "t",
+    "v": "f",
+    "w": "v",
+    "x": "ks",
+    "z": "ts",
+}
 _DEVOICE = {"b": "p", "d": "t", "g": "k"}
 
 
@@ -66,7 +214,7 @@ def word_phonemes(word: str) -> list[str]:
             break
         if c in _V:
             if c == "e" and i > 0 and rest in ("e", "en", "el", "em", "es", "ern", "end"):
-                if rest in ("ern",):
+                if rest == "ern":
                     out += ["ɐ", "n"]
                     break
                 out.append("ə")
@@ -91,10 +239,7 @@ def word_phonemes(word: str) -> list[str]:
             elif rest.startswith("au"):
                 out.append("aʊ")
                 i += 2
-            elif nxt == c and c in "aeo":
-                out.append(_LONG[c])
-                i += 2
-            elif nxt == "h" and (i + 2 >= n or w[i + 2] not in _V):
+            elif (nxt == c and c in "aeo") or (nxt == "h" and (i + 2 >= n or w[i + 2] not in _V)):
                 out.append(_LONG[c])
                 i += 2
             else:

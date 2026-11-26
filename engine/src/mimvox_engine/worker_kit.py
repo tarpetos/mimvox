@@ -1,8 +1,10 @@
 """Event loop shared by the standalone workers. They load this file by path with ``-I`` in other interpreters, so it
 uses the standard library only. Protocol: one JSON object per line each way; ``cancel`` and ``quit`` get no reply.
 """
+
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import mmap
 import os
@@ -10,6 +12,7 @@ import re
 import sys
 import threading
 import traceback
+from pathlib import Path
 
 
 class Cancelled(Exception):
@@ -33,17 +36,25 @@ VRAM_RESERVE_GB = float(os.environ.get("MIMVOX_VRAM_RESERVE_GB", "1.5"))
 IDLE_EXIT_S = float(os.environ.get("MIMVOX_IDLE_EXIT_S", "600"))
 NO_VRAM = "not enough free GPU memory: close programs that use the graphics card (games, video, browsers) and try again"
 NO_RAM = "not enough free memory (RAM): close other programs and try again"
-NO_COMMIT = ("not enough free memory: the graphics card has room, but Windows has no memory left to back it; close "
-             "other programs and try again")
-NO_RAM_CPU = ("not enough free memory (RAM): the speech model needs more RAM than is free on this computer ({out:.1f} GB "
-              "of it are no longer in the {total:.0f} GB of RAM, {free:.1f} GB free), so speech on the processor would "
-              "take minutes per sentence; close other programs or use a computer with more RAM")
-NO_RAM_CPU_GROW = ("not enough free memory (RAM): the speech model needs about {need:.1f} GB more to take on a voice and "
-                   "{free:.1f} GB of the {total:.0f} GB of RAM are free on this computer; close other programs or use a "
-                   "computer with more RAM")
-NO_RAM_CPU_TOTAL = ("not enough memory (RAM) for speech on the processor: it needs a computer with at least {need:.0f} GB "
-                    "of RAM and this one has {total:.1f} GB, so the speech model would be swapped out to the disk and "
-                    "take minutes per sentence; use a graphics card or a computer with more RAM")
+NO_COMMIT = (
+    "not enough free memory: the graphics card has room, but Windows has no memory left to back it; close "
+    "other programs and try again"
+)
+NO_RAM_CPU = (
+    "not enough free memory (RAM): the speech model needs more RAM than is free on this computer ({out:.1f} "
+    "GB of it are no longer in the {total:.0f} GB of RAM, {free:.1f} GB free), so speech on the processor "
+    "would take minutes per sentence; close other programs or use a computer with more RAM"
+)
+NO_RAM_CPU_GROW = (
+    "not enough free memory (RAM): the speech model needs about {need:.1f} GB more to take on a voice "
+    "and {free:.1f} GB of the {total:.0f} GB of RAM are free on this computer; close other programs or "
+    "use a computer with more RAM"
+)
+NO_RAM_CPU_TOTAL = (
+    "not enough memory (RAM) for speech on the processor: it needs a computer with at least {need:.0f} "
+    "GB of RAM and this one has {total:.1f} GB, so the speech model would be swapped out to the disk "
+    "and take minutes per sentence; use a graphics card or a computer with more RAM"
+)
 # The commit cap (memguard) counts the page file: a model that works from RAM on the CPU is checked against the RAM.
 RAM_LOW_SHARE, RAM_LOW_MIN_GB, OUT_MIN_GB = 0.05, 0.5, 1.0
 PAGE = mmap.PAGESIZE
@@ -59,7 +70,7 @@ def _cuda_torch(start=False):
             return None
         if not start and not torch.cuda.is_initialized():
             return None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     return torch
 
@@ -84,7 +95,7 @@ def gpu_fence(start=False):
         allow = held + max(0, free - int(VRAM_RESERVE_GB * 2**30))
         torch.cuda.set_per_process_memory_fraction(max(0.01, min(1.0, allow / total)))
         return allow / 2**30
-    except Exception:  # noqa: BLE001 - the guard must never break an op by itself
+    except Exception:
         return None
 
 
@@ -107,10 +118,8 @@ def gpu_release_cache():
     committed 2 GB)."""
     torch = _cuda_torch()
     if torch is not None:
-        try:
+        with contextlib.suppress(Exception):
             torch.cuda.empty_cache()
-        except Exception:  # noqa: BLE001, S110 - best effort
-            pass
 
 
 # Loading a model leaves pages in the working set that are not used again (measured: the RVC worker holds 2.0 GB after
@@ -127,9 +136,13 @@ def _working_set():
         from ctypes import wintypes
 
         class Counters(ctypes.Structure):
-            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
-                        *[(f"f{i}", ctypes.c_size_t) for i in range(6)]]
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                *[(f"f{i}", ctypes.c_size_t) for i in range(6)],
+            ]
 
         k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
         k32.GetCurrentProcess.restype = wintypes.HANDLE
@@ -139,7 +152,7 @@ def _working_set():
         if not psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
             return None
         return c.WorkingSetSize
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -154,7 +167,7 @@ def trim_working_set():
         k32.GetCurrentProcess.restype = wintypes.HANDLE
         psapi.EmptyWorkingSet.argtypes = [wintypes.HANDLE]
         psapi.EmptyWorkingSet(k32.GetCurrentProcess())
-    except Exception:  # noqa: BLE001, S110 - best effort
+    except Exception:
         pass
 
 
@@ -162,7 +175,7 @@ class _Trimmer:
     """The steady size is the working set after the op that follows a trim."""
 
     def __init__(self):
-        self.steady = 0          # 0: nothing measured yet, so the first load is trimmed
+        self.steady = 0  # 0: nothing measured yet, so the first load is trimmed
         self.just_trimmed = False
 
     def after_op(self):
@@ -173,7 +186,7 @@ class _Trimmer:
             self.steady, self.just_trimmed = max(self.steady, now), False
             return
         if now <= self.steady + TRIM_ABOVE_STEADY:
-            self.steady = max(self.steady, now)   # a small op after a trim must not set the bar low for the next one
+            self.steady = max(self.steady, now)  # a small op after a trim must not set the bar low for the next one
             return
         import gc
 
@@ -189,10 +202,22 @@ def physical_memory():
             import ctypes
 
             class Status(ctypes.Structure):
-                _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
-                            *[(n, ctypes.c_uint64) for n in ("ullTotalPhys", "ullAvailPhys", "ullTotalPageFile",
-                                                             "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual",
-                                                             "ullAvailExtendedVirtual")]]
+                _fields_ = [
+                    ("dwLength", ctypes.c_uint32),
+                    ("dwMemoryLoad", ctypes.c_uint32),
+                    *[
+                        (n, ctypes.c_uint64)
+                        for n in (
+                            "ullTotalPhys",
+                            "ullAvailPhys",
+                            "ullTotalPageFile",
+                            "ullAvailPageFile",
+                            "ullTotalVirtual",
+                            "ullAvailVirtual",
+                            "ullAvailExtendedVirtual",
+                        )
+                    ],
+                ]
 
             s = Status()
             s.dwLength = ctypes.sizeof(s)
@@ -201,12 +226,12 @@ def physical_memory():
             return s.ullTotalPhys, s.ullAvailPhys
         if sys.platform.startswith("linux"):
             info = {}
-            with open("/proc/meminfo", encoding="ascii", errors="replace") as fh:
+            with Path("/proc/meminfo").open(encoding="ascii", errors="replace") as fh:
                 for line in fh:
                     name, _, rest = line.partition(":")
                     info[name] = int(rest.split()[0]) * 1024
             return info["MemTotal"], info["MemAvailable"]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     return None
 
@@ -219,6 +244,7 @@ def resident_share(ranges):
         import ctypes
 
         if os.name == "nt":
+
             class Info(ctypes.Structure):
                 _fields_ = [("VirtualAddress", ctypes.c_void_p), ("VirtualAttributes", ctypes.c_size_t)]
 
@@ -244,7 +270,7 @@ def resident_share(ranges):
                 inside += sum(v & 1 for v in picked)
                 total += len(picked)
             return inside / total if total else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     return None
 
@@ -315,10 +341,8 @@ def open_channels():
         k32 = ctypes.windll.kernel32
         k32.SetStdHandle.argtypes = [ctypes.c_ulong, ctypes.c_void_p]
         k32.SetStdHandle(ctypes.c_ulong(-10 & 0xFFFFFFFF), ctypes.c_void_p(msvcrt.get_osfhandle(0)))
-    try:
+    with contextlib.suppress(AttributeError, ValueError):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
     return os.fdopen(fd, "rb"), out
 
 
@@ -345,17 +369,17 @@ class Worker:
         self.exec = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="op")
         self._send_lock = threading.Lock()
         self._cancelled = set()
-        self.current = None          # read by check_cancel on the op thread
+        self.current = None  # read by check_cancel on the op thread
         self._busy = 0
         self._timers = []
         self._trimmer = _Trimmer()
-        self.trim = True             # off when the working set is the model itself (weights on the CPU)
+        self.trim = True  # off when the working set is the model itself (weights on the CPU)
         self.loop = None
         self._finished = None
 
     # any thread
     def send(self, obj):
-        line = json.dumps(obj, ensure_ascii=False) + "\n"
+        line = json.dumps(obj, ensure_ascii=False, default=str) + "\n"
         with self._send_lock:
             try:
                 self.out.write(line)
@@ -369,7 +393,7 @@ class Worker:
     # op thread
     def check_cancel(self):
         if self.current is not None and self.current in self._cancelled:
-            raise Cancelled()
+            raise Cancelled
 
     def progress(self, payload):
         self.send({"id": self.current, "progress": payload})
@@ -394,10 +418,8 @@ class Worker:
         except (OSError, ValueError):
             pass
         finally:
-            try:
+            with contextlib.suppress(RuntimeError):
                 self.loop.call_soon_threadsafe(self._finish, "stdin closed")
-            except RuntimeError:
-                pass
 
     def _finish(self, reason):
         if not self._finished.done():
@@ -410,8 +432,8 @@ class Worker:
         try:
             req = json.loads(line)
             if not isinstance(req, dict):
-                raise ValueError("not an object")
-        except ValueError:
+                raise TypeError("not an object")
+        except (ValueError, TypeError):
             self.log(f"unreadable request: {line[:200]}")
             return
         op = req.get("op")
@@ -448,13 +470,20 @@ class Worker:
         except Cancelled:
             self.send({"id": rid, "ok": False, "code": "cancelled", "error": "cancelled"})
         except OpError as exc:
-            self.send({"id": rid, "ok": False, "code": exc.code, "error": str(exc),
-                       **({"permanent": True} if exc.permanent else {})})
+            self.send(
+                {
+                    "id": rid,
+                    "ok": False,
+                    "code": exc.code,
+                    "error": str(exc),
+                    **({"permanent": True} if exc.permanent else {}),
+                }
+            )
         except MemoryError:
             gpu_cleanup()
             self.log(f"op {req.get('op')} ran out of RAM: {traceback.format_exc()}")
             self.send({"id": rid, "ok": False, "code": "no_memory", "error": NO_RAM})
-        except BaseException as exc:  # noqa: BLE001 - every request gets an answer
+        except BaseException as exc:
             if is_vram_error(exc):
                 gpu_cleanup()
                 self.log(f"op {req.get('op')} ran out of GPU memory: {exc}")

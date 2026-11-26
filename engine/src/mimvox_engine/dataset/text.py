@@ -7,7 +7,7 @@ from ..registry import EngineError, method
 from . import lang
 from .levels import level_for, message_for
 
-WPM = 145.0              # English; other languages: ``lang.LANGUAGES[code].wpm``
+WPM = 145.0  # English; other languages: ``lang.LANGUAGES[code].wpm``
 PART_MIN_S = 60.0
 PART_TARGET_S = 75.0
 PART_MAX_S = 90.0
@@ -26,16 +26,16 @@ def count_words(text: str) -> int:
 
 
 def est_seconds(words: int, wpm: float = WPM) -> int:
-    return int(round(words / wpm * 60.0))
+    return round(words / wpm * 60.0)
 
 
 def _split_sentences(text: str) -> list[str]:
     out: list[str] = []
     pos = 0
     for m in _SENT_END.finditer(text):
-        nxt = text[m.end():m.end() + 1]
+        nxt = text[m.end() : m.end() + 1]
         if nxt and (nxt in _SENT_OPENERS or nxt.isupper() or nxt.isdigit()):
-            out.append(text[pos:m.end()].strip())
+            out.append(text[pos : m.end()].strip())
             pos = m.end()
     out.append(text[pos:].strip())
     return [s for s in out if s]
@@ -43,8 +43,8 @@ def _split_sentences(text: str) -> list[str]:
 
 def _units(text: str) -> list[tuple[str, int, bool]]:
     out = []
-    for para in re.split(r"\n+", text.replace("\r\n", "\n").replace("\r", "\n")):
-        para = para.strip()
+    for raw in re.split(r"\n+", text.replace("\r\n", "\n").replace("\r", "\n")):
+        para = raw.strip()
         if para:
             out.append((para, count_words(para), True))
     return out
@@ -59,8 +59,9 @@ def _sentences(unit: tuple[str, int, bool]) -> list[tuple[str, int, bool]]:
     return res
 
 
-def split_parts(text: str, target_s: float = PART_TARGET_S, min_s: float = PART_MIN_S,
-                max_s: float = PART_MAX_S, wpm: float = WPM) -> list[dict[str, Any]]:
+def split_parts(
+    text: str, target_s: float = PART_TARGET_S, min_s: float = PART_MIN_S, max_s: float = PART_MAX_S, wpm: float = WPM
+) -> list[dict[str, Any]]:
     per_s = wpm / 60.0
     target_w, min_w, max_w = target_s * per_s, min_s * per_s, max_s * per_s
     queue = _units(text)
@@ -101,14 +102,16 @@ def split_parts(text: str, target_s: float = PART_TARGET_S, min_s: float = PART_
             if j < len(g) - 1:
                 text_out += "\n\n" if para_end else " "
         words = sum(x[1] for x in g)
-        parts.append({"index": i, "title": f"Part {i}", "text": text_out, "words": words, "est_seconds": est_seconds(words, wpm)})
+        parts.append(
+            {"index": i, "title": f"Part {i}", "text": text_out, "words": words, "est_seconds": est_seconds(words, wpm)}
+        )
     return parts
 
 
 def _coverage_note(missing: list[str], code: str) -> str:
     if not missing:
         return ""
-    shown = ", ".join(f"{p} (as in \"{lang.example(code, p)}\")" for p in missing[:4])
+    shown = ", ".join(f'{p} (as in "{lang.example(code, p)}")' for p in missing[:4])
     more = f" and {len(missing) - 4} more" if len(missing) > 4 else ""
     return f"Missing sounds: {shown}{more}. Add words that use them."
 
@@ -121,8 +124,16 @@ def analyze(text: str, language: str | None = None) -> dict[str, Any]:
     base = {"language": code, "language_detected": detected, "phonemes_total": len(inv)}
     words = count_words(text)
     if not words:
-        return {**base, "words": 0, "est_minutes": 0.0, "phoneme_coverage": 0.0, "missing_phonemes": inv,
-                "level": "too_short", "message": "Type or paste the text you want to read aloud.", "parts": []}
+        return {
+            **base,
+            "words": 0,
+            "est_minutes": 0.0,
+            "phoneme_coverage": 0.0,
+            "missing_phonemes": inv,
+            "level": "too_short",
+            "message": "Type or paste the text you want to read aloud.",
+            "parts": [],
+        }
     minutes = words / info.wpm
     cov, missing, _ = lang.coverage(text, code)
     level = level_for(minutes, cov, info.low_coverage)

@@ -1,4 +1,5 @@
 """Recording quality. Quiet but clean takes (peak 0.1-0.15) are fine: the dataset step normalises loudness."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -27,7 +28,7 @@ _SEVERITY = {"ok": 0, "warn": 1, "bad": 2}
 def _sum_squares(y: np.ndarray, block: int = 1 << 20) -> float:
     total = 0.0
     for i in range(0, len(y), block):
-        seg = y[i:i + block].astype(np.float64)
+        seg = y[i : i + block].astype(np.float64)
         total += float(np.dot(seg, seg))
     return total
 
@@ -36,10 +37,7 @@ def measure(y: np.ndarray, sr: int) -> dict[str, Any]:
     """Keys starting with ``_`` are frame-level arrays other modules reuse."""
     n = len(y)
     peak = max(float(np.max(y)), -float(np.min(y))) if n else 0.0
-    if peak >= 0.95:
-        clipping_pct = float(100.0 * np.count_nonzero(np.abs(y) >= peak * 0.999) / n)
-    else:
-        clipping_pct = 0.0
+    clipping_pct = float(100.0 * np.count_nonzero(np.abs(y) >= peak * 0.999) / n) if peak >= 0.95 else 0.0
     rms = float(np.sqrt(_sum_squares(y) / n)) if n else 0.0
     fdb = frame_db(y, sr)
     live = fdb[fdb > -90.0]
@@ -86,11 +84,13 @@ def assess(m: dict[str, Any], expected_s: float | None = None) -> tuple[str, lis
         elif m["peak"] < PEAK_WARN:
             found.append(("warn", "Very quiet: move closer to the microphone or raise the input volume"))
         if m["clipping_pct"] > CLIP_BAD_PCT:
-            found.append(("bad", "Clipping: the sound is distorted, move back from the microphone or lower the input volume"))
+            hint = "Clipping: the sound is distorted, move back from the microphone or lower the input volume"
+            found.append(("bad", hint))
         elif m["clipping_pct"] > CLIP_WARN_PCT:
             found.append(("warn", "Clipping: some peaks are distorted, move back a little or lower the input volume"))
         if m["snr_db"] < SNR_BAD_DB:
-            found.append(("bad", "Background noise: the room is too noisy, find a quieter place or switch off fans and music"))
+            hint = "Background noise: the room is too noisy, find a quieter place or switch off fans and music"
+            found.append(("bad", hint))
         elif m["snr_db"] < SNR_WARN_DB or m["noise_floor_db"] > NOISE_FLOOR_WARN_DB:
             found.append(("warn", "Background noise: a quieter room or a closer microphone would help"))
         if m["silence_pct"] > SILENCE_BAD_PCT:
@@ -138,4 +138,4 @@ def recording_check(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return check_file(params.get("path"), float(expected) if isinstance(expected, (int, float)) else None)
 
 
-__all__ = ["measure", "assess", "check_array", "check_file", "HOP_S"]
+__all__ = ["HOP_S", "assess", "check_array", "check_file", "measure"]

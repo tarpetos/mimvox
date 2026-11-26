@@ -9,13 +9,16 @@ Ops (wire format: ``worker_kit.py``):
   release  {}                                                  -> {}
   status   {}                                                  -> {"loaded","vram_gb"}
 """
+
 import argparse
+import contextlib
 import importlib.util
 import os
 import sys
 import time
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = Path(__file__).absolute().parent
 
 
 def load_by_path(name, path):
@@ -25,7 +28,7 @@ def load_by_path(name, path):
     return mod
 
 
-kit = load_by_path("mimvox_worker_kit", os.path.join(os.path.dirname(HERE), "worker_kit.py"))
+kit = load_by_path("mimvox_worker_kit", HERE.parent / "worker_kit.py")
 
 
 def parse_args():
@@ -46,7 +49,7 @@ def run(name, inp, out, args, load, speak):
     import soundfile as sf
     import torch
 
-    text_norm = load_by_path("mimvox_omnivoice_text", os.path.join(HERE, "omnivoice_text.py"))
+    text_norm = load_by_path("mimvox_omnivoice_text", HERE / "omnivoice_text.py")
     state = {"model": None, "device": None}
 
     def log(msg):
@@ -78,6 +81,7 @@ def run(name, inp, out, args, load, speak):
     def op_release(_req=None):
         state["model"] = None
         import gc
+
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -86,11 +90,11 @@ def run(name, inp, out, args, load, speak):
     def prompt_clip(req, out_path):
         ref, start, end = req["ref"], req.get("start"), req.get("end")
         if start is None or end is None:
-            return ref
+            return None
         info = sf.info(ref)
         a, b = int(float(start) * info.samplerate), int(float(end) * info.samplerate)
         x, sr = sf.read(ref, start=a, stop=b, dtype="float32", always_2d=True)
-        clip = os.path.splitext(out_path)[0] + "_prompt.wav"
+        clip = out_path.with_name(out_path.stem + "_prompt.wav")
         sf.write(clip, x.mean(axis=1), sr, subtype="PCM_16")
         return clip
 
@@ -98,23 +102,26 @@ def run(name, inp, out, args, load, speak):
         text, out_path, ref = req.get("text"), req.get("out"), req.get("ref")
         if not isinstance(text, str) or not text.strip() or not out_path or not ref:
             raise kit.OpError("bad_request", "synth needs 'text', 'ref' and 'out'")
-        if not os.path.isfile(ref):
+        if not Path(ref).is_file():
             raise kit.OpError("not_found", f"reference clip not found: {ref}")
         op_load()
         lang = str(req.get("lang") or "en").lower()
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-        clip = prompt_clip(req, out_path)
+        Path(out_path).absolute().parent.mkdir(parents=True, exist_ok=True)
+        clip = prompt_clip(req, Path(out_path))
         t0 = time.time()
         try:
             with torch.inference_mode():
-                audio, sr = speak(state["model"], text_norm.normalize(text, lang), lang,
-                                  {"wav": clip, "text": req.get("ref_text")}, req)
+                audio, sr = speak(
+                    state["model"],
+                    text_norm.normalize(text, lang),
+                    lang,
+                    {"wav": str(clip) if clip else ref, "text": req.get("ref_text")},
+                    req,
+                )
         finally:
-            if clip != ref:
-                try:
-                    os.remove(clip)
-                except OSError:
-                    pass
+            if clip is not None:
+                with contextlib.suppress(OSError):
+                    clip.unlink()
         audio = np.asarray(audio, dtype=np.float32).reshape(-1)
         if audio.size == 0:
             raise kit.OpError("internal", "the model returned no audio")
@@ -127,6 +134,10 @@ def run(name, inp, out, args, load, speak):
     def op_status(_req=None):
         return {"loaded": state["model"] is not None, "vram_gb": vram_gb()}
 
-    worker = kit.Worker(name, inp, out, {"load": op_load, "synth": op_synth, "release": op_release,
-                                         "status": op_status, "ping": lambda _r: {}})
+    worker = kit.Worker(
+        name,
+        inp,
+        out,
+        {"load": op_load, "synth": op_synth, "release": op_release, "status": op_status, "ping": lambda _r: {}},
+    )
     worker.run()

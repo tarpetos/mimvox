@@ -2,6 +2,7 @@
 
 Arrays are float32 ``(channels, n)``; a mono voice is ``(n,)``.
 """
+
 from __future__ import annotations
 
 import math
@@ -9,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-HOP_S = 0.1              # four frames make a 400 ms BS.1770 block
+HOP_S = 0.1  # four frames make a 400 ms BS.1770 block
 ABS_GATE = -70.0
 REL_GATE = -10.0
 ACTIVE_BELOW_TOP_DB = 30.0
@@ -35,10 +36,16 @@ def _biquads(sr: int) -> list[tuple[np.ndarray, np.ndarray]]:
         alpha = math.sin(w0) / (2 * q)
         c = math.cos(w0)
         if kind == "shelf":
-            b = [a_ * ((a_ + 1) + (a_ - 1) * c + 2 * math.sqrt(a_) * alpha), -2 * a_ * ((a_ - 1) + (a_ + 1) * c),
-                 a_ * ((a_ + 1) + (a_ - 1) * c - 2 * math.sqrt(a_) * alpha)]
-            a = [(a_ + 1) - (a_ - 1) * c + 2 * math.sqrt(a_) * alpha, 2 * ((a_ - 1) - (a_ + 1) * c),
-                 (a_ + 1) - (a_ - 1) * c - 2 * math.sqrt(a_) * alpha]
+            b = [
+                a_ * ((a_ + 1) + (a_ - 1) * c + 2 * math.sqrt(a_) * alpha),
+                -2 * a_ * ((a_ - 1) + (a_ + 1) * c),
+                a_ * ((a_ + 1) + (a_ - 1) * c - 2 * math.sqrt(a_) * alpha),
+            ]
+            a = [
+                (a_ + 1) - (a_ - 1) * c + 2 * math.sqrt(a_) * alpha,
+                2 * ((a_ - 1) - (a_ + 1) * c),
+                (a_ + 1) - (a_ - 1) * c - 2 * math.sqrt(a_) * alpha,
+            ]
         else:
             b = [(1 + c) / 2, -(1 + c), (1 + c) / 2]
             a = [1 + alpha, -2 * c, 1 - alpha]
@@ -49,10 +56,10 @@ def _biquads(sr: int) -> list[tuple[np.ndarray, np.ndarray]]:
 def frame_power(x: np.ndarray, sr: int, weighted: bool = True) -> np.ndarray:
     """Mean square per ``HOP_S`` frame, summed over the channels: shape (frames,).
     Filtered in one-minute pieces, so a long track does not need a float64 copy of itself."""
-    from scipy.signal import lfilter, lfilter_zi  # noqa: PLC0415
+    from scipy.signal import lfilter, lfilter_zi
 
     x = as2d(x)
-    hop = int(round(HOP_S * sr))
+    hop = round(HOP_S * sr)
     n = x.shape[1]
     frames = max(n // hop, 0)
     out = np.zeros(frames, dtype=np.float64)
@@ -63,11 +70,11 @@ def frame_power(x: np.ndarray, sr: int, weighted: bool = True) -> np.ndarray:
     for ch in range(x.shape[0]):
         states = [lfilter_zi(b, a) * 0.0 for b, a in filters]
         for a0 in range(0, frames * hop, step):
-            y = np.asarray(x[ch, a0:min(a0 + step, frames * hop)], dtype=np.float64)
+            y = np.asarray(x[ch, a0 : min(a0 + step, frames * hop)], dtype=np.float64)
             for k, (b, a) in enumerate(filters):
                 y, states[k] = lfilter(b, a, y, zi=states[k])
             f0 = a0 // hop
-            out[f0:f0 + len(y) // hop] += (y.reshape(-1, hop) ** 2).mean(axis=1)
+            out[f0 : f0 + len(y) // hop] += (y.reshape(-1, hop) ** 2).mean(axis=1)
     return out
 
 
@@ -105,14 +112,15 @@ def active_frames(power: np.ndarray) -> np.ndarray:
     act = db > max(top - ACTIVE_BELOW_TOP_DB, ACTIVE_FLOOR_DB)
     gap = ~act
     bridged = gap.copy()
-    bridged[1:-1] = gap[1:-1] & (gap[:-2] | gap[2:])   # a lone silent frame counts as active
+    bridged[1:-1] = gap[1:-1] & (gap[:-2] | gap[2:])  # a lone silent frame counts as active
     return ~bridged
 
 
 def _dilate(mask: np.ndarray, frames: int) -> np.ndarray:
     if frames <= 0 or not mask.any():
         return mask
-    from scipy.ndimage import maximum_filter1d  # noqa: PLC0415
+    from scipy.ndimage import maximum_filter1d
+
     return maximum_filter1d(mask.astype(np.uint8), size=2 * frames + 1) > 0
 
 
@@ -138,14 +146,15 @@ def _duck_gain(new_active: np.ndarray, orig_active: np.ndarray, depth_db: float,
     k2 = min(len(orig_active), frames)
     orig = np.zeros(frames, dtype=bool)
     orig[:k2] = orig_active[:k2]
-    want &= ~orig   # where the original voice spoke, its ducking is already in the stem
+    want &= ~orig  # where the original voice spoke, its ducking is already in the stem
     if not want.any():
         return None
-    from scipy.ndimage import uniform_filter1d  # noqa: PLC0415
+    from scipy.ndimage import uniform_filter1d
+
     held = want.copy()
-    for k in range(1, max(int(round(DUCK_ATTACK_S / HOP_S)), 1) + 1):
+    for k in range(1, max(round(DUCK_ATTACK_S / HOP_S), 1) + 1):
         held[:-k] |= want[k:]
-    for k in range(1, max(int(round(DUCK_RELEASE_S / HOP_S)), 1) + 1):
+    for k in range(1, max(round(DUCK_RELEASE_S / HOP_S), 1) + 1):
         held[k:] |= want[:-k]
     smooth = np.clip(uniform_filter1d(held.astype(np.float64), size=3), 0.0, 1.0)
     db = -depth_db * smooth
@@ -159,19 +168,25 @@ def limit(x: np.ndarray, sr: int, ceiling: float = CEILING) -> tuple[np.ndarray,
     peak = float(np.max(np.abs(x))) if x.size else 0.0
     if peak <= ceiling:
         return x, 0.0
-    from scipy.ndimage import minimum_filter1d, uniform_filter1d  # noqa: PLC0415
+    from scipy.ndimage import minimum_filter1d, uniform_filter1d
+
     need = np.minimum(1.0, ceiling / np.maximum(np.max(np.abs(x), axis=0), 1e-9)).astype(np.float32)
     r = max(int(LIMIT_RAMP_S * sr), 1)
     # A minimum over 2r then a mean over r never exceeds the gain a sample needs, and ramps instead of jumping.
     g = uniform_filter1d(minimum_filter1d(need, size=2 * r + 1), size=r + 1)
-    g = np.minimum(g, need)   # float rounding
+    g = np.minimum(g, need)  # float rounding
     out = (x * g).astype(np.float32, copy=False)
     np.clip(out, -ceiling, ceiling, out=out)
     return out, round(float(-20.0 * math.log10(max(float(g.min()), 1e-9))), 2)
 
 
-def mix(voice: np.ndarray, sr: int, background: np.ndarray | None, vocals: np.ndarray | None,
-        original: np.ndarray | None = None) -> tuple[np.ndarray, dict[str, Any]]:
+def mix(
+    voice: np.ndarray,
+    sr: int,
+    background: np.ndarray | None,
+    vocals: np.ndarray | None,
+    original: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
     """The voice at the loudness of the original ``vocals`` stem (else of the ``original`` mixture) over
     ``background``. Returns the mix ``(channels, max(n, m))`` and a report of the gains in dB."""
     channels = background.shape[0] if background is not None else 1
@@ -213,7 +228,7 @@ def mix(voice: np.ndarray, sr: int, background: np.ndarray | None, vocals: np.nd
             out[:, :m] = bg if gain is None else bg * gain
         else:
             out[:, :m] = bg
-    out[:, :len(voice)] += v2 * g
+    out[:, : len(voice)] += v2 * g
     report.update(duck_db=round(duck, 2), duck_measured_db=round(measured, 2))
     out, reduced = limit(out, sr)
     report["limited_db"] = reduced

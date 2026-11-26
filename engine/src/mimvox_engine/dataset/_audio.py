@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -14,26 +15,26 @@ HOP_S = 0.010
 DB_FLOOR = -100.0
 
 
-def read_audio(path: str) -> tuple[np.ndarray, int]:
+def read_audio(path: str | Path) -> tuple[np.ndarray, int]:
     """Mono float32 samples and the sample rate; a video gives its audio track."""
-    from .. import media  # noqa: PLC0415
+    from .. import media
 
-    if not isinstance(path, str) or not path:
+    if not isinstance(path, (str, Path)) or not path:
         raise EngineError("bad_request", "Missing audio file path.")
-    if not os.path.isfile(path):
+    if not Path(path).is_file():
         raise EngineError("not_found", f"Audio file not found: {path}")
     return media.read_audio(path)
 
 
-def write_wav(path: str, y: np.ndarray, sr: int) -> None:
+def write_wav(path: str | Path, y: np.ndarray, sr: int) -> None:
     """Atomically write a mono 16-bit PCM WAV."""
-    tmp = f"{path}.tmp-{os.getpid()}.wav"
+    path = Path(path)
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}.wav")
     try:
         sf.write(tmp, np.clip(y, -1.0, 1.0), sr, subtype="PCM_16", format="WAV")
-        os.replace(tmp, path)
+        tmp.replace(path)
     finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        tmp.unlink(missing_ok=True)
 
 
 def resample(y: np.ndarray, sr: int, target: int) -> np.ndarray:
@@ -61,9 +62,9 @@ def frame_db(y: np.ndarray, sr: int) -> np.ndarray:
     starts = np.arange(0, len(y) - n + 1, hop)
     energy = np.empty(len(starts), dtype=np.float64)
     for i in range(0, len(starts), FRAME_BLOCK):
-        st = starts[i:i + FRAME_BLOCK]
+        st = starts[i : i + FRAME_BLOCK]
         a = int(st[0])
-        seg = y[a:int(st[-1]) + n].astype(np.float64)
+        seg = y[a : int(st[-1]) + n].astype(np.float64)
         c = np.concatenate([[0.0], np.cumsum(seg * seg)])
-        energy[i:i + len(st)] = (c[st - a + n] - c[st - a]) / n
+        energy[i : i + len(st)] = (c[st - a + n] - c[st - a]) / n
     return to_db(np.sqrt(np.maximum(energy, 0.0)))

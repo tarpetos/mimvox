@@ -1,5 +1,6 @@
 """Zero-shot voice-conversion worker on Seed-VC (GPL-3.0). Standalone: it imports nothing from ``mimvox_engine`` and
 loads ``worker_kit.py`` by its file path."""
+
 import argparse
 import collections
 import gc
@@ -8,10 +9,11 @@ import os
 import sys
 import time
 import types
+from pathlib import Path
 
 
 def _load_kit():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker_kit.py")
+    path = Path(__file__).absolute().parent / "worker_kit.py"
     spec = importlib.util.spec_from_file_location("mimvox_worker_kit", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -29,22 +31,24 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--seed-vc", required=True)
 ap.add_argument("--models", required=True)
 ap.add_argument("--device", default="cuda")
-ap.add_argument("--unload-after", type=float, default=float(os.environ.get("MIMVOX_ZSVC_UNLOAD_S", "0")))  # 0: exit instead
+ap.add_argument(
+    "--unload-after", type=float, default=float(os.environ.get("MIMVOX_ZSVC_UNLOAD_S", "0"))
+)  # 0: exit instead
 args = ap.parse_args(HOST["argv"] if HOST else None)
 
-SEED_VC = os.path.abspath(args.seed_vc)
-MODELS = os.path.abspath(args.models)
-SR = 22050                # the speech model's rate (mel hop 256)
+SEED_VC = Path(args.seed_vc).absolute()
+MODELS = Path(args.models).absolute()
+SR = 22050  # the speech model's rate (mel hop 256)
 HOP = 256
-REF_MAX_S = 20.0          # reference used (Seed-VC allows 25 s, but prompt + source share a 30 s context)
+REF_MAX_S = 20.0  # reference used (Seed-VC allows 25 s, but prompt + source share a 30 s context)
 CONTEXT_FRAMES = SR // HOP * 30
-OVERLAP_FRAMES = 16       # crossfade between windows of a long source
-STEPS = 12                # 12 to 25 gave the same speaker similarity and WER, at half the time
-WARM_STEPS = 4            # the warm-up conversion (its output is thrown away)
-CFG = 0.7                 # inference_cfg_rate (upstream default)
+OVERLAP_FRAMES = 16  # crossfade between windows of a long source
+STEPS = 12  # 12 to 25 gave the same speaker similarity and WER, at half the time
+WARM_STEPS = 4  # the warm-up conversion (its output is thrown away)
+CFG = 0.7  # inference_cfg_rate (upstream default)
 PROMPT_CACHE = 2
 
-sys.path.insert(0, SEED_VC)
+sys.path.insert(0, str(SEED_VC))
 
 
 def _stub_unused_imports():
@@ -53,7 +57,7 @@ def _stub_unused_imports():
     if importlib.util.find_spec("dac") is None:
         dac, nn_, quant = (types.ModuleType(n) for n in ("dac", "dac.nn", "dac.nn.quantize"))
 
-        class VectorQuantize:  # noqa: D401 - a stand-in
+        class VectorQuantize:
             def __init__(self, *_a, **_k):
                 raise RuntimeError("vector quantization is not available")
 
@@ -74,8 +78,8 @@ import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 import torchaudio  # noqa: E402
 
-_state = {"model": None, "ran": False}   # ran: one conversion has run since the models were loaded
-_prompts = collections.OrderedDict()   # (path, mtime, size) -> (prompt_condition, mel2, style)
+_state = {"model": None, "ran": False}  # ran: one conversion has run since the models were loaded
+_prompts = collections.OrderedDict()  # (path, mtime, size) -> (prompt_condition, mel2, style)
 
 
 def _device():
@@ -92,8 +96,8 @@ def _vram_gb():
 
 
 def _need(*parts):
-    path = os.path.join(MODELS, *parts)
-    if not os.path.isfile(path):
+    path = MODELS.joinpath(*parts)
+    if not path.is_file():
         raise kit.OpError("model_missing", f"{path} is missing; run setup")
     return path
 
@@ -102,30 +106,36 @@ def op_load(_req=None):
     if _state["model"] is not None:
         return {"load_s": 0.0, "device": str(_state["model"]["device"]), "vram_gb": _vram_gb()}
     t0 = time.time()
-    import yaml  # noqa: PLC0415
-    from modules.audio import mel_spectrogram  # noqa: PLC0415
-    from modules.bigvgan import bigvgan  # noqa: PLC0415
-    from modules.campplus.DTDNN import CAMPPlus  # noqa: PLC0415
-    from modules.commons import build_model, load_checkpoint, recursive_munch  # noqa: PLC0415
-    from transformers import AutoFeatureExtractor, WhisperModel  # noqa: PLC0415
+    import yaml
+    from modules.audio import mel_spectrogram
+    from modules.bigvgan import bigvgan
+    from modules.campplus.DTDNN import CAMPPlus
+    from modules.commons import build_model, load_checkpoint, recursive_munch
+    from transformers import AutoFeatureExtractor, WhisperModel
 
     dev = _device()
     half = dev.type == "cuda"
     if half:
         kit.gpu_fence(start=True)
-    with open(_need("dit", "config_dit_mel_seed_uvit_whisper_small_wavenet.yml"), encoding="utf-8") as fh:
+    with _need("dit", "config_dit_mel_seed_uvit_whisper_small_wavenet.yml").open(encoding="utf-8") as fh:
         config = yaml.safe_load(fh)
     mp = recursive_munch(config["model_params"])
     mp.dit_type = "DiT"
     dit = build_model(mp, stage="DiT")
-    dit, *_ = load_checkpoint(dit, None, _need("dit", "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth"),
-                              load_only_params=True, ignore_modules=[], is_distributed=False)
+    dit, *_ = load_checkpoint(
+        dit,
+        None,
+        _need("dit", "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth"),
+        load_only_params=True,
+        ignore_modules=[],
+        is_distributed=False,
+    )
     for k in dit:
         dit[k].eval().to(dev)
     dit.cfm.estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
 
-    camp_path = os.path.join(SEED_VC, "campplus_cn_common.bin")
-    if not os.path.isfile(camp_path):
+    camp_path = SEED_VC / "campplus_cn_common.bin"
+    if not camp_path.is_file():
         raise kit.OpError("model_missing", f"{camp_path} is missing; run setup")
     camp = CAMPPlus(feat_dim=80, embedding_size=192)
     camp.load_state_dict(torch.load(camp_path, map_location="cpu"))
@@ -136,7 +146,7 @@ def op_load(_req=None):
     voc.remove_weight_norm()
     voc = voc.eval().to(dev)
 
-    wdir = os.path.join(MODELS, "whisper-small")
+    wdir = MODELS / "whisper-small"
     _need("whisper-small", "model.safetensors")
     wm = WhisperModel.from_pretrained(wdir, torch_dtype=torch.float16 if half else torch.float32)
     del wm.decoder
@@ -144,21 +154,36 @@ def op_load(_req=None):
     wfe = AutoFeatureExtractor.from_pretrained(wdir)
 
     sp = config["preprocess_params"]["spect_params"]
-    mel_args = {"n_fft": sp["n_fft"], "win_size": sp["win_length"], "hop_size": sp["hop_length"],
-                "num_mels": sp["n_mels"], "sampling_rate": SR, "fmin": sp.get("fmin", 0), "fmax": None, "center": False}
-    _state["model"] = {"dit": dit, "camp": camp, "voc": voc, "wm": wm, "wfe": wfe, "device": dev, "half": half,
-                       "mel": lambda x: mel_spectrogram(x, **mel_args)}
+    mel_args = {
+        "n_fft": sp["n_fft"],
+        "win_size": sp["win_length"],
+        "hop_size": sp["hop_length"],
+        "num_mels": sp["n_mels"],
+        "sampling_rate": SR,
+        "fmin": sp.get("fmin", 0),
+        "fmax": None,
+        "center": False,
+    }
+    _state["model"] = {
+        "dit": dit,
+        "camp": camp,
+        "voc": voc,
+        "wm": wm,
+        "wfe": wfe,
+        "device": dev,
+        "half": half,
+        "mel": lambda x: mel_spectrogram(x, **mel_args),
+    }
     worker.log(f"Seed-VC loaded on {dev} in {time.time() - t0:.1f}s ({_vram_gb()} GB VRAM reserved)")
     return {"load_s": round(time.time() - t0, 2), "device": str(dev), "vram_gb": _vram_gb()}
 
 
 def _semantic(m, w16):
     """Whisper-small encoder features (50 per second) of 16 kHz audio of at most 30 s."""
-    inp = m["wfe"]([w16.squeeze(0).cpu().numpy()], return_tensors="pt", return_attention_mask=True,
-                   sampling_rate=16000)
+    inp = m["wfe"]([w16.squeeze(0).cpu().numpy()], return_tensors="pt", return_attention_mask=True, sampling_rate=16000)
     feats = m["wm"]._mask_input_features(inp.input_features, attention_mask=inp.attention_mask).to(m["device"])
     out = m["wm"].encoder(feats.to(m["wm"].encoder.dtype), return_dict=True)
-    return out.last_hidden_state.float()[:, :w16.size(-1) // 320 + 1]
+    return out.last_hidden_state.float()[:, : w16.size(-1) // 320 + 1]
 
 
 def _semantic_long(m, w16):
@@ -167,20 +192,20 @@ def _semantic_long(m, w16):
         return _semantic(m, w16)
     parts, buf, pos = [], None, 0
     while pos < w16.size(-1):
-        if buf is None:
-            chunk = w16[:, pos:pos + 16000 * 30]
-        else:
-            chunk = torch.cat([buf, w16[:, pos:pos + 16000 * 25]], dim=-1)
+        chunk = (
+            w16[:, pos : pos + 16000 * 30] if buf is None else torch.cat([buf, w16[:, pos : pos + 16000 * 25]], dim=-1)
+        )
         s = _semantic(m, chunk)
-        parts.append(s if buf is None else s[:, 50 * 5:])
-        buf = chunk[:, -16000 * 5:]
+        parts.append(s if buf is None else s[:, 50 * 5 :])
+        buf = chunk[:, -16000 * 5 :]
         pos += 16000 * 30 if pos == 0 else chunk.size(-1) - 16000 * 5
         worker.check_cancel()
     return torch.cat(parts, dim=1)
 
 
 def _load(path, max_s=None):
-    import librosa  # noqa: PLC0415
+    import librosa
+
     x, _ = librosa.load(path, sr=SR, mono=True, duration=max_s)
     if len(x) < SR // 4:
         raise kit.OpError("bad_request", f"{path} is too short to convert")
@@ -188,8 +213,8 @@ def _load(path, max_s=None):
 
 
 def _prompt(m, ref):
-    st = os.stat(ref)
-    key = (os.path.abspath(ref), st.st_mtime_ns, st.st_size)
+    st = Path(ref).stat()
+    key = (Path(ref).absolute(), st.st_mtime_ns, st.st_size)
     if key in _prompts:
         _prompts.move_to_end(key)
         return _prompts[key]
@@ -229,13 +254,14 @@ def _convert(m, x, prompt, steps, cfg):
     pieces, prev, done = [], None, 0
     while done < cond.size(1):
         worker.check_cancel()
-        chunk = cond[:, done:done + window]
+        chunk = cond[:, done : done + window]
         last = done + window >= cond.size(1)
         cat = torch.cat([pc, chunk], dim=1)
-        amp = torch.autocast(device_type="cuda", dtype=torch.float16) if m["half"] else _null()
+        amp = torch.autocast(device_type="cuda", dtype=torch.float16) if m["half"] else _Null()
         with amp:
-            vm = m["dit"].cfm.inference(cat, torch.LongTensor([cat.size(1)]).to(dev), mel2, style, None, steps,
-                                        inference_cfg_rate=cfg)[:, :, mel2.size(-1):]
+            vm = m["dit"].cfm.inference(
+                cat, torch.LongTensor([cat.size(1)]).to(dev), mel2, style, None, steps, inference_cfg_rate=cfg
+            )[:, :, mel2.size(-1) :]
         w = m["voc"](vm.float()).squeeze().float().cpu().numpy()
         if prev is None and last:
             pieces.append(w)
@@ -260,7 +286,7 @@ def op_convert(req):
     if not (src and out and ref):
         raise kit.OpError("bad_request", "'in', 'out' and 'ref' are required")
     for p in (src, ref):
-        if not os.path.isfile(p):
+        if not Path(p).is_file():
             raise kit.OpError("bad_request", f"{p} does not exist")
     steps = int(req.get("steps") or STEPS)
     cfg = float(req.get("cfg", CFG))
@@ -269,12 +295,12 @@ def op_convert(req):
     prompt = _prompt(m, ref)
     worker.check_cancel()
     y = _convert(m, _load(src), prompt, steps, cfg)
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    Path(out).absolute().parent.mkdir(parents=True, exist_ok=True)
     sf.write(out, y, SR, subtype="PCM_16")
     return {"elapsed": round(time.time() - t0, 3), "duration_s": round(len(y) / SR, 3), "sr": SR}
 
 
-class _null:
+class _Null:
     def __enter__(self):
         return self
 
@@ -286,7 +312,7 @@ class _null:
 def op_warm(req):
     t0 = time.time()
     ref = req.get("ref")
-    if not ref or not os.path.isfile(ref):
+    if not ref or not Path(ref).is_file():
         raise kit.OpError("bad_request", "'ref' must be an existing file")
     op_load()
     m = _state["model"]
@@ -330,7 +356,7 @@ else:
     worker = kit.Worker("zsvc", INP, OUT, {**OPS, "ping": lambda _req: {}}, idle=idle)
     try:
         worker.run()
-    except BaseException as exc:  # noqa: BLE001
+    except BaseException as exc:
         worker.send({"event": "fatal", "error": f"{type(exc).__name__}: {exc}"})
         sys.stderr.flush()
         os._exit(1)

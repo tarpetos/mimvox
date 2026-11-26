@@ -1,0 +1,74 @@
+[project]
+name = "mimvox-engine"
+version = "0.1.0"
+license = "PolyForm-Noncommercial-1.0.0"
+description = "ML engine for Mimvox (runs inside the engine virtualenv made by setup)"
+requires-python = ">=3.14,<3.15"
+dependencies = []
+
+[dependency-groups]
+test = ["pytest>=8", "numpy", "scipy", "soundfile"]
+
+[tool.pytest.ini_options]
+testpaths = ["engine/tests"]
+pythonpath = ["engine/src"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["crates/desktop/vendor"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN002", "ANN003", "ANN204",
+    "ANN401",
+    "BLE001",
+    "COM812",
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107", "D203", "D205", "D401",
+    "DTZ005",
+    "EM101", "EM102",
+    "FBT001", "FBT002", "FBT003",
+    "FIX001", "FIX002",
+    "G004",
+    "N802",
+    "PLR2004",
+    "S101", "S311",
+    "TD001", "TD002", "TD003", "TD004", "TD005",
+    "TRY002", "TRY003", "TRY400",
+    "D209", "D213",
+    "CPY001",
+    "RUF001", "RUF002", "RUF003",
+    "TID252",
+    "PLC0415",
+    "SLF001",
+    "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",
+    "ARG001", "ARG002", "ARG005",
+    "S603", "S607",
+    "S110", "S112",
+    "TRY300", "TRY301",
+    "TC001", "TC002", "TC003",
+    "N818",
+    "N812",
+    "PLW0603",
+    "ASYNC109",
+    "B905",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"engine/tests/**" = ["ANN", "INP001", "PT018", "S", "ASYNC110"]
+"engine/src/mimvox_engine/*_worker.py" = ["ANN", "T201"]
+"engine/src/mimvox_engine/backends/*_worker.py" = ["ANN", "T201"]
+"engine/src/mimvox_engine/worker_kit.py" = ["ANN", "T201"]
+"engine/src/mimvox_engine/whisper_half.py" = ["ANN", "T201"]
+"engine/src/mimvox_engine/backends/omnivoice_text.py" = ["ANN", "T201"]
+"engine/src/mimvox_engine/backends/omnivoice_stress.py" = ["ANN", "T201"]
+"engine/src/mimvox_engine/backends/*_fast.py" = ["ANN", "T201"]
+"tools/**" = ["INP001", "T201", "S310"]
+"scripts/**" = ["INP001", "T201"]
+"scripts/build/inno.py" = ["E501"]
+"crates/desktop/examples/*.py" = ["INP001", "T201", "ANN"]
+
+[tool.ruff.format]
+quote-style = "double"

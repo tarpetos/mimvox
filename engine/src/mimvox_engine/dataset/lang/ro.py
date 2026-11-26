@@ -1,4 +1,5 @@
 """Romanian rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic)."""
+
 from __future__ import annotations
 
 from ._common import words
@@ -8,26 +9,101 @@ NAME = "Romanian"
 NATIVE = "Română"
 
 PHONEMES = [
-    "a", "e", "i", "o", "u", "ə", "ɨ", "j", "w", "e̯", "o̯", "ʲ",
-    "p", "b", "t", "d", "k", "g", "f", "v", "s", "z", "ʃ", "ʒ", "h", "ts", "tʃ", "dʒ", "m", "n", "l", "r",
+    "a",
+    "e",
+    "i",
+    "o",
+    "u",
+    "ə",
+    "ɨ",
+    "j",
+    "w",
+    "e̯",
+    "o̯",
+    "ʲ",
+    "p",
+    "b",
+    "t",
+    "d",
+    "k",
+    "g",
+    "f",
+    "v",
+    "s",
+    "z",
+    "ʃ",
+    "ʒ",
+    "h",
+    "ts",
+    "tʃ",
+    "dʒ",
+    "m",
+    "n",
+    "l",
+    "r",
 ]
 EXAMPLES = {
-    "a": "apă", "e": "mere", "i": "inimă", "o": "om", "u": "unde", "ə": "mără", "ɨ": "pâine", "j": "iarnă",
-    "w": "ou", "e̯": "seară", "o̯": "soare", "ʲ": "lupi", "p": "pom", "b": "bun", "t": "tată", "d": "drum",
-    "k": "casă", "g": "gară", "f": "foc", "v": "vară", "s": "sare", "z": "zi", "ʃ": "șapte", "ʒ": "joc",
-    "h": "hartă", "ts": "țară", "tʃ": "cer", "dʒ": "ger", "m": "mamă", "n": "nor", "l": "lună", "r": "râu",
+    "a": "apă",
+    "e": "mere",
+    "i": "inimă",
+    "o": "om",
+    "u": "unde",
+    "ə": "mără",
+    "ɨ": "pâine",
+    "j": "iarnă",
+    "w": "ou",
+    "e̯": "seară",
+    "o̯": "soare",
+    "ʲ": "lupi",
+    "p": "pom",
+    "b": "bun",
+    "t": "tată",
+    "d": "drum",
+    "k": "casă",
+    "g": "gară",
+    "f": "foc",
+    "v": "vară",
+    "s": "sare",
+    "z": "zi",
+    "ʃ": "șapte",
+    "ʒ": "joc",
+    "h": "hartă",
+    "ts": "țară",
+    "tʃ": "cer",
+    "dʒ": "ger",
+    "m": "mamă",
+    "n": "nor",
+    "l": "lună",
+    "r": "râu",
 }
-DIGITS = "zero unu doi trei patru cinci șase șapte opt nouă".split()
+DIGITS = ["zero", "unu", "doi", "trei", "patru", "cinci", "șase", "șapte", "opt", "nouă"]
 
 _CEDILLA = str.maketrans({"ş": "ș", "ţ": "ț"})
 _VOWELS = set("aăâeiîou")
 _SIMPLE_V = {"a": "a", "ă": "ə", "â": "ɨ", "î": "ɨ"}
 _SIMPLE = {
-    "b": "b", "d": "d", "f": "f", "h": "h", "j": "ʒ", "k": "k", "l": "l", "m": "m", "n": "n", "p": "p", "q": "k",
-    "r": "r", "s": "s", "ș": "ʃ", "t": "t", "ț": "ts", "v": "v", "w": "v", "z": "z",
+    "b": "b",
+    "d": "d",
+    "f": "f",
+    "h": "h",
+    "j": "ʒ",
+    "k": "k",
+    "l": "l",
+    "m": "m",
+    "n": "n",
+    "p": "p",
+    "q": "k",
+    "r": "r",
+    "s": "s",
+    "ș": "ʃ",
+    "t": "t",
+    "ț": "ts",
+    "v": "v",
+    "w": "v",
+    "z": "z",
 }
 # Old spellings that start with the glide j: the pronouns and the forms of "a fi".
-_J_INITIAL = frozenset("el ea ei ele eu este ești e era eram erai erau erați".split())
+_J_INITIAL = frozenset(["el", "ea", "ei", "ele", "eu", "este", "ești", "e", "era", "eram", "erai", "erau", "erați"])
 
 
 def word_phonemes(word: str) -> list[str]:

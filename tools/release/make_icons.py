@@ -2,6 +2,7 @@
 """Generate the app icon set, and its labelled variants for mimvox-server, mimvox-mcp and the API docs, into
 tools/release/icons/ (committed):
 ``uv run --with pillow python tools/release/make_icons.py``."""
+
 from __future__ import annotations
 
 import math
@@ -47,14 +48,13 @@ def render(size: int, bars: int) -> Image.Image:
 
     shadow = Image.new("L", (s, s), 0)
     off = round(s * 0.018)
-    ImageDraw.Draw(shadow).rounded_rectangle(
-        (box[0], box[1] + off, box[2], box[3] + off), radius, fill=120)
+    ImageDraw.Draw(shadow).rounded_rectangle((box[0], box[1] + off, box[2], box[3] + off), radius, fill=120)
     shadow = shadow.filter(ImageFilter.GaussianBlur(s * 0.022))
     img.paste(Image.new("RGBA", (s, s), (2, 4, 8, 255)), (0, 0), shadow)
 
     body = Image.composite(
-        Image.new("RGBA", (s, s), TOP + (255,)),
-        Image.new("RGBA", (s, s), BOTTOM + (255,)),
+        Image.new("RGBA", (s, s), (*TOP, 255)),
+        Image.new("RGBA", (s, s), (*BOTTOM, 255)),
         diagonal_mask(s).point(lambda p: 255 - p),
     )
     img.paste(body, (0, 0), shape)
@@ -62,25 +62,38 @@ def render(size: int, bars: int) -> Image.Image:
     fade = Image.linear_gradient("L").transpose(Image.FLIP_TOP_BOTTOM).resize((s, s), Image.BILINEAR)
     fade = fade.point(lambda p: int(p * 0.12 if p > 128 else p * 0.12 * (p / 128) ** 2))
     fade = ImageChops.multiply(fade, shape)
-    img = Image.alpha_composite(img, Image.merge("RGBA", (
-        Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), fade)))
+    img = Image.alpha_composite(
+        img,
+        Image.merge(
+            "RGBA", (Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), fade)
+        ),
+    )
 
     bloom = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(bloom).ellipse(
-        (s * 0.45, s * 0.55, s * 1.05, s * 1.15), fill=38)
+    ImageDraw.Draw(bloom).ellipse((s * 0.45, s * 0.55, s * 1.05, s * 1.15), fill=38)
     bloom = ImageChops.multiply(bloom.filter(ImageFilter.GaussianBlur(s * 0.09)), shape)
-    img = Image.alpha_composite(img, Image.merge("RGBA", (
-        Image.new("L", (s, s), GLOW[0]), Image.new("L", (s, s), GLOW[1]), Image.new("L", (s, s), GLOW[2]), bloom)))
+    img = Image.alpha_composite(
+        img,
+        Image.merge(
+            "RGBA",
+            (Image.new("L", (s, s), GLOW[0]), Image.new("L", (s, s), GLOW[1]), Image.new("L", (s, s), GLOW[2]), bloom),
+        ),
+    )
 
     rim_w = max(2, round(s * 0.014))
     inner = Image.new("L", (s, s), 0)
     ImageDraw.Draw(inner).rounded_rectangle(
-        (box[0] + rim_w, box[1] + rim_w, box[2] - rim_w, box[3] - rim_w), radius - rim_w, fill=255)
+        (box[0] + rim_w, box[1] + rim_w, box[2] - rim_w, box[3] - rim_w), radius - rim_w, fill=255
+    )
     ring = ImageChops.subtract(shape, inner)
     vgrad = Image.linear_gradient("L").transpose(Image.FLIP_TOP_BOTTOM).resize((s, s), Image.BILINEAR)
     ring = ImageChops.multiply(ring, vgrad.point(lambda p: 25 + int(p * 0.45)))
-    img = Image.alpha_composite(img, Image.merge("RGBA", (
-        Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), ring)))
+    img = Image.alpha_composite(
+        img,
+        Image.merge(
+            "RGBA", (Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), Image.new("L", (s, s), 255), ring)
+        ),
+    )
 
     cx, cy = s / 2, s / 2
     span = (s - 2 * margin) * 0.58
@@ -89,7 +102,7 @@ def render(size: int, bars: int) -> Image.Image:
     heights = []
     for i in range(bars):
         t = (i / (bars - 1)) * 2 - 1
-        env = math.cos(t * math.pi / 2) ** 1.2   # 0 at the edges, 1 at the centre
+        env = math.cos(t * math.pi / 2) ** 1.2  # 0 at the edges, 1 at the centre
         ripple = 0.82 + 0.18 * math.cos(i * 2.1)
         heights.append(max(0.16, env * ripple) * (s - 2 * margin) * 0.52)
 
@@ -100,13 +113,23 @@ def render(size: int, bars: int) -> Image.Image:
         d.rounded_rectangle((x - bar_w / 2, cy - h / 2, x + bar_w / 2, cy + h / 2), bar_w / 2, fill=255)
 
     glow = wave.filter(ImageFilter.GaussianBlur(s * 0.03)).point(lambda p: min(255, int(p * 1.1)))
-    img = Image.alpha_composite(img, Image.merge("RGBA", (
-        Image.new("L", (s, s), GLOW[0]), Image.new("L", (s, s), GLOW[1]), Image.new("L", (s, s), GLOW[2]), glow)))
+    img = Image.alpha_composite(
+        img,
+        Image.merge(
+            "RGBA",
+            (Image.new("L", (s, s), GLOW[0]), Image.new("L", (s, s), GLOW[1]), Image.new("L", (s, s), GLOW[2]), glow),
+        ),
+    )
 
     shade = Image.linear_gradient("L").transpose(Image.FLIP_TOP_BOTTOM).resize((s, s), Image.BILINEAR)
     bar_alpha = ImageChops.multiply(wave, shade.point(lambda p: 215 + int(p * 40 / 255)))
-    img = Image.alpha_composite(img, Image.merge("RGBA", (
-        Image.new("L", (s, s), BAR[0]), Image.new("L", (s, s), BAR[1]), Image.new("L", (s, s), BAR[2]), bar_alpha)))
+    img = Image.alpha_composite(
+        img,
+        Image.merge(
+            "RGBA",
+            (Image.new("L", (s, s), BAR[0]), Image.new("L", (s, s), BAR[1]), Image.new("L", (s, s), BAR[2]), bar_alpha),
+        ),
+    )
 
     return img.resize((size, size), Image.LANCZOS)
 
@@ -141,13 +164,18 @@ def main() -> None:
 
     for name, (label, font_size, ico) in LABELS.items():
         big = labelled(images[1024], label, font_size)
-        sized = {n: big.resize((n, n), Image.LANCZOS) if n >= LABEL_MIN else images.get(n) or render(n, bars=5)
-                 for n in LABEL_SIZES}
+        sized = {
+            n: big.resize((n, n), Image.LANCZOS) if n >= LABEL_MIN else images.get(n) or render(n, bars=5)
+            for n in LABEL_SIZES
+        }
         for n, image in sized.items():
             image.save(OUT / f"{name}_{n}x{n}.png")
         if ico:
-            sized[256].save(OUT / f"{name}.ico", sizes=[(n, n) for n in LABEL_SIZES],
-                            append_images=[sized[n] for n in LABEL_SIZES if n != 256])
+            sized[256].save(
+                OUT / f"{name}.ico",
+                sizes=[(n, n) for n in LABEL_SIZES],
+                append_images=[sized[n] for n in LABEL_SIZES if n != 256],
+            )
     print(f"wrote {len(list(OUT.iterdir()))} files to {OUT}")
 
 

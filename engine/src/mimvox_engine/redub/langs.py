@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 from .. import components
 
@@ -14,34 +14,115 @@ TRANSLATORS = {"nllb-1.3b": "nllb-200-distilled-1.3B", "nllb-600m": NLLB_DIR_NAM
 _COMPONENT = {"nllb-1.3b": "better_translation", "nllb-600m": "translation"}
 
 
-def installed_translators(models_root: str, honour_off: bool = True) -> list[str]:
+def installed_translators(models_root: str | Path, honour_off: bool = True) -> list[str]:
     out = []
     for name, folder in TRANSLATORS.items():
         if honour_off and components.off(_COMPONENT[name]):
             continue
-        d = os.path.join(models_root, folder)
-        if (all(os.path.isfile(os.path.join(d, f)) for f in ("config.json", "sentencepiece.bpe.model"))
-                and any(os.path.isfile(os.path.join(d, f)) for f in ("model.safetensors", "pytorch_model.bin"))):
+        d = Path(models_root) / folder
+        if all((d / f).is_file() for f in ("config.json", "sentencepiece.bpe.model")) and any(
+            (d / f).is_file() for f in ("model.safetensors", "pytorch_model.bin")
+        ):
             out.append(name)
     return out
 
+
 NLLB = {
-    "en": "eng_Latn", "zh": "zho_Hans", "de": "deu_Latn", "es": "spa_Latn", "ru": "rus_Cyrl", "ko": "kor_Hang",
-    "fr": "fra_Latn", "ja": "jpn_Jpan", "pt": "por_Latn", "tr": "tur_Latn", "pl": "pol_Latn", "ca": "cat_Latn",
-    "nl": "nld_Latn", "ar": "arb_Arab", "sv": "swe_Latn", "it": "ita_Latn", "id": "ind_Latn", "hi": "hin_Deva",
-    "fi": "fin_Latn", "vi": "vie_Latn", "he": "heb_Hebr", "uk": "ukr_Cyrl", "el": "ell_Grek", "ms": "zsm_Latn",
-    "cs": "ces_Latn", "ro": "ron_Latn", "da": "dan_Latn", "hu": "hun_Latn", "ta": "tam_Taml", "no": "nob_Latn",
-    "th": "tha_Thai", "ur": "urd_Arab", "hr": "hrv_Latn", "bg": "bul_Cyrl", "lt": "lit_Latn", "mi": "mri_Latn",
-    "ml": "mal_Mlym", "cy": "cym_Latn", "sk": "slk_Latn", "te": "tel_Telu", "fa": "pes_Arab", "lv": "lvs_Latn",
-    "bn": "ben_Beng", "sr": "srp_Cyrl", "az": "azj_Latn", "sl": "slv_Latn", "kn": "kan_Knda", "et": "est_Latn",
-    "mk": "mkd_Cyrl", "eu": "eus_Latn", "is": "isl_Latn", "hy": "hye_Armn", "ne": "npi_Deva", "mn": "khk_Cyrl",
-    "bs": "bos_Latn", "kk": "kaz_Cyrl", "sq": "als_Latn", "sw": "swh_Latn", "gl": "glg_Latn", "mr": "mar_Deva",
-    "pa": "pan_Guru", "si": "sin_Sinh", "km": "khm_Khmr", "sn": "sna_Latn", "yo": "yor_Latn", "so": "som_Latn",
-    "af": "afr_Latn", "ka": "kat_Geor", "be": "bel_Cyrl", "tg": "tgk_Cyrl", "sd": "snd_Arab", "gu": "guj_Gujr",
-    "am": "amh_Ethi", "lo": "lao_Laoo", "uz": "uzn_Latn", "fo": "fao_Latn", "ht": "hat_Latn", "ps": "pbt_Arab",
-    "tk": "tuk_Latn", "nn": "nno_Latn", "mt": "mlt_Latn", "lb": "ltz_Latn", "my": "mya_Mymr", "bo": "bod_Tibt",
-    "tl": "tgl_Latn", "mg": "plt_Latn", "as": "asm_Beng", "tt": "tat_Cyrl", "ln": "lin_Latn", "ha": "hau_Latn",
-    "ba": "bak_Cyrl", "su": "sun_Latn", "yue": "yue_Hant", "jw": "jav_Latn", "sa": "san_Deva",
+    "en": "eng_Latn",
+    "zh": "zho_Hans",
+    "de": "deu_Latn",
+    "es": "spa_Latn",
+    "ru": "rus_Cyrl",
+    "ko": "kor_Hang",
+    "fr": "fra_Latn",
+    "ja": "jpn_Jpan",
+    "pt": "por_Latn",
+    "tr": "tur_Latn",
+    "pl": "pol_Latn",
+    "ca": "cat_Latn",
+    "nl": "nld_Latn",
+    "ar": "arb_Arab",
+    "sv": "swe_Latn",
+    "it": "ita_Latn",
+    "id": "ind_Latn",
+    "hi": "hin_Deva",
+    "fi": "fin_Latn",
+    "vi": "vie_Latn",
+    "he": "heb_Hebr",
+    "uk": "ukr_Cyrl",
+    "el": "ell_Grek",
+    "ms": "zsm_Latn",
+    "cs": "ces_Latn",
+    "ro": "ron_Latn",
+    "da": "dan_Latn",
+    "hu": "hun_Latn",
+    "ta": "tam_Taml",
+    "no": "nob_Latn",
+    "th": "tha_Thai",
+    "ur": "urd_Arab",
+    "hr": "hrv_Latn",
+    "bg": "bul_Cyrl",
+    "lt": "lit_Latn",
+    "mi": "mri_Latn",
+    "ml": "mal_Mlym",
+    "cy": "cym_Latn",
+    "sk": "slk_Latn",
+    "te": "tel_Telu",
+    "fa": "pes_Arab",
+    "lv": "lvs_Latn",
+    "bn": "ben_Beng",
+    "sr": "srp_Cyrl",
+    "az": "azj_Latn",
+    "sl": "slv_Latn",
+    "kn": "kan_Knda",
+    "et": "est_Latn",
+    "mk": "mkd_Cyrl",
+    "eu": "eus_Latn",
+    "is": "isl_Latn",
+    "hy": "hye_Armn",
+    "ne": "npi_Deva",
+    "mn": "khk_Cyrl",
+    "bs": "bos_Latn",
+    "kk": "kaz_Cyrl",
+    "sq": "als_Latn",
+    "sw": "swh_Latn",
+    "gl": "glg_Latn",
+    "mr": "mar_Deva",
+    "pa": "pan_Guru",
+    "si": "sin_Sinh",
+    "km": "khm_Khmr",
+    "sn": "sna_Latn",
+    "yo": "yor_Latn",
+    "so": "som_Latn",
+    "af": "afr_Latn",
+    "ka": "kat_Geor",
+    "be": "bel_Cyrl",
+    "tg": "tgk_Cyrl",
+    "sd": "snd_Arab",
+    "gu": "guj_Gujr",
+    "am": "amh_Ethi",
+    "lo": "lao_Laoo",
+    "uz": "uzn_Latn",
+    "fo": "fao_Latn",
+    "ht": "hat_Latn",
+    "ps": "pbt_Arab",
+    "tk": "tuk_Latn",
+    "nn": "nno_Latn",
+    "mt": "mlt_Latn",
+    "lb": "ltz_Latn",
+    "my": "mya_Mymr",
+    "bo": "bod_Tibt",
+    "tl": "tgl_Latn",
+    "mg": "plt_Latn",
+    "as": "asm_Beng",
+    "tt": "tat_Cyrl",
+    "ln": "lin_Latn",
+    "ha": "hau_Latn",
+    "ba": "bak_Cyrl",
+    "su": "sun_Latn",
+    "yue": "yue_Hant",
+    "jw": "jav_Latn",
+    "sa": "san_Deva",
 }
 
 _ALIAS = {"iw": "he", "in": "id", "jv": "jw", "nb": "no", "cmn": "zh"}

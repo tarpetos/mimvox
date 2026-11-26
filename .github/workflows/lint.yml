@@ -28,6 +28,9 @@ jobs:
 
       - uses: astral-sh/setup-uv@v10.3.3
 
+      - name: ruff format
+        run: uvx "ruff@$RUFF_VERSION" format --check .
+
       - name: ruff check
         run: uvx "ruff@$RUFF_VERSION" check --output-format github .
 

@@ -5,23 +5,24 @@ The clips are modifications of the CMU ARCTIC recordings (licence: CMU_ARCTIC_CO
 
     uv run --no-project --python 3.14 --with numpy,scipy,soundfile,librosa python tools/release/make_native_refs.py
 """
+
 from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import sys
 import urllib.request
 import zipfile
+from pathlib import Path
 
 import librosa
 import numpy as np
 import soundfile as sf
 from scipy.signal import butter, sosfiltfilt
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(REPO, "engine", "src"))
+REPO = Path(__file__).absolute().parents[2]
+sys.path.insert(0, str(REPO / "engine" / "src"))
 from mimvox_engine import accent  # noqa: E402
 
 BASE = "http://festvox.org/cmu_arctic/cmu_arctic"
@@ -52,14 +53,14 @@ class HttpFile(io.RawIOBase):
         self.pos = off if whence == 0 else self.pos + off if whence == 1 else self.size + off
         return self.pos
 
-    def readinto(self, b) -> int:  # type: ignore[no-untyped-def]
+    def readinto(self, b: bytearray | memoryview) -> int:
         n = min(len(b), self.size - self.pos)
         if n <= 0:
             return 0
         req = urllib.request.Request(self.url, headers={"Range": f"bytes={self.pos}-{self.pos + n - 1}"})
         with urllib.request.urlopen(req, timeout=120) as r:
             data = r.read()
-        b[:len(data)] = data
+        b[: len(data)] = data
         self.pos += len(data)
         return len(data)
 
@@ -75,18 +76,21 @@ def sentence(z: zipfile.ZipFile, spk: str, utt: str) -> np.ndarray:
     assert sr == SR_IN, sr
     y = sosfiltfilt(butter(4, 50.0, "highpass", fs=sr, output="sos"), x[:, 0]).astype(np.float32)  # ch 1 is the EGG
     _, (a, b) = librosa.effects.trim(y, top_db=35, frame_length=1024, hop_length=256)
-    y = y[max(0, a - int(0.03 * sr)):b + int(0.05 * sr)]
+    y = y[max(0, a - int(0.03 * sr)) : b + int(0.05 * sr)]
     frames = librosa.feature.rms(y=y, frame_length=1024, hop_length=256)[0]
     speech = frames[frames > frames.max() * 0.1]
-    return y * (10 ** (TARGET_RMS_DB / 20.0) / float(np.sqrt(np.mean(speech ** 2))))
+    return y * (10 ** (TARGET_RMS_DB / 20.0) / float(np.sqrt(np.mean(speech**2))))
 
 
 def main() -> int:
-    out_dir = accent.NATIVE_DIR
-    os.makedirs(out_dir, exist_ok=True)
-    manifest: dict = {"corpus": "CMU ARCTIC 0.95 (http://festvox.org/cmu_arctic/), Copyright (c) 2003 Carnegie Mellon "
-                                "University; modified: four recordings trimmed, levelled and joined",
-                      "sentences": SENTENCES, "voices": {}}
+    out_dir = Path(accent.NATIVE_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest: dict = {
+        "corpus": "CMU ARCTIC 0.95 (http://festvox.org/cmu_arctic/), Copyright (c) 2003 Carnegie Mellon "
+        "University; modified: four recordings trimmed, levelled and joined",
+        "sentences": SENTENCES,
+        "voices": {},
+    }
     for gender, spk in SPEAKERS.items():
         texts = transcripts(spk)
         z = zipfile.ZipFile(io.BufferedReader(HttpFile(f"{BASE}/orig/cmu_us_{spk}_arctic-WAVEGG.zip"), 1 << 20))
@@ -99,15 +103,19 @@ def main() -> int:
         x *= min(1.0, PEAK / float(np.max(np.abs(x))))
         y = librosa.resample(x, orig_sr=SR_IN, target_sr=SR_OUT)
         name = f"en-us-{gender}"
-        sf.write(os.path.join(out_dir, name + ".wav"), np.clip(y, -1, 1), SR_OUT, subtype="PCM_16")
+        sf.write(out_dir / f"{name}.wav", np.clip(y, -1, 1), SR_OUT, subtype="PCM_16")
         text = " ".join(texts[u] for u in SENTENCES)
-        with open(os.path.join(out_dir, name + ".txt"), "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text + "\n")
+        (out_dir / f"{name}.txt").write_text(text + "\n", encoding="utf-8", newline="\n")
         f0 = accent.median_f0(y, SR_OUT)
-        manifest["voices"][gender] = {"file": name + ".wav", "text_file": name + ".txt", "speaker": spk,
-                                      "f0_median": round(float(f0 or 0.0), 1), "duration_s": round(len(y) / SR_OUT, 2)}
+        manifest["voices"][gender] = {
+            "file": name + ".wav",
+            "text_file": name + ".txt",
+            "speaker": spk,
+            "f0_median": round(float(f0 or 0.0), 1),
+            "duration_s": round(len(y) / SR_OUT, 2),
+        }
         print(f"{name}: {len(y) / SR_OUT:.2f} s, median F0 {f0:.1f} Hz: {text}")
-    with open(os.path.join(out_dir, "voices.json"), "w", encoding="utf-8", newline="\n") as fh:
+    with (out_dir / "voices.json").open("w", encoding="utf-8", newline="\n") as fh:
         json.dump(manifest, fh, indent=1)
         fh.write("\n")
     return 0

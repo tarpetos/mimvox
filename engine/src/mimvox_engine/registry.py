@@ -1,12 +1,13 @@
 """Engine method registry. ``async def`` handlers run on the event loop, the only thread that changes shared state;
 plain ``def`` handlers run on the IO pool. Only ``server.py`` may write to stdout."""
+
 from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, Union
+from typing import Any, Protocol
 
-Handler = Callable[["Context", dict[str, Any]], Union[dict[str, Any], Awaitable[dict[str, Any]]]]
+Handler = Callable[["Context", dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]]
 _METHODS: dict[str, Handler] = {}
 
 
@@ -41,6 +42,7 @@ def method(name: str) -> Callable[[Handler], Handler]:
             raise RuntimeError(f"method {name!r} registered twice")
         _METHODS[name] = fn
         return fn
+
     return register
 
 
@@ -48,19 +50,21 @@ def handlers() -> dict[str, Handler]:
     return dict(_METHODS)
 
 
-def methods() -> dict[str, Callable[["Context", dict[str, Any]], dict[str, Any]]]:
+def methods() -> dict[str, Callable[[Context, dict[str, Any]], dict[str, Any]]]:
     """Handlers as blocking calls for sync code. Never on the loop thread: an async handler waits on the loop."""
     return {name: (_blocking(fn) if inspect.iscoroutinefunction(fn) else fn) for name, fn in _METHODS.items()}  # type: ignore[misc]
 
 
-def _blocking(fn: Handler) -> Callable[["Context", dict[str, Any]], dict[str, Any]]:
+def _blocking(fn: Handler) -> Callable[[Context, dict[str, Any]], dict[str, Any]]:
     def call(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-        from . import aio  # noqa: PLC0415
+        from . import aio
 
         try:
             aio.loop()
         except RuntimeError:  # no engine loop: the `import` command line
-            import asyncio  # noqa: PLC0415
+            import asyncio
+
             return asyncio.run(fn(ctx, params))  # type: ignore[arg-type]
         return aio.run_sync(fn(ctx, params))  # type: ignore[arg-type]
+
     return call

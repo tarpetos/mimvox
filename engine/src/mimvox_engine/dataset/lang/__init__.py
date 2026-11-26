@@ -16,7 +16,7 @@ class Language:
     code: str
     name: str
     native: str
-    wpm: float       # English 145 wpm scaled by syllables per word: an estimate, not measured
+    wpm: float  # English 145 wpm scaled by syllables per word: an estimate, not measured
     low_coverage: float = 0.80  # one 60-90 s preset part reaches 0.84-1.0 in every language
     hint_coverage: float = 0.95
 
@@ -37,7 +37,7 @@ def normalize_code(value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError("'language' must be a string such as \"en\" or \"uk\"")
+        raise ValueError('\'language\' must be a string such as "en" or "uk"')  # noqa: TRY004
     code = value.strip().lower().replace("_", "-").split("-", 1)[0]
     if code in ("", "auto"):
         return None
@@ -57,7 +57,7 @@ def describe(code: str) -> dict[str, str]:
 
 def module(code: str) -> ModuleType:
     if code == "en":
-        from .. import phonemes  # noqa: PLC0415
+        from .. import phonemes
 
         return phonemes
     return importlib.import_module(f".{code}", __name__)
@@ -97,9 +97,19 @@ _TOKEN = re.compile(r"[^\W\d_]+")
 CYRILLIC_LANGUAGES = frozenset({"uk", "ru", "be", "bg"})
 # Letters that set a language apart from the others of its script.
 _MARKS = {
-    "uk": "їєґ", "ru": "ыэё", "be": "ўыэё", "bg": "ъ",
-    "pl": "ąęłśźżćń", "de": "äöüß", "fr": "èêàçœùôûëï", "es": "ñáíú¿¡", "ro": "ășțşţ",
-    "it": "ìò", "pt": "ãõ", "cs": "ěřůčšž", "nl": "",
+    "uk": "їєґ",
+    "ru": "ыэё",
+    "be": "ўыэё",
+    "bg": "ъ",
+    "pl": "ąęłśźżćń",
+    "de": "äöüß",
+    "fr": "èêàçœùôûëï",
+    "es": "ñáíú¿¡",
+    "ro": "ășțşţ",
+    "it": "ìò",
+    "pt": "ãõ",
+    "cs": "ěřůčšž",
+    "nl": "",
 }
 _STOPWORDS = {
     "uk": "і й та що не на в у з це як він вона вони ми ви був була було його її але так ще вже чи до від",
@@ -139,7 +149,7 @@ def detect(text: str, among: frozenset[str] | set[str] | None = None) -> str:
     candidates = [c for c in _PREFERENCE if c in pool and c in script]
     if not candidates:
         return DEFAULT
-    scores = {code: 0.0 for code in candidates}
+    scores = dict.fromkeys(candidates, 0.0)
     for tok in _TOKEN.findall(t):
         for code in candidates:
             if tok in _STOP[code]:

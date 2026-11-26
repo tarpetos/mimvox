@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 TOO_SHORT_MIN = 0.5
-ZERO_SHOT_MIN = 3.0   # below this RVC training overfits and sounds metallic
+ZERO_SHOT_MIN = 3.0  # below this RVC training overfits and sounds metallic
 GREAT_MIN = 10.0
 LOW_COVERAGE = 0.80
 
@@ -26,14 +26,14 @@ def level_for(minutes: float, coverage: float | None = None, low_coverage: float
 def recommended_epochs(minutes: float) -> int:
     if minutes < ZERO_SHOT_MIN:
         return 0
-    from ..training.plan import recommended_epochs as plan_epochs  # noqa: PLC0415 - training imports the registry only
+    from ..training.plan import recommended_epochs as plan_epochs
 
     return plan_epochs(minutes)
 
 
 def fmt_minutes(minutes: float) -> str:
     if minutes < 1.0:
-        return f"{int(round(minutes * 60))} s"
+        return f"{round(minutes * 60)} s"
     return f"{minutes:.1f} min"
 
 
@@ -48,7 +48,9 @@ def message_for(minutes: float, level: str, extra: str = "", wpm: float = 145.0)
             f"Reach {ZERO_SHOT_MIN:.0f} minutes or more to unlock training."
         )
     elif level == "trainable":
-        text = f"About {t}: good for training a custom voice model. {GREAT_MIN:.0f} minutes or more gives the best result."
+        text = (
+            f"About {t}: good for training a custom voice model. {GREAT_MIN:.0f} minutes or more gives the best result."
+        )
     else:
         text = f"About {t}: excellent, this is plenty for the best possible similarity."
     return f"{text} {extra}".strip()

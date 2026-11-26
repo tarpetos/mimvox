@@ -1,8 +1,10 @@
 """Client of the persistent RVC worker; a dead worker is restarted by the next request, which is retried once."""
+
 from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from . import components, config
@@ -10,7 +12,7 @@ from .workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, 
 
 log = logging.getLogger("mimvox.rvc")
 
-WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rvc_worker.py")
+WORKER = Path(__file__).absolute().parent / "rvc_worker.py"
 
 
 # The index pulls foreign phonemes towards the recorded language. Measured, Ukrainian on an English-trained voice:
@@ -29,11 +31,13 @@ class RvcError(RuntimeError):
 
 
 class RvcWorker:
-    def __init__(self, python: str, applio: str) -> None:
+    def __init__(self, python: str | Path, applio: str | Path) -> None:
         self.python = python
         self.applio = applio
         # -I: do not put the script directory (engine modules such as config.py) on sys.path.
-        self.client = WorkerClient("rvc", [python, *isolated(), WORKER, "--applio", applio], child_env(), start_timeout=240.0)
+        self.client = WorkerClient(
+            "rvc", [python, *isolated(), WORKER, "--applio", applio], child_env(), start_timeout=240.0
+        )
         self.loaded_model: tuple | None = None
         self.client.on_release.append(self._released)
 
@@ -53,12 +57,16 @@ class RvcWorker:
         except (WorkerError, WorkerDied) as exc:
             raise RvcError(str(exc)) from exc
 
-    async def convert(self, src: str, dst: str, pth: str, index: str, index_rate: float,
-                      timeout: float = 180.0, pitch: int = 0) -> float:
+    async def convert(
+        self, src: str, dst: str, pth: str, index: str, index_rate: float, timeout: float = 180.0, pitch: int = 0
+    ) -> float:
         """Returns the worker's elapsed seconds."""
         try:
-            res = await self.client.call("convert", {"in": src, "out": dst, "pth": pth, "index": index,
-                                                     "idx": float(index_rate), "pitch": int(pitch)}, timeout=timeout)
+            res = await self.client.call(
+                "convert",
+                {"in": src, "out": dst, "pth": pth, "index": index, "idx": float(index_rate), "pitch": int(pitch)},
+                timeout=timeout,
+            )
         except (WorkerError, WorkerDied, WorkerCancelled) as exc:
             self.client.last_error = str(exc)
             raise RvcError(str(exc)) from exc
@@ -70,12 +78,13 @@ class RvcWorker:
         await self.client.stop()
 
 
-def model_sig(pth: str) -> tuple | None:
+def model_sig(pth: str | Path) -> tuple | None:
+    pth = Path(pth)
     try:
-        st = os.stat(pth)
+        st = pth.stat()
     except OSError:
         return None
-    return (os.path.abspath(pth), st.st_mtime_ns, st.st_size)
+    return (pth.absolute(), st.st_mtime_ns, st.st_size)
 
 
 _WORKER: RvcWorker | None = None
@@ -85,7 +94,7 @@ def available(runtime: dict[str, Any], honour_off: bool = True) -> bool:
     if honour_off and components.off("training"):
         return False
     py, applio = config.rvc_python(runtime), config.applio_dir(runtime)
-    return bool(py and applio and os.path.isfile(py) and os.path.isdir(applio))
+    return bool(py and applio and py.is_file() and applio.is_dir())
 
 
 def get(runtime: dict[str, Any]) -> RvcWorker | None:
@@ -93,7 +102,7 @@ def get(runtime: dict[str, Any]) -> RvcWorker | None:
     if components.off("training"):
         return None
     py, applio = config.rvc_python(runtime), config.applio_dir(runtime)
-    if not py or not applio or not os.path.isfile(py) or not os.path.isdir(applio):
+    if not py or not applio or not py.is_file() or not applio.is_dir():
         return None
     if _WORKER is None:
         _WORKER = RvcWorker(py, applio)

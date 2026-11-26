@@ -12,6 +12,7 @@ Ops (wire format: ``worker_kit.py``):
   release  {}                                -> {}
   status   {}                                -> {"loaded","vram_gb"}
 """
+
 import argparse
 import collections
 import importlib.util
@@ -20,8 +21,9 @@ import re
 import sys
 import time
 import unicodedata
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = Path(__file__).absolute().parent
 
 
 def _load_by_path(name, path):
@@ -31,7 +33,7 @@ def _load_by_path(name, path):
     return mod
 
 
-kit = _load_by_path("mimvox_worker_kit", os.path.join(os.path.dirname(HERE), "worker_kit.py"))
+kit = _load_by_path("mimvox_worker_kit", HERE.parent / "worker_kit.py")
 INP, OUT = kit.open_channels()  # before torch / stanza: they print, also from C code
 
 ap = argparse.ArgumentParser()
@@ -43,13 +45,13 @@ args = ap.parse_args()
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ["STANZA_RESOURCES_DIR"] = os.path.join(args.model_dir, "stanza")
+os.environ["STANZA_RESOURCES_DIR"] = str(Path(args.model_dir) / "stanza")
 
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 
-text_norm = _load_by_path("mimvox_omnivoice_text", os.path.join(HERE, "omnivoice_text.py"))
+text_norm = _load_by_path("mimvox_omnivoice_text", HERE / "omnivoice_text.py")
 
 SR = 24000
 ACUTE = "́"
@@ -96,9 +98,9 @@ def op_load(_req=None):
     from ukrainian_word_stress import Stressifier
 
     dev = _device()
-    d = args.model_dir
-    _state["model"] = HolosTTS(os.path.join(d, "holos.pt"), device=dev, voices_path=os.path.join(d, "voices.pt"))
-    _state["encoder"] = VoiceEncoder(os.path.join(d, "voice_encoder.pt"), device=dev)
+    d = Path(args.model_dir)
+    _state["model"] = HolosTTS(d / "holos.pt", device=dev, voices_path=d / "voices.pt")
+    _state["encoder"] = VoiceEncoder(d / "voice_encoder.pt", device=dev)
     _state["stressify"] = Stressifier()
     _state["ipa"] = ipa
     _state["device"] = dev
@@ -111,6 +113,7 @@ def op_release(_req=None):
         _state[key] = None
     _voices.clear()
     import gc
+
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -118,8 +121,8 @@ def op_release(_req=None):
 
 
 def _sig(path):
-    st = os.stat(path)
-    return (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    st = Path(path).stat()
+    return (Path(path).absolute(), st.st_mtime_ns, st.st_size)
 
 
 def _voice(ref):
@@ -181,7 +184,7 @@ def op_stress(req):
 
 def op_warm(req):
     ref = req.get("ref")
-    if not ref or not os.path.isfile(ref):
+    if not ref or not Path(ref).is_file():
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
     op_load()
     t0 = time.time()
@@ -193,7 +196,7 @@ def op_synth(req):
     text, out, ref = req.get("text"), req.get("out"), req.get("ref")
     if not isinstance(text, str) or not text.strip() or not out or not ref:
         raise kit.OpError("bad_request", "synth needs 'text', 'ref' and 'out'")
-    if not os.path.isfile(ref):
+    if not Path(ref).is_file():
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
     speed = float(req.get("speed") or 1.0)
     if not (0.25 <= speed <= 4.0):
@@ -220,18 +223,35 @@ def op_synth(req):
     peak = float(np.abs(audio).max())
     if peak > 0.99:
         audio = audio * (0.99 / peak)
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    Path(out).absolute().parent.mkdir(parents=True, exist_ok=True)
     sf.write(out, audio, SR, subtype="PCM_16")
-    return {"out": out, "sr": SR, "duration_s": round(len(audio) / SR, 3), "gen_s": round(time.time() - t0, 3),
-            "text": text, "stressed": stressed}
+    return {
+        "out": out,
+        "sr": SR,
+        "duration_s": round(len(audio) / SR, 3),
+        "gen_s": round(time.time() - t0, 3),
+        "text": text,
+        "stressed": stressed,
+    }
 
 
 def op_status(_req=None):
     return {"loaded": _state["model"] is not None, "vram_gb": _vram_gb()}
 
 
-kit_worker = kit.Worker("holos", INP, OUT,
-                        {"load": op_load, "synth": op_synth, "warm": op_warm, "stress": op_stress,
-                         "release": op_release, "status": op_status, "ping": lambda _r: {}})
+kit_worker = kit.Worker(
+    "holos",
+    INP,
+    OUT,
+    {
+        "load": op_load,
+        "synth": op_synth,
+        "warm": op_warm,
+        "stress": op_stress,
+        "release": op_release,
+        "status": op_status,
+        "ping": lambda _r: {},
+    },
+)
 kit_worker.run()
 os._exit(0)

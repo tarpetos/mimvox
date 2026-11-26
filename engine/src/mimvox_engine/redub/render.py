@@ -1,15 +1,18 @@
 """Redub rendering: ``convert`` (RVC over the original audio) and ``respeak`` (TTS per transcript segment).
 
 Runs on the engine loop with the numpy and ffmpeg work on the IO pool; cancel by cancelling the awaiting task."""
+
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
-import os
 import shutil
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -28,7 +31,7 @@ GAP_S = 0.12
 MIN_AVAIL_S = 0.25
 CLIP_GAP_S = 0.05
 FIT_TOL_S = 0.02
-FIT_FLOOR = 0.85                # measured: faster than this OmniVoice drops weak consonants and short words
+FIT_FLOOR = 0.85  # measured: faster than this OmniVoice drops weak consonants and short words
 FACTOR_MAX = 1.25
 FACTOR_LO, FACTOR_HI = 0.65, 1.4
 NATURAL_PAUSE_S = 0.5
@@ -71,51 +74,74 @@ def split_chunks(x: np.ndarray, sr: int) -> list[tuple[int, int]]:
     if len(cuts) > 1 and n - cuts[-1] < int(MIN_TAIL_S * sr):
         cuts.pop()
     cuts.append(n)
-    return list(zip(cuts[:-1], cuts[1:]))
+    return list(itertools.pairwise(cuts))
 
 
-def _write_clip(path: str, x: np.ndarray, sr: int) -> str:
+def _write_clip(path: Path, x: np.ndarray, sr: int) -> Path:
     au.write_wav(path, x, sr)
     return path
 
 
-def _read_converted(src: str, dst: str, n_in: int, sr_in: int) -> np.ndarray:
+def _read_converted(src: Path, dst: Path, n_in: int, sr_in: int) -> np.ndarray:
     try:
         y, ysr = au.read_mono(dst)
     finally:
         for p in (src, dst):
             with contextlib.suppress(OSError):
-                os.remove(p)
+                p.unlink()
     y = au.resample(y, ysr, SR)
-    return _fit_length(y, int(round(n_in * SR / sr_in)))
+    return _fit_length(y, round(n_in * SR / sr_in))
 
 
-async def _rvc_clip(worker: rvc.RvcWorker, x: np.ndarray, sr: int, workdir: str, tag: str, pth: str, idx: str,
-                    index_rate: float, timeout: float = 180.0, pitch: int = 0) -> np.ndarray:
-    return await _converted(lambda src, dst: worker.convert(src, dst, pth, idx, index_rate, timeout=timeout,
-                                                            pitch=pitch), x, sr, workdir, tag)
+async def _rvc_clip(
+    worker: rvc.RvcWorker,
+    x: np.ndarray,
+    sr: int,
+    workdir: Path,
+    tag: str,
+    pth: str | Path,
+    idx: str | Path,
+    index_rate: float,
+    timeout: float = 180.0,
+    pitch: int = 0,
+) -> np.ndarray:
+    return await _converted(
+        lambda src, dst: worker.convert(src, dst, pth, idx, index_rate, timeout=timeout, pitch=pitch),
+        x,
+        sr,
+        workdir,
+        tag,
+    )
 
 
-async def _zs_clip(zs: zsvc.Bound, x: np.ndarray, sr: int, workdir: str, tag: str) -> np.ndarray:
+async def _zs_clip(zs: zsvc.Bound, x: np.ndarray, sr: int, workdir: Path, tag: str) -> np.ndarray:
     return await _converted(zs.convert, x, sr, workdir, tag)
 
 
-async def _converted(convert: Callable[[str, str], Awaitable[Any]], x: np.ndarray, sr: int, workdir: str,
-                     tag: str) -> np.ndarray:
-    src = await aio.run_io(_write_clip, os.path.join(workdir, f"{tag}_in.wav"), x, sr)
-    dst = os.path.join(workdir, f"{tag}_out.wav")
+async def _converted(
+    convert: Callable[[Path, Path], Awaitable[Any]], x: np.ndarray, sr: int, workdir: Path, tag: str
+) -> np.ndarray:
+    src = await aio.run_io(_write_clip, workdir / f"{tag}_in.wav", x, sr)
+    dst = workdir / f"{tag}_out.wav"
     try:
         await convert(src, dst)
     except BaseException:
         for p in (src, dst):
             with contextlib.suppress(OSError):
-                os.remove(p)
+                p.unlink()
         raise
     return await aio.run_io(_read_converted, src, dst, len(x), sr)
 
 
-async def convert(source: np.ndarray, workdir: str, worker: rvc.RvcWorker, pth: str, idx: str, index_rate: float,
-                  progress: Progress) -> np.ndarray:
+async def convert(
+    source: np.ndarray,
+    workdir: Path,
+    worker: rvc.RvcWorker,
+    pth: str | Path,
+    idx: str | Path,
+    index_rate: float,
+    progress: Progress,
+) -> np.ndarray:
     chunks = await aio.run_io(split_chunks, source, SR)
     total = len(source)
     out = np.zeros(total, dtype=np.float32)
@@ -124,8 +150,9 @@ async def convert(source: np.ndarray, workdir: str, worker: rvc.RvcWorker, pth: 
         piece = source[a:b]
         if float(np.max(np.abs(piece))) >= SILENT_PEAK:
             t0 = time.time()
-            conv = await _rvc_clip(worker, piece, SR, workdir, f"c{i}", pth, idx, index_rate,
-                                   timeout=max(180.0, 12.0 * (b - a) / SR))
+            conv = await _rvc_clip(
+                worker, piece, SR, workdir, f"c{i}", pth, idx, index_rate, timeout=max(180.0, 12.0 * (b - a) / SR)
+            )
             log.info("chunk %d/%d: %.1fs of audio in %.1fs", i + 1, len(chunks), (b - a) / SR, time.time() - t0)
             out[a:b] = _fade(conv) if len(chunks) > 1 else conv
         else:
@@ -136,18 +163,18 @@ async def convert(source: np.ndarray, workdir: str, worker: rvc.RvcWorker, pth: 
 
 
 def _trim_clip(y: np.ndarray, sr: int) -> np.ndarray:
-    import librosa  # noqa: PLC0415
+    import librosa
 
     if len(y) == 0 or float(np.max(np.abs(y))) < 1e-4:
         return y
     _, (a, b) = librosa.effects.trim(y, top_db=40, frame_length=512, hop_length=128)
-    return y[max(a - int(0.02 * sr), 0): min(b + int(0.06 * sr), len(y))]
+    return y[max(a - int(0.02 * sr), 0) : min(b + int(0.06 * sr), len(y))]
 
 
-def _load_trimmed(path: str) -> tuple[np.ndarray, int]:
+def _load_trimmed(path: str | Path) -> tuple[np.ndarray, int]:
     y, sr = au.read_mono(path)
     with contextlib.suppress(OSError):
-        os.remove(path)
+        Path(path).unlink()
     return _trim_clip(y.astype(np.float32, copy=False), sr), sr
 
 
@@ -209,10 +236,25 @@ class _Track:
         self.data[pos:end] += y
 
 
-async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temperature: float, quality: str,
-                  worker: rvc.RvcWorker | None, pth: str, idx: str, index_rate: float, workdir: str,
-                  progress: Progress, speed: float = 1.0, lang: str = "en", ref_text: str | None = None,
-                  pitch: int = 0, zs: zsvc.Bound | None = None, timing: str = "keep") -> tuple[np.ndarray, dict[str, Any]]:
+async def respeak(
+    segments: list[dict[str, Any]],
+    total_s: float,
+    ref: str | Path,
+    temperature: float,
+    quality: str,
+    worker: rvc.RvcWorker | None,
+    pth: str | Path,
+    idx: str | Path,
+    index_rate: float,
+    workdir: Path,
+    progress: Progress,
+    speed: float = 1.0,
+    lang: str = "en",
+    ref_text: str | None = None,
+    pitch: int = 0,
+    zs: zsvc.Bound | None = None,
+    timing: str = "keep",
+) -> tuple[np.ndarray, dict[str, Any]]:
     """Speech is never cut and two clips never overlap: a clip that does not fit pushes the following ones later, and
     the track grows past ``total_s`` when it must."""
     backend = backends.for_language(lang)
@@ -255,9 +297,18 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
                 factor = natural_factor(user_factor)
             t0 = time.time()
             async with zsvc.gpu_turn(zs.turn if zs is not None else None):  # a tight GPU: one model at a time
-                path = await backend.synthesize(text, lang, ref, SynthParams(
-                    out_path=os.path.join(workdir, f"s{i}_tts.wav"), temperature=temperature, quality=quality,
-                    duration_factor=factor, reference_text=ref_text))
+                path = await backend.synthesize(
+                    text,
+                    lang,
+                    ref,
+                    SynthParams(
+                        out_path=workdir / f"s{i}_tts.wav",
+                        temperature=temperature,
+                        quality=quality,
+                        duration_factor=factor,
+                        reference_text=ref_text,
+                    ),
+                )
             clip, sr = await aio.run_io(_load_trimmed, path)
             dur = len(clip) / float(sr)
             rate.update(dur / factor, len(text))
@@ -282,10 +333,19 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
                 note += f" (overruns by {dur - room:.2f}s, the next segments move later)"
             elif dur > own + 0.05:
                 note += f" (runs {min(dur, room) - own:.1f}s into the following silence)"
-            log.info("segment %d/%d: factor %.2f, %.1fs (segment %.1fs, room %.1fs) in %.1fs%s", i + 1, n, factor,
-                     dur, own, min(room, 999.0), time.time() - t0, note)
+            log.info(
+                "segment %d/%d: factor %.2f, %.1fs (segment %.1fs, room %.1fs) in %.1fs%s",
+                i + 1,
+                n,
+                factor,
+                dur,
+                own,
+                min(room, 999.0),
+                time.time() - t0,
+                note,
+            )
             last_end = pos_s + dur
-            await todo.put((i, int(round(pos_s * SR)), clip, sr))
+            await todo.put((i, round(pos_s * SR), clip, sr))
         await todo.put(None)
 
     async def consume() -> None:
@@ -293,7 +353,9 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
             if zs is not None:
                 t0 = time.time()
                 y = await _zs_clip(zs, clip, sr, workdir, f"s{i}")
-                log.info("segment %d/%d: converted (zero-shot, %d steps) in %.1fs", i + 1, n, zs.steps, time.time() - t0)
+                log.info(
+                    "segment %d/%d: converted (zero-shot, %d steps) in %.1fs", i + 1, n, zs.steps, time.time() - t0
+                )
             elif worker is not None:
                 y = await _rvc_clip(worker, clip, sr, workdir, f"s{i}", pth, idx, index_rate, pitch=pitch)
             else:
@@ -302,12 +364,12 @@ async def respeak(segments: list[dict[str, Any]], total_s: float, ref: str, temp
             progress("speak", 5 + 90.0 * (i + 1) / n, segment=i, segments=n)
 
     await aio.gather_or_cancel(produce(), consume())
-    out = track.data[:max(int(total_s * SR), track.end)]
+    out = track.data[: max(int(total_s * SR), track.end)]
     stats["drift_s"] = round(max(len(out) / float(SR) - total_s, 0.0), 2)
     stats["timing"] = timing
     stats["max_push_s"] = round(max_push[0], 2)
     return out, stats
 
 
-def cleanup(workdir: str) -> None:
+def cleanup(workdir: str | Path) -> None:
     shutil.rmtree(workdir, ignore_errors=True)

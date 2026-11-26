@@ -3,17 +3,18 @@
 The app parses the output: ``[move] 37% 11.4/31.0 GB`` while copying, then ``[move] done`` (exit code 0) or
 ``[move] failed: <reason>`` (non-zero); anything else is ``[move] <text>``.
 """
+
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
 import stat
 import subprocess
-import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Callable
 from urllib.parse import quote
 
 MARKER = ".mimvox-move.json"
@@ -34,10 +35,19 @@ def running_processes(old: Path, windows: bool) -> list[str]:
     found: list[str] = []
     me = os.getpid()
     if windows:
-        script = ("Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId)`t$($_.ExecutablePath)`t$($_.CommandLine)\" }")
+        script = (
+            "Get-CimInstance Win32_Process | ForEach-Object { "
+            '"$($_.ProcessId)`t$($_.ExecutablePath)`t$($_.CommandLine)" }'
+        )
         try:
-            text = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
-                                  text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            text = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            ).stdout
         except (OSError, subprocess.SubprocessError):
             raise MoveError("cannot list running processes to check that the engine is stopped") from None
         rows = [ln.split("\t", 2) for ln in text.splitlines() if ln.count("\t") >= 2]
@@ -51,7 +61,7 @@ def running_processes(old: Path, windows: bool) -> list[str]:
             if int(entry.name) == me:
                 continue
             try:
-                exe = os.readlink(entry / "exe")
+                exe = str((entry / "exe").readlink())
                 cmd = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
             except OSError:
                 continue
@@ -59,7 +69,9 @@ def running_processes(old: Path, windows: bool) -> list[str]:
                 found.append(f"pid {entry.name}: {(exe or cmd)[:100]}")
         if not Path("/proc").is_dir():  # macOS
             try:
-                text = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=30).stdout
+                text = subprocess.run(
+                    ["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=30, check=False
+                ).stdout
             except (OSError, subprocess.SubprocessError):
                 raise MoveError("cannot list running processes to check that the engine is stopped") from None
             for ln in text.splitlines():
@@ -80,20 +92,19 @@ def existing_parent(path: Path) -> Path:
 NOT_MOVED = ("cache", "tmp")
 
 
-def _prune_top(root: Path, dirpath: str, dirs: list[str]) -> None:
-    if Path(dirpath) == root:
+def _prune_top(root: Path, dirpath: Path, dirs: list[str], files: list[str]) -> None:
+    if dirpath == root:
         dirs[:] = [d for d in dirs if d not in NOT_MOVED]
+        files[:] = [f for f in files if f not in NOT_MOVED or not (root / f).is_dir()]
 
 
 def tree_size(root: Path) -> int:
     total = 0
-    for dirpath, dirs, files in os.walk(root):
-        _prune_top(root, dirpath, dirs)
+    for dirpath, dirs, files in root.walk():
+        _prune_top(root, dirpath, dirs, files)
         for name in files:
-            try:
-                total += os.lstat(os.path.join(dirpath, name)).st_size
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                total += (dirpath / name).lstat().st_size
     return total
 
 
@@ -102,18 +113,14 @@ def _inside(child: Path, parent: Path) -> bool:
     return c == p or c.startswith(p.rstrip("\\/") + os.sep)
 
 
-def _walk_files(root: Path):
+def _walk_files(root: Path) -> Iterator[tuple[Path, bool | None]]:
     """``(rel, is_symlink)`` of every file and symlink; directories as ``(rel, None)``."""
-    for dirpath, dirs, files in os.walk(root):
-        _prune_top(root, dirpath, dirs)
-        rel_dir = Path(dirpath).relative_to(root)
-        for d in list(dirs):
-            if os.path.islink(os.path.join(dirpath, d)):  # a symlinked directory is copied as a link
-                dirs.remove(d)
-                files.append(d)
+    for dirpath, dirs, files in root.walk():
+        _prune_top(root, dirpath, dirs, files)
+        rel_dir = dirpath.relative_to(root)
         yield rel_dir, None
         for name in files:
-            yield rel_dir / name, os.path.islink(os.path.join(dirpath, name))
+            yield rel_dir / name, (dirpath / name).is_symlink()
 
 
 def copy_tree(src: Path, dst: Path, old: Path, total: int, progress: Callable[[int], None]) -> None:
@@ -126,12 +133,12 @@ def copy_tree(src: Path, dst: Path, old: Path, total: int, progress: Callable[[i
             d.mkdir(parents=True, exist_ok=True)
             continue
         if link:
-            target = os.readlink(s)
+            target = str(s.readlink())
             if os.path.normcase(target).startswith(os.path.normcase(str(src))):
-                target = str(dst) + target[len(str(src)):]
-            if os.path.lexists(d):
+                target = str(dst) + target[len(str(src)) :]
+            if d.exists(follow_symlinks=False):
                 d.unlink()
-            os.symlink(target, d, target_is_directory=s.is_dir())
+            d.symlink_to(target, target_is_directory=s.is_dir())
             continue
         size = s.stat().st_size
         if d.is_file() and d.stat().st_size == size:
@@ -139,7 +146,7 @@ def copy_tree(src: Path, dst: Path, old: Path, total: int, progress: Callable[[i
             progress(done)
             continue
         tmp = d.with_name(d.name + ".mimvox-part")
-        with open(s, "rb") as fin, open(tmp, "wb") as fout:
+        with s.open("rb") as fin, tmp.open("wb") as fout:
             while True:
                 block = fin.read(8 * 1024 * 1024)
                 if not block:
@@ -148,36 +155,43 @@ def copy_tree(src: Path, dst: Path, old: Path, total: int, progress: Callable[[i
                 done += len(block)
                 progress(done)
         shutil.copystat(s, tmp)
-        os.replace(tmp, d)
+        tmp.replace(d)
     progress(total)
 
 
 def verify_tree(src: Path, dst: Path) -> None:
-    want = {rel.as_posix(): (None if link else (src / rel).stat().st_size) for rel, link in _walk_files(src) if link is not None}
-    have = {rel.as_posix(): (None if link else (dst / rel).stat().st_size) for rel, link in _walk_files(dst) if link is not None}
+    want = {
+        rel.as_posix(): (None if link else (src / rel).stat().st_size)
+        for rel, link in _walk_files(src)
+        if link is not None
+    }
+    have = {
+        rel.as_posix(): (None if link else (dst / rel).stat().st_size)
+        for rel, link in _walk_files(dst)
+        if link is not None
+    }
     have.pop(MARKER, None)
     missing = [k for k in want if k not in have]
     wrong = [k for k, v in want.items() if k in have and have[k] != v]
     stray = [k for k in have if k not in want and not k.endswith(".mimvox-part")]
     parts = [k for k in have if k.endswith(".mimvox-part")]
     if missing or wrong or parts:
-        raise MoveError(f"the copy is not complete ({len(missing)} missing, {len(wrong)} with a different size, "
-                        f"{len(parts)} unfinished); e.g. {(missing + wrong + parts)[0]}. Run the move again to resume.")
+        raise MoveError(
+            f"the copy is not complete ({len(missing)} missing, {len(wrong)} with a different size, "
+            f"{len(parts)} unfinished); e.g. {(missing + wrong + parts)[0]}. Run the move again to resume."
+        )
     del stray  # files only the target has (for example the marker) are fine
 
 
 def remove_tree(path: Path) -> None:
-    def onexc(func, p, _exc):  # read-only files (git objects) on Windows
+    def onexc(func: Callable[[str], object], p: str, _exc: BaseException) -> None:  # read-only files (git objects)
         try:
-            os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+            Path(p).chmod(stat.S_IWRITE | stat.S_IREAD)
             func(p)
         except OSError:
             pass
 
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=onexc)
-    else:
-        shutil.rmtree(path, onerror=lambda f, p, e: onexc(f, p, e))
+    shutil.rmtree(path, onexc=onexc)
 
 
 def _forms(old: Path, new: Path) -> list[tuple[bytes, bytes]]:
@@ -245,13 +259,13 @@ class PathFixer:
 def _link_target(path: Path) -> str | None:
     """A symlink's target, or a Windows junction's (uv links each Python's minor version to its patch release)."""
     try:
-        junction = os.lstat(path).st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+        junction = path.lstat().st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
     except (OSError, AttributeError):  # st_reparse_tag: Windows only
         junction = False
     if not (path.is_symlink() or junction):
         return None
     try:
-        return os.readlink(path).removeprefix("\\\\?\\")
+        return str(path.readlink()).removeprefix("\\\\?\\")
     except OSError:
         return None
 
@@ -261,14 +275,14 @@ def fix_link(path: Path, old: Path, new: Path, fixer: PathFixer) -> None:
     target = _link_target(path)
     if target is None or not _inside(Path(target), old):
         return
-    moved = str(new) + target[len(str(old)):]
+    moved = str(new) + target[len(str(old)) :]
     if path.is_symlink():
         path.unlink()
-        os.symlink(moved, path, target_is_directory=Path(moved).is_dir())
+        path.symlink_to(moved, target_is_directory=Path(moved).is_dir())
     else:
-        import _winapi  # noqa: PLC0415 - Windows only
+        import _winapi
 
-        os.rmdir(path)  # the junction, not its target
+        path.rmdir()  # the junction, not its target
         _winapi.CreateJunction(moved, str(path))
     fixer.fixed.append(str(path))
 
@@ -320,7 +334,7 @@ def prepare(old: Path | None, new: Path, windows: bool, force: bool) -> tuple[Pa
     same = False
     if old.exists():
         try:
-            same = os.stat(old).st_dev == os.stat(existing_parent(new)).st_dev
+            same = old.stat().st_dev == existing_parent(new).stat().st_dev
         except OSError:
             same = False
     if os.environ.get("MIMVOX_MOVE_FORCE_COPY"):  # testing: take the copy path on one volume
@@ -340,7 +354,7 @@ def move_files(old: Path, new: Path, resume: bool, same_volume: bool, force: boo
         if new.exists():
             new.rmdir()
         try:
-            os.rename(old, new)
+            old.rename(new)
             out(f"Renamed {old} to {new} (same volume, nothing copied)")
             out("100% done")
             return

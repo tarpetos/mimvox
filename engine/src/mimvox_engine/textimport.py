@@ -1,8 +1,10 @@
 """Book import (``text.import``): a title and chapters of paragraphs from a text file of any supported format."""
+
 from __future__ import annotations
 
 import base64
 import codecs
+import contextlib
 import hashlib
 import html
 import itertools
@@ -15,8 +17,9 @@ import unicodedata
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from html.entities import html5 as _HTML5
+from html.entities import html5 as _html5_entities
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 from xml.etree import ElementTree as ET
@@ -29,28 +32,53 @@ from .registry import EngineError, method
 log = logging.getLogger("mimvox.textimport")
 
 SUPPORTED: dict[str, str] = {
-    ".txt": "Plain text", ".md": "Markdown", ".markdown": "Markdown", ".html": "HTML", ".htm": "HTML",
-    ".xhtml": "XHTML", ".epub": "EPUB", ".docx": "Word document", ".odt": "OpenDocument text", ".rtf": "Rich Text",
-    ".fb2": "FictionBook", ".fb2.zip": "FictionBook (zipped)", ".pdf": "PDF", ".srt": "SubRip subtitles",
+    ".txt": "Plain text",
+    ".md": "Markdown",
+    ".markdown": "Markdown",
+    ".html": "HTML",
+    ".htm": "HTML",
+    ".xhtml": "XHTML",
+    ".epub": "EPUB",
+    ".docx": "Word document",
+    ".odt": "OpenDocument text",
+    ".rtf": "Rich Text",
+    ".fb2": "FictionBook",
+    ".fb2.zip": "FictionBook (zipped)",
+    ".pdf": "PDF",
+    ".srt": "SubRip subtitles",
     ".vtt": "WebVTT subtitles",
 }
-_FORMAT = {".txt": "txt", ".md": "md", ".markdown": "md", ".html": "html", ".htm": "html", ".xhtml": "html",
-           ".epub": "epub", ".docx": "docx", ".odt": "odt", ".rtf": "rtf", ".fb2": "fb2", ".fb2.zip": "fb2",
-           ".pdf": "pdf", ".srt": "srt", ".vtt": "vtt"}
+_FORMAT = {
+    ".txt": "txt",
+    ".md": "md",
+    ".markdown": "md",
+    ".html": "html",
+    ".htm": "html",
+    ".xhtml": "html",
+    ".epub": "epub",
+    ".docx": "docx",
+    ".odt": "odt",
+    ".rtf": "rtf",
+    ".fb2": "fb2",
+    ".fb2.zip": "fb2",
+    ".pdf": "pdf",
+    ".srt": "srt",
+    ".vtt": "vtt",
+}
 MAX_BYTES = 300 * 1024 * 1024
-MAX_MEMBER = 512 * 1024 * 1024     # zip bombs
+MAX_MEMBER = 512 * 1024 * 1024  # zip bombs
 OPENING_WORDS = 150
 PART_WORDS = 60
 SAMPLE_CHARS = 20_000
 MAX_COVER = 20 * 1024 * 1024
-COVERS_DIR = "covers"       # <data>/tmp/covers: wiped at engine start
+COVERS_DIR = "covers"  # <data>/tmp/covers: wiped at engine start
 
 
 @dataclass
 class _Ch:
     title: str
     paras: list[str] = field(default_factory=list)
-    part: bool = False             # a "Part" heading: with almost no text of its own it opens the next chapter
+    part: bool = False  # a "Part" heading: with almost no text of its own it opens the next chapter
     lead: list[str] = field(default_factory=list)
 
 
@@ -73,14 +101,15 @@ class _Book:
     meta: _Meta = field(default_factory=_Meta)
 
 
-Block = tuple[str, int, str]       # ("h", level, text) | ("p", 0, text)
+Block = tuple[str, int, str]  # ("h", level, text) | ("p", 0, text)
 
 
-_TRANS: dict[int, Any] = {c: " " for c in range(0x20)}
-_TRANS.update({0x7F: " ", **{c: " " for c in range(0x80, 0xA0)}})
-_TRANS.update({c: None for c in (0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0xFFFD, 0x200E, 0x200F,
-                                 *range(0x202A, 0x202F), *range(0x2066, 0x206A))})
-_TRANS.update({c: " " for c in (0x00A0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000)})
+_TRANS: dict[int, Any] = dict.fromkeys(range(32), " ")
+_TRANS.update({0x7F: " ", **dict.fromkeys(range(128, 160), " ")})
+_TRANS.update(
+    dict.fromkeys((173, 8203, 8204, 8205, 8288, 65279, 65533, 8206, 8207, *range(8234, 8239), *range(8294, 8298)))
+)
+_TRANS.update(dict.fromkeys((160, 5760, *range(8192, 8203), 8232, 8233, 8239, 8287, 12288), " "))
 _TRANS.update({0xFB00: "ff", 0xFB01: "fi", 0xFB02: "fl", 0xFB03: "ffi", 0xFB04: "ffl", 0xFB05: "st", 0xFB06: "st"})
 _WS = re.compile(r"\s+")
 _WORDISH = re.compile(r"[^\W_]")
@@ -124,8 +153,13 @@ def _join_title(head: str, sub: str) -> str:
     return f"{head} {sub}" if head[-1:] in ".:!?—–-" else f"{head}. {sub}"
 
 
-_BOMS = ((codecs.BOM_UTF32_LE, "utf-32-le"), (codecs.BOM_UTF32_BE, "utf-32-be"), (codecs.BOM_UTF8, "utf-8"),
-         (codecs.BOM_UTF16_LE, "utf-16-le"), (codecs.BOM_UTF16_BE, "utf-16-be"))
+_BOMS = (
+    (codecs.BOM_UTF32_LE, "utf-32-le"),
+    (codecs.BOM_UTF32_BE, "utf-32-be"),
+    (codecs.BOM_UTF8, "utf-8"),
+    (codecs.BOM_UTF16_LE, "utf-16-le"),
+    (codecs.BOM_UTF16_BE, "utf-16-be"),
+)
 
 
 def _plausible(text: str) -> float:
@@ -138,13 +172,13 @@ def _plausible(text: str) -> float:
 def _decode(data: bytes, hint: str | None = None) -> tuple[str, str]:
     for bom, enc in _BOMS:
         if data.startswith(bom):
-            return data[len(bom):].decode(enc, errors="replace"), enc
+            return data[len(bom) :].decode(enc, errors="replace"), enc
     head = data[:200_000]
-    if head.count(0) > len(head) // 20:          # many NULs: UTF-16 without a BOM
+    if head.count(0) > len(head) // 20:  # many NULs: UTF-16 without a BOM
         best: tuple[float, str, str] | None = None
         for enc in ("utf-16-le", "utf-16-be"):
             try:
-                text = data[:len(data) // 2 * 2].decode(enc)
+                text = data[: len(data) // 2 * 2].decode(enc)
             except UnicodeDecodeError:
                 continue
             score = _plausible(text[:50_000])
@@ -171,7 +205,7 @@ def _decode(data: bytes, hint: str | None = None) -> tuple[str, str]:
     if cyr and cyr / max(1, cyr + ascii_letters) >= 0.3:
         if lower >= cyr * 0.5:
             return data.decode("cp1251", errors="replace"), "cp1251"
-        return data.decode("koi8-u", errors="replace"), "koi8-u"   # KOI8 swaps the cases of windows-1251
+        return data.decode("koi8-u", errors="replace"), "koi8-u"  # KOI8 swaps the cases of windows-1251
     # Central European: bytes that are letters in windows-1250 but superscripts/symbols in windows-1252 (ą ł ś ź ż)
     ce = sum(1 for b in head if b in (0xB9, 0xB3, 0x9C, 0x9F, 0xA5, 0xA3, 0x8C, 0x8F, 0xBF))
     if high and ce / high >= 0.25:
@@ -183,12 +217,19 @@ def _decode(data: bytes, hint: str | None = None) -> tuple[str, str]:
 
 
 def _newlines(text: str) -> str:
-    return (text.replace("\r\n", "\n").replace("\r", "\n").replace("\u2028", "\n").replace("\u2029", "\n\n")
-            .replace("\f", "\n\n").replace("\x85", "\n"))
+    return (
+        text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\u2028", "\n")
+        .replace("\u2029", "\n\n")
+        .replace("\f", "\n\n")
+        .replace("\x85", "\n")
+    )
 
 
-_CHARSET_RE = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?([\w.:-]+)|<\?xml[^>]+encoding\s*=\s*["']([\w.:-]+)""",
-                         re.IGNORECASE)
+_CHARSET_RE = re.compile(
+    rb"""<meta[^>]+charset\s*=\s*["']?([\w.:-]+)|<\?xml[^>]+encoding\s*=\s*["']([\w.:-]+)""", re.IGNORECASE
+)
 
 
 def _markup_charset(data: bytes) -> str | None:
@@ -224,7 +265,7 @@ def _chapters_from_blocks(blocks: list[Block], max_level: int = 3) -> tuple[list
             preamble.append(text)
     if carry and chapters:
         chapters[-1].paras.extend(carry)
-    if split is None and title:                 # one chapter under a single heading
+    if split is None and title:  # one chapter under a single heading
         return [_Ch(title, preamble)], [], title
     return chapters, preamble, title
 
@@ -245,8 +286,15 @@ def _strip_title(title: str, paras: list[str]) -> list[str]:
             continue
         if len(pk.split()) > 15:
             break
-        if pk == key or f" {pk} " in f" {key} " or (f" {key} " in f" {pk} " and len(pk.split()) <= 12
-                                                     and (_heading_match(paras[i]) or not _is_sentence(paras[i]))):
+        if (
+            pk == key
+            or f" {pk} " in f" {key} "
+            or (
+                f" {key} " in f" {pk} "
+                and len(pk.split()) <= 12
+                and (_heading_match(paras[i]) or not _is_sentence(paras[i]))
+            )
+        ):
             i += 1
             dropped += 1
         else:
@@ -254,9 +302,25 @@ def _strip_title(title: str, paras: list[str]) -> list[str]:
     return paras[i:]
 
 
-_TOC_NAMES = {"contents", "table of contents", "list of illustrations", "illustrations", "зміст", "содержание",
-              "оглавление", "inhalt", "inhaltsverzeichnis", "table des matières", "sommaire", "índice", "indice",
-              "contenido", "contenidos", "spis treści", "spis tresci"}
+_TOC_NAMES = {
+    "contents",
+    "table of contents",
+    "list of illustrations",
+    "illustrations",
+    "зміст",
+    "содержание",
+    "оглавление",
+    "inhalt",
+    "inhaltsverzeichnis",
+    "table des matières",
+    "sommaire",
+    "índice",
+    "indice",
+    "contenido",
+    "contenidos",
+    "spis treści",
+    "spis tresci",
+}
 
 
 def _is_toc(ch: _Ch, title_keys: set[str]) -> bool:
@@ -279,8 +343,11 @@ def _finish(book: _Book, fallback_title: str) -> tuple[str, list[dict[str, str]]
     if len(chapters) < len(book.chapters):
         book.preamble = [p for p in book.preamble if not (_heading_match(p) or _key(p) in title_keys | _TOC_NAMES)]
     # a title page listed as a chapter ("<book title>", "by <author>")
-    while len(chapters) > 1 and _key(chapters[0].title) == _key(title) and \
-            sum(count_words(p) for p in chapters[0].paras) < OPENING_WORDS:
+    while (
+        len(chapters) > 1
+        and _key(chapters[0].title) == _key(title)
+        and sum(count_words(p) for p in chapters[0].paras) < OPENING_WORDS
+    ):
         chapters.pop(0)
     pre = [p for p in (_clean(x) for x in book.preamble) if p]
     pre_words = sum(count_words(p) for p in pre)
@@ -303,7 +370,7 @@ def _finish(book: _Book, fallback_title: str) -> tuple[str, list[dict[str, str]]
             continue
         out.append({"title": ctitle, "text": "\n\n".join(carry + lead + paras)})
         carry, carry_text = [], False
-    if carry_text and out:                  # a trailing "Part" with a little text of its own
+    if carry_text and out:  # a trailing "Part" with a little text of its own
         out[-1]["text"] += "\n\n" + "\n\n".join(carry)
     for i, ch in enumerate(out, 1):
         if not ch["title"]:
@@ -311,31 +378,171 @@ def _finish(book: _Book, fallback_title: str) -> tuple[str, list[dict[str, str]]
     return title, out
 
 
-_KW = (r"chapter|part|book|volume|розділ|глава|частина|книга|том|kapitel|teil|buch|chapitre|partie|livre|tome|"
-       r"capítulo|capitulo|parte|libro|rozdział|rozdzial|część|czesc|księga|ksiega")
-_PART_KW = {"part", "book", "volume", "частина", "книга", "том", "teil", "buch", "partie", "livre", "tome", "parte",
-            "libro", "część", "czesc", "księga", "ksiega"}
-_SINGLE = (r"prologue|epilogue|preface|foreword|introduction|afterword|interlude|пролог|епілог|эпилог|передмова|"
-           r"післямова|вступ|предисловие|послесловие|prolog|epilog|vorwort|nachwort|einleitung|épilogue|préface|"
-           r"avant-propos|prólogo|epílogo|prefacio|introducción|wstęp|przedmowa|posłowie")
+_KW = (
+    r"chapter|part|book|volume|розділ|глава|частина|книга|том|kapitel|teil|buch|chapitre|partie|livre|tome|"
+    r"capítulo|capitulo|parte|libro|rozdział|rozdzial|część|czesc|księga|ksiega"
+)
+_PART_KW = {
+    "part",
+    "book",
+    "volume",
+    "частина",
+    "книга",
+    "том",
+    "teil",
+    "buch",
+    "partie",
+    "livre",
+    "tome",
+    "parte",
+    "libro",
+    "część",
+    "czesc",
+    "księga",
+    "ksiega",
+}
+_SINGLE = (
+    r"prologue|epilogue|preface|foreword|introduction|afterword|interlude|пролог|епілог|эпилог|передмова|"
+    r"післямова|вступ|предисловие|послесловие|prolog|epilog|vorwort|nachwort|einleitung|épilogue|préface|"
+    r"avant-propos|prólogo|epílogo|prefacio|introducción|wstęp|przedmowa|posłowie"
+)
 _KW_RE = re.compile(rf"^({_KW})\b\.?\s*(.*)$", re.IGNORECASE)
 _SINGLE_RE = re.compile(rf"^({_SINGLE})\b\s*(.*)$", re.IGNORECASE)
-_NUMBER_WORDS = set((
-    "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen "
-    "eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred first second third fourth fifth "
-    "sixth seventh eighth ninth tenth eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth "
-    "eighteenth nineteenth twentieth thirtieth last final "
-    "eins zwei drei vier fünf sechs sieben acht neun zehn elf zwölf "
-    "un une deux trois quatre cinq sept huit neuf dix onze douze premier première dernier "
-    "uno dos tres cuatro cinco seis siete ocho nueve diez once doce primero primera segundo segunda tercero tercera "
-    "pierwszy pierwsza drugi druga trzeci trzecia czwarty czwarta piąty piąta szósty szósta siódmy siódma ósmy ósma "
-    "dziewiąty dziewiąta dziesiąty dziesiąta ostatni ostatnia "
-    "один одна два дві три чотири останній остання").split())
+_NUMBER_WORDS = {
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+    "hundred",
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+    "thirteenth",
+    "fourteenth",
+    "fifteenth",
+    "sixteenth",
+    "seventeenth",
+    "eighteenth",
+    "nineteenth",
+    "twentieth",
+    "thirtieth",
+    "last",
+    "final",
+    "eins",
+    "zwei",
+    "drei",
+    "vier",
+    "fünf",
+    "sechs",
+    "sieben",
+    "acht",
+    "neun",
+    "zehn",
+    "elf",
+    "zwölf",
+    "un",
+    "une",
+    "deux",
+    "trois",
+    "quatre",
+    "cinq",
+    "sept",
+    "huit",
+    "neuf",
+    "dix",
+    "onze",
+    "douze",
+    "premier",
+    "première",
+    "dernier",
+    "uno",
+    "dos",
+    "tres",
+    "cuatro",
+    "cinco",
+    "seis",
+    "siete",
+    "ocho",
+    "nueve",
+    "diez",
+    "once",
+    "doce",
+    "primero",
+    "primera",
+    "segundo",
+    "segunda",
+    "tercero",
+    "tercera",
+    "pierwszy",
+    "pierwsza",
+    "drugi",
+    "druga",
+    "trzeci",
+    "trzecia",
+    "czwarty",
+    "czwarta",
+    "piąty",
+    "piąta",
+    "szósty",
+    "szósta",
+    "siódmy",
+    "siódma",
+    "ósmy",
+    "ósma",
+    "dziewiąty",
+    "dziewiąta",
+    "dziesiąty",
+    "dziesiąta",
+    "ostatni",
+    "ostatnia",
+    "один",
+    "одна",
+    "два",
+    "дві",
+    "три",
+    "чотири",
+    "останній",
+    "остання",
+}
 _SLAV_ORD = re.compile(
     r"(?:перш|друг|трет|четверт|п['’ʼ]?ят|шост|сьом|восьм|дев['’ʼ]?ят|десят|одинадцят|дванадцят|тринадцят|"
     r"чотирнадцят|шістнадцят|сімнадцят|вісімнадцят|двадцят|тридцят|сороков|перв|втор|шест|седьм|девят|"
-    r"одиннадцат|двенадцат|двадцат|тридцат)[а-яіїєґё]*", re.IGNORECASE)
-_SUBTITLE_END = ".,;:!?…»\"”"
+    r"одиннадцат|двенадцат|двадцат|тридцат)[а-яіїєґё]*",
+    re.IGNORECASE,
+)
+_SUBTITLE_END = '.,;:!?…»"”'
 
 
 def _number_token(word: str) -> bool:
@@ -362,13 +569,13 @@ def _heading_match(line: str) -> tuple[str, bool, bool] | None:
         if not tokens:
             return None
         n = 0
-        if tokens[0].lower() == "the" and len(tokens) > 1:   # "Chapter the First"
+        if tokens[0].lower() == "the" and len(tokens) > 1:  # "Chapter the First"
             n = 1
         if not _number_token(re.sub(r"[.:)\-–—]+$", "", tokens[n])):
             return None
         n += 1
         if n < len(tokens) and _number_token(tokens[n].rstrip(".:")) and not _is_roman(tokens[n].rstrip(".:")):
-            n += 1                                           # "twenty one", "двадцять перший"
+            n += 1  # "twenty one", "двадцять перший"
         after = " ".join(tokens[n:]).lstrip(".:)-–— ").strip()
         if after and (after[0].islower() or len(after) > 70 or after[-1] in ",;"):
             return None
@@ -420,14 +627,14 @@ def _find_headings(lines: list[str], wrapped: bool) -> list[tuple[int, int, str,
             if cand and _is_subtitle(cand, wrapped) and (after_blank or not wrapped):
                 end, title = j + 1, _join_title(title, _tidy_title(cand))
         if kind == "roman" and wrapped and end < n and lines[end].strip() and end == i + 1:
-            continue                                         # a lone numeral must stand alone
+            continue  # a lone numeral must stand alone
         if wrapped and has_title and end < n and lines[end].strip():
             run = end
             while run < n and lines[run].strip():
                 run += 1
             if run - end >= 2:
-                continue                                     # the first line of a paragraph ("Book I. (Folio) ...")
-            title, end = f"{title} {lines[end].strip()}", end + 1     # a title wrapped onto a second line
+                continue  # the first line of a paragraph ("Book I. (Folio) ...")
+            title, end = f"{title} {lines[end].strip()}", end + 1  # a title wrapped onto a second line
         found[kind].append((i, end, title, part))
     roman = found["roman"]
     if len(roman) >= 2:
@@ -457,7 +664,7 @@ def _same_heading(a: str, b: str) -> bool:
 
 def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) -> list[tuple[int, int, str, bool]]:
     """Blanks ``lines`` of each table of contents (3+ headings with almost no text between them)."""
-    small = [count_words(" ".join(lines[heads[k][1]:heads[k + 1][0]])) < 20 for k in range(len(heads) - 1)]
+    small = [count_words(" ".join(lines[heads[k][1] : heads[k + 1][0]])) < 20 for k in range(len(heads) - 1)]
     keep = [True] * len(heads)
     k = 0
     while k < len(small):
@@ -468,13 +675,14 @@ def _drop_toc_runs(lines: list[str], heads: list[tuple[int, int, str, bool]]) ->
         while m < len(small) and small[m]:
             m += 1
         if m - k + 1 >= 3:
-            keys = [_key(h[2]) for h in heads[k:m + 1]]
+            keys = [_key(h[2]) for h in heads[k : m + 1]]
             # the headings right after a contents list repeat its first entries and are not part of it
-            size = next((j for j in range(1, len(keys))
-                         if all(_same_heading(a, b) for a, b in zip(keys[j:], keys))), len(keys))
+            size = next(
+                (j for j in range(1, len(keys)) if all(_same_heading(a, b) for a, b in zip(keys[j:], keys))), len(keys)
+            )
             last = k + size - 1
             first = heads[k][0]
-            for i in range(first - 1, max(-1, first - 12), -1):    # its "Contents" header and untitled entries
+            for i in range(first - 1, max(-1, first - 12), -1):  # its "Contents" header and untitled entries
                 s = lines[i].strip()
                 if len(s) > 80 or len(s.split()) > 12:
                     break
@@ -496,7 +704,7 @@ def _join_lines(parts: list[str], dehyphenate: bool) -> str:
             prev = out[-1]
             if prev.endswith("\u00ad"):
                 out[-1] = prev[:-1]
-            elif (prev.endswith("-") and len(prev) > 1 and prev[-2].isalpha() and s[:1].isalpha()):
+            elif prev.endswith("-") and len(prev) > 1 and prev[-2].isalpha() and s[:1].isalpha():
                 if dehyphenate and s[:1].islower():
                     out[-1] = prev[:-1]
             else:
@@ -553,13 +761,13 @@ def _plain_text_book(text: str) -> _Book:
     text = _newlines(text)
     start = _GUTENBERG_START.search(text)
     if start:
-        m = re.search(r"^Title:\s*(.+)$", text[:start.start()], re.MULTILINE)
+        m = re.search(r"^Title:\s*(.+)$", text[: start.start()], re.MULTILINE)
         if m:
             book.title = m.group(1).strip()
-        text = text[start.end():]
+        text = text[start.end() :]
         end = _GUTENBERG_END.search(text)
         if end:
-            text = text[:end.start()]
+            text = text[: end.start()]
     lines = _UNDERSCORE_ITALICS.sub(r"\1", text).split("\n")
     wrapped = _is_wrapped(lines)
     width = _line_width(lines)
@@ -570,18 +778,23 @@ def _plain_text_book(text: str) -> _Book:
     if heads:
         heads = _drop_toc_runs(lines, heads)
         if len(heads) < 2:
-            heads = _find_headings(lines, wrapped) if not heads else heads
+            heads = heads or _find_headings(lines, wrapped)
             heads = heads if len(heads) >= 2 else []
     if not heads:
         book.chapters = [_Ch("", _lines_to_paras(lines, wrapped, width, indent_breaks))]
         if count_words(text) > 5000:
             book.warnings.append("No chapter headings were found, so the text is one chapter.")
         return book
-    book.preamble = _lines_to_paras(lines[:heads[0][0]], wrapped, width, indent_breaks)
+    book.preamble = _lines_to_paras(lines[: heads[0][0]], wrapped, width, indent_breaks)
     first = next((x.strip() for x in book.preamble if x.strip()), "")
-    if not book.title and first and len(first) <= 80 and len(first.split()) <= 12 and \
-            sum(count_words(x) for x in book.preamble) < OPENING_WORDS:
-        book.title = first                                   # a short title page: its first line names the book
+    if (
+        not book.title
+        and first
+        and len(first) <= 80
+        and len(first.split()) <= 12
+        and sum(count_words(x) for x in book.preamble) < OPENING_WORDS
+    ):
+        book.title = first  # a short title page: its first line names the book
     for k, (_, end, title, part) in enumerate(heads):
         stop = heads[k + 1][0] if k + 1 < len(heads) else len(lines)
         book.chapters.append(_Ch(title, _lines_to_paras(lines[end:stop], wrapped, width, indent_breaks), part))
@@ -589,15 +802,15 @@ def _plain_text_book(text: str) -> _Book:
 
 
 _MD_INLINE = (
-    (re.compile(r"!\[[^\]]*\]\([^)]*\)"), ""),                       # images
+    (re.compile(r"!\[[^\]]*\]\([^)]*\)"), ""),  # images
     (re.compile(r"!\[[^\]]*\]\[[^\]]*\]"), ""),
-    (re.compile(r"\[\^[^\]]+\]"), ""),                                # footnote references
-    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),                    # links -> their text
+    (re.compile(r"\[\^[^\]]+\]"), ""),  # footnote references
+    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),  # links -> their text
     (re.compile(r"\[([^\]]+)\]\[[^\]]*\]"), r"\1"),
-    (re.compile(r"<(?:https?|ftp|mailto):[^>]+>"), ""),               # autolinks
+    (re.compile(r"<(?:https?|ftp|mailto):[^>]+>"), ""),  # autolinks
     (re.compile(r"<!--.*?-->"), ""),
-    (re.compile(r"</?[A-Za-z][^>]*>"), ""),                           # inline HTML
-    (re.compile(r"``?([^`]+)``?"), r"\1"),                            # inline code
+    (re.compile(r"</?[A-Za-z][^>]*>"), ""),  # inline HTML
+    (re.compile(r"``?([^`]+)``?"), r"\1"),  # inline code
     (re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1"), r"\2"),
     (re.compile(r"(?<![\w*])\*(?=\S)(.+?)(?<=\S)\*(?![\w*])"), r"\1"),
     (re.compile(r"(?<![\w_])_(?=\S)(.+?)(?<=\S)_(?![\w_])"), r"\1"),
@@ -615,14 +828,14 @@ def _md_inline(s: str) -> str:
 def _markdown_book(text: str) -> _Book:
     book = _Book()
     lines = _newlines(text).split("\n")
-    if lines and lines[0].strip() == "---":                           # YAML front matter
+    if lines and lines[0].strip() == "---":  # YAML front matter
         for k in range(1, min(len(lines), 200)):
             if lines[k].strip() in ("---", "..."):
                 for fm in lines[1:k]:
                     m = re.match(r"^title:\s*(.+)$", fm.strip(), re.IGNORECASE)
                     if m:
                         book.title = m.group(1).strip().strip("\"'")
-                lines = lines[k + 1:]
+                lines = lines[k + 1 :]
                 break
     blocks: list[Block] = []
     para: list[str] = []
@@ -669,13 +882,13 @@ def _markdown_book(text: str) -> _Book:
             blocks.append(("h", 2, _md_inline(" ".join(para))))
             para.clear()
             continue
-        if re.fullmatch(r"([-*_])(\s*\1){2,}", s):                    # horizontal rule
+        if re.fullmatch(r"([-*_])(\s*\1){2,}", s):  # horizontal rule
             flush()
             continue
-        if re.match(r"^\[\^?[^\]]+\]:\s*\S", s):                      # reference / footnote definitions
+        if re.match(r"^\[\^?[^\]]+\]:\s*\S", s):  # reference / footnote definitions
             flush()
             continue
-        if re.fullmatch(r"\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?", s):   # table separator row
+        if re.fullmatch(r"\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?", s):  # table separator row
             continue
         if s.startswith("|"):
             flush()
@@ -696,17 +909,72 @@ def _markdown_book(text: str) -> _Book:
     return book
 
 
-_BLOCK_TAGS = {"p", "div", "section", "article", "main", "li", "ul", "ol", "dl", "dt", "dd", "blockquote", "pre",
-               "table", "tr", "header", "footer", "figure", "figcaption", "hr", "body", "address", "center",
-               "caption", "details", "summary", "form", "fieldset", "legend", "tbody", "thead", "tfoot", "aside",
-               "hgroup", "html"}
-_SKIP_TAGS = {"script", "style", "nav", "noscript", "template", "svg", "math", "iframe", "object", "button", "select",
-              "textarea", "rt", "rp", "audio", "video", "canvas", "map", "figcaption"}
+_BLOCK_TAGS = {
+    "p",
+    "div",
+    "section",
+    "article",
+    "main",
+    "li",
+    "ul",
+    "ol",
+    "dl",
+    "dt",
+    "dd",
+    "blockquote",
+    "pre",
+    "table",
+    "tr",
+    "header",
+    "footer",
+    "figure",
+    "figcaption",
+    "hr",
+    "body",
+    "address",
+    "center",
+    "caption",
+    "details",
+    "summary",
+    "form",
+    "fieldset",
+    "legend",
+    "tbody",
+    "thead",
+    "tfoot",
+    "aside",
+    "hgroup",
+    "html",
+}
+_SKIP_TAGS = {
+    "script",
+    "style",
+    "nav",
+    "noscript",
+    "template",
+    "svg",
+    "math",
+    "iframe",
+    "object",
+    "button",
+    "select",
+    "textarea",
+    "rt",
+    "rp",
+    "audio",
+    "video",
+    "canvas",
+    "map",
+    "figcaption",
+}
 _VOID_TAGS = {"br", "img", "hr", "meta", "link", "input", "area", "base", "col", "embed", "source", "track", "wbr"}
 # Not read aloud: page breaks, note references and notes (EPUB 3 types, ARIA roles, Gutenberg and converter classes).
 _NOISE = re.compile(r"\b(?:doc-)?(?:pagebreak|noteref|footnotes?|endnotes?|rearnotes?)\b", re.IGNORECASE)
-_NOISE_CLASS = re.compile(r"^(?:foot|end|rear)notes?$|^page-?(?:num|number|break)$|^noteref$|^fnref$|^footnote-?ref$|"
-                          r"^caption$|^pg-boilerplate$", re.IGNORECASE)
+_NOISE_CLASS = re.compile(
+    r"^(?:foot|end|rear)notes?$|^page-?(?:num|number|break)$|^noteref$|^fnref$|^footnote-?ref$|"
+    r"^caption$|^pg-boilerplate$",
+    re.IGNORECASE,
+)
 _NOISE_IDS = {"pg-header", "pg-footer", "pg-machine-header", "pg-start-separator", "pg-end-separator"}  # Gutenberg
 _NOISE_CLASS_TAGS = {"a", "span", "sup", "sub", "aside", "p", "div", "small"}
 
@@ -738,9 +1006,12 @@ class _HtmlBlocks(HTMLParser):
                 self._skip_depth += 1
             return
         a = {k.lower(): (v or "") for k, v in attrs}
-        noisy = (tag not in ("body", "html") and any(_NOISE.search(a.get(k, "")) for k in ("epub:type", "role"))
-                 or tag in _NOISE_CLASS_TAGS and any(_NOISE_CLASS.match(c) for c in a.get("class", "").split())
-                 or "hidden" in a or a.get("id", "") in _NOISE_IDS)
+        noisy = (
+            (tag not in ("body", "html") and any(_NOISE.search(a.get(k, "")) for k in ("epub:type", "role")))
+            or (tag in _NOISE_CLASS_TAGS and any(_NOISE_CLASS.match(c) for c in a.get("class", "").split()))
+            or "hidden" in a
+            or a.get("id", "") in _NOISE_IDS
+        )
         if tag not in _VOID_TAGS and (tag in _SKIP_TAGS or noisy):
             self._skip, self._skip_depth = tag, 1
             return
@@ -764,7 +1035,7 @@ class _HtmlBlocks(HTMLParser):
             self._buf.append(" ")
         elif tag == "img":
             alt = a.get("alt", "").strip()
-            if self._heading or (len(alt) == 1 and alt.isalpha()):   # a heading or a drop-cap letter drawn as an image
+            if self._heading or (len(alt) == 1 and alt.isalpha()):  # a heading or a drop-cap letter drawn as an image
                 self._buf.append(alt)
 
     def handle_endtag(self, tag: str) -> None:
@@ -808,7 +1079,7 @@ def _html_blocks(text: str) -> _HtmlBlocks:
 def _html_book(text: str) -> _Book:
     p = _html_blocks(text)
     chapters, preamble, title = _chapters_from_blocks(p.blocks)
-    page_title = re.sub(r"\s+\|\s+[^|]{1,40}$", "", p.title)        # "Book | Site name"
+    page_title = re.sub(r"\s+\|\s+[^|]{1,40}$", "", p.title)  # "Book | Site name"
     return _Book(title=page_title or title, chapters=chapters, preamble=preamble)
 
 
@@ -843,7 +1114,7 @@ def _attr(elem: ET.Element, name: str) -> str:
 
 def _xml(data: bytes) -> ET.Element:
     try:
-        return ET.fromstring(data)
+        return ET.fromstring(data)  # noqa: S314
     except ET.ParseError:
         # HTML named entities (&nbsp; ...) are not XML: replace them and try again
         text, _ = _decode(data, _markup_charset(data))
@@ -853,15 +1124,17 @@ def _xml(data: bytes) -> ET.Element:
             name = m.group(1)
             if name in ("amp", "lt", "gt", "quot", "apos"):
                 return m.group(0)
-            return html.unescape(m.group(0)) if (name + ";") in _HTML5 else ""
-        return ET.fromstring(re.sub(r"&([A-Za-z][A-Za-z0-9]*);", entity, text))
+            return html.unescape(m.group(0)) if (name + ";") in _html5_entities else ""
+
+        return ET.fromstring(re.sub(r"&([A-Za-z][A-Za-z0-9]*);", entity, text))  # noqa: S314
 
 
 def _read_member(zf: zipfile.ZipFile, name: str) -> bytes:
     info = zf.getinfo(name)
     if info.file_size > MAX_MEMBER:
-        raise EngineError("bad_request", f"The file is too large to read ({name} unpacks to "
-                                         f"{info.file_size // (1024 * 1024)} MB).")
+        raise EngineError(
+            "bad_request", f"The file is too large to read ({name} unpacks to {info.file_size // (1024 * 1024)} MB)."
+        )
     return zf.read(info)
 
 
@@ -909,12 +1182,16 @@ def _cover(data: bytes | None) -> tuple[bytes, str] | None:
 
 def _doc_meta(root: ET.Element, *creators: str) -> _Meta:
     creator = next((t for t in (_text_of(_find(root, n)) for n in creators) if t), "")
-    return _Meta(authors=_names(creator), description=_plain_of(_find(root, "description")),
-                 language_tag=_text_of(_find(root, "language")) or None)
+    return _Meta(
+        authors=_names(creator),
+        description=_plain_of(_find(root, "description")),
+        language_tag=_text_of(_find(root, "language")) or None,
+    )
 
 
-def _epub_meta(meta: _Meta, opf: ET.Element, manifest: dict[str, tuple[str, str, str]],
-               read: Callable[[str], bytes | None]) -> None:
+def _epub_meta(
+    meta: _Meta, opf: ET.Element, manifest: dict[str, tuple[str, str, str]], read: Callable[[str], bytes | None]
+) -> None:
     md = _find(opf, "metadata")
     if md is None:
         return
@@ -932,8 +1209,11 @@ def _epub_meta(meta: _Meta, opf: ET.Element, manifest: dict[str, tuple[str, str,
     meta.description = _plain_of(_find(md, "description"))
     meta.language_tag = _text_of(_find(md, "language")) or None
     rank = {"publication": 0, "": 1, "original-publication": 2}
-    dates = sorted((rank.get(e, 3), i, t) for i, d in enumerate(_all(md, "date"))
-                   if (t := _text_of(d)) and (e := _attr(d, "event").strip().lower()) != "modification")
+    dates = sorted(
+        (rank.get(e, 3), i, t)
+        for i, d in enumerate(_all(md, "date"))
+        if (t := _text_of(d)) and (e := _attr(d, "event").strip().lower()) != "modification"
+    )
     meta.date = dates[0][2] if dates else None
     cover_id = next((m.get("content", "") for m in _all(md, "meta") if m.get("name", "").lower() == "cover"), "")
     cover_href = posixpath.normpath(unquote(cover_id)).lstrip("/") if cover_id else ""
@@ -941,10 +1221,22 @@ def _epub_meta(meta: _Meta, opf: ET.Element, manifest: dict[str, tuple[str, str,
         next((p for p, _, props in manifest.values() if "cover-image" in props.split()), ""),
         manifest.get(cover_id, ("",))[0],
         # some EPUB 2 files name the image's href instead of its manifest id
-        next((p for p, mt, _ in manifest.values()
-              if cover_href and mt.startswith("image/") and (p == cover_href or p.endswith("/" + cover_href))), ""),
-        next((p for i, (p, mt, _) in manifest.items()
-              if mt.startswith("image/") and "cover" in f"{i} {posixpath.basename(p)}".lower()), ""),
+        next(
+            (
+                p
+                for p, mt, _ in manifest.values()
+                if cover_href and mt.startswith("image/") and (p == cover_href or p.endswith("/" + cover_href))
+            ),
+            "",
+        ),
+        next(
+            (
+                p
+                for i, (p, mt, _) in manifest.items()
+                if mt.startswith("image/") and "cover" in f"{i} {posixpath.basename(p)}".lower()
+            ),
+            "",
+        ),
     )
     for p in dict.fromkeys(c for c in candidates if c):
         if (cover := _cover(read(p))) is not None:
@@ -1048,8 +1340,9 @@ class _NavParser(HTMLParser):
         for kind, root in self.navs:
             if "toc" in kind and root:
                 return root
-        return next((root for kind, root in self.navs if root and "landmarks" not in kind and "page-list" not in kind),
-                    [])
+        return next(
+            (root for kind, root in self.navs if root and "landmarks" not in kind and "page-list" not in kind), []
+        )
 
 
 def _resolve(base_dir: str, href: str) -> tuple[str, str]:
@@ -1096,8 +1389,11 @@ def _epub_book(path: str) -> _Book:
         if enc:
             refs = [_attr(c, "URI") for c in _all(_xml(enc), "CipherReference")]
             if any(re.search(r"\.(x?html?|xml)$", r, re.IGNORECASE) for r in refs):
-                raise EngineError("bad_request", "This EPUB is protected by DRM (its text is encrypted). Mimvox can "
-                                                 "only read EPUB files without DRM.")
+                raise EngineError(
+                    "bad_request",
+                    "This EPUB is protected by DRM (its text is encrypted). Mimvox can "
+                    "only read EPUB files without DRM.",
+                )
         container = get("META-INF/container.xml")
         rootfile = next((r.get("full-path", "") for r in _all(_xml(container), "rootfile")), "") if container else ""
         if not rootfile:
@@ -1110,11 +1406,14 @@ def _epub_book(path: str) -> _Book:
         book.title = _text_of(_find(opf, "metadata", "title"))
         manifest: dict[str, tuple[str, str, str]] = {}
         for item in _all(opf, "item"):
-            manifest[item.get("id", "")] = (_resolve(base, item.get("href", ""))[0], item.get("media-type", ""),
-                                            item.get("properties", ""))
+            manifest[item.get("id", "")] = (
+                _resolve(base, item.get("href", ""))[0],
+                item.get("media-type", ""),
+                item.get("properties", ""),
+            )
         try:
             _epub_meta(book.meta, opf, manifest, cover_bytes)
-        except Exception:                                   # noqa: BLE001  (metadata never fails the import)
+        except Exception:
             log.warning("EPUB metadata not read from %s", path, exc_info=True)
         spine_el = _find(opf, "spine")
         spine: list[str] = []
@@ -1122,8 +1421,11 @@ def _epub_book(path: str) -> _Book:
         if spine_el is not None:
             for ref in (c for c in spine_el if _local(c.tag) == "itemref"):
                 it = manifest.get(ref.get("idref", ""))
-                if it and ("html" in it[1] or it[0].lower().endswith((".html", ".htm", ".xhtml"))) \
-                        and it[0] != nav_path:
+                if (
+                    it
+                    and ("html" in it[1] or it[0].lower().endswith((".html", ".htm", ".xhtml")))
+                    and it[0] != nav_path
+                ):
                     spine.append(it[0])
         # table of contents: EPUB 3 nav, else the EPUB 2 NCX
         toc: list[_TocNode] = []
@@ -1136,7 +1438,8 @@ def _epub_book(path: str) -> _Book:
         if not toc:
             ncx_id = spine_el.get("toc", "") if spine_el is not None else ""
             ncx_path = manifest.get(ncx_id, ("",))[0] or next(
-                (p for p, mt, _ in manifest.values() if mt == "application/x-dtbncx+xml"), "")
+                (p for p, mt, _ in manifest.values() if mt == "application/x-dtbncx+xml"), ""
+            )
             if ncx_path and (data := get(ncx_path)):
                 nav_map = _find(_xml(data), "navMap")
                 if nav_map is not None:
@@ -1186,10 +1489,12 @@ def _epub_book(path: str) -> _Book:
         book.title = book.title or title
         book.chapters, book.preamble = chapters, preamble
         if len(chapters) < 2 and toc:
-            book.warnings.append("The table of contents of this EPUB could not be matched to its text, so chapters "
-                                 "come from its headings.")
+            book.warnings.append(
+                "The table of contents of this EPUB could not be matched to its text, so chapters "
+                "come from its headings."
+            )
         return book
-    book.preamble = [t for _, _, t in blocks[:cuts[0][0]]]
+    book.preamble = [t for _, _, t in blocks[: cuts[0][0]]]
     for k, (p, title, part) in enumerate(cuts):
         stop = cuts[k + 1][0] if k + 1 < len(cuts) else len(blocks)
         book.chapters.append(_Ch(title, [t for _, _, t in blocks[p:stop]], part))
@@ -1214,8 +1519,11 @@ def _docx_book(path: str) -> _Book:
                 based = st.find(f"{_W}basedOn")
                 lvl_el = st.find(f"{_W}pPr/{_W}outlineLvl")
                 lvl = int(lvl_el.get(f"{_W}val", "9")) if lvl_el is not None else None
-                styles[sid] = ((name_el.get(f"{_W}val", "") if name_el is not None else "").lower(), lvl,
-                               based.get(f"{_W}val", "") if based is not None else "")
+                styles[sid] = (
+                    (name_el.get(f"{_W}val", "") if name_el is not None else "").lower(),
+                    lvl,
+                    based.get(f"{_W}val", "") if based is not None else "",
+                )
         if "docprops/core.xml" in names:
             core = _xml(_read_member(zf, names["docprops/core.xml"]))
             book.title = _text_of(_find(core, "title"))
@@ -1250,9 +1558,23 @@ def _docx_book(path: str) -> _Book:
                 out.append(" " if c.get(f"{_W}type") in ("page", "column") else "\n")
             elif tag == f"{_W}noBreakHyphen":
                 out.append("-")
-            elif tag in (f"{_W}del", f"{_W}drawing", f"{_W}pict", f"{_W}footnoteReference", f"{_W}endnoteReference",
-                         f"{_W}commentReference", f"{_W}instrText", f"{_W}delText", f"{_W}object", f"{_W}pPr",
-                         f"{_W}rPr") or _local(tag) == "AlternateContent":
+            elif (
+                tag
+                in (
+                    f"{_W}del",
+                    f"{_W}drawing",
+                    f"{_W}pict",
+                    f"{_W}footnoteReference",
+                    f"{_W}endnoteReference",
+                    f"{_W}commentReference",
+                    f"{_W}instrText",
+                    f"{_W}delText",
+                    f"{_W}object",
+                    f"{_W}pPr",
+                    f"{_W}rPr",
+                )
+                or _local(tag) == "AlternateContent"
+            ):
                 continue
             else:
                 runs(c, out)
@@ -1281,7 +1603,7 @@ def _docx_book(path: str) -> _Book:
                     blocks.append(("h", level, " ".join(pieces)))
                 else:
                     blocks.extend(("p", 0, p) for p in pieces)
-            elif c.tag in (f"{_W}sectPr",) or _local(c.tag) == "AlternateContent":
+            elif c.tag == f"{_W}sectPr" or _local(c.tag) == "AlternateContent":
                 continue
             else:
                 walk(c)
@@ -1294,9 +1616,23 @@ def _docx_book(path: str) -> _Book:
     return book
 
 
-_ODT_SKIP = {"tracked-changes", "annotation", "annotation-end", "note", "table-of-content", "alphabetical-index",
-             "illustration-index", "table-index", "object-index", "user-index", "bibliography", "sequence-decls",
-             "variable-decls", "user-field-decls", "forms"}
+_ODT_SKIP = {
+    "tracked-changes",
+    "annotation",
+    "annotation-end",
+    "note",
+    "table-of-content",
+    "alphabetical-index",
+    "illustration-index",
+    "table-index",
+    "object-index",
+    "user-index",
+    "bibliography",
+    "sequence-decls",
+    "variable-decls",
+    "user-field-decls",
+    "forms",
+}
 
 
 def _odt_book(path: str) -> _Book:
@@ -1357,10 +1693,7 @@ def _odt_book(path: str) -> _Book:
                 out: list[str] = []
                 inline(c, out)
                 level: int | None = None
-                if name == "h":
-                    level = int(_attr(c, "outline-level") or "1")
-                else:
-                    level = para_level(_attr(c, "style-name"))
+                level = int(_attr(c, "outline-level") or "1") if name == "h" else para_level(_attr(c, "style-name"))
                 pieces = [p for p in (_clean(x) for x in "".join(out).split("\n")) if p]
                 if level is not None and pieces:
                     blocks.append(("h", level, " ".join(pieces)))
@@ -1392,6 +1725,7 @@ def _fb2_inline(elem: ET.Element) -> str:
                 rec(c)
             if c.tail:
                 out.append(c.tail)
+
     rec(elem)
     return _clean("".join(out))
 
@@ -1428,13 +1762,12 @@ def _fb2_book(path: str) -> _Book:
                 raise EngineError("bad_request", "This ZIP file does not contain an .fb2 book.")
             data = _read_member(zf, member)
     else:
-        with open(path, "rb") as f:
-            data = f.read()
+        data = Path(path).read_bytes()
     root = _xml(data)
     book.title = _text_of(_find(root, "description", "title-info", "book-title"))
     try:
         _fb2_meta(book.meta, root)
-    except Exception:                                       # noqa: BLE001  (metadata never fails the import)
+    except Exception:
         log.warning("FB2 metadata not read from %s", path, exc_info=True)
     bodies = [b for b in root if _local(b.tag) == "body"]
     main = [b for b in bodies if not b.get("name")] or bodies[:1]
@@ -1457,7 +1790,7 @@ def _fb2_book(path: str) -> _Book:
             paras: list[str] = []
             for c in sec:
                 name = _local(c.tag)
-                if name == "section":                     # too deep: inline the sub-section with its title
+                if name == "section":  # too deep: inline the sub-section with its title
                     sub = _fb2_title(c)
                     if sub:
                         paras.append(sub)
@@ -1476,26 +1809,107 @@ def _fb2_book(path: str) -> _Book:
     return book
 
 
-_RTF_TOKEN = re.compile(r"\\([a-zA-Z]{1,32})(-?\d{1,10})? ?|\\'([0-9a-fA-F]{2})|\\([^a-zA-Z])|([{}])|[\r\n]+|"
-                        r"([^\\{}\r\n]+)")
-_RTF_SKIP = {"colortbl", "pict", "object", "header", "headerl", "headerr", "headerf", "footer", "footerl", "footerr",
-             "footerf", "footnote", "fldinst", "xe", "tc", "txe", "themedata", "colorschememapping", "latentstyles",
-             "datastore", "listtable", "listoverridetable", "rsidtbl", "generator", "xmlnstbl", "mmathPr",
-             "nonshppict", "private", "revtbl", "filetbl", "pgdsctbl", "operator", "bkmkstart", "bkmkend", "shp",
-             "shpinst", "sp", "annotation", "atnid", "atnauthor", "comment", "objdata", "pn", "pntext", "listtext",
-             "fonttbl_skip", "author", "company", "keywords", "subject", "doccomm", "userprops", "template"}
-_RTF_CHARS = {"tab": " ", "emdash": "—", "endash": "–", "lquote": "‘", "rquote": "’", "ldblquote": "“",
-              "rdblquote": "”", "bullet": "•", "emspace": " ", "enspace": " ", "qmspace": " ", "cell": " "}
+_RTF_TOKEN = re.compile(
+    r"\\([a-zA-Z]{1,32})(-?\d{1,10})? ?|\\'([0-9a-fA-F]{2})|\\([^a-zA-Z])|([{}])|[\r\n]+|"
+    r"([^\\{}\r\n]+)"
+)
+_RTF_SKIP = {
+    "colortbl",
+    "pict",
+    "object",
+    "header",
+    "headerl",
+    "headerr",
+    "headerf",
+    "footer",
+    "footerl",
+    "footerr",
+    "footerf",
+    "footnote",
+    "fldinst",
+    "xe",
+    "tc",
+    "txe",
+    "themedata",
+    "colorschememapping",
+    "latentstyles",
+    "datastore",
+    "listtable",
+    "listoverridetable",
+    "rsidtbl",
+    "generator",
+    "xmlnstbl",
+    "mmathPr",
+    "nonshppict",
+    "private",
+    "revtbl",
+    "filetbl",
+    "pgdsctbl",
+    "operator",
+    "bkmkstart",
+    "bkmkend",
+    "shp",
+    "shpinst",
+    "sp",
+    "annotation",
+    "atnid",
+    "atnauthor",
+    "comment",
+    "objdata",
+    "pn",
+    "pntext",
+    "listtext",
+    "fonttbl_skip",
+    "author",
+    "company",
+    "keywords",
+    "subject",
+    "doccomm",
+    "userprops",
+    "template",
+}
+_RTF_CHARS = {
+    "tab": " ",
+    "emdash": "—",
+    "endash": "–",
+    "lquote": "‘",
+    "rquote": "’",
+    "ldblquote": "“",
+    "rdblquote": "”",
+    "bullet": "•",
+    "emspace": " ",
+    "enspace": " ",
+    "qmspace": " ",
+    "cell": " ",
+}
 _RTF_BREAKS = {"par", "line", "row", "sect", "page", "softline"}
-_CHARSET_CP = {0: None, 1: None, 2: "cp1252", 77: "mac_roman", 128: "cp932", 129: "cp949", 130: "johab",
-               134: "gbk", 136: "big5", 161: "cp1253", 162: "cp1254", 163: "cp1258", 177: "cp1255", 178: "cp1256",
-               186: "cp1257", 204: "cp1251", 222: "cp874", 238: "cp1250", 255: "cp437"}
+_CHARSET_CP = {
+    0: None,
+    1: None,
+    2: "cp1252",
+    77: "mac_roman",
+    128: "cp932",
+    129: "cp949",
+    130: "johab",
+    134: "gbk",
+    136: "big5",
+    161: "cp1253",
+    162: "cp1254",
+    163: "cp1258",
+    177: "cp1255",
+    178: "cp1256",
+    186: "cp1257",
+    204: "cp1251",
+    222: "cp874",
+    238: "cp1250",
+    255: "cp437",
+}
 
 
 @dataclass
 class _RtfState:
     skip: bool = False
-    dest: str = ""                 # "", "fonttbl", "font", "stylesheet", "style", "info", "title"
+    dest: str = ""  # "", "fonttbl", "font", "stylesheet", "style", "info", "title"
     uc: int = 1
     cp: str = "cp1252"
     style: int = 0
@@ -1551,7 +1965,7 @@ def _rtf_book(data: bytes) -> _Book:
         if level is None:
             if name == "title":
                 level = -1
-            elif (m := re.fullmatch(r"heading\s*(\d)", name)):
+            elif m := re.fullmatch(r"heading\s*(\d)", name):
                 level = int(m.group(1)) - 1
             else:
                 level = slevel
@@ -1602,8 +2016,10 @@ def _rtf_book(data: bytes) -> _Book:
                     if cp:
                         fonts[entry["f"]] = cp
                 elif dest == "style" and parent.dest == "stylesheet" and entry is not None:
-                    styles[entry.get("s", 0)] = (_clean(entry.get("name", "")).rstrip(";").strip().lower(),
-                                                 entry.get("outline"))
+                    styles[entry.get("s", 0)] = (
+                        _clean(entry.get("name", "")).rstrip(";").strip().lower(),
+                        entry.get("outline"),
+                    )
                 st = parent
             skip_chars = 0
             star = False
@@ -1631,7 +2047,7 @@ def _rtf_book(data: bytes) -> _Book:
         num = int(param) if param is not None else None
         if star:
             star = False
-            if word not in ("title",):
+            if word != "title":
                 st.skip = True
                 continue
         if word == "bin" and num:
@@ -1644,7 +2060,7 @@ def _rtf_book(data: bytes) -> _Book:
         if word == "title" and st.dest == "info":
             st.dest = "title"
             continue
-        if word in _RTF_SKIP or (st.dest == "info" and word not in ("title",)):
+        if word in _RTF_SKIP or (st.dest == "info" and word != "title"):
             st.skip = True
             continue
         if st.dest == "font" and st.entry is not None:
@@ -1662,10 +2078,8 @@ def _rtf_book(data: bytes) -> _Book:
                 st.entry["outline"] = num
             continue
         if word == "ansicpg" and num:
-            try:
+            with contextlib.suppress(LookupError):
                 default_cp = codecs.lookup(f"cp{num}").name
-            except LookupError:
-                pass
             st.cp = fonts.get(deff, default_cp)
             continue
         if word in ("ansi", "mac", "pc", "pca"):
@@ -1727,37 +2141,49 @@ def _rtf_book(data: bytes) -> _Book:
     return book
 
 
-_PAGE_NUM = re.compile(r"^[\W_]*(?:page|стор(?:інка)?\.?|seite|p\.)?\s*(\d{1,4}|[ivxlcdm]{1,7})"
-                       r"(?:\s*(?:of|/|з|из|von)\s*\d{1,4})?[\W_]*$", re.IGNORECASE)
+_PAGE_NUM = re.compile(
+    r"^[\W_]*(?:page|стор(?:інка)?\.?|seite|p\.)?\s*(\d{1,4}|[ivxlcdm]{1,7})"
+    r"(?:\s*(?:of|/|з|из|von)\s*\d{1,4})?[\W_]*$",
+    re.IGNORECASE,
+)
 _TERMINAL = ".!?…:\"'»”’)"
 
 
 def _pdf_book(path: str) -> _Book:
     try:
-        from pypdf import PdfReader  # noqa: PLC0415
-        from pypdf.errors import DependencyError  # noqa: PLC0415
+        from pypdf import PdfReader
+        from pypdf.errors import DependencyError
     except ImportError as e:
-        raise EngineError("not_ready", "Reading PDF files needs the pypdf package, which is not installed in the "
-                                       "engine environment. Run setup again to install it.") from e
+        raise EngineError(
+            "not_ready",
+            "Reading PDF files needs the pypdf package, which is not installed in the "
+            "engine environment. Run setup again to install it.",
+        ) from e
     logging.getLogger("pypdf").setLevel(logging.ERROR)
     book = _Book()
-    aes = EngineError("bad_request", "This PDF is encrypted with AES, which Mimvox cannot open. Print it to a new PDF "
-                                     "or save it in another format, then import that.")
+    aes = EngineError(
+        "bad_request",
+        "This PDF is encrypted with AES, which Mimvox cannot open. Print it to a new PDF "
+        "or save it in another format, then import that.",
+    )
     try:
-        reader = PdfReader(path, strict=False)              # opens a PDF with an empty user password by itself
+        reader = PdfReader(path, strict=False)  # opens a PDF with an empty user password by itself
         ok = 1
         if reader.is_encrypted:
             try:
                 ok = reader.decrypt("")
             except DependencyError:
                 raise
-            except Exception:                               # noqa: BLE001  (bad keys)
+            except Exception:
                 ok = 0
-    except DependencyError as e:                            # AES needs the optional `cryptography` package
+    except DependencyError as e:  # AES needs the optional `cryptography` package
         raise aes from e
     if reader.is_encrypted and not ok:
-        raise EngineError("bad_request", "This PDF is password-protected. Remove the password (for example by "
-                                         "printing it to a new PDF) and import it again.")
+        raise EngineError(
+            "bad_request",
+            "This PDF is password-protected. Remove the password (for example by "
+            "printing it to a new PDF) and import it again.",
+        )
     n_pages = len(reader.pages)
     if n_pages == 0:
         raise EngineError("bad_request", "This PDF has no pages.")
@@ -1768,19 +2194,23 @@ def _pdf_book(path: str) -> _Book:
             text = page.extract_text() or ""
         except DependencyError as e:
             raise aes from e
-        except Exception:                                   # noqa: BLE001  (a broken page should not stop the book)
+        except Exception:
             text, failed = "", failed + 1
         pages.append([s.strip() for s in _newlines(text).split("\n") if s.strip()])
     chars = [sum(len(s.replace(" ", "")) for s in p) for p in pages]
     textless = sum(1 for c in chars if c < 40)
     if sum(chars) < 15 * n_pages or textless == n_pages:
-        raise EngineError("bad_request", "This PDF has no text layer (it is a scanned image). Mimvox cannot read "
-                                         "scanned PDFs; run it through OCR first or use another format.")
+        raise EngineError(
+            "bad_request",
+            "This PDF has no text layer (it is a scanned image). Mimvox cannot read "
+            "scanned PDFs; run it through OCR first or use another format.",
+        )
     if failed:
         book.warnings.append(f"{failed} page(s) of the PDF could not be read and were skipped.")
     if n_pages >= 4 and textless >= max(2, n_pages // 10):
-        book.warnings.append(f"{textless} of {n_pages} pages have no text layer (scanned images or pictures) and "
-                             "were skipped.")
+        book.warnings.append(
+            f"{textless} of {n_pages} pages have no text layer (scanned images or pictures) and were skipped."
+        )
     # running headers/footers: first/last two lines of a page repeated (numbers ignored) on many pages
     if n_pages >= 4:
         seen: dict[str, int] = {}
@@ -1792,8 +2222,11 @@ def _pdf_book(path: str) -> _Book:
         repeated = set()
     for k, p in enumerate(pages):
         edge = set(range(min(2, len(p)))) | set(range(max(0, len(p) - 2), len(p)))
-        pages[k] = [s for i, s in enumerate(p) if not (i in edge and (
-            _PAGE_NUM.fullmatch(s) or re.sub(r"\d+", "#", s.lower()) in repeated))]
+        pages[k] = [
+            s
+            for i, s in enumerate(p)
+            if not (i in edge and (_PAGE_NUM.fullmatch(s) or re.sub(r"\d+", "#", s.lower()) in repeated))
+        ]
     flat = [s for p in pages for s in p]
     lens = sorted(len(s) for s in flat if len(s) >= 15)
     width = lens[int(len(lens) * 0.75)] if lens else 60
@@ -1828,13 +2261,14 @@ def _pdf_book(path: str) -> _Book:
             try:
                 pg = reader.get_destination_page_number(it)
                 title = _clean(str(getattr(it, "title", "") or ""))
-            except Exception:                               # noqa: BLE001
+            except Exception:
                 continue
             if pg is not None and pg >= 0 and title:
                 entries.append((depth, title, pg))
+
     try:
         walk(reader.outline, 0)
-    except Exception:                                       # noqa: BLE001  (a broken outline: use heading lines)
+    except Exception:
         entries = []
     # (first line, title, is_part, heading lines to skip)
     cuts: list[tuple[int, str, bool, int]] = []
@@ -1849,9 +2283,13 @@ def _pdf_book(path: str) -> _Book:
                     sk = _key(s)
                     if sk and (f" {sk} " in tk or tk.strip().startswith(sk) or sk.startswith(tk.strip())):
                         at = page_start[pg] + i
-                        skip = 1                             # the heading line(s) as printed on the page
-                        while i + skip < len(lines) and skip < 3 and _key(lines[i + skip]) and \
-                                f" {_key(lines[i + skip])} " in tk:
+                        skip = 1  # the heading line(s) as printed on the page
+                        while (
+                            i + skip < len(lines)
+                            and skip < 3
+                            and _key(lines[i + skip])
+                            and f" {_key(lines[i + skip])} " in tk
+                        ):
                             skip += 1
                         break
                 cuts.append((at, t, False, skip))
@@ -1860,7 +2298,7 @@ def _pdf_book(path: str) -> _Book:
         cuts = []
         starts = set(page_start)
         for i, s in enumerate(flat):
-            if len(s) > 70 or len(s) >= 0.7 * width and i:
+            if len(s) > 70 or (len(s) >= 0.7 * width and i):
                 continue
             hm = _heading_match(s)
             if not hm or hm[0] == "roman":
@@ -1871,7 +2309,7 @@ def _pdf_book(path: str) -> _Book:
             title, skip = s, 1
             nxt = flat[i + 1] if i + 1 < len(flat) else ""
             if hm[2] and s[-1] not in _TERMINAL and nxt and len(nxt) < 0.5 * width and len(nxt.split()) <= 8:
-                title, skip = f"{s} {nxt}", 2                # a title wrapped onto a second line
+                title, skip = f"{s} {nxt}", 2  # a title wrapped onto a second line
             cuts.append((i, title, hm[1], skip))
         if len(cuts) < 2:
             cuts = []
@@ -1881,18 +2319,17 @@ def _pdf_book(path: str) -> _Book:
         if count_words(" ".join(flat[:20000])) > 5000:
             book.warnings.append("No bookmarks or chapter headings were found, so the text is one chapter.")
     else:
-        book.preamble = paras(flat[:cuts[0][0]])
+        book.preamble = paras(flat[: cuts[0][0]])
         for k, (at, title, part, skip) in enumerate(cuts):
             stop = cuts[k + 1][0] if k + 1 < len(cuts) else len(flat)
-            book.chapters.append(_Ch(title, paras(flat[min(at + skip, stop):stop]), part))
+            book.chapters.append(_Ch(title, paras(flat[min(at + skip, stop) : stop]), part))
     meta_title = ""
-    try:
+    with contextlib.suppress(Exception):
         meta_title = _clean(str(reader.metadata.title or "")) if reader.metadata else ""
-    except Exception:                                       # noqa: BLE001
-        pass
     meta_title = re.sub(r"^Microsoft (Word|PowerPoint) - ", "", meta_title)
-    if meta_title and not re.fullmatch(r"(untitled|document\d*|.*\.(docx?|odt|rtf|tex|indd|pdf))", meta_title,
-                                       re.IGNORECASE):
+    if meta_title and not re.fullmatch(
+        r"(untitled|document\d*|.*\.(docx?|odt|rtf|tex|indd|pdf))", meta_title, re.IGNORECASE
+    ):
         book.title = meta_title
     return book
 
@@ -1914,7 +2351,7 @@ def _subtitles_book(text: str) -> _Book:
     last_line = ""
     prev_end: float | None = None
     for block in re.split(r"\n[ \t]*\n", _newlines(text).strip()):
-        lines = [s for s in block.split("\n")]
+        lines = list(block.split("\n"))
         first = lines[0].strip() if lines else ""
         if first.startswith(("WEBVTT", "NOTE", "STYLE", "REGION")) and "-->" not in first:
             continue
@@ -1929,7 +2366,7 @@ def _subtitles_book(text: str) -> _Book:
             cur = []
         if end is not None:
             prev_end = max(prev_end or 0.0, end)
-        for raw in lines[idx + 1:]:
+        for raw in lines[idx + 1 :]:
             s = html.unescape(_CUE_TAGS.sub("", raw))
             s = _SOUND.sub(" ", s)
             s = re.sub(r"^\s*[-–—]\s*", "", s)
@@ -1937,7 +2374,7 @@ def _subtitles_book(text: str) -> _Book:
             if not s or re.fullmatch(r"\([^)]*\)", s) or not _WORDISH.search(s):
                 continue
             if s == last_line:
-                continue                                    # rolling captions repeat the previous line
+                continue  # rolling captions repeat the previous line
             last_line = s
             cur.append(s)
     if cur:
@@ -1950,7 +2387,7 @@ def _format_of(path: str) -> str:
     low = path.lower()
     if low.endswith(".fb2.zip"):
         return ".fb2.zip"
-    return os.path.splitext(low)[1]
+    return Path(low).suffix
 
 
 def _bad_file(label: str, what: str) -> EngineError:
@@ -1963,20 +2400,25 @@ def extract(path: str) -> dict[str, Any]:
         kind = f"'{ext}'" if ext else "(a file without an extension)"
         raise EngineError("bad_request", f"Unsupported file type {kind}. Supported: {', '.join(SUPPORTED)}.")
     fmt, label = _FORMAT[ext], SUPPORTED[ext]
-    stem = os.path.basename(path)[:-len(ext)] if ext else os.path.basename(path)
+    file = Path(path)
+    stem = file.name[: -len(ext)] if ext else file.name
     fallback = _clean(stem.replace("_", " ")) or "Untitled"
     try:
-        if os.path.getsize(path) > MAX_BYTES:
+        if file.stat().st_size > MAX_BYTES:
             raise EngineError("bad_request", f"The file is larger than {MAX_BYTES // (1024 * 1024)} MB.")
         if fmt in ("txt", "md", "html", "srt", "vtt", "rtf"):
-            with open(path, "rb") as f:
-                data = f.read()
+            data = file.read_bytes()
             if fmt == "rtf":
                 book = _rtf_book(data)
             else:
                 text, enc = _decode(data, _markup_charset(data) if fmt == "html" else None)
-                book = {"txt": _plain_text_book, "md": _markdown_book, "html": _html_book,
-                        "srt": _subtitles_book, "vtt": _subtitles_book}[fmt](text)
+                book = {
+                    "txt": _plain_text_book,
+                    "md": _markdown_book,
+                    "html": _html_book,
+                    "srt": _subtitles_book,
+                    "vtt": _subtitles_book,
+                }[fmt](text)
                 book.encoding = enc
         elif fmt == "epub":
             book = _epub_book(path)
@@ -1998,14 +2440,21 @@ def extract(path: str) -> dict[str, Any]:
         raise _bad_file(label, "it is too large or too deeply nested") from e
     except OSError as e:
         raise EngineError("bad_request", f"The file could not be opened: {e.strerror or e}.") from e
-    except Exception as e:                                  # noqa: BLE001  (a parser library's own error types)
+    except Exception as e:
         log.warning("text.import failed for %s", path, exc_info=True)
         raise _bad_file(label, f"{type(e).__name__}: {e}") from e
     title, chapters = _finish(book, fallback)
     if not chapters:
         raise EngineError("bad_request", "No readable text was found in this file.")
-    return {"format": fmt, "format_label": label, "title": title, "chapters": chapters, "encoding": book.encoding,
-            "warnings": book.warnings, "meta": book.meta}
+    return {
+        "format": fmt,
+        "format_label": label,
+        "title": title,
+        "chapters": chapters,
+        "encoding": book.encoding,
+        "warnings": book.warnings,
+        "meta": book.meta,
+    }
 
 
 def _sample(chapters: list[dict[str, str]]) -> str:
@@ -2014,24 +2463,24 @@ def _sample(chapters: list[dict[str, str]]) -> str:
         return text
     n, size = 10, SAMPLE_CHARS // 10
     step = (len(text) - size) // (n - 1)
-    return " ".join(text[i * step:i * step + size] for i in range(n))
+    return " ".join(text[i * step : i * step + size] for i in range(n))
 
 
-def _save_cover(ctx: Any, cover: tuple[bytes, str] | None) -> dict[str, str] | None:
+def _save_cover(ctx: Any, cover: tuple[bytes, str] | None) -> dict[str, Any] | None:
     if cover is None:
         return None
     data, media_type = cover
-    folder = os.path.join(config.data_dir(ctx).tmp, COVERS_DIR)
-    path = os.path.join(folder, hashlib.sha256(data).hexdigest()[:32] + _COVER_EXT[media_type])
+    folder = config.data_dir(ctx).tmp / COVERS_DIR
+    path = folder / (hashlib.sha256(data).hexdigest()[:32] + _COVER_EXT[media_type])
     try:
-        if not os.path.isfile(path):
-            os.makedirs(folder, exist_ok=True)
+        if not path.is_file():
+            folder.mkdir(parents=True, exist_ok=True)
             fd, part = tempfile.mkstemp(suffix=".part", dir=folder)
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
-            os.replace(part, path)
+            Path(part).replace(path)
     except OSError as exc:
-        if not os.path.isfile(path):
+        if not path.is_file():
             log.warning("the cover was not saved: %s", exc)
             return None
     return {"path": path, "media_type": media_type}
@@ -2042,11 +2491,12 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     path = params.get("path")
     if not isinstance(path, str) or not path.strip():
         raise EngineError("bad_request", "'path' is required")
-    if not os.path.isabs(path):
+    given = Path(path)
+    if not given.is_absolute():
         raise EngineError("bad_request", "'path' must be an absolute path")
-    if not os.path.exists(path):
+    if not given.exists():
         raise EngineError("bad_request", f"File not found: {path}")
-    if os.path.isdir(path):
+    if given.is_dir():
         raise EngineError("bad_request", "This is a folder; choose a text file.")
     raw = params.get("language")
     detected = raw is None or (isinstance(raw, str) and raw.strip().lower() in ("", "auto"))
@@ -2057,8 +2507,9 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         except ValueError as e:
             base = raw.strip().lower().replace("_", "-").split("-", 1)[0] if isinstance(raw, str) else ""
             if not re.fullmatch(r"[a-z]{2,3}", base):
-                raise EngineError("bad_request", f"Unknown language {raw!r}: use a language code such as \"en\" or "
-                                                 f"\"uk\", or \"auto\".") from e
+                raise EngineError(
+                    "bad_request", f'Unknown language {raw!r}: use a language code such as "en" or "uk", or "auto".'
+                ) from e
             code = base
     split = params.get("split")
     if split not in (None, "auto"):
@@ -2072,23 +2523,56 @@ def text_import(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     out_chapters = []
     for ch in chapters:
         words = count_words(ch["text"])
-        out_chapters.append({"title": ch["title"], "text": ch["text"], "words": words, "chars": len(ch["text"]),
-                             "est_s": est_seconds(words, wpm)})
+        out_chapters.append(
+            {
+                "title": ch["title"],
+                "text": ch["text"],
+                "words": words,
+                "chars": len(ch["text"]),
+                "est_s": est_seconds(words, wpm),
+            }
+        )
     # only a suggestion unless split is "auto": the app applies it on request
     parts = None
     suggested = autoparts.suggest(chapters, code)
     if suggested:
-        parts = {"how": suggested["how"], "chapters": [
-            {"title": c["title"], "text": c["text"], "words": (w := count_words(c["text"])), "chars": len(c["text"]),
-             "est_s": est_seconds(w, wpm)} for c in suggested["chapters"]]}
+        parts = {
+            "how": suggested["how"],
+            "chapters": [
+                {
+                    "title": c["title"],
+                    "text": c["text"],
+                    "words": (w := count_words(c["text"])),
+                    "chars": len(c["text"]),
+                    "est_s": est_seconds(w, wpm),
+                }
+                for c in suggested["chapters"]
+            ],
+        }
     if split == "auto" and parts is not None:
         out_chapters, parts = parts["chapters"], None
     words = sum(c["words"] for c in out_chapters)
     meta: _Meta = book["meta"]
-    return {"path": path, "name": os.path.basename(path), "format": book["format"],
-            "format_label": book["format_label"], "title": book["title"], "encoding": book["encoding"],
-            "language": code, "language_detected": detected, "words": words,
-            "chars": sum(c["chars"] for c in out_chapters), "est_s": est_seconds(words, wpm),
-            "chapters": out_chapters, "parts": parts, "warnings": book["warnings"],
-            "meta": {"authors": meta.authors, "description": meta.description, "language_tag": meta.language_tag,
-                     "date": meta.date, "cover": _save_cover(ctx, meta.cover)}}
+    return {
+        "path": path,
+        "name": given.name,
+        "format": book["format"],
+        "format_label": book["format_label"],
+        "title": book["title"],
+        "encoding": book["encoding"],
+        "language": code,
+        "language_detected": detected,
+        "words": words,
+        "chars": sum(c["chars"] for c in out_chapters),
+        "est_s": est_seconds(words, wpm),
+        "chapters": out_chapters,
+        "parts": parts,
+        "warnings": book["warnings"],
+        "meta": {
+            "authors": meta.authors,
+            "description": meta.description,
+            "language_tag": meta.language_tag,
+            "date": meta.date,
+            "cover": _save_cover(ctx, meta.cover),
+        },
+    }

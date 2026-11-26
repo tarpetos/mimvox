@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import contextlib
 import importlib
 import inspect
 import itertools
@@ -14,9 +15,10 @@ import subprocess
 import sys
 import traceback
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, BinaryIO
 
-from . import __version__, aio, config, media, memguard
+from . import __version__, aio, config, media, memguard, paths
 from .registry import EngineError, handlers, method, methods
 
 log = logging.getLogger("mimvox.server")
@@ -27,7 +29,7 @@ SHUTDOWN_GRACE_S = 20.0
 class Server:
     """Implements ``registry.Context``. Created inside the running loop."""
 
-    def __init__(self, out: BinaryIO, runtime: dict[str, Any], data_dir: str) -> None:
+    def __init__(self, out: BinaryIO, runtime: dict[str, Any], data_dir: Path) -> None:
         self.loop = asyncio.get_running_loop()
         aio.bind_loop(self.loop)
         self._out = out
@@ -42,11 +44,16 @@ class Server:
         self._requests: set[asyncio.Task[Any]] = set()
         self._closing = False
         self.stopped: asyncio.Future[None] = self.loop.create_future()
-        self.device: dict[str, Any] = {"backend": config.backend(runtime), "name": config.backend(runtime).upper(),
-                                       "vram_gb": 0.0}
+        self.device: dict[str, Any] = {
+            "backend": config.backend(runtime),
+            "name": config.backend(runtime).upper(),
+            "vram_gb": 0.0,
+        }
 
     def _put(self, obj: dict[str, Any]) -> None:
-        line = (json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        line = (json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=paths.json_default) + "\n").encode(
+            "utf-8"
+        )
         aio.call_soon(self._outq.put_nowait, line)
 
     async def _write_lines(self) -> None:
@@ -72,7 +79,7 @@ class Server:
         self._outq.put_nowait(None)
         try:
             await asyncio.wait_for(self._writer, 10.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("stdout writer did not finish")
 
     def emit(self, event: str, data: dict[str, Any], job: str | None = None) -> None:
@@ -90,10 +97,7 @@ class Server:
         return job
 
     def _create_job(self, job: str, fn: Callable[[str], Any]) -> None:
-        if inspect.iscoroutinefunction(fn):
-            body = fn(job)
-        else:
-            body = self.loop.run_in_executor(aio.IO, fn, job)
+        body = fn(job) if inspect.iscoroutinefunction(fn) else self.loop.run_in_executor(aio.IO, fn, job)
         self._jobs[job] = self.loop.create_task(self._run_job(job, body), name=job)
 
     async def _run_job(self, job: str, body: Any) -> None:
@@ -102,7 +106,7 @@ class Server:
         except asyncio.CancelledError:
             if not self._closing:
                 log.info("job %s cancelled", job)
-        except Exception as exc:  # noqa: BLE001 - jobs report their own errors; this is the last resort
+        except Exception as exc:
             log.exception("job %s crashed", job)
             self.emit("job.error", {"code": "internal", "message": f"{type(exc).__name__}: {exc}"}, job=job)
         finally:
@@ -137,7 +141,7 @@ class Server:
         try:
             req = json.loads(line)
             if not isinstance(req, dict):
-                raise ValueError("request must be an object")
+                raise EngineError("bad_request", "invalid request: request must be an object")
             rid = req.get("id")
             name = req.get("method")
             params = req.get("params") or {}
@@ -162,7 +166,7 @@ class Server:
         except asyncio.CancelledError:
             self._error(rid, "cancelled", "the engine is shutting down")
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.error("request failed: %s", traceback.format_exc())
             self._error(rid, "internal", f"{type(exc).__name__}: {exc}")
 
@@ -176,9 +180,10 @@ class Server:
         self._closing = True
         aio.set_closing()
         try:
-            from .training import handlers as training  # noqa: PLC0415
+            from .training import handlers as training
+
             await training.on_shutdown()  # kills Applio first, leaving the run resumable (interrupted)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("could not stop the training")
         requests = [t for t in self._requests if not t.done()]
         if requests:  # requests are short: let the ones in flight answer (a job they start is cancelled below)
@@ -187,17 +192,24 @@ class Server:
         for t in tasks:
             t.cancel()
         if tasks:
-            done, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_GRACE_S)
+            _done, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_GRACE_S)
             if pending:
                 log.warning("%d task(s) did not end within %.0f s", len(pending), SHUTDOWN_GRACE_S)
         await _stop_workers()
 
 
 async def _stop_workers() -> None:
-    from . import backends, rvc, speech, zsvc  # noqa: PLC0415
-    from .training import proc  # noqa: PLC0415
-    results = await asyncio.gather(rvc.shutdown(), speech.shutdown(), zsvc.shutdown(), proc.kill_all(),
-                                   *(b.close() for b in backends.all_backends()), return_exceptions=True)
+    from . import backends, rvc, speech, zsvc
+    from .training import proc
+
+    results = await asyncio.gather(
+        rvc.shutdown(),
+        speech.shutdown(),
+        zsvc.shutdown(),
+        proc.kill_all(),
+        *(b.close() for b in backends.all_backends()),
+        return_exceptions=True,
+    )
     for r in results:
         if isinstance(r, BaseException):
             log.error("shutdown step failed", exc_info=r)
@@ -214,14 +226,22 @@ def _device_info(runtime: dict[str, Any]) -> dict[str, Any]:
         info.update(name=str(device.get("name") or "AMD GPU"), vram_gb=round(float(device.get("vram_gb", 0.0)), 1))
     elif backend == "cuda":
         try:
-            out = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5, check=True, stdin=subprocess.DEVNULL,
-                creationflags=aio.NO_WINDOW,
-            ).stdout.strip().splitlines()[0]
+            out = (
+                subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=True,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=aio.NO_WINDOW,
+                )
+                .stdout.strip()
+                .splitlines()[0]
+            )
             name, mem = [p.strip() for p in out.split(",")]
             info.update(name=name, vram_gb=round(float(mem) / 1024.0, 1))
-        except Exception:  # noqa: BLE001
+        except Exception:
             info["name"] = "NVIDIA GPU"
     elif backend == "mps":
         info["name"] = "Apple Silicon GPU"
@@ -230,41 +250,45 @@ def _device_info(runtime: dict[str, Any]) -> dict[str, Any]:
 
 def _models() -> dict[str, str]:
     from . import tts
+
     return tts.models_status()
 
 
 def speech_languages() -> list[dict[str, Any]]:
-    from . import backends  # noqa: PLC0415
-    from .backends import names  # noqa: PLC0415
+    from . import backends
+    from .backends import names
+
     return names.describe(backends.languages())
 
 
 def _translators(ctx: Server, honour_off: bool = True) -> list[str]:
     """Best first; [] without the redub module."""
     try:
-        from .redub import langs  # noqa: PLC0415
+        from .redub import langs
     except ImportError:
         return []
-    return langs.installed_translators(os.path.join(ctx.data_dir, "runtime", "models"), honour_off=honour_off)
+    return langs.installed_translators(ctx.data_dir / "runtime" / "models", honour_off=honour_off)
 
 
 def _zero_shot_vc(ctx: Server) -> bool:
-    from . import zsvc  # noqa: PLC0415
+    from . import zsvc
+
     return zsvc.installed(ctx.runtime, ctx.data_dir, honour_off=False)
 
 
 def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list[str]:
     """Setup's COMPONENTS found on disk, turned off or not."""
-    from . import rvc, speech  # noqa: PLC0415
-    from .backends import holos, omnivoice  # noqa: PLC0415
-    from .backends.clone import CHATTERBOX, VOXCPM  # noqa: PLC0415
+    from . import rvc, speech
+    from .backends import holos, omnivoice
+    from .backends.clone import CHATTERBOX, VOXCPM
+
     found = {
         "speech": omnivoice.installed(ctx.runtime),
         "training": rvc.available(ctx.runtime, honour_off=False),
         "translation": "nllb-600m" in translators,
         "better_translation": "nllb-1.3b" in translators,
         "native_accent": zero_shot_vc,
-        "music_removal": os.path.isfile(speech.separator_path(ctx.data_dir)),
+        "music_removal": speech.separator_path(ctx.data_dir).is_file(),
         "ukrainian": holos.installed(ctx.runtime, honour_off=False),
         "voxcpm": VOXCPM.installed(ctx.runtime, honour_off=False),
         "chatterbox": CHATTERBOX.installed(ctx.runtime, honour_off=False),
@@ -274,7 +298,8 @@ def _components(ctx: Server, translators: list[str], zero_shot_vc: bool) -> list
 
 def speech_models(ctx: Server) -> list[dict[str, Any]]:
     """The models a request may name in ``model`` (besides ``auto``), the main one first."""
-    from . import backends  # noqa: PLC0415
+    from . import backends
+
     for b in backends.all_backends():
         probe = getattr(b, "probe", None)
         if probe is not None:
@@ -283,14 +308,23 @@ def speech_models(ctx: Server) -> list[dict[str, Any]]:
 
 
 def hello_info(ctx: Server) -> dict[str, Any]:
-    from . import components  # noqa: PLC0415
+    from . import components
+
     zero_shot_vc = _zero_shot_vc(ctx)
     models = speech_models(ctx)
     found = _components(ctx, _translators(ctx, honour_off=False), zero_shot_vc)
     off = [c for c in found if components.off(c)]
-    return {"version": __version__, "device": ctx.device, "models": _models(), "languages": speech_languages(),
-            "translators": _translators(ctx), "zero_shot_vc": zero_shot_vc and not components.off("native_accent"),
-            "components": [c for c in found if c not in off], "components_off": off, "speech_models": models}
+    return {
+        "version": __version__,
+        "device": ctx.device,
+        "models": _models(),
+        "languages": speech_languages(),
+        "translators": _translators(ctx),
+        "zero_shot_vc": zero_shot_vc and not components.off("native_accent"),
+        "components": [c for c in found if c not in off],
+        "components_off": off,
+        "speech_models": models,
+    }
 
 
 @method("hello")
@@ -305,6 +339,7 @@ async def tts_languages(ctx: Server, params: dict[str, Any]) -> dict[str, Any]:
 
 def _load_handlers() -> None:
     from . import book, components, media, results, textimport, tts, voices  # noqa: F401 - register their methods
+
     for pkg in ("dataset", "training", "redub"):  # written by other modules; may not exist in every checkout
         try:
             importlib.import_module(f"{__package__}.{pkg}")
@@ -315,25 +350,28 @@ def _load_handlers() -> None:
 def _prepare_data_dir(data: config.DataDir) -> None:
     data.ensure()
     shutil.rmtree(data.tmp, ignore_errors=True)  # scratch only
-    os.makedirs(data.tmp, exist_ok=True)
+    data.tmp.mkdir(parents=True, exist_ok=True)
 
 
 async def serve(runtime_path: str, data_dir: str, out: BinaryIO, inp: BinaryIO) -> int:
     runtime = config.load_runtime(runtime_path)
-    data = config.DataDir(os.path.abspath(data_dir))
+    data = config.DataDir(await aio.run_io(Path(data_dir).absolute))
     server = Server(out, runtime, data.root)
     await aio.run_io(_prepare_data_dir, data)
-    from . import components  # noqa: PLC0415
+    from . import components
+
     await aio.run_io(components.load, data.root)
     server.device = await aio.run_io(_device_info, runtime)
     media.configure(runtime)
     media.add_to_path()
     await aio.run_io(_load_handlers)
     from . import tts
+
     try:  # a training the previous engine did not finish (app closed or crashed) becomes a resumable paused run
         from .training.handlers import recover_interrupted
+
         await aio.run_io(recover_interrupted, server)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("could not check for interrupted trainings")
 
     server.emit("ready", hello_info(server))
@@ -358,7 +396,7 @@ async def serve(runtime_path: str, data_dir: str, out: BinaryIO, inp: BinaryIO) 
 class _CliContext:
     """Just enough of ``registry.Context`` for handlers that need no running engine (no events, no jobs)."""
 
-    def __init__(self, data_dir: str) -> None:
+    def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
         self.runtime: dict[str, Any] = {}
 
@@ -368,21 +406,25 @@ class _CliContext:
 
 def _import_cli(args: argparse.Namespace) -> int:
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
-    data = config.DataDir(os.path.abspath(args.data_dir))
+    data = config.DataDir(Path(args.data_dir).absolute())
     data.ensure()
-    try:  # the Applio ffmpeg is found through runtime.toml when it sits in the data directory
-        media.configure(config.load_runtime(os.path.join(data.root, "runtime.toml")))
-    except (OSError, ValueError):
-        pass
+    with contextlib.suppress(OSError, ValueError):
+        media.configure(config.load_runtime(data.root / "runtime.toml"))
     _load_handlers()
-    params = {"name": args.name, "reference_path": args.reference, "dataset_dir": args.dataset_dir,
-              "rvc_model": args.rvc_model, "rvc_index": args.rvc_index, "language": args.language}
+    params = {
+        "name": args.name,
+        "reference_path": args.reference,
+        "dataset_dir": args.dataset_dir,
+        "rvc_model": args.rvc_model,
+        "rvc_index": args.rvc_index,
+        "language": args.language,
+    }
     try:
         result = methods()["voices.import"](_CliContext(data.root), params)  # type: ignore[arg-type]
     except EngineError as exc:
-        print(json.dumps({"error": {"code": exc.code, "message": exc.message}}), file=sys.stderr)
+        sys.stderr.write(json.dumps({"error": {"code": exc.code, "message": exc.message}}) + "\n")
         return 1
-    print(json.dumps(result, ensure_ascii=False))
+    sys.stdout.write(json.dumps(result, ensure_ascii=False, default=paths.json_default) + "\n")
     return 0
 
 
@@ -399,8 +441,11 @@ def main(argv: list[str] | None = None) -> int:
     ip.add_argument("--dataset-dir", help="folder with part<N>.wav files")
     ip.add_argument("--rvc-model", help="trained RVC .pth")
     ip.add_argument("--rvc-index", help="matching RVC .index")
-    ip.add_argument("--language", default=None,
-                    help="language the recordings are in (ISO 639-1: en, uk, de, fr, es, pl; default en)")
+    ip.add_argument(
+        "--language",
+        default=None,
+        help="language the recordings are in (ISO 639-1: en, uk, de, fr, es, pl; default en)",
+    )
     args = ap.parse_args(argv)
     if args.cmd == "import":
         return _import_cli(args)
@@ -416,14 +461,13 @@ def main(argv: list[str] | None = None) -> int:
     code = 1
     try:
         code = asyncio.run(serve(args.runtime, args.data_dir, out, inp))
-    except BaseException:  # noqa: BLE001
+    except BaseException:
         log.exception("engine failed")
-        from .training import proc  # noqa: PLC0415
+        from .training import proc
+
         proc.kill_all_sync()  # never leave an Applio training behind
     memguard.report("at engine exit")
-    try:
+    with contextlib.suppress(OSError):
         out.flush()
-    except OSError:
-        pass
     sys.stderr.flush()
     os._exit(code)  # do not wait for CUDA teardown or the stdin reader thread

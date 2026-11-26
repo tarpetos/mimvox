@@ -7,12 +7,11 @@ Wire format: ``worker_kit.py``.
 Ops (all params optional unless stated):
   load_asr    {"model":"turbo","allow_cuda":true}                              -> {"device","half","model","load_s"}
   transcribe  {"audio":"<.npy 16 kHz mono float32>"(required),"language":null|"uk","model":"turbo","allow_cuda":true}
-                                                                               -> {"language","device","segments":[{start,end,text}]}
+              -> {"language","device","segments":[{start,end,text}]}
   translate   {"texts":[...](required),"src":"ukr_Cyrl"(required),"tgt":"eng_Latn","allow_cuda":true,"num_beams":4,
                "translator":null|"nllb-1.3b"|"nllb-600m","join":false,"gaps":[s],"glossary":true}
-                                                                               -> {"texts":[...],"device","untranslated":[i],
-                                                                                   "translator","model","joined":[[i]],
-                                                                                   "elapsed_s","peak_vram_gb"}
+              -> {"texts":[...],"device","untranslated":[i],"translator","model","joined":[[i]],"elapsed_s",
+                  "peak_vram_gb"}
   separate_vocals {"audio":"<.npy 44.1 kHz float32, mono (n,) or (channels, n)>"(required),"out":"<.npy to write>"
                    (required),"background_out":null|"<.npy>","allow_cuda":true}
                                                                                -> {"device","seconds","channels",
@@ -25,7 +24,9 @@ Progress replies: {"id":N,"progress":{"stage":"load_model|transcribe|translate|s
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"} (models dropped after UNLOAD_S idle),
 {"event":"exit","reason":"idle"} (the process exits after EXIT_S idle).
 """
+
 import argparse
+import contextlib
 import gc
 import importlib.util
 import os
@@ -33,10 +34,13 @@ import re
 import sys
 import time
 import types
+from pathlib import Path
+
+HERE = Path(__file__).absolute().parent
 
 
 def _load_kit():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker_kit.py")
+    path = HERE / "worker_kit.py"
     spec = importlib.util.spec_from_file_location("mimvox_worker_kit", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -44,8 +48,7 @@ def _load_kit():
 
 
 kit = _load_kit()
-_wh_spec = importlib.util.spec_from_file_location(
-    "mimvox_whisper_half", os.path.join(os.path.dirname(os.path.abspath(__file__)), "whisper_half.py"))
+_wh_spec = importlib.util.spec_from_file_location("mimvox_whisper_half", HERE / "whisper_half.py")
 whisper_half = importlib.util.module_from_spec(_wh_spec)
 _wh_spec.loader.exec_module(whisper_half)
 INP, OUT = kit.open_channels()  # protocol on private descriptors; library prints go to stderr
@@ -56,7 +59,7 @@ args = ap.parse_args()
 
 UNLOAD_S = float(os.environ.get("MIMVOX_SPEECH_UNLOAD_S", "180"))
 EXIT_S = float(os.environ.get("MIMVOX_SPEECH_EXIT_S", "600"))
-ASR_NEED_HALF_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))   # fp16 weights (1.6 GB) + decoding
+ASR_NEED_HALF_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))  # fp16 weights (1.6 GB) + decoding
 ASR_NEED_FP32_GB = 4.0
 # NLLB-200 translators, best first: (folder, VRAM for fp16 weights + beam search). The 1.3B runs on the GPU only
 # while the 600M is there to fall back to (on a CPU it is about 3x slower, with 2x the RAM).
@@ -65,16 +68,16 @@ MT_MODELS = {
     "nllb-600m": ("nllb-200-distilled-600M", float(os.environ.get("MIMVOX_NLLB_NEED_GB", "2.0"))),
 }
 MT_FILES = ("config.json", "sentencepiece.bpe.model", "tokenizer_config.json")
-GLOSSARY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glossary")
-WHISPER_DIR = os.path.join(args.models_root, "whisper")
+GLOSSARY_DIR = HERE / "glossary"
+WHISPER_DIR = Path(args.models_root) / "whisper"
 # torchaudio's HDEMUCS_HIGH_MUSDB_PLUS weights: setup downloads them, never fetched from here.
-SEP_PATH = os.path.join(args.models_root, "demucs", "hdemucs_high_trained.pt")
+SEP_PATH = Path(args.models_root) / "demucs" / "hdemucs_high_trained.pt"
 SEP_SOURCES = ("drums", "bass", "other", "vocals")
 SEP_SR = 44100
-SEP_NEED_GB = float(os.environ.get("MIMVOX_DEMUCS_NEED_GB", "1.2"))   # measured 0.76 GB peak plus the CUDA context
+SEP_NEED_GB = float(os.environ.get("MIMVOX_DEMUCS_NEED_GB", "1.2"))  # measured 0.76 GB peak plus the CUDA context
 SEP_SEGMENT_S = 10.0
 SEP_OVERLAP = 0.25
-SPLIT_OVER_CHARS = 160   # NLLB drops content of long inputs
+SPLIT_OVER_CHARS = 160  # NLLB drops content of long inputs
 MERGE_MIN_CHARS = 50
 JOIN_MAX_TEXTS = 4
 JOIN_MAX_CHARS = 320
@@ -99,6 +102,7 @@ def progress(stage, pct):
 
 def _torch():
     import torch
+
     return torch
 
 
@@ -107,7 +111,7 @@ def free_vram_gb():
         torch = _torch()
         if torch.cuda.is_available():
             return torch.cuda.mem_get_info()[0] / 2**30
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return 0.0
 
@@ -119,11 +123,18 @@ def rss_gb():
             from ctypes import wintypes
 
             class C(ctypes.Structure):
-                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
-                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
 
             c = C()
             c.cb = ctypes.sizeof(c)
@@ -133,10 +144,10 @@ def rss_gb():
             if ctypes.windll.psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
                 return c.WorkingSetSize / 2**30, c.PeakWorkingSetSize / 2**30
             return 0.0, 0.0
-        with open("/proc/self/status") as f:
+        with Path("/proc/self/status").open() as f:
             vals = {ln.split(":")[0]: int(ln.split()[1]) for ln in f if ln.startswith(("VmRSS", "VmHWM"))}
         return vals.get("VmRSS", 0) / 2**20, vals.get("VmHWM", 0) / 2**20
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 0.0, 0.0
 
 
@@ -145,11 +156,12 @@ def trim_working_set():
         return
     try:
         import ctypes
+
         k32 = ctypes.windll.kernel32
         k32.GetCurrentProcess.restype = ctypes.c_void_p
         ctypes.windll.psapi.EmptyWorkingSet.argtypes = [ctypes.c_void_p]
         ctypes.windll.psapi.EmptyWorkingSet(k32.GetCurrentProcess())
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -161,7 +173,7 @@ def collect():
             torch = sys.modules["torch"]
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     trim_working_set()
 
@@ -174,7 +186,7 @@ class Slot:
 ASR = [None]
 MT = [None]
 SEP = [None]
-_half_broken = [False]   # the fp16 Whisper loader failed once: use the stock loader from then on
+_half_broken = [False]  # the fp16 Whisper loader failed once: use the stock loader from then on
 
 
 def unload(which):
@@ -198,7 +210,7 @@ def unload_all(reason=""):
 
 
 def pick_device(need_gb, allow_cuda, *others):
-    """cuda when ``need_gb`` is free beyond the desktop's reserve, dropping the other models if that makes it fit,
+    """Cuda when ``need_gb`` is free beyond the desktop's reserve, dropping the other models if that makes it fit,
     else cpu. On cuda the allocator cap (``kit.gpu_fence``) is set right away."""
     torch = _torch()
     if allow_cuda and torch.cuda.is_available():
@@ -213,8 +225,10 @@ def pick_device(need_gb, allow_cuda, *others):
                 if free >= need_gb:
                     kit.gpu_fence(start=True)
                     return "cuda"
-        log(f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (need {need_gb:.1f}): "
-            "using the CPU")
+        log(
+            f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (need {need_gb:.1f}): "
+            "using the CPU"
+        )
     for other in others:
         if other[0] is not None and other[0].device == "cpu":
             unload(other)
@@ -223,6 +237,7 @@ def pick_device(need_gb, allow_cuda, *others):
 
 class Bar:
     """Stands in for tqdm inside whisper: reports progress and honours cancel."""
+
     stage = "load_model"
 
     def __init__(self, total=None, **_):
@@ -242,6 +257,7 @@ class Bar:
 
 def _patch_whisper(whisper):
     import inspect
+
     tr_mod = sys.modules["whisper.transcribe"]  # (the package attribute `whisper.transcribe` is the function)
     ns = types.SimpleNamespace(tqdm=Bar)
     tr_mod.tqdm = ns
@@ -260,9 +276,10 @@ def ensure_asr(name, allow_cuda):
     unload(ASR)
     torch = _torch()
     import whisper
+
     _patch_whisper(whisper)
     Bar.stage = "load_model"
-    os.makedirs(WHISPER_DIR, exist_ok=True)
+    WHISPER_DIR.mkdir(parents=True, exist_ok=True)
     progress("load_model", 0)
     t0 = time.time()
     model, device, half = None, "cpu", False
@@ -271,7 +288,7 @@ def ensure_asr(name, allow_cuda):
         if device == "cuda":
             try:
                 model, half = _load_whisper_half(whisper, name, "cuda"), True
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log(f"fp16 loader failed ({type(exc).__name__}: {exc}); using the stock loader")
                 _half_broken[0] = True
                 model = None
@@ -284,8 +301,10 @@ def ensure_asr(name, allow_cuda):
         else:
             model = whisper.load_model(name, device="cpu", download_root=WHISPER_DIR)
     collect()
-    log(f"whisper {name} loaded on {device}{' (fp16 weights)' if half else ''} in {time.time() - t0:.1f}s; "
-        f"{free_vram_gb():.1f} GB VRAM free")
+    log(
+        f"whisper {name} loaded on {device}{' (fp16 weights)' if half else ''} in {time.time() - t0:.1f}s; "
+        f"{free_vram_gb():.1f} GB VRAM free"
+    )
     progress("load_model", 100)
     ASR[0] = Slot(name, model, device, half=half)
     return ASR[0]
@@ -301,6 +320,7 @@ def op_load_asr(req):
 def op_transcribe(req):
     import numpy as np
     import whisper
+
     audio = np.load(req["audio"])
     name = req.get("model", "turbo")
     allow = req.get("allow_cuda", True)
@@ -311,12 +331,19 @@ def op_transcribe(req):
         progress("transcribe", 0)
         t1 = time.time()
         try:
-            res = whisper.transcribe(slot.obj, audio, language=req.get("language"), task="transcribe",
-                                     fp16=(slot.device == "cuda"), verbose=False, condition_on_previous_text=False)
+            res = whisper.transcribe(
+                slot.obj,
+                audio,
+                language=req.get("language"),
+                task="transcribe",
+                fp16=(slot.device == "cuda"),
+                verbose=False,
+                condition_on_previous_text=False,
+            )
             break
         except Cancelled:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if attempt == 1 and slot.half:  # the fp16 weights did not work here: reload the stock way and retry
                 log(f"fp16 transcription failed ({type(exc).__name__}: {exc}); reloading with the stock loader")
                 _half_broken[0] = True
@@ -325,13 +352,19 @@ def op_transcribe(req):
             raise
     log(f"whisper transcribed {len(audio) / 16000:.1f}s of audio in {time.time() - t1:.1f}s on {slot.device}")
     progress("transcribe", 100)
-    return {"language": res.get("language"), "device": slot.device,
-            "segments": [{"start": float(s["start"]), "end": float(s["end"]), "text": str(s["text"])}
-                         for s in res.get("segments", [])]}
+    return {
+        "language": res.get("language"),
+        "device": slot.device,
+        "segments": [
+            {"start": float(s["start"]), "end": float(s["end"]), "text": str(s["text"])}
+            for s in res.get("segments", [])
+        ],
+    }
 
 
 def _transformers_major():
     import transformers
+
     try:
         return int(transformers.__version__.split(".")[0])
     except ValueError:
@@ -339,13 +372,14 @@ def _transformers_major():
 
 
 def mt_folder(name):
-    return os.path.join(args.models_root, MT_MODELS[name][0])
+    return Path(args.models_root) / MT_MODELS[name][0]
 
 
 def mt_installed(name):
     folder = mt_folder(name)
-    return (all(os.path.isfile(os.path.join(folder, n)) for n in MT_FILES)
-            and any(os.path.isfile(os.path.join(folder, n)) for n in ("model.safetensors", "pytorch_model.bin")))
+    return all((folder / n).is_file() for n in MT_FILES) and any(
+        (folder / n).is_file() for n in ("model.safetensors", "pytorch_model.bin")
+    )
 
 
 def mt_candidates(want):
@@ -357,8 +391,10 @@ def mt_candidates(want):
         order.insert(0, want)
     have = [n for n in order if mt_installed(n)]
     if not have:
-        raise OpError("model_missing", f"the translation model is not installed (nothing in "
-                                       f"{mt_folder('nllb-600m')}); run setup to download it")
+        raise OpError(
+            "model_missing",
+            f"the translation model is not installed (nothing in {mt_folder('nllb-600m')}); run setup to download it",
+        )
     return have
 
 
@@ -368,9 +404,12 @@ def ensure_mt(want, allow_cuda, force_cpu=False):
     have = mt_candidates(want)
     cuda = bool(allow_cuda) and not force_cpu and torch.cuda.is_available()
     slot = MT[0]
-    if slot is not None and not (force_cpu and slot.device == "cuda"):
-        if slot.key == have[0] or (not cuda and slot.key == "nllb-600m" and "nllb-600m" in have):
-            return slot
+    if (
+        slot is not None
+        and not (force_cpu and slot.device == "cuda")
+        and (slot.key == have[0] or (not cuda and slot.key == "nllb-600m" and "nllb-600m" in have))
+    ):
+        return slot
     unload(MT)
     name, device = have[-1], "cpu"
     for k, cand in enumerate(have):
@@ -379,6 +418,7 @@ def ensure_mt(want, allow_cuda, force_cpu=False):
             name, device = cand, dev
             break
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
     progress("translate", 0)
     t0 = time.time()
     folder = mt_folder(name)
@@ -435,8 +475,14 @@ def join_groups(texts, gaps=None):
             gap = float(gaps[i]) if gaps is not None and i < len(gaps) else 0.0
         except (TypeError, ValueError):
             gap = 0.0
-        if (not t or not nxt or _SENT_END.search(t) or len(cur) >= JOIN_MAX_TEXTS
-                or size + 1 + len(nxt) > JOIN_MAX_CHARS or gap >= JOIN_MAX_GAP_S):
+        if (
+            not t
+            or not nxt
+            or _SENT_END.search(t)
+            or len(cur) >= JOIN_MAX_TEXTS
+            or size + 1 + len(nxt) > JOIN_MAX_CHARS
+            or gap >= JOIN_MAX_GAP_S
+        ):
             groups.append(cur)
             cur, size = [], 0
     if cur:
@@ -491,11 +537,12 @@ def glossary(src):
     """``glossary/<src>.json``: ``{"replace": [[regex, text], ...]}``, applied in order, case-insensitive."""
     if src not in _GLOSSARIES:
         rules = []
-        path = os.path.join(GLOSSARY_DIR, f"{src}.json")
-        if os.path.isfile(path):
+        path = GLOSSARY_DIR / f"{src}.json"
+        if path.is_file():
             import json
+
             try:
-                with open(path, encoding="utf-8") as fh:
+                with path.open(encoding="utf-8") as fh:
                     rules = [(re.compile(p, re.IGNORECASE), r) for p, r in json.load(fh).get("replace", [])]
             except (OSError, ValueError, re.error) as exc:
                 log(f"glossary {path} not used: {exc}")
@@ -521,8 +568,9 @@ def _translate_batch(slot, batch, src, bos, beams):
     enc = tok(batch, return_tensors="pt", padding=True, truncation=True, max_length=400).to(slot.device)
     n_in = int(enc["input_ids"].shape[1])
     with torch.inference_mode():
-        gen = model.generate(**enc, forced_bos_token_id=bos, num_beams=beams, do_sample=False,
-                             max_new_tokens=min(400, 2 * n_in + 16))
+        gen = model.generate(
+            **enc, forced_bos_token_id=bos, num_beams=beams, do_sample=False, max_new_tokens=min(400, 2 * n_in + 16)
+        )
     return [t.strip() for t in tok.batch_decode(gen, skip_special_tokens=True)]
 
 
@@ -537,7 +585,7 @@ def _translate_all(slot, pieces, src, tgt, beams):
     k = 0
     while k < len(order):
         check_cancel()
-        idx = order[k:k + size]
+        idx = order[k : k + size]
         try:
             outs = _translate_batch(slot, [pieces[i] for i in idx], src, bos, beams)
         except _torch().cuda.OutOfMemoryError:
@@ -609,16 +657,25 @@ def op_translate(req):
     elapsed = time.time() - t1
     peak = torch.cuda.max_memory_allocated() / 2**30 if slot.device == "cuda" else 0.0
     joined = [g for g in groups if len(g) > 1 and not set(g) & set(alone)]
-    log(f"{slot.key} translated {len(texts)} text(s) as {len(groups)} unit(s) on {slot.device} in {elapsed:.1f}s"
-        + (f" (peak {peak:.2f} GB VRAM)" if peak else ""))
+    log(
+        f"{slot.key} translated {len(texts)} text(s) as {len(groups)} unit(s) on {slot.device} in {elapsed:.1f}s"
+        + (f" (peak {peak:.2f} GB VRAM)" if peak else "")
+    )
     untranslated = []
     for i, t in enumerate(result):
         if not t and texts[i].strip():
             untranslated.append(i)
             result[i] = _clean(texts[i])  # never drop a segment: keep the source text
-    return {"texts": result, "device": slot.device, "untranslated": untranslated, "translator": slot.key,
-            "model": MT_MODELS[slot.key][0], "joined": joined, "elapsed_s": round(elapsed, 2),
-            "peak_vram_gb": round(peak, 2)}
+    return {
+        "texts": result,
+        "device": slot.device,
+        "untranslated": untranslated,
+        "translator": slot.key,
+        "model": MT_MODELS[slot.key][0],
+        "joined": joined,
+        "elapsed_s": round(elapsed, 2),
+        "peak_vram_gb": round(peak, 2),
+    }
 
 
 def ensure_sep(allow_cuda, force_cpu=False):
@@ -627,15 +684,18 @@ def ensure_sep(allow_cuda, force_cpu=False):
         progress("load_model", 100)
         return slot
     unload(SEP)
-    if not os.path.isfile(SEP_PATH):
-        raise OpError("model_missing", f"the music-removal model is not installed ({SEP_PATH} is missing); "
-                                       "run setup again to download it")
+    if not SEP_PATH.is_file():
+        raise OpError(
+            "model_missing",
+            f"the music-removal model is not installed ({SEP_PATH} is missing); run setup again to download it",
+        )
     torch = _torch()
     from torchaudio.models import hdemucs_high
+
     progress("load_model", 0)
     t0 = time.time()
     device = "cpu" if force_cpu else pick_device(SEP_NEED_GB, allow_cuda, ASR, MT)
-    with open(SEP_PATH, "rb") as fh:
+    with SEP_PATH.open("rb") as fh:
         state = torch.load(fh, map_location="cpu", weights_only=True)
     model = hdemucs_high(sources=list(SEP_SOURCES))
     model.load_state_dict(state)
@@ -654,20 +714,21 @@ def _separate(slot, mix, vocals_out, rest_out=None):
     import math
 
     import numpy as np
+
     torch = _torch()
     model, dev = slot.obj, slot.device
     vi = SEP_SOURCES.index("vocals")
     others = [i for i in range(len(SEP_SOURCES)) if i != vi]
     chans, n = int(mix.shape[0]), int(mix.shape[1])
     mean, std = 0.0, 0.0
-    step = SEP_SR * 60   # a memory-mapped input stays on disk
+    step = SEP_SR * 60  # a memory-mapped input stays on disk
     total_sq = 0.0
     for a in range(0, n, step):
-        ref = np.asarray(mix[:, a:a + step], dtype=np.float64).mean(0)
+        ref = np.asarray(mix[:, a : a + step], dtype=np.float64).mean(0)
         mean += float(ref.sum())
-        total_sq += float((ref ** 2).sum())
+        total_sq += float((ref**2).sum())
     mean /= max(n, 1)
-    std = math.sqrt(max(total_sq / max(n, 1) - mean ** 2, 0.0))
+    std = math.sqrt(max(total_sq / max(n, 1) - mean**2, 0.0))
     std = std if std > 1e-8 else 1.0
     seg = int(SEP_SEGMENT_S * SEP_SR)
     stride = max(int(seg * (1.0 - SEP_OVERLAP)), 1)
@@ -680,35 +741,37 @@ def _separate(slot, mix, vocals_out, rest_out=None):
     with torch.inference_mode():
         for i, s in enumerate(starts):
             check_cancel()
-            piece = (np.asarray(mix[:, s:s + seg], dtype=np.float32) - mean) / std
+            piece = (np.asarray(mix[:, s : s + seg], dtype=np.float32) - mean) / std
             length = int(piece.shape[1])
             x = torch.from_numpy(np.ascontiguousarray(piece))
             if length < seg:
                 x = torch.nn.functional.pad(x, (0, seg - length))
             x = x.expand(2, seg) if chans == 1 else x
-            out = model(x.to(dev).view(1, 2, seg).contiguous())[0]   # (sources, 2, seg)
+            out = model(x.to(dev).view(1, 2, seg).contiguous())[0]  # (sources, 2, seg)
             voc = out[vi]
             rest = out[others].sum(0) if rest_out is not None else None
             if chans == 1:
                 voc = voc.mean(0, keepdim=True)
                 rest = rest.mean(0, keepdim=True) if rest is not None else None
             w = weight[:length]
-            vocals_out[:, s:s + length] += voc[:, :length].float().cpu().numpy() * (w * std)
+            vocals_out[:, s : s + length] += voc[:, :length].float().cpu().numpy() * (w * std)
             if rest is not None:
-                rest_out[:, s:s + length] += rest[:, :length].float().cpu().numpy() * (w * std)
-            total[s:s + length] += w
+                rest_out[:, s : s + length] += rest[:, :length].float().cpu().numpy() * (w * std)
+            total[s : s + length] += w
             del x, out, voc, rest
             progress("separate", 100.0 * (i + 1) / len(starts))
     np.maximum(total, 1e-8, out=total)
     for a in range(0, n, step):
-        vocals_out[:, a:a + step] /= total[a:a + step]
+        vocals_out[:, a : a + step] /= total[a : a + step]
         if rest_out is not None:
-            rest_out[:, a:a + step] /= total[a:a + step]
+            rest_out[:, a : a + step] /= total[a : a + step]
 
 
 def _open_out(path, shape):
     import numpy as np
-    return np.lib.format.open_memmap(path + ".part.npy", mode="w+", dtype=np.float32, shape=shape)
+
+    path = Path(path)
+    return np.lib.format.open_memmap(path.with_name(path.name + ".part.npy"), mode="w+", dtype=np.float32, shape=shape)
 
 
 def _release_outs(outs):
@@ -725,6 +788,7 @@ def op_separate_vocals(req):
     import traceback
 
     import numpy as np
+
     torch = _torch()
     audio = np.load(req["audio"], mmap_mode="r")
     if audio.ndim not in (1, 2) or (audio.ndim == 2 and audio.shape[0] not in (1, 2)):
@@ -744,12 +808,10 @@ def op_separate_vocals(req):
             _separate(slot, mix, *[o.reshape(mix.shape) for o in outs])
             break
         except BaseException as exc:
-            traceback.clear_frames(exc.__traceback__)   # the frames hold views of the mapped files
+            traceback.clear_frames(exc.__traceback__)  # the frames hold views of the mapped files
             for name in _release_outs(outs):
-                try:
-                    os.remove(name)
-                except OSError:
-                    pass
+                with contextlib.suppress(OSError):
+                    Path(name).unlink()
             if attempt == 2 or slot.device != "cuda" or not isinstance(exc, torch.cuda.OutOfMemoryError):
                 raise
             log("out of VRAM while separating: retrying on the CPU")
@@ -758,22 +820,33 @@ def op_separate_vocals(req):
     elapsed = time.time() - t1
     peak = torch.cuda.max_memory_allocated() / 2**30 if slot.device == "cuda" else 0.0
     for tmp, dest in zip(_release_outs(outs), dests):
-        os.replace(tmp, dest)
+        Path(tmp).replace(dest)
     seconds = mix.shape[1] / SEP_SR
-    log(f"separated {seconds:.1f}s of {mix.shape[0]}-channel audio in {elapsed:.1f}s on {slot.device}"
-        + (f" (peak {peak:.2f} GB VRAM)" if peak else ""))
+    log(
+        f"separated {seconds:.1f}s of {mix.shape[0]}-channel audio in {elapsed:.1f}s on {slot.device}"
+        + (f" (peak {peak:.2f} GB VRAM)" if peak else "")
+    )
     progress("separate", 100)
-    return {"device": slot.device, "seconds": round(seconds, 2), "channels": int(mix.shape[0]),
-            "elapsed_s": round(elapsed, 2), "peak_vram_gb": round(peak, 2)}
+    return {
+        "device": slot.device,
+        "seconds": round(seconds, 2),
+        "channels": int(mix.shape[0]),
+        "elapsed_s": round(elapsed, 2),
+        "peak_vram_gb": round(peak, 2),
+    }
 
 
 def op_status(_req):
     cur, peak = rss_gb()
-    return {"asr": None if ASR[0] is None else {"model": ASR[0].key, "device": ASR[0].device, "half": ASR[0].half},
-            "mt": None if MT[0] is None else {"translator": MT[0].key, "device": MT[0].device},
-            "translators": [n for n in MT_MODELS if mt_installed(n)],
-            "sep": None if SEP[0] is None else {"device": SEP[0].device},
-            "rss_gb": round(cur, 2), "peak_rss_gb": round(peak, 2), "free_gb": round(free_vram_gb(), 2)}
+    return {
+        "asr": None if ASR[0] is None else {"model": ASR[0].key, "device": ASR[0].device, "half": ASR[0].half},
+        "mt": None if MT[0] is None else {"translator": MT[0].key, "device": MT[0].device},
+        "translators": [n for n in MT_MODELS if mt_installed(n)],
+        "sep": None if SEP[0] is None else {"device": SEP[0].device},
+        "rss_gb": round(cur, 2),
+        "peak_rss_gb": round(peak, 2),
+        "free_gb": round(free_vram_gb(), 2),
+    }
 
 
 def op_release(_req):
@@ -781,9 +854,16 @@ def op_release(_req):
     return {"free_gb": round(free_vram_gb(), 2)}
 
 
-OPS = {"load_asr": op_load_asr, "transcribe": op_transcribe, "translate": op_translate,
-       "separate_vocals": op_separate_vocals, "status": op_status, "release_gpu": op_release, "unload": op_release,
-       "release": op_release}
+OPS = {
+    "load_asr": op_load_asr,
+    "transcribe": op_transcribe,
+    "translate": op_translate,
+    "separate_vocals": op_separate_vocals,
+    "status": op_status,
+    "release_gpu": op_release,
+    "unload": op_release,
+    "release": op_release,
+}
 
 
 def on_idle_unload():
@@ -795,7 +875,7 @@ def on_idle_unload():
 WORKER = kit.Worker("speech", INP, OUT, OPS, idle=[(UNLOAD_S, on_idle_unload), (EXIT_S, "exit")])
 try:
     WORKER.run()
-except BaseException as exc:  # noqa: BLE001
+except BaseException as exc:
     WORKER.send({"event": "fatal", "error": f"{type(exc).__name__}: {exc}"})
     sys.stderr.flush()
     os._exit(1)

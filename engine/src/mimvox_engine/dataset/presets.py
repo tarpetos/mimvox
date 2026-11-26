@@ -1,6 +1,7 @@
 """Reading presets, ``presets/<lang>/<id>.md``: front matter between ``---`` lines, then ``## `` part headings and
 paragraphs separated by blank lines (hand-parsed, no YAML dependency).
 """
+
 from __future__ import annotations
 
 import os
@@ -35,7 +36,7 @@ def parse_preset(raw: str, fallback_id: str, language: str = lang.DEFAULT) -> di
     raw = raw.replace("\r\n", "\n").lstrip("﻿")
     meta: dict[str, str] = {}
     body = raw
-    m = re.match(r"\s*---\n(.*?)\n---\n?(.*)\Z", raw, re.S)
+    m = re.match(r"\s*---\n(.*?)\n---\n?(.*)\Z", raw, re.DOTALL)
     if m:
         for line in m.group(1).splitlines():
             if ":" in line and not line.lstrip().startswith("#"):
@@ -53,7 +54,14 @@ def parse_preset(raw: str, fallback_id: str, language: str = lang.DEFAULT) -> di
         paras = [p.strip() for p in re.split(r"\n\s*\n", "\n".join(buf)) if p.strip()]
         text = "\n\n".join(" ".join(p.split()) for p in paras)
         if text:
-            parts.append({"index": len(parts) + 1, "title": title, "text": text, "est_seconds": est_seconds(count_words(text), wpm)})
+            parts.append(
+                {
+                    "index": len(parts) + 1,
+                    "title": title,
+                    "text": text,
+                    "est_seconds": est_seconds(count_words(text), wpm),
+                }
+            )
 
     for line in body.splitlines():
         if line.startswith("## "):
@@ -99,7 +107,7 @@ def load_presets(language: str = lang.DEFAULT) -> list[dict[str, Any]]:
         return []
     found = []
     for f in d.glob("*.md"):
-        if f.stem.lower() in ("readme",):
+        if f.stem.lower() == "readme":
             continue
         p = parse_preset(f.read_text(encoding="utf-8"), f.stem, language)
         if p["parts"]:

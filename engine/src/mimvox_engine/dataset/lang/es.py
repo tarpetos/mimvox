@@ -1,4 +1,5 @@
 """Spanish: rule-based grapheme-to-phoneme conversion (the orthography is close to phonemic)."""
+
 from __future__ import annotations
 
 from ._common import words
@@ -8,22 +9,81 @@ NAME = "Spanish"
 NATIVE = "Español"
 
 PHONEMES = [
-    "a", "e", "i", "o", "u", "j", "w",
-    "p", "b", "t", "d", "k", "g", "f", "θ", "s", "x", "tʃ", "ʝ", "m", "n", "ɲ", "l", "ɾ", "r",
+    "a",
+    "e",
+    "i",
+    "o",
+    "u",
+    "j",
+    "w",
+    "p",
+    "b",
+    "t",
+    "d",
+    "k",
+    "g",
+    "f",
+    "θ",
+    "s",
+    "x",
+    "tʃ",
+    "ʝ",
+    "m",
+    "n",
+    "ɲ",
+    "l",
+    "ɾ",
+    "r",
 ]
 EXAMPLES = {
-    "a": "casa", "e": "mesa", "i": "sí", "o": "todo", "u": "luna", "j": "tierra", "w": "bueno", "p": "pan",
-    "b": "vino", "t": "taza", "d": "dedo", "k": "casa", "g": "gato", "f": "fuego", "θ": "cielo", "s": "sol",
-    "x": "jamón", "tʃ": "chico", "ʝ": "llave", "m": "madre", "n": "noche", "ɲ": "niño", "l": "luz", "ɾ": "pero",
+    "a": "casa",
+    "e": "mesa",
+    "i": "sí",
+    "o": "todo",
+    "u": "luna",
+    "j": "tierra",
+    "w": "bueno",
+    "p": "pan",
+    "b": "vino",
+    "t": "taza",
+    "d": "dedo",
+    "k": "casa",
+    "g": "gato",
+    "f": "fuego",
+    "θ": "cielo",
+    "s": "sol",
+    "x": "jamón",
+    "tʃ": "chico",
+    "ʝ": "llave",
+    "m": "madre",
+    "n": "noche",
+    "ɲ": "niño",
+    "l": "luz",
+    "ɾ": "pero",
     "r": "perro",
 }
-DIGITS = "cero uno dos tres cuatro cinco seis siete ocho nueve".split()
+DIGITS = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve"]
 
 _ACCENT = str.maketrans("áéóàèò", "aeoaeo")
 _VOWELS = set("aeiouáéíóúü")
 _X_AS_JOTA = ("méxico", "mexicano", "mexicana", "texas", "oaxaca", "xavier")
-_SIMPLE = {"b": "b", "d": "d", "f": "f", "k": "k", "l": "l", "m": "m", "n": "n", "ñ": "ɲ", "p": "p", "s": "s",
-           "t": "t", "v": "b", "w": "w", "z": "θ", "j": "x"}
+_SIMPLE = {
+    "b": "b",
+    "d": "d",
+    "f": "f",
+    "k": "k",
+    "l": "l",
+    "m": "m",
+    "n": "n",
+    "ñ": "ɲ",
+    "p": "p",
+    "s": "s",
+    "t": "t",
+    "v": "b",
+    "w": "w",
+    "z": "θ",
+    "j": "x",
+}
 
 
 def word_phonemes(word: str) -> list[str]:

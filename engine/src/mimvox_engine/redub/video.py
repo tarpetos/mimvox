@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -18,32 +19,52 @@ from . import langs
 log = logging.getLogger("mimvox.redub.video")
 
 SR = 44100
-SEP_PREFIX = "redub_sep_"     # <data>/tmp/redub_sep_<file key>/{vocals,background}.npy
+SEP_PREFIX = "redub_sep_"  # <data>/tmp/redub_sep_<file key>/{vocals,background}.npy
 OUTPUTS = ("video", "audio")
 
 # Container (by the source's extension) -> audio encoders to try, best first: (encoder, options).
 _AAC = ("aac", ["-b:a", "192k"])
 _OPUS = ("libopus", ["-b:a", "160k"])
 _CONTAINERS: dict[str, tuple[tuple[str, list[str]], ...]] = {
-    "mp4": (_AAC,), "m4v": (_AAC,), "mov": (_AAC,),
+    "mp4": (_AAC,),
+    "m4v": (_AAC,),
+    "mov": (_AAC,),
     "mkv": (_OPUS, _AAC),
     "webm": (_OPUS, ("libvorbis", ["-q:a", "6"])),
     "avi": (("libmp3lame", ["-b:a", "192k"]), _AAC),
 }
-VIDEO_AUDIO_SR = 48000       # the video's audio track is written at the video standard rate
-FALLBACK_CONTAINER = "mkv"   # a video in another container (ts, flv, ...) is written as Matroska
+VIDEO_AUDIO_SR = 48000  # the video's audio track is written at the video standard rate
+FALLBACK_CONTAINER = "mkv"  # a video in another container (ts, flv, ...) is written as Matroska
 _FASTSTART = {"mp4", "m4v", "mov"}
 
 # NLLB codes whose first three letters are not the ISO 639-2 code that containers use for the audio language.
-_ISO639_2 = {"arb": "ara", "pes": "fas", "zsm": "msa", "swh": "swa", "khk": "mon", "azj": "aze", "lvs": "lav",
-             "npi": "nep", "uzn": "uzb", "als": "sqi", "plt": "mlg", "pbt": "pus", "ydd": "yid", "gaz": "orm",
-             "quy": "que", "ory": "ori", "yue": "zho", "nob": "nor", "est": "est"}
+_ISO639_2 = {
+    "arb": "ara",
+    "pes": "fas",
+    "zsm": "msa",
+    "swh": "swa",
+    "khk": "mon",
+    "azj": "aze",
+    "lvs": "lav",
+    "npi": "nep",
+    "uzn": "uzb",
+    "als": "sqi",
+    "plt": "mlg",
+    "pbt": "pus",
+    "ydd": "yid",
+    "gaz": "orm",
+    "quy": "que",
+    "ory": "ori",
+    "yue": "zho",
+    "nob": "nor",
+    "est": "est",
+}
 
 
-def file_key(path: str) -> str:
+def file_key(path: str | Path) -> str:
     """(path, mtime, size): the preview and the stems are cached by it."""
-    st = os.stat(path)
-    return hashlib.sha1(f"{path}|{st.st_mtime_ns}|{st.st_size}".encode("utf-8")).hexdigest()[:16]
+    st = Path(path).stat()
+    return hashlib.sha1(f"{path}|{st.st_mtime_ns}|{st.st_size}".encode(), usedforsecurity=False).hexdigest()[:16]
 
 
 def language_tag(code: str | None) -> str | None:
@@ -60,7 +81,7 @@ class Output:
     output: str
     keep_background: bool
     has_video: bool
-    container: str        # the extension of the video result
+    container: str  # the extension of the video result
 
     @property
     def video(self) -> bool:
@@ -72,12 +93,12 @@ class Output:
         return self.video or self.keep_background
 
 
-def options(params: dict[str, Any], path: str) -> Output:
+def options(params: dict[str, Any], path: str | Path) -> Output:
     """Defaults: ``output`` audio, ``keep_background`` true for a video output. Blocking (probes)."""
     out = params.get("output")
     out = "audio" if out in (None, "") else out
     if out not in OUTPUTS:
-        raise EngineError("bad_request", "'output' must be \"video\" or \"audio\"")
+        raise EngineError("bad_request", '\'output\' must be "video" or "audio"')
     keep = params.get("keep_background")
     if keep is None:
         keep = out == "video"
@@ -87,9 +108,8 @@ def options(params: dict[str, Any], path: str) -> Output:
     if out == "video" or keep:
         has_video = bool(media.probe(path).get("has_video"))
     if out == "video" and not has_video:
-        raise EngineError("bad_request", "This file has no picture, so there is no video to write: use output "
-                                         "\"audio\".")
-    ext = os.path.splitext(path)[1].lower().lstrip(".")
+        raise EngineError("bad_request", 'This file has no picture, so there is no video to write: use output "audio".')
+    ext = Path(path).suffix.lower().lstrip(".")
     return Output(out, keep, has_video, ext if ext in _CONTAINERS else FALLBACK_CONTAINER)
 
 
@@ -97,22 +117,23 @@ def options(params: dict[str, Any], path: str) -> Output:
 class Stems:
     """A file split into ``vocals`` and ``background`` (drums + bass + other): float32 ``(channels, n)`` ``.npy``
     files at 44.1 kHz, read memory-mapped."""
-    folder: str
+
+    folder: Path
     channels: int
     frames: int
     device: str
-    elapsed_s: float           # the separation itself (model load excluded)
-    total_s: float             # decode + load + separation
-    cached: bool = False       # found ready (a finished preload, or an earlier job)
-    wait_s: float = 0.0        # how long the caller waited for them (joining a preload in flight, or separating)
+    elapsed_s: float  # the separation itself (model load excluded)
+    total_s: float  # decode + load + separation
+    cached: bool = False  # found ready (a finished preload, or an earlier job)
+    wait_s: float = 0.0  # how long the caller waited for them (joining a preload in flight, or separating)
 
     @property
-    def vocals_path(self) -> str:
-        return os.path.join(self.folder, "vocals.npy")
+    def vocals_path(self) -> Path:
+        return self.folder / "vocals.npy"
 
     @property
-    def background_path(self) -> str:
-        return os.path.join(self.folder, "background.npy")
+    def background_path(self) -> Path:
+        return self.folder / "background.npy"
 
     def vocals(self) -> np.ndarray:
         return np.load(self.vocals_path, mmap_mode="r")
@@ -121,7 +142,7 @@ class Stems:
         return np.load(self.background_path, mmap_mode="r")
 
     def exists(self) -> bool:
-        return os.path.isfile(self.vocals_path) and os.path.isfile(self.background_path)
+        return self.vocals_path.is_file() and self.background_path.is_file()
 
 
 @dataclass
@@ -131,21 +152,21 @@ class _Run:
     listeners: list[Callable[[str, float], None]] = field(default_factory=list)
 
 
-_RUNS: dict[str, _Run] = {}      # file key -> separation in flight (loop thread)
+_RUNS: dict[str, _Run] = {}  # file key -> separation in flight (loop thread)
 _DONE: dict[str, Stems] = {}
 
 
 def installed(data: config.DataDir) -> bool:
-    return not components.off("music_removal") and os.path.isfile(speech.separator_path(data.root))
+    return not components.off("music_removal") and speech.separator_path(data.root).is_file()
 
 
-def _decode(path: str, folder: str) -> tuple[str, int, int]:
+def _decode(path: str | Path, folder: Path) -> tuple[Path, int, int]:
     """``<folder>/mix.npy``: float32 ``(channels, n)`` at 44.1 kHz, at most stereo; returns (path, channels, n)."""
     info = media.probe(path)
     channels = 1 if int(info.get("channels") or 0) == 1 else 2
     y = media.decode_pcm(path, SR, channels=channels)
-    os.makedirs(folder, exist_ok=True)
-    out = os.path.join(folder, "mix.npy")
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "mix.npy"
     np.save(out, np.ascontiguousarray(y.reshape(channels, -1), dtype=np.float32))
     return out, channels, int(y.shape[-1])
 
@@ -153,17 +174,18 @@ def _decode(path: str, folder: str) -> tuple[str, int, int]:
 def _drop_others(data: config.DataDir, keep: str) -> None:
     """One cached separation at a time: they are large."""
     try:
-        names = os.listdir(data.tmp)
+        entries = list(data.tmp.iterdir())
     except OSError:
         return
-    for name in names:
-        if name.startswith(SEP_PREFIX) and name != SEP_PREFIX + keep and name[len(SEP_PREFIX):] not in _RUNS:
-            shutil.rmtree(os.path.join(data.tmp, name), ignore_errors=True)
-            _DONE.pop(name[len(SEP_PREFIX):], None)
+    for entry in entries:
+        name = entry.name
+        if name.startswith(SEP_PREFIX) and name != SEP_PREFIX + keep and name[len(SEP_PREFIX) :] not in _RUNS:
+            shutil.rmtree(entry, ignore_errors=True)
+            _DONE.pop(name[len(SEP_PREFIX) :], None)
 
 
-async def _separate(ctx: Context, data: config.DataDir, path: str, key: str, run: _Run) -> Stems:
-    folder = os.path.join(data.tmp, SEP_PREFIX + key)
+async def _separate(ctx: Context, data: config.DataDir, path: str | Path, key: str, run: _Run) -> Stems:
+    folder = data.tmp / (SEP_PREFIX + key)
     sp = speech.get(ctx.runtime, data.root)
     t0 = time.time()
 
@@ -174,15 +196,33 @@ async def _separate(ctx: Context, data: config.DataDir, path: str, key: str, run
     try:
         await aio.run_io(_drop_others, data, key)
         mix, channels, frames = await aio.run_io(_decode, path, folder)
-        res = await sp.separate_vocals(mix, os.path.join(folder, "vocals.npy"), frames / SR, progress,
-                                       background_out=os.path.join(folder, "background.npy"),
-                                       tag=key if run.background else None)
-        await aio.run_io(os.remove, mix)
-        stems = Stems(folder, channels, frames, str(res.get("device") or ""), float(res.get("elapsed_s") or 0.0),
-                      round(time.time() - t0, 2))
+        res = await sp.separate_vocals(
+            mix,
+            folder / "vocals.npy",
+            frames / SR,
+            progress,
+            background_out=folder / "background.npy",
+            tag=key if run.background else None,
+        )
+        await aio.run_io(mix.unlink)
+        stems = Stems(
+            folder,
+            channels,
+            frames,
+            str(res.get("device") or ""),
+            float(res.get("elapsed_s") or 0.0),
+            round(time.time() - t0, 2),
+        )
         _DONE[key] = stems
-        log.info("separated %s: %.1fs of %d-channel audio in %.1fs on %s (%.1fs with decoding and loading)",
-                 os.path.basename(path), frames / SR, channels, stems.elapsed_s, stems.device, stems.total_s)
+        log.info(
+            "separated %s: %.1fs of %d-channel audio in %.1fs on %s (%.1fs with decoding and loading)",
+            Path(path).name,
+            frames / SR,
+            channels,
+            stems.elapsed_s,
+            stems.device,
+            stems.total_s,
+        )
         return stems
     except BaseException:
         await asyncio.shield(aio.run_io(shutil.rmtree, folder, True))
@@ -192,8 +232,13 @@ async def _separate(ctx: Context, data: config.DataDir, path: str, key: str, run
         sp.background_tags.discard(key)
 
 
-async def separate(ctx: Context, data: config.DataDir, path: str, progress: Callable[[str, float], None] | None = None,
-                   background: bool = False) -> Stems:
+async def separate(
+    ctx: Context,
+    data: config.DataDir,
+    path: str | Path,
+    progress: Callable[[str, float], None] | None = None,
+    background: bool = False,
+) -> Stems:
     """Cached, joined from a run in flight, or separated now. A ``background`` preload may be stopped by another GPU
     job; a job that was waiting for it starts it again."""
     t0 = time.time()
@@ -210,7 +255,7 @@ async def separate(ctx: Context, data: config.DataDir, path: str, progress: Call
             speech.get(ctx.runtime, data.root).background_tags.add(key)
         run.task = aio.spawn(_separate(ctx, data, path, key, run), name=f"redub-separate-{key}")
     elif not background and run.background:
-        run.background = False     # a job waits for it now: no longer a preload another job may stop
+        run.background = False  # a job waits for it now: no longer a preload another job may stop
         speech.get(ctx.runtime, data.root).background_tags.discard(key)
     if progress is not None:
         run.listeners.append(progress)
@@ -220,7 +265,7 @@ async def separate(ctx: Context, data: config.DataDir, path: str, progress: Call
     except speech.Cancelled:
         if background or not joined:
             raise
-        return await separate(ctx, data, path, progress, background=False)   # the preload was stopped: run it now
+        return await separate(ctx, data, path, progress, background=False)  # the preload was stopped: run it now
     finally:
         if progress is not None and progress in run.listeners:
             run.listeners.remove(progress)
@@ -231,29 +276,46 @@ def forget(key: str) -> None:
     _DONE.pop(key, None)
 
 
-def write_mix_wav(path: str, x: np.ndarray, sr: int = SR) -> str:
+def write_mix_wav(path: str | Path, x: np.ndarray, sr: int = SR) -> Path:
     """``x`` (channels, n) as a 32-bit float WAV (no rounding before the encoder)."""
-    import soundfile as sf  # noqa: PLC0415
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    import soundfile as sf
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     data = x.reshape(1, -1) if x.ndim == 1 else x
     sf.write(path, np.ascontiguousarray(data.T, dtype=np.float32), sr, subtype="FLOAT", format="WAV")
     return path
 
 
-def _audio_start(path: str) -> float:
+def _audio_start(path: str | Path) -> float:
     """The start time of the source's first audio stream (the decoded samples begin there), 0 when unknown."""
     exe = media.ffprobe_path()
     if not exe:
         return 0.0
-    res = media._run([exe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=start_time",
-                      "-of", "default=nw=1:nk=1", path], 60)
+    res = media._run(
+        [
+            exe,
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=start_time",
+            "-of",
+            "default=nw=1:nk=1",
+            path,
+        ],
+        60,
+    )
     try:
         return float(res.stdout.decode("utf-8", errors="replace").strip().splitlines()[0])
     except (ValueError, IndexError):
         return 0.0
 
 
-def mux(source: str, audio: str, dest: str, container: str, language: str | None = None) -> dict[str, Any]:
+def mux(
+    source: str | Path, audio: str | Path, dest: str | Path, container: str, language: str | None = None
+) -> dict[str, Any]:
     """Copy the picture of ``source`` (with subtitles, attachments, chapters where the container takes them) and
     encode ``audio`` as the only audio track. Blocking."""
     exe = media.require_ffmpeg()
@@ -266,19 +328,49 @@ def mux(source: str, audio: str, dest: str, container: str, language: str | None
     offset = ["-itsoffset", f"{start:.6f}"] if abs(start) > 0.0005 else []
     tag = ["-metadata:s:a:0", f"language={language}"] if language else []
     fast = ["-movflags", "+faststart"] if container in _FASTSTART else []
-    part = f"{dest}.part.{container}"
+    dest = Path(dest)
+    part = dest.with_name(f"{dest.name}.part.{container}")
     last = ""
     # First with subtitles, attachments and chapters; if the container refuses one of them, the picture alone.
     for extra in (["-map", "0:s?", "-map", "0:t?"], []):
-        cmd = [exe, "-nostdin", "-v", "error", "-y", "-i", source, *offset, "-i", audio,
-               "-map", "0:v", *extra, "-map", "1:a:0", "-map_metadata", "0", "-map_chapters", "0" if extra else "-1",
-               "-c", "copy", "-c:a", encoder, *args, "-ar", str(VIDEO_AUDIO_SR), *tag, "-disposition:a:0", "default", *fast, part]
+        cmd = [
+            exe,
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            source,
+            *offset,
+            "-i",
+            audio,
+            "-map",
+            "0:v",
+            *extra,
+            "-map",
+            "1:a:0",
+            "-map_metadata",
+            "0",
+            "-map_chapters",
+            "0" if extra else "-1",
+            "-c",
+            "copy",
+            "-c:a",
+            encoder,
+            *args,
+            "-ar",
+            str(VIDEO_AUDIO_SR),
+            *tag,
+            "-disposition:a:0",
+            "default",
+            *fast,
+            part,
+        ]
         res = media._run(cmd)
-        if res.returncode == 0 and os.path.isfile(part):
-            os.replace(part, dest)
+        if res.returncode == 0 and part.is_file():
+            part.replace(dest)
             return {"audio_codec": encoder, "faststart": bool(fast)}
         last = media._tail(res.stderr)
-        log.warning("mux %s failed (%s)%s", os.path.basename(dest), last, "; trying the picture alone" if extra else "")
-        if os.path.exists(part):
-            os.remove(part)
+        log.warning("mux %s failed (%s)%s", dest.name, last, "; trying the picture alone" if extra else "")
+        part.unlink(missing_ok=True)
     raise EngineError("internal", f"Could not write the video ({last}).")

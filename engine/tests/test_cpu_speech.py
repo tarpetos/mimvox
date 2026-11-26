@@ -59,10 +59,10 @@ def test_progress_keeps_a_slow_call_alive_past_the_stall_limit(tmp_path):
 def test_silence_ends_the_call_and_a_new_worker_takes_the_next(tmp_path):
     async def body(client):
         pid = None
+        call = asyncio.ensure_future(client.call("synth", {"sleep": 5}, stall=0.3))
+        await asyncio.sleep(0.1)
+        pid = client.pid
         with pytest.raises(WorkerError, match="made no progress for 0 s in synth"):
-            call = asyncio.ensure_future(client.call("synth", {"sleep": 5}, stall=0.3))
-            await asyncio.sleep(0.1)
-            pid = client.pid
             await call
         return pid, await client.call("synth", {}, stall=0.3), client.pid
 
@@ -85,14 +85,17 @@ def test_a_fixed_timeout_alone_still_works(tmp_path):
     assert _run(tmp_path, body) == {"op": "synth"}
 
 
-@pytest.mark.parametrize(("total", "available", "out", "short"), [
-    (8 * GB, 0, 3 * GB, True),                    # the QA laptop: nothing available, the model compressed away
-    (8 * GB, int(0.4 * GB), int(1.5 * GB), True),
-    (8 * GB, 2 * GB, 3 * GB, False),              # paged out but RAM free again: the pages come back once
-    (8 * GB, 0, int(0.5 * GB), False),            # RAM full, the model itself in it
-    (64 * GB, 2 * GB, 2 * GB, True),              # 5 % of 64 GB is above the 0.5 GB floor
-    (64 * GB, 4 * GB, 2 * GB, False),
-])
+@pytest.mark.parametrize(
+    ("total", "available", "out", "short"),
+    [
+        (8 * GB, 0, 3 * GB, True),  # the QA laptop: nothing available, the model compressed away
+        (8 * GB, int(0.4 * GB), int(1.5 * GB), True),
+        (8 * GB, 2 * GB, 3 * GB, False),  # paged out but RAM free again: the pages come back once
+        (8 * GB, 0, int(0.5 * GB), False),  # RAM full, the model itself in it
+        (64 * GB, 2 * GB, 2 * GB, True),  # 5 % of 64 GB is above the 0.5 GB floor
+        (64 * GB, 4 * GB, 2 * GB, False),
+    ],
+)
 def test_thrashing(total, available, out, short):
     assert worker_kit.thrashing(total, available, out) is short
 
@@ -196,8 +199,9 @@ def test_a_refusal_on_the_cpu_forgets_the_warm_references(tmp_path, device, forg
     b = _backend(device, error=WorkerError("no_memory", "full"))
     b._mark_warm(str(ref))
     with pytest.raises(EngineError):
-        asyncio.run(b.synthesize("Hi.", "en", str(ref), SynthParams(out_path=str(tmp_path / "o.wav"),
-                                                                   reference_text="hello")))
+        asyncio.run(
+            b.synthesize("Hi.", "en", str(ref), SynthParams(out_path=str(tmp_path / "o.wav"), reference_text="hello"))
+        )
     assert b.is_warm(str(ref)) is not forgets
 
 
@@ -219,7 +223,7 @@ def test_ram_too_small(monkeypatch):
     msg = worker_kit.ram_too_small(11)
     assert msg is not None and "at least 11 GB of RAM and this one has 7.4 GB" in msg
     monkeypatch.setattr(worker_kit, "physical_memory", lambda: (int(11.7 * GB), 0))
-    assert worker_kit.ram_too_small(11) is None   # a full 12 GB computer is the other check's business
+    assert worker_kit.ram_too_small(11) is None  # a full 12 GB computer is the other check's business
     monkeypatch.setattr(worker_kit, "physical_memory", lambda: None)
     assert worker_kit.ram_too_small(11) is None
 
@@ -316,8 +320,10 @@ STUB_OMNIVOICE = textwrap.dedent("""
             return [np.zeros(2400, dtype=np.float32)]
 """)
 
-LAUNCH = "import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], " \
-         "run_name='__main__')"
+LAUNCH = (
+    "import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], "
+    "run_name='__main__')"
+)
 
 
 def _stub_worker(tmp_path, device, need_gb, load_s=0.0, gpu=None, prompt_gb=0, ram_full=None):
@@ -329,14 +335,35 @@ def _stub_worker(tmp_path, device, need_gb, load_s=0.0, gpu=None, prompt_gb=0, r
     (stubs / "omnivoice" / "__init__.py").write_text(STUB_OMNIVOICE, encoding="utf-8")
     ref = tmp_path / "reference.wav"
     sf.write(str(ref), np.zeros(24000, dtype=np.float32), 24000)
-    env = dict(os.environ, MIMVOX_OMNIVOICE_FAST="0", MIMVOX_CPU_RAM_NEED_GB=str(need_gb),
-               FAKE_CUDA="1" if (device == "cuda" if gpu is None else gpu) else "0", FAKE_LOADED=str(tmp_path / "loaded"),
-               FAKE_LOAD_S=str(load_s), FAKE_PROMPTS=str(tmp_path / "prompts"), MIMVOX_CPU_PROMPT_GB=str(prompt_gb),
-               **({"FAKE_RAM_FULL": str(ram_full)} if ram_full else {}))
-    argv = [sys.executable, "-c", LAUNCH, str(stubs), omnivoice.WORKER, "--model-dir", str(tmp_path / "model"),
-            "--device", device]
-    params = {"ref": str(ref), "ref_text": "hello", "text": "Hello there.", "out": str(tmp_path / "out.wav"),
-              "normalize": False}
+    env = dict(
+        os.environ,
+        MIMVOX_OMNIVOICE_FAST="0",
+        MIMVOX_CPU_RAM_NEED_GB=str(need_gb),
+        FAKE_CUDA="1" if (device == "cuda" if gpu is None else gpu) else "0",
+        FAKE_LOADED=str(tmp_path / "loaded"),
+        FAKE_LOAD_S=str(load_s),
+        FAKE_PROMPTS=str(tmp_path / "prompts"),
+        MIMVOX_CPU_PROMPT_GB=str(prompt_gb),
+        **({"FAKE_RAM_FULL": str(ram_full)} if ram_full else {}),
+    )
+    argv = [
+        sys.executable,
+        "-c",
+        LAUNCH,
+        str(stubs),
+        omnivoice.WORKER,
+        "--model-dir",
+        str(tmp_path / "model"),
+        "--device",
+        device,
+    ]
+    params = {
+        "ref": str(ref),
+        "ref_text": "hello",
+        "text": "Hello there.",
+        "out": str(tmp_path / "out.wav"),
+        "normalize": False,
+    }
     return WorkerClient("omnivoice", argv, env, start_timeout=60.0), params
 
 
@@ -365,7 +392,7 @@ needs_ram_figure = pytest.mark.skipif(worker_kit.physical_memory() is None, reas
 @needs_ram_figure
 def test_cpu_refuses_every_pass_up_front_on_a_computer_with_too_little_ram(tmp_path):
     assert _omnivoice_worker(tmp_path, "cpu", 10**6, ["load", "warm", "synth", "inspect"]) == [("no_memory", True)] * 4
-    assert not (tmp_path / "loaded").exists()   # refused before the model was loaded
+    assert not (tmp_path / "loaded").exists()  # refused before the model was loaded
 
 
 @needs_ram_figure
@@ -398,7 +425,11 @@ def test_a_refusal_after_the_prompt_grew_the_worker_releases_the_model(tmp_path)
             await client.close()
 
     refused, status, synth = asyncio.run(main())
-    assert (refused.code, refused.permanent, refused.message) == ("no_memory", False, "not enough free memory (RAM): fake")
+    assert (refused.code, refused.permanent, refused.message) == (
+        "no_memory",
+        False,
+        "not enough free memory (RAM): fake",
+    )
     assert status["loaded"] is False
     assert loaded.exists() and synth["out"] == str(tmp_path / "out.wav")
 
@@ -514,7 +545,7 @@ def _models_events(ctx):
 
 
 def _start_up(tmp_path, monkeypatch, device="cuda", load=None, synth=None):
-    """``tts.load_models`` over a stub backend: the ``models`` events, and the last one sent before each warm-up synth."""
+    """``tts.load_models`` over a stub backend: the ``models`` events, and the last one before each warm-up synth."""
     b = omnivoice.OmniVoiceBackend()
     ctx = _patch_start_up(tmp_path, monkeypatch, b)
     seen = []
@@ -571,8 +602,11 @@ def test_a_request_during_the_gpu_warm_up_waits_behind_it_and_speaks(tmp_path, m
         while not client.lock.locked():
             await asyncio.sleep(0.01)
         tts.check_backend_ready(b)
-        request = asyncio.ensure_future(b.synthesize("Hello there.", "en", str(tmp_path / "reference.wav"),
-                                                     SynthParams(out_path=out, reference_text="hello")))
+        request = asyncio.ensure_future(
+            b.synthesize(
+                "Hello there.", "en", str(tmp_path / "reference.wav"), SynthParams(out_path=out, reference_text="hello")
+            )
+        )
         await asyncio.sleep(0.05)
         waiting = not request.done()
         client.gate.set()
@@ -643,7 +677,7 @@ def _voice_warm(tmp_path, monkeypatch, device, synth_error=None):
 
 def test_a_refused_voice_warm_up_sends_the_plain_message(tmp_path, monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="mimvox.tts"):
-        calls, events = _voice_warm(tmp_path, monkeypatch, "cuda", EngineError("no_memory", "not enough free memory"))
+        _calls, events = _voice_warm(tmp_path, monkeypatch, "cuda", EngineError("no_memory", "not enough free memory"))
     assert events == [("voice.warm", {"id": "v", "ok": False, "message": "not enough free memory"})]
     assert [(r.levelname, r.exc_info) for r in caplog.records] == [("WARNING", None)]
 

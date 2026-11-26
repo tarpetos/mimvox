@@ -7,7 +7,8 @@ import os
 import re
 import shutil
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -22,20 +23,20 @@ from .registry import Context, EngineError, method
 log = logging.getLogger("mimvox.tts")
 
 SPEED_MIN, SPEED_MAX = 0.8, 1.3
-PAUSE_SENTENCE_MS = 200   # silence appended to a chunk that ends mid-paragraph
+PAUSE_SENTENCE_MS = 200  # silence appended to a chunk that ends mid-paragraph
 PAUSE_PARAGRAPH_MS = 480  # ... and at a paragraph end
 MIN_FIRST_TOKENS = 6  # the first segment is one sentence unless that is shorter than this
-FIRST_TOKENS = 40   # cap for segment 0 (normally just the first sentence, ~13 tokens = ~4 s of speech)
+FIRST_TOKENS = 40  # cap for segment 0 (normally just the first sentence, ~13 tokens = ~4 s of speech)
 GROWTH = float(os.environ.get("MIMVOX_SEGMENT_GROWTH", "2.5"))  # measured: lowest total time
 LATER_TOKENS = 70
-MIN_PIECE_WORDS = 3   # a cut sentence never leaves a piece shorter than this many words...
+MIN_PIECE_WORDS = 3  # a cut sentence never leaves a piece shorter than this many words...
 MIN_PIECE_SHARE = 0.3  # ...or than this share of the segment budget
 MIN_TAIL_TOKENS = 10  # a paragraph never ends in a segment shorter than this (merged into the previous one)
 
 # Loop-thread state (only the event loop changes it, so no locks).
 _RVC_STATUS = ["loading"]
-_ACTIVE: list[str | None] = [None]   # the job holding the one generation slot (tts.generate, Redub GPU jobs, books)
-_HOLDER: list[str | None] = [None]   # what a busy answer says while that job runs, when it says more than the caller's
+_ACTIVE: list[str | None] = [None]  # the job holding the one generation slot (tts.generate, Redub GPU jobs, books)
+_HOLDER: list[str | None] = [None]  # what a busy answer says while that job runs, when it says more than the caller's
 _WARMING: set[str] = set()
 _SETTLED: asyncio.Event | None = None  # set while no model is "loading"
 
@@ -77,12 +78,35 @@ async def wait_settled(timeout: float) -> bool:
     try:
         await asyncio.wait_for(_settled().wait(), timeout)
         return True
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return False
 
 
-_ABBREV = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e", "no", "inc", "ltd", "mt",
-           "gen", "col", "lt", "capt", "sgt", "fig", "approx"}
+_ABBREV = {
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "prof",
+    "sr",
+    "jr",
+    "st",
+    "vs",
+    "etc",
+    "e.g",
+    "i.e",
+    "no",
+    "inc",
+    "ltd",
+    "mt",
+    "gen",
+    "col",
+    "lt",
+    "capt",
+    "sgt",
+    "fig",
+    "approx",
+}
 _SENT_END = re.compile(r"""([.!?…]+["'”’»)\]]*)\s+""")
 _CLAUSE = re.compile(r"(?<=[,;:—–])\s+")
 
@@ -90,8 +114,8 @@ _CLAUSE = re.compile(r"(?<=[,;:—–])\s+")
 def _split_sentences(par: str) -> list[str]:
     out, start = [], 0
     for m in _SENT_END.finditer(par):
-        head = par[start:m.start()] + m.group(1)
-        last = re.findall(r"[A-Za-z.]+$", par[start:m.start()])
+        head = par[start : m.start()] + m.group(1)
+        last = re.findall(r"[A-Za-z.]+$", par[start : m.start()])
         word = last[0].lower().rstrip(".") if last else ""
         if m.group(1).startswith(".") and (word in _ABBREV or (len(word) == 1 and word.isalpha())):
             continue  # "Dr. Smith", "J. Smith", "e.g. this"
@@ -134,13 +158,13 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
         cur: list[str] = []
         for i, w in enumerate(words):
             left = len(words) - i  # words not placed yet, this one included
-            if cur and len(out) < parts - 1 and left >= 2 and count(" ".join(cur + [w])) > goal:
+            if cur and len(out) < parts - 1 and left >= 2 and count(" ".join([*cur, w])) > goal:
                 carry: list[str] = []
                 # A run never ends on a preposition, conjunction or article ("з", "the"): it belongs with the next word.
                 while len(cur) > 1 and len(cur[-1].strip("\"'«»()")) <= 3 and not re.search(r"[,.;:!?…—–]$", cur[-1]):
                     carry.insert(0, cur.pop())
                 out.append(" ".join(cur))
-                cur = carry + [w]
+                cur = [*carry, w]
             else:
                 cur.append(w)
         out.append(" ".join(cur))
@@ -202,9 +226,9 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
                 pair = f"{a} {b}"
                 k = min(i, j)
                 if count(pair) <= limit + MIN_TAIL_TOKENS:
-                    merged[k:k + 2] = [pair]
+                    merged[k : k + 2] = [pair]
                 else:
-                    merged[k:k + 2] = words_split(pair.split(" "), 2)
+                    merged[k : k + 2] = words_split(pair.split(" "), 2)
                     i = k + 2
                     continue
                 i = max(k, 0)
@@ -222,28 +246,32 @@ def segment_text(text: str, count: Callable[[str], int], fixed: int | None = Non
             for piece in pieces(sent, budget()):
                 if not cur:
                     cur = piece
-                elif (fixed is None and not segs and count(cur) >= MIN_FIRST_TOKENS) or count(cur + " " + piece) > budget():
+                elif (fixed is None and not segs and count(cur) >= MIN_FIRST_TOKENS) or count(
+                    cur + " " + piece
+                ) > budget():
                     add(cur, PAUSE_SENTENCE_MS)
                     cur = piece
                 else:
                     cur = f"{cur} {piece}"
         if cur:
-            if len(segs) > max(par_start, 1) and count(cur) < MIN_TAIL_TOKENS \
-                    and count(segs[-1][0]) + count(cur) <= cap + MIN_TAIL_TOKENS:
+            if (
+                len(segs) > max(par_start, 1)
+                and count(cur) < MIN_TAIL_TOKENS
+                and count(segs[-1][0]) + count(cur) <= cap + MIN_TAIL_TOKENS
+            ):
                 cur = f"{segs.pop()[0]} {cur}"  # no tiny trailing segment: its fixed cost is not worth it
             add(cur, PAUSE_PARAGRAPH_MS)
     return segs
 
 
-
-def _pick_warm_voice(data: config.DataDir) -> tuple[str | None, str | None]:
+def _pick_warm_voice(data: config.DataDir) -> tuple[Path | None, str | None]:
     """(reference path, voice id with an RVC model) to warm with: prefer a trained voice."""
     ref_only = None
     for vid in voices.list_voice_ids(data):
         ref = data.reference(vid)
-        if not os.path.isfile(ref):
+        if not ref.is_file():
             continue
-        if os.path.isfile(data.rvc_model(vid)[0]):
+        if data.rvc_model(vid)[0].is_file():
             return ref, vid
         ref_only = ref_only or ref
     return ref_only, None
@@ -265,7 +293,7 @@ async def load_models(ctx: Context) -> None:
                 errors["tts"] = "OmniVoice is not installed or failed to load (see the log); run setup"
             elif OMNIVOICE.status() == "no_memory":
                 errors["tts"] = OMNIVOICE.status_message() or "not enough memory (RAM)"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception("the speech model failed to load")
             errors["tts"] = f"{type(exc).__name__}: {exc}"
 
@@ -278,7 +306,7 @@ async def load_models(ctx: Context) -> None:
             if b is not OMNIVOICE:
                 try:
                     await b.load(ctx.runtime)
-                except Exception:  # noqa: BLE001 - an extra backend never blocks the main one
+                except Exception:
                     log.exception("TTS backend %s failed to load", b.name)
 
     t0 = time.time()
@@ -299,40 +327,44 @@ async def load_models(ctx: Context) -> None:
 
 
 async def _warm_up(data: config.DataDir) -> None:
-    warm_dir = os.path.join(data.tmp, "_warm")
+    warm_dir = data.tmp / "_warm"
     try:
         ref, trained_voice = await aio.run_io(_pick_warm_voice, data)
         if ref is None:  # without any voice there is nothing to clone yet: the first generation warms up
             return
-        await aio.run_io(os.makedirs, warm_dir, exist_ok=True)
+        await aio.run_io(warm_dir.mkdir, parents=True, exist_ok=True)
         t1 = time.time()
         lang = await aio.run_io(_voice_language, data, trained_voice) if trained_voice else "en"
-        await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), lang, ref,
-                                   SynthParams(out_path=os.path.join(warm_dir, "warm_tts.wav"), first=True))
+        await OMNIVOICE.synthesize(
+            _WARM_TEXT.get(lang, _WARM_TEXT["en"]),
+            lang,
+            ref,
+            SynthParams(out_path=warm_dir / "warm_tts.wav", first=True),
+        )
         log.info("speech model warm-up %.1fs", time.time() - t1)
     except EngineError as exc:
         log.warning("speech model warm-up skipped: %s", exc.message)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("speech model warm-up failed")
     finally:
         await aio.run_io(shutil.rmtree, warm_dir, ignore_errors=True)
 
 
 def _prewarm_redub() -> None:
-    """librosa's first call compiles numba kernels (measured ~20 s in the middle of the first dub) and the ffmpeg filter
+    """Librosa's first call compiles numba kernels (measured ~20 s in the middle of the first dub) and the ffmpeg filter
     list is read once: pay both after start-up."""
     try:
-        import librosa  # noqa: PLC0415
+        import librosa
 
         t0 = time.time()
         y = (0.1 * np.sin(np.arange(22050) * 0.05)).astype(np.float32)
         librosa.effects.trim(y, top_db=40, frame_length=512, hop_length=128)
         log.info("librosa warmed up in %.1fs", time.time() - t0)
-    except Exception:  # noqa: BLE001 - only an optimization
+    except Exception:
         log.exception("librosa warm-up failed")
     try:
         log.info("redub time-stretch: %s", ", ".join(media.stretch_filters()) or "none (long clips overrun)")
-    except Exception:  # noqa: BLE001 - only an optimization
+    except Exception:
         log.exception("listing the ffmpeg filters failed")
 
 
@@ -373,16 +405,20 @@ def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str,
         return lang, _named_model(model, lang)
     backend = backends.for_language(lang, skip=() if exact else ("holos",))
     if backend is None:
-        raise EngineError("bad_request", f"no voice model speaks {lang!r} (available: "
-                                         f"{', '.join(sorted(backends.languages()))})")
+        raise EngineError(
+            "bad_request", f"no voice model speaks {lang!r} (available: {', '.join(sorted(backends.languages()))})"
+        )
     return lang, backend
 
 
 def _named_model(model: Any, lang: str) -> backends.TtsBackend:
     backend = backends.by_name(model) if isinstance(model, str) else None
     if backend is None or backend.name == "holos":
-        raise EngineError("bad_request", f"'model' must be \"auto\" or one of: "
-                                         f"{', '.join(b.name for b in backends.all_backends() if b.name != 'holos')}")
+        raise EngineError(
+            "bad_request",
+            f"'model' must be \"auto\" or one of: "
+            f"{', '.join(b.name for b in backends.all_backends() if b.name != 'holos')}",
+        )
     if backend.status() == "missing":
         raise EngineError("not_ready", f"{backend.label} is not installed (add it in Settings or run setup)")
     if lang not in backend.languages:
@@ -395,9 +431,14 @@ def check_backend_ready(backend: backends.TtsBackend) -> None:
     if state == "no_memory":
         raise EngineError("no_memory", backend.status_message() or "not enough memory (RAM) for speech")
     if state not in ("ready", "idle"):
-        raise EngineError("not_ready", "the speech model is still loading" if state == "loading"
-                          else "speech is paused while a voice trains" if state == "paused"
-                          else "the speech model is not available")
+        raise EngineError(
+            "not_ready",
+            "the speech model is still loading"
+            if state == "loading"
+            else "speech is paused while a voice trains"
+            if state == "paused"
+            else "the speech model is not available",
+        )
 
 
 @method("text.stress")
@@ -427,7 +468,7 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     speed = _num(params, "speed", 1.0, SPEED_MIN, SPEED_MAX)
     quality = params.get("quality") or "best"
     if quality not in ("best", "fast"):
-        raise EngineError("bad_request", "'quality' must be \"best\" or \"fast\"")
+        raise EngineError("bad_request", '\'quality\' must be "best" or "fast"')
     lang, backend = speech_language(params)
     requested, native_voice = accent.parse(params), accent.parse_voice(params)
     check_backend_ready(backend)
@@ -436,7 +477,7 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     rvc_rate = rvc.index_rate_for(index_rate, lang, meta.get("language"))  # capped for foreign languages
     ref = data.reference(voice_id)
     pth, idx = data.rvc_model(voice_id)
-    has_ref, has_pth = await aio.run_io(lambda: (os.path.isfile(ref), os.path.isfile(pth)))
+    has_ref, has_pth = await aio.run_io(lambda: (ref.is_file(), pth.is_file()))
     if not has_ref:
         raise EngineError("not_found", "this voice has no recording yet (reference.wav is missing)")
     use_rvc = has_pth and index_rate > 0
@@ -458,18 +499,51 @@ async def tts_generate(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if not segs:
         raise EngineError("bad_request", "nothing to say in this text")
     # (no await between the busy check in start_exclusive and taking the slot: the loop makes it atomic)
-    about = {"kind": "speak", "voice_id": voice_id, "voice_name": str(meta.get("name") or voice_id), "text": text,
-             "language": lang}
-    job = start_exclusive(ctx, lambda j: _generate(ctx, j, data, backend, lang, ref, segs, temperature, quality, pth,
-                                                   idx, rvc_rate, worker, duration_factor_for(speed), out_fmt,
-                                                   choice, index_rate, zs, about),
-                          "another generation is running")
-    return {"job": job, "segments": len(segs), "segment_chars": [len(t) for t, _ in segs], "model": backend.name,
-            **choice.fields(), **ref_fields}
+    about = {
+        "kind": "speak",
+        "voice_id": voice_id,
+        "voice_name": str(meta.get("name") or voice_id),
+        "text": text,
+        "language": lang,
+    }
+    job = start_exclusive(
+        ctx,
+        lambda j: _generate(
+            ctx,
+            j,
+            data,
+            backend,
+            lang,
+            ref,
+            segs,
+            temperature,
+            quality,
+            pth,
+            idx,
+            rvc_rate,
+            worker,
+            duration_factor_for(speed),
+            out_fmt,
+            choice,
+            index_rate,
+            zs,
+            about,
+        ),
+        "another generation is running",
+    )
+    return {
+        "job": job,
+        "segments": len(segs),
+        "segment_chars": [len(t) for t, _ in segs],
+        "model": backend.name,
+        **choice.fields(),
+        **ref_fields,
+    }
 
 
-async def holos_timbre(ctx: Context, backend: backends.TtsBackend, data: config.DataDir, ref: str,
-                       quality: str) -> zsvc.Bound | None:
+async def holos_timbre(
+    ctx: Context, backend: backends.TtsBackend, data: config.DataDir, ref: str, quality: str
+) -> zsvc.Bound | None:
     """HolosTTS keeps little of an untrained voice's timbre (ECAPA 0.76 to the reference, against 0.94 for OmniVoice);
     the zero-shot converter brings it back to 0.88. None for another backend or without the converter."""
     if backend.name != "holos":
@@ -481,8 +555,9 @@ async def holos_timbre(ctx: Context, backend: backends.TtsBackend, data: config.
     return zsvc.Bound(worker, ref, zsvc.turn_lock(vram), quality)
 
 
-def zero_shot(ctx: Context, choice: accent.Choice, worker: zsvc.ZsvcWorker | None, ref: str,
-              quality: str = "best") -> zsvc.Bound | None:
+def zero_shot(
+    ctx: Context, choice: accent.Choice, worker: zsvc.ZsvcWorker | None, ref: str, quality: str = "best"
+) -> zsvc.Bound | None:
     """Bound to ``ref`` (the timbre) and the diffusion steps of ``quality``; None when ``choice`` does not use it."""
     if choice.converter != "zero-shot" or worker is None:
         return None
@@ -499,25 +574,41 @@ async def tts_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _chunk_from(src: str, i: int, last: bool, pause: int, jobdir: str) -> tuple[np.ndarray, str, float]:
-    """IO thread: the final 44.1 kHz chunk ``i`` from a synthesized / converted WAV (pause appended), written to disk."""
+def _chunk_from(src: str | Path, i: int, last: bool, pause: int, jobdir: Path) -> tuple[np.ndarray, Path, float]:
+    """IO thread: the final 44.1 kHz chunk ``i`` from a synthesized or converted WAV (pause appended), on disk."""
     x, sr = au.read_mono(src)
     x = au.resample(x, sr, au.OUT_SR)
     if not last:
         x = np.concatenate([x, au.silence(pause)])
-    path = os.path.join(jobdir, f"chunk{i:03d}.wav")
+    path = jobdir / f"chunk{i:03d}.wav"
     au.write_wav(path, x, au.OUT_SR)
-    for p in (os.path.join(jobdir, f"s{i}_{k}.wav") for k in ("tts", "rvc", "vc")):
+    for p in (jobdir / f"s{i}_{k}.wav" for k in ("tts", "rvc", "vc")):
         with contextlib.suppress(OSError):
-            os.remove(p)
+            p.unlink()
     return x, path, au.duration_s(x)
 
 
-async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backends.TtsBackend, lang: str, ref: str,
-                    segs: list[tuple[str, int]], temperature: float, quality: str, pth: str, idx: str,
-                    index_rate: float, worker: rvc.RvcWorker | None, duration_factor: float, out_fmt: str,
-                    choice: accent.Choice | None = None, voice_match: float = 1.0, zs: zsvc.Bound | None = None,
-                    about: dict[str, Any] | None = None) -> None:
+async def _generate(
+    ctx: Context,
+    job: str,
+    data: config.DataDir,
+    backend: backends.TtsBackend,
+    lang: str,
+    ref: str | Path,
+    segs: list[tuple[str, int]],
+    temperature: float,
+    quality: str,
+    pth: str | Path,
+    idx: str | Path,
+    index_rate: float,
+    worker: rvc.RvcWorker | None,
+    duration_factor: float,
+    out_fmt: str,
+    choice: accent.Choice | None = None,
+    voice_match: float = 1.0,
+    zs: zsvc.Bound | None = None,
+    about: dict[str, Any] | None = None,
+) -> None:
     """With a ``native-us`` ``choice`` OmniVoice speaks from the native clip and RVC (or ``zs``, for an untrained voice)
     gives each segment the timbre of ``ref``."""
     t_start = time.time()
@@ -527,7 +618,7 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         release_job(job)  # free the slot before the app can see the end of this job (it may start the next one)
         ctx.emit(event, payload, job=job)
 
-    jobdir = os.path.join(data.tmp, job)
+    jobdir = data.tmp / job
     try:
         await aio.run_io(_prepare_jobdir, data, jobdir)
         native = await aio.run_io(accent.prepare, choice, ref, voice_match) if choice.accent == "native-us" else None
@@ -539,9 +630,17 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         if native is not None:
             index_rate = native.index_rate
         await speech.yield_gpu()  # Whisper / NLLB (if warm) leave the GPU to the speech model and RVC
-        log.info("job %s: %s (accent %s%s), %d segment(s), RVC index %s pitch %+d: %s", job, lang, choice.accent,
-                 ", zero-shot conversion" if zs is not None else "", len(segs),
-                 index_rate if worker is not None else "-", pitch, [s for s, _ in segs])
+        log.info(
+            "job %s: %s (accent %s%s), %d segment(s), RVC index %s pitch %+d: %s",
+            job,
+            lang,
+            choice.accent,
+            ", zero-shot conversion" if zs is not None else "",
+            len(segs),
+            index_rate if worker is not None else "-",
+            pitch,
+            [s for s, _ in segs],
+        )
         turn = zs.turn if zs is not None else None
         chunks: list[np.ndarray | None] = [None] * len(segs)
         todo: asyncio.Queue[tuple[int, str, int] | None] = asyncio.Queue(maxsize=2)
@@ -552,21 +651,31 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
             for i, (seg, pause) in enumerate(segs):
                 t0 = time.time()
                 async with zsvc.gpu_turn(turn):  # a tight GPU: never at the same time as the converter
-                    path = await backend.synthesize(seg, lang, synth_ref, SynthParams(
-                        out_path=os.path.join(jobdir, f"s{i}_tts.wav"), temperature=temperature, quality=quality,
-                        duration_factor=duration_factor, first=(i == 0), reference_text=ref_text))
+                    path = await backend.synthesize(
+                        seg,
+                        lang,
+                        synth_ref,
+                        SynthParams(
+                            out_path=jobdir / f"s{i}_tts.wav",
+                            temperature=temperature,
+                            quality=quality,
+                            duration_factor=duration_factor,
+                            first=(i == 0),
+                            reference_text=ref_text,
+                        ),
+                    )
                 log.info("job %s seg %d: %s %.2fs", job, i, backend.name, time.time() - t0)
                 await todo.put((i, path, pause))  # waits while two segments are ahead of the consumer
             await todo.put(None)
 
         async def consume() -> None:
             async for i, path, pause in aio.queue_items(todo):
-                src = path
+                src: str | Path = path
                 if zs is not None:
-                    src = os.path.join(jobdir, f"s{i}_vc.wav")
+                    src = jobdir / f"s{i}_vc.wav"
                     await zs.convert(path, src)
                 elif worker is not None:
-                    src = os.path.join(jobdir, f"s{i}_rvc.wav")
+                    src = jobdir / f"s{i}_rvc.wav"
                     await worker.convert(path, src, pth, idx, index_rate, pitch=pitch)
                 last = i == len(segs) - 1
                 x, chunk, dur = await aio.run_io(_chunk_from, src, i, last, pause, jobdir)
@@ -577,8 +686,18 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
                 speech_s = max(dur - (0.0 if last else pause / 1000.0), 0.01)
                 rtf = (now - last_ready[0]) / speech_s  # wall time since the previous chunk / this chunk's speech
                 last_ready[0] = now
-                ctx.emit("tts.chunk", {"index": i, "path": chunk, "duration_s": dur, "segments": len(segs),
-                                       "ready_s": round(now, 2), "rtf": round(rtf, 2)}, job=job)
+                ctx.emit(
+                    "tts.chunk",
+                    {
+                        "index": i,
+                        "path": chunk,
+                        "duration_s": dur,
+                        "segments": len(segs),
+                        "ready_s": round(now, 2),
+                        "rtf": round(rtf, 2),
+                    },
+                    job=job,
+                )
 
         await aio.gather_or_cancel(produce(), consume())
         full = np.concatenate([c for c in chunks if c is not None])
@@ -586,30 +705,51 @@ async def _generate(ctx: Context, job: str, data: config.DataDir, backend: backe
         # Read again: the first synthesis from a new clip has just transcribed it (and detected its language).
         ref_fields = await aio.run_io(reflang.fields, ref, lang, native is not None)
         duration_s, elapsed_s = au.duration_s(full), round(time.time() - t_start, 2)
-        await aio.run_io(results.record, saved, {**(about or {"kind": "speak"}), "accent": choice.accent,
-                                                 "duration_s": duration_s, "elapsed_s": elapsed_s})
-        finish("tts.done", {**saved, "duration_s": duration_s, "elapsed_s": elapsed_s, "model": backend.name,
-                            **choice.fields(), **(native.fields() if native else {}), **ref_fields})
-        log.info("job %s done in %.1fs (first chunk %.1fs)", job, time.time() - t_start,
-                 first_chunk_at[0] if first_chunk_at else -1)
+        await aio.run_io(
+            results.record,
+            saved,
+            {**(about or {"kind": "speak"}), "accent": choice.accent, "duration_s": duration_s, "elapsed_s": elapsed_s},
+        )
+        finish(
+            "tts.done",
+            {
+                **saved,
+                "duration_s": duration_s,
+                "elapsed_s": elapsed_s,
+                "model": backend.name,
+                **choice.fields(),
+                **(native.fields() if native else {}),
+                **ref_fields,
+            },
+        )
+        log.info(
+            "job %s done in %.1fs (first chunk %.1fs)",
+            job,
+            time.time() - t_start,
+            first_chunk_at[0] if first_chunk_at else -1,
+        )
     except asyncio.CancelledError:
         finish("tts.error", {"code": "cancelled", "message": "generation cancelled"})
     except EngineError as exc:
         finish("tts.error", {"code": exc.code, "message": exc.message})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("job %s failed", job)
         finish("tts.error", {"code": "internal", "message": f"{type(exc).__name__}: {exc}"})
     finally:
         release_job(job)
 
 
-def _prepare_jobdir(data: config.DataDir, jobdir: str) -> None:
-    os.makedirs(jobdir, exist_ok=True)
+def _prepare_jobdir(data: config.DataDir, jobdir: Path) -> None:
+    jobdir.mkdir(parents=True, exist_ok=True)
     _gc_tmp(data)
 
 
-def start_exclusive(ctx: Context, fn: Callable[[str], Awaitable[None]],
-                    busy_message: str = "another generation or Redub job is running", holder: str | None = None) -> str:
+def start_exclusive(
+    ctx: Context,
+    fn: Callable[[str], Awaitable[None]],
+    busy_message: str = "another generation or Redub job is running",
+    holder: str | None = None,
+) -> str:
     """Take the one generation slot for ``fn(job)``, which should call :func:`release_job` before its final event. Loop
     thread only (the check-and-take is atomic there). Raises ``busy`` with the holder's text, else ``busy_message``."""
     if _ACTIVE[0] is not None:
@@ -643,9 +783,8 @@ def busy_message(default: str) -> str:
 
 def _gc_tmp(data: config.DataDir) -> None:
     try:
-        for name in os.listdir(data.tmp):
-            p = os.path.join(data.tmp, name)
-            if name.startswith("job-") and os.path.isdir(p) and time.time() - os.path.getmtime(p) > 3600:
+        for p in data.tmp.iterdir():
+            if p.name.startswith("job-") and p.is_dir() and time.time() - p.stat().st_mtime > 3600:
                 shutil.rmtree(p, ignore_errors=True)
     except OSError:
         pass
@@ -667,7 +806,7 @@ async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     lang = str(meta.get("language") or "en").lower()
     ref = data.reference(vid)
     pth, idx = data.rvc_model(vid)
-    has_ref, has_pth = await aio.run_io(lambda: (os.path.isfile(ref), os.path.isfile(pth)))
+    has_ref, has_pth = await aio.run_io(lambda: (ref.is_file(), pth.is_file()))
     if not has_ref:
         raise EngineError("not_found", "this voice has no recording yet (reference.wav is missing)")
     check_backend_ready(OMNIVOICE)
@@ -680,8 +819,12 @@ async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         zs_worker = None
     if choice.accent == "native-us":
         known, native_ref = await aio.run_io(accent.peek_native, ref, native_voice)
-        native_warm = (known and native_ref is not None and OMNIVOICE.is_warm(native_ref.path)
-                       and (zs_worker is None or zs_worker.is_warm(ref)))
+        native_warm = (
+            known
+            and native_ref is not None
+            and OMNIVOICE.is_warm(native_ref.path)
+            and (zs_worker is None or zs_worker.is_warm(ref))
+        )
     else:
         native_warm = True
     if OMNIVOICE.is_warm(ref) and (worker is None or worker.loaded_model == rvc.model_sig(pth)) and native_warm:
@@ -695,23 +838,36 @@ async def voices_warm(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     return {"warming": True}
 
 
-async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: str, worker: rvc.RvcWorker | None,
-                pth: str, idx: str, choice: accent.Choice | None = None, zs_worker: zsvc.ZsvcWorker | None = None
-                ) -> None:
+async def _warm(
+    ctx: Context,
+    data: config.DataDir,
+    vid: str,
+    ref: str | Path,
+    lang: str,
+    worker: rvc.RvcWorker | None,
+    pth: str | Path,
+    idx: str | Path,
+    choice: accent.Choice | None = None,
+    zs_worker: zsvc.ZsvcWorker | None = None,
+) -> None:
     t0 = time.time()
-    warm_dir = os.path.join(data.tmp, f"_warm_{vid}")
+    warm_dir = data.tmp / f"_warm_{vid}"
     try:
-        await aio.run_io(os.makedirs, warm_dir, exist_ok=True)
+        await aio.run_io(warm_dir.mkdir, parents=True, exist_ok=True)
         speak_lang = lang if lang in OMNIVOICE.languages else "en"
         if OMNIVOICE.on_cpu():  # a sentence takes minutes there: only the prompt, which the first generation needs too
             await OMNIVOICE.warm(ref, speak_lang)
         else:
             # The shortest real inference: builds the voice-clone prompt (and, the first time for a clip, its
             # transcript).
-            src = await OMNIVOICE.synthesize(_WARM_TEXT.get(lang, _WARM_TEXT["en"]), speak_lang, ref,
-                                             SynthParams(out_path=os.path.join(warm_dir, "in.wav"), first=True))
+            src = await OMNIVOICE.synthesize(
+                _WARM_TEXT.get(lang, _WARM_TEXT["en"]),
+                speak_lang,
+                ref,
+                SynthParams(out_path=warm_dir / "in.wav", first=True),
+            )
             if worker is not None:  # load the voice's RVC model and index too (about 16 s cold, 1.7 s warm)
-                await worker.convert(src, os.path.join(warm_dir, "out.wav"), pth, idx, 1.0)
+                await worker.convert(src, warm_dir / "out.wav", pth, idx, 1.0)
         if lang == "uk" and HOLOS.available():  # Ukrainian with exact stress: the voice's style vector (~0.2 s)
             await HOLOS.warm(ref)
         if choice is not None and choice.accent == "native-us":
@@ -726,14 +882,21 @@ async def _warm(ctx: Context, data: config.DataDir, vid: str, ref: str, lang: st
         ref_lang = await aio.run_io(lambda: reflang.detected(ref)[0])
         if ref_lang is None:
             ref_lang = await OMNIVOICE.inspect(ref)
-        ctx.emit("voice.warm", {"id": vid, "ok": True, "elapsed_s": round(time.time() - t0, 2),
-                                "reference_language": reflang.norm(ref_lang)})
+        ctx.emit(
+            "voice.warm",
+            {
+                "id": vid,
+                "ok": True,
+                "elapsed_s": round(time.time() - t0, 2),
+                "reference_language": reflang.norm(ref_lang),
+            },
+        )
     except asyncio.CancelledError:
         ctx.emit("voice.warm", {"id": vid, "ok": False, "message": "cancelled"})
     except EngineError as exc:
         log.warning("warm-up of voice %s refused: %s", vid, exc.message)
         ctx.emit("voice.warm", {"id": vid, "ok": False, "message": exc.message})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("warm-up of voice %s failed", vid)
         ctx.emit("voice.warm", {"id": vid, "ok": False, "message": f"{type(exc).__name__}: {exc}"})
     finally:
@@ -750,7 +913,7 @@ async def release_gpu(ctx: Context) -> None:
     for b in backends.all_backends():
         try:
             await b.release()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("TTS backend %s could not release the GPU", b.name)
     await asyncio.gather(rvc.shutdown(), speech.shutdown(), zsvc.shutdown())
 
@@ -764,7 +927,7 @@ def reacquire_gpu(ctx: Context) -> asyncio.Task[None] | None:
 
 
 @contextlib.asynccontextmanager
-async def gpu_released(ctx: Context):  # type: ignore[no-untyped-def]
+async def gpu_released(ctx: Context) -> AsyncIterator[None]:
     """Release before, reload in the background after (also on error)."""
     await release_gpu(ctx)
     try:

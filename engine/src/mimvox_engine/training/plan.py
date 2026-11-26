@@ -19,7 +19,7 @@ def recommended_epochs(minutes: float) -> int:
     if minutes <= 0:
         return MAX_EPOCHS
     raw = REF_EPOCHS * (REF_MINUTES / minutes) ** 0.5
-    return int(round(min(MAX_EPOCHS, max(MIN_EPOCHS, raw)) / 10.0)) * 10
+    return round(min(MAX_EPOCHS, max(MIN_EPOCHS, raw)) / 10.0) * 10
 
 
 def wav_seconds(path: Path) -> float:
@@ -51,7 +51,10 @@ def free_vram_gb() -> tuple[float | None, float | None]:
     try:
         out = subprocess.run(
             [exe, "--query-gpu=memory.free,memory.total", "--format=csv,noheader,nounits", "-i", "0"],
-            capture_output=True, text=True, timeout=15, check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
         ).stdout
         free_mib, total_mib = (float(x) for x in out.strip().splitlines()[0].split(","))
         return free_mib / 1024.0, total_mib / 1024.0

@@ -18,9 +18,9 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
 
 APP_DIR_NAME = "mimvox"
 
@@ -64,8 +64,15 @@ APPLIO_WINDOWS_REQUIRED = ("ffmpeg.exe", "ffprobe.exe")
 # Redub models, under <data>/runtime/models (the speech worker loads them from there, never from the user's cache).
 NLLB_REPO = "facebook/nllb-200-distilled-600M"
 NLLB_DIR = "nllb-200-distilled-600M"
-NLLB_FILES = ("config.json", "generation_config.json", "pytorch_model.bin", "sentencepiece.bpe.model",
-              "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json")
+NLLB_FILES = (
+    "config.json",
+    "generation_config.json",
+    "pytorch_model.bin",
+    "sentencepiece.bpe.model",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+)
 NLLB_REQUIRED = ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")
 # "Better translation" (optional; a default with a GPU): NLLB-200 distilled 1.3B. The repo only has fp32
 # weights (pytorch_model.bin, 5.5 GB), so they are downloaded, stored as fp16 safetensors (2.7 GB) and the .bin deleted.
@@ -86,56 +93,99 @@ NLLB_FP16_SCRIPT = (
 # of this repository.
 SEEDVC_URL = "https://github.com/Plachtaa/seed-vc.git"
 SEEDVC_COMMIT = "51383efd921027683c89e5348211d93ff12ac2a8"
-SEEDVC_DIR = "seed-vc"                 # <runtime>/seed-vc (code) and <runtime>/models/seed-vc (weights)
+SEEDVC_DIR = "seed-vc"  # <runtime>/seed-vc (code) and <runtime>/models/seed-vc (weights)
 SEEDVC_PACKAGES = ("munch==4.0.0", "einops==0.8.0")
-SEEDVC_MODELS = (   # (subfolder, Hugging Face repo, revision, files)
-    ("dit", "Plachta/Seed-VC", "257283f9f41585055e8f858fba4fd044e5caed6e",
-     ("DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth", "config_dit_mel_seed_uvit_whisper_small_wavenet.yml")),
-    ("bigvgan", "nvidia/bigvgan_v2_22khz_80band_256x", "633ff708ed5b74903e86ff1298cf4a98e921c513",
-     ("config.json", "bigvgan_generator.pt")),
-    ("whisper-small", "openai/whisper-small", "973afd24965f72e36ca33b3055d56a652f456b4d",
-     ("config.json", "preprocessor_config.json", "model.safetensors")),
+SEEDVC_MODELS = (  # (subfolder, Hugging Face repo, revision, files)
+    (
+        "dit",
+        "Plachta/Seed-VC",
+        "257283f9f41585055e8f858fba4fd044e5caed6e",
+        (
+            "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
+            "config_dit_mel_seed_uvit_whisper_small_wavenet.yml",
+        ),
+    ),
+    (
+        "bigvgan",
+        "nvidia/bigvgan_v2_22khz_80band_256x",
+        "633ff708ed5b74903e86ff1298cf4a98e921c513",
+        ("config.json", "bigvgan_generator.pt"),
+    ),
+    (
+        "whisper-small",
+        "openai/whisper-small",
+        "973afd24965f72e36ca33b3055d56a652f456b4d",
+        ("config.json", "preprocessor_config.json", "model.safetensors"),
+    ),
 )
-SEEDVC_STAMP = ".mimvox-setup-ok"      # in the weights folder: the engine uses the converter only once it is there
-ZERO_SHOT_GB = 2.0   # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, BigVGAN 0.45, Whisper-small 0.97)
+SEEDVC_STAMP = ".mimvox-setup-ok"  # in the weights folder: the engine uses the converter only once it is there
+ZERO_SHOT_GB = 2.0  # Seed-VC checkout (~0.1 GB) + weights (1.8 GB: DiT 0.44, BigVGAN 0.45, Whisper-small 0.97)
 # HolosTTS (MIT): Ukrainian with exact word stress, in its own venv because its ukrainian-word-stress fork has the
 # package name of the lang-uk one the engine venv uses for OmniVoice's stress hints.
-HOLOS_DIR = "holos"                    # <runtime>/holos/.venv and <runtime>/models/holos
+HOLOS_DIR = "holos"  # <runtime>/holos/.venv and <runtime>/models/holos
 HOLOS_PYTHON = "3.14"
 HOLOS_PACKAGES = (
-    "holos-tts==0.4", "stanza==1.15.1", "transformers==5.23.0", "huggingface-hub==2.4.0", "marisa-trie==1.4.1",
-    "librosa==0.11.0", "soundfile==0.14.0", "numpy==2.4.6", "scipy==1.17.1", "num2words==0.5.14",
+    "holos-tts==0.4",
+    "stanza==1.15.1",
+    "transformers==5.23.0",
+    "huggingface-hub==2.4.0",
+    "marisa-trie==1.4.1",
+    "librosa==0.11.0",
+    "soundfile==0.14.0",
+    "numpy==2.4.6",
+    "scipy==1.17.1",
+    "num2words==0.5.14",
     # archives at pinned commits, not git: setup works without git (and its certificate setup)
     "ipa-uk @ https://github.com/patriotyk/ipa-uk/archive/3faf05ec50fd4880965b6c76f8e479a4f82117f5.zip",
-    "ukrainian-accentor @ https://github.com/egorsmkv/ukrainian-accentor/archive/"
-    "3dff5ecd2ac91e879086c0e2a7f1ce079603c9f1.zip",
+    (
+        "ukrainian-accentor @ https://github.com/egorsmkv/ukrainian-accentor/archive/"
+        "3dff5ecd2ac91e879086c0e2a7f1ce079603c9f1.zip"
+    ),
 )
 # --no-deps: its metadata asks for ukrainian-accentor from git (installed above from the same commit's archive).
-HOLOS_NO_DEPS = ("ukrainian-word-stress @ https://github.com/patriotyk/ukrainian-word-stress/archive/"
-                 "d5b37ea0abe9711930d9c3b0b13edec5a0675512.zip",)
+HOLOS_NO_DEPS = (
+    (
+        "ukrainian-word-stress @ https://github.com/patriotyk/ukrainian-word-stress/archive/"
+        "d5b37ea0abe9711930d9c3b0b13edec5a0675512.zip"
+    ),
+)
 HOLOS_REPO = "patriotyk/HolosTTS"
 HOLOS_REVISION = "main"
 HOLOS_FILES = ("holos.pt", "voice_encoder.pt", "voices.pt")
-HOLOS_STANZA = "stanza"                # <runtime>/models/holos/stanza: STANZA_RESOURCES_DIR of the worker
+HOLOS_STANZA = "stanza"  # <runtime>/models/holos/stanza: STANZA_RESOURCES_DIR of the worker
 HOLOS_STANZA_PROCESSORS = "tokenize,pos,mwt"
-HOLOS_STAMP = ".mimvox-setup-ok"       # in <runtime>/models/holos: the engine uses HolosTTS only once it is there
-UKRAINIAN_GB = 1.5   # weights 0.9 GB + the packages the engine venv does not share (Stanza, ipa-uk, ...)
-# More voice-cloning models, each in its own venv (<runtime>/<id>/.venv, weights in <runtime>/models/<id>): Chatterbox
-# pins transformers 5.2, VoxCPM2 brings funasr, modelscope and datasets. Chatterbox's watermarker imports pkg_resources,
-# which setuptools 82 drops.
+HOLOS_STAMP = ".mimvox-setup-ok"  # in <runtime>/models/holos: the engine uses HolosTTS only once it is there
+UKRAINIAN_GB = 1.5  # weights 0.9 GB + the packages the engine venv does not share (Stanza, ipa-uk, ...)
+# Chatterbox's watermarker imports pkg_resources, which setuptools 82 drops.
 CLONE_MODELS = {
-    "voxcpm": {"label": "VoxCPM2", "packages": ("voxcpm==2.0.3", "num2words==0.5.14"),
-               "repo": "openbmb/VoxCPM2", "revision": "7936080b41163874f38610f46f438e2c0757f9fd", "files": (),
-               "required": ("model.safetensors", "audiovae.pth", "config.json"), "download_gb": 4.7},
-    "chatterbox": {"label": "Chatterbox", "packages": ("chatterbox-tts==0.1.7", "num2words==0.5.14", "setuptools==81.0.0"),
-                   "repo": "ResembleAI/chatterbox", "revision": "5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18",
-                   "files": ("ve.pt", "t3_mtl23ls_v2.safetensors", "s3gen.pt", "grapheme_mtl_merged_expanded_v1.json",
-                             "conds.pt", "Cangjie5_TC.json"),
-                   "required": ("t3_mtl23ls_v2.safetensors", "s3gen.pt", "ve.pt", "conds.pt"), "download_gb": 3.0,
-                   # Its Chinese word segmenter downloads its model on first use: fetched here, into the weights folder.
-                   "after": "from spacy_pkuseg import pkuseg; pkuseg()"},
+    "voxcpm": {
+        "label": "VoxCPM2",
+        "packages": ("voxcpm==2.0.3", "num2words==0.5.14"),
+        "repo": "openbmb/VoxCPM2",
+        "revision": "7936080b41163874f38610f46f438e2c0757f9fd",
+        "files": (),
+        "required": ("model.safetensors", "audiovae.pth", "config.json"),
+        "download_gb": 4.7,
+    },
+    "chatterbox": {
+        "label": "Chatterbox",
+        "packages": ("chatterbox-tts==0.1.7", "num2words==0.5.14", "setuptools==81.0.0"),
+        "repo": "ResembleAI/chatterbox",
+        "revision": "5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18",
+        "files": (
+            "ve.pt",
+            "t3_mtl23ls_v2.safetensors",
+            "s3gen.pt",
+            "grapheme_mtl_merged_expanded_v1.json",
+            "conds.pt",
+            "Cangjie5_TC.json",
+        ),
+        "required": ("t3_mtl23ls_v2.safetensors", "s3gen.pt", "ve.pt", "conds.pt"),
+        "download_gb": 3.0,
+        "after": "from spacy_pkuseg import pkuseg; pkuseg()",
+    },
 }
-CLONE_STAMP = ".mimvox-setup-ok"   # in the weights folder: the engine uses the model only once it is there
+CLONE_STAMP = ".mimvox-setup-ok"
 
 WHISPER_MODEL = "turbo"
 # The checkpoint openai-whisper downloads for "turbo" (whisper._MODELS; the SHA-256 is part of the URL). Fetched by
@@ -151,47 +201,67 @@ DEMUCS_FILE = "hdemucs_high_trained.pt"
 DEMUCS_SIZE = 334_697_255
 DEMUCS_SHA256 = "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816"
 ENGINE_DIR = "engine"
-UV_PYTHON_DIR = "python"   # <runtime>/python, also in move_runtime.fix_venv_paths and crates/desktop/src/ui/setuprun.rs
+UV_PYTHON_DIR = "python"  # <runtime>/python, also in move_runtime.fix_venv_paths and crates/desktop/src/ui/setuprun.rs
 ENGINE_PYTHON = "3.14"
-PIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;@]+$")   # a `uv pip freeze` line of a registry package
+PIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;@]+$")  # a `uv pip freeze` line of a registry package
 ENGINE_TORCH = ("torch==2.11.0", "torchaudio==2.11.0")
 # pypdf (BSD-3-Clause, pure Python): PDF books; every other book format is read with the standard library.
-ENGINE_PACKAGES = ("omnivoice==0.2.1", "openai-whisper==20250625", "num2words==0.5.14", "sentencepiece", "g2p_en==2.1.0",
-                   "soundfile", "librosa", "scipy", "numpy", "marisa-trie==1.4.1", "pypdf==6.21.4")
+ENGINE_PACKAGES = (
+    "omnivoice==0.2.1",
+    "openai-whisper==20250625",
+    "num2words==0.5.14",
+    "sentencepiece",
+    "g2p_en==2.1.0",
+    "soundfile",
+    "librosa",
+    "scipy",
+    "numpy",
+    "marisa-trie==1.4.1",
+    "pypdf==6.21.4",
+)
 # --no-deps: its Stanza dependency (and the ~500 MB of models Stanza downloads) is only needed for the context mode,
 # which is not used; the dictionary-only mode works offline.
 ENGINE_NO_DEPS = ("ukrainian-word-stress==2.1.0",)
-NLTK_DIR = "nltk_data"   # in the engine venv
+NLTK_DIR = "nltk_data"  # in the engine venv
 # g2p_en's import looks for the first two (else downloads them); NLTK 3.9+ tags with the third.
-NLTK_PACKAGES = (("corpora", "cmudict"), ("taggers", "averaged_perceptron_tagger"),
-                 ("taggers", "averaged_perceptron_tagger_eng"))
+NLTK_PACKAGES = (
+    ("corpora", "cmudict"),
+    ("taggers", "averaged_perceptron_tagger"),
+    ("taggers", "averaged_perceptron_tagger_eng"),
+)
 OMNIVOICE_REPO = "k2-fsa/OmniVoice"
-OMNIVOICE_DIR = "omnivoice"   # <runtime>/models/omnivoice
-OMNIVOICE_REQUIRED = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json",
-                      "audio_tokenizer/config.json", "audio_tokenizer/model.safetensors",
-                      "audio_tokenizer/preprocessor_config.json")
+OMNIVOICE_DIR = "omnivoice"  # <runtime>/models/omnivoice
+OMNIVOICE_REQUIRED = (
+    "config.json",
+    "model.safetensors",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "audio_tokenizer/config.json",
+    "audio_tokenizer/model.safetensors",
+    "audio_tokenizer/preprocessor_config.json",
+)
 
 MIN_RUST = (1, 97)
 RUNTIME_GB = 30
-ENGINE_GB = 11    # engine venv (torch 2.11 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + the OmniVoice model (3.3 GB)
+ENGINE_GB = 11  # engine venv (torch 2.11 CUDA, transformers 5, OmniVoice, Whisper; ~7.6 GB) + OmniVoice (3.3 GB)
 APPLIO_GB = 12
-SPEECH_GB = 4.5   # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
-BETTER_TRANSLATION_GB = 2.7   # NLLB-200 1.3B in fp16 (a 5.5 GB download), with a GPU or --better-translation yes
-SEPARATION_GB = 0.3   # Hybrid Demucs (335 MB) for "Remove background music"
-LEGACY_INDEXTTS_DIR = "index-tts"   # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
+SPEECH_GB = 4.5  # Whisper turbo (1.6 GB) + the NLLB-200 translation model (2.5 GB) for Redub
+BETTER_TRANSLATION_GB = 2.7  # NLLB-200 1.3B in fp16 (a 5.5 GB download), with a GPU or --better-translation yes
+SEPARATION_GB = 0.3  # Hybrid Demucs (335 MB) for "Remove background music"
+LEGACY_INDEXTTS_DIR = "index-tts"  # the IndexTTS-2.5 runtime of earlier versions (about 19 GB), no longer used
 DISK_NEEDED_GB = 34
 # "speech" is always installed; the rest are chosen in the app (or --components / --add) and recorded in runtime.toml.
 # Sizes on disk in GB, also in COMPONENTS in crates/desktop/src/ui/setuprun.rs.
 COMPONENTS = {
-    "speech": 12.6,             # engine venv + OmniVoice (11) + Whisper turbo (1.6): Speak, Book, Redub's Re-speak
-    "training": APPLIO_GB,      # Applio/RVC: Train, voice match for trained voices, Redub's Convert voice
-    "translation": 2.5,         # NLLB-200 600M: Redub's Translate & dub
-    "better_translation": BETTER_TRANSLATION_GB,   # NLLB-200 1.3B (a 5.5 GB download)
-    "native_accent": ZERO_SHOT_GB,                 # Seed-VC: the native accent of voices that are not trained
-    "music_removal": SEPARATION_GB,                # Hybrid Demucs: background music out of media files
-    "ukrainian": UKRAINIAN_GB,                     # HolosTTS: Ukrainian with exact word stress
-    "voxcpm": 6.0,                                 # VoxCPM2: weights 4.7 GB + its packages
-    "chatterbox": 4.3,                             # Chatterbox Multilingual: weights 3.0 GB + its packages
+    "speech": 12.6,  # engine venv + OmniVoice (11) + Whisper turbo (1.6): Speak, Book, Redub's Re-speak
+    "training": APPLIO_GB,  # Applio/RVC: Train, voice match for trained voices, Redub's Convert voice
+    "translation": 2.5,  # NLLB-200 600M: Redub's Translate & dub
+    "better_translation": BETTER_TRANSLATION_GB,  # NLLB-200 1.3B (a 5.5 GB download)
+    "native_accent": ZERO_SHOT_GB,  # Seed-VC: the native accent of voices that are not trained
+    "music_removal": SEPARATION_GB,  # Hybrid Demucs: background music out of media files
+    "ukrainian": UKRAINIAN_GB,  # HolosTTS: Ukrainian with exact word stress
+    "voxcpm": 6.0,
+    "chatterbox": 4.3,
 }
 # Portable ffmpeg for Windows when Applio (which brings one) is not installed.
 FFMPEG_WINDOWS_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-{}-gpl.zip"
@@ -203,24 +273,76 @@ ARCHIVE_MARKER = ".mimvox-commit"
 # plus ffmpeg and libsndfile for the Python side. Keys are the package managers' names.
 LINUX_PACKAGES = {
     "apt-get": [
-        "build-essential", "pkg-config", "git", "curl", "ca-certificates", "ffmpeg", "libsndfile1",
-        "libasound2-dev", "libxkbcommon-dev", "libxkbcommon-x11-0", "libwayland-dev", "libx11-dev",
-        "libfontconfig1-dev", "libvulkan1", "mesa-vulkan-drivers", "libportaudio2",
+        "build-essential",
+        "pkg-config",
+        "git",
+        "curl",
+        "ca-certificates",
+        "ffmpeg",
+        "libsndfile1",
+        "libasound2-dev",
+        "libxkbcommon-dev",
+        "libxkbcommon-x11-0",
+        "libwayland-dev",
+        "libx11-dev",
+        "libfontconfig1-dev",
+        "libvulkan1",
+        "mesa-vulkan-drivers",
+        "libportaudio2",
     ],
     "dnf": [
-        "gcc", "gcc-c++", "make", "pkgconf-pkg-config", "git", "curl", "ffmpeg-free", "libsndfile",
-        "alsa-lib-devel", "libxkbcommon-devel", "libxkbcommon-x11", "wayland-devel", "libX11-devel",
-        "fontconfig-devel", "vulkan-loader", "mesa-vulkan-drivers", "portaudio",
+        "gcc",
+        "gcc-c++",
+        "make",
+        "pkgconf-pkg-config",
+        "git",
+        "curl",
+        "ffmpeg-free",
+        "libsndfile",
+        "alsa-lib-devel",
+        "libxkbcommon-devel",
+        "libxkbcommon-x11",
+        "wayland-devel",
+        "libX11-devel",
+        "fontconfig-devel",
+        "vulkan-loader",
+        "mesa-vulkan-drivers",
+        "portaudio",
     ],
     "pacman": [
-        "base-devel", "pkgconf", "git", "curl", "ffmpeg", "libsndfile", "alsa-lib", "libxkbcommon",
-        "libxkbcommon-x11", "wayland", "libx11", "fontconfig", "vulkan-icd-loader", "vulkan-mesa-layers",
+        "base-devel",
+        "pkgconf",
+        "git",
+        "curl",
+        "ffmpeg",
+        "libsndfile",
+        "alsa-lib",
+        "libxkbcommon",
+        "libxkbcommon-x11",
+        "wayland",
+        "libx11",
+        "fontconfig",
+        "vulkan-icd-loader",
+        "vulkan-mesa-layers",
         "portaudio",
     ],
     "zypper": [
-        "gcc", "gcc-c++", "make", "pkg-config", "git", "curl", "ffmpeg", "libsndfile1", "alsa-devel",
-        "libxkbcommon-devel", "libxkbcommon-x11-0", "wayland-devel", "libX11-devel", "fontconfig-devel",
-        "libvulkan1", "portaudio",
+        "gcc",
+        "gcc-c++",
+        "make",
+        "pkg-config",
+        "git",
+        "curl",
+        "ffmpeg",
+        "libsndfile1",
+        "alsa-devel",
+        "libxkbcommon-devel",
+        "libxkbcommon-x11-0",
+        "wayland-devel",
+        "libX11-devel",
+        "fontconfig-devel",
+        "libvulkan1",
+        "portaudio",
     ],
 }
 LINUX_INSTALL = {
@@ -314,10 +436,12 @@ def read_location(plat: str) -> Path | None:
 
 def previous_components(data_dir: Path) -> set[str] | None:
     """runtime.toml ``[setup] components``; None before there were any."""
-    import tomllib  # noqa: PLC0415 - Python 3.11+, only needed here
+    import tomllib
 
     try:
-        found = tomllib.loads((data_dir / "runtime.toml").read_text(encoding="utf-8")).get("setup", {}).get("components")
+        found = (
+            tomllib.loads((data_dir / "runtime.toml").read_text(encoding="utf-8")).get("setup", {}).get("components")
+        )
     except (OSError, ValueError):
         return None
     return {c for c in found if c in COMPONENTS} if isinstance(found, list) else None
@@ -325,26 +449,38 @@ def previous_components(data_dir: Path) -> set[str] | None:
 
 def recorded_gpu(data_dir: Path) -> Gpu | None:
     """runtime.toml ``[device]`` of an earlier run; None before there was one."""
-    import tomllib  # noqa: PLC0415 - Python 3.11+, only needed here
+    import tomllib
 
     try:
         device = tomllib.loads((data_dir / "runtime.toml").read_text(encoding="utf-8")).get("device", {})
         backend = str(device["backend"]).lower()
-        return Gpu(backend, str(device.get("name", "")), float(device.get("vram_gb", 0.0)), str(device.get("vendor", "")))
+        return Gpu(
+            backend, str(device.get("name", "")), float(device.get("vram_gb", 0.0)), str(device.get("vendor", ""))
+        )
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
 def has_runtime(data_dir: Path) -> bool:
-    return (data_dir / "runtime.toml").is_file() or (data_dir / "runtime" / ENGINE_DIR).is_dir() \
+    return (
+        (data_dir / "runtime.toml").is_file()
+        or (data_dir / "runtime" / ENGINE_DIR).is_dir()
         or (data_dir / "runtime" / LEGACY_INDEXTTS_DIR).is_dir()
+    )
+
+
+def _drive_exists(root: str) -> bool:
+    try:
+        return Path(root).exists()
+    except OSError:
+        return False
 
 
 def volumes(plat: str) -> list[tuple[str, float]]:
     """``(mount point or drive, free GB)`` of the volumes worth offering for the install."""
     roots: list[str] = []
     if plat == "windows":
-        roots = [f"{c}:\\" for c in "CDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{c}:\\")]
+        roots = [f"{c}:\\" for c in "CDEFGHIJKLMNOPQRSTUVWXYZ" if _drive_exists(f"{c}:\\")]
     else:
         roots = ["/", str(Path.home())]
         for base in ("/mnt", "/media", "/run/media", "/Volumes"):
@@ -359,7 +495,7 @@ def volumes(plat: str) -> list[tuple[str, float]]:
     for root in roots:
         try:
             usage = shutil.disk_usage(root)
-            dev = os.stat(root).st_dev
+            dev = Path(root).stat().st_dev
         except OSError:
             continue
         key = (dev, usage.total)
@@ -413,11 +549,11 @@ def swap_venv(venv: Path, new: Path) -> None:
     old = venv.with_name(venv.name + ".old")
     if old.exists():
         _rmtree(old)
-    os.rename(venv, old)
+    venv.rename(old)
     try:
-        os.rename(new, venv)
+        new.rename(venv)
     except OSError:
-        os.rename(old, venv)
+        old.rename(venv)
         raise
     restore_swapped(venv)
 
@@ -427,7 +563,7 @@ def restore_swapped(venv: Path) -> None:
     old, new = venv.with_name(venv.name + ".old"), venv.with_name(venv.name + ".new")
     try:
         if old.exists() and not venv.exists():
-            os.rename(old, venv)
+            old.rename(venv)
         for leftover in (old, new):
             if leftover.exists():
                 _rmtree(leftover)
@@ -480,8 +616,9 @@ def amd_gpu_name(dev: Path) -> str:
         pass
     try:
         slot = dev.resolve().name
-        out = subprocess.run(["lspci", "-mm", "-s", slot], capture_output=True, text=True, timeout=10,
-                             check=False).stdout
+        out = subprocess.run(
+            ["lspci", "-mm", "-s", slot], capture_output=True, text=True, timeout=10, check=False
+        ).stdout
         fields = re.findall(r'"([^"]*)"', out)
         match = re.search(r"\[(.+)\]", fields[2]) if len(fields) > 2 else None
         if match:
@@ -519,7 +656,7 @@ class Setup:
 
     @property
     def python_dir(self) -> Path:
-        """uv's Pythons (UV_PYTHON_INSTALL_DIR), which the venvs are made from."""
+        """Uv's Pythons (UV_PYTHON_INSTALL_DIR), which the venvs are made from."""
         return self.runtime / UV_PYTHON_DIR
 
     @property
@@ -605,7 +742,9 @@ class Setup:
             env.update(extra)
         return env
 
-    def run(self, command: Sequence[object], cwd: Path | None = None, extra_env: Mapping[str, str] | None = None) -> int:
+    def run(
+        self, command: Sequence[object], cwd: Path | None = None, extra_env: Mapping[str, str] | None = None
+    ) -> int:
         """Returns the exit code (127: program not found)."""
         argv = [str(part) for part in command]
         try:
@@ -615,13 +754,20 @@ class Setup:
 
     def quiet(self, command: Sequence[object], cwd: Path | None = None) -> int:
         try:
-            return subprocess.run([str(p) for p in command], cwd=cwd or self.root, env=self.env(), check=False,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+            return subprocess.run(
+                [str(p) for p in command],
+                cwd=cwd or self.root,
+                env=self.env(),
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
         except OSError:
             return 127
 
-    def must(self, command: Sequence[object], what: str, cwd: Path | None = None,
-             extra_env: Mapping[str, str] | None = None) -> None:
+    def must(
+        self, command: Sequence[object], what: str, cwd: Path | None = None, extra_env: Mapping[str, str] | None = None
+    ) -> None:
         code = self.run(command, cwd, extra_env)
         if code != 0:
             raise SetupError(f"{what} failed (exit {code}); the output above says why.")
@@ -629,8 +775,16 @@ class Setup:
     def read(self, command: Sequence[object], cwd: Path | None = None) -> str:
         """A command's stdout, or '' when it failed or is missing."""
         try:
-            done = subprocess.run([str(p) for p in command], cwd=cwd or self.root, env=self.env(), check=False,
-                                  capture_output=True, text=True, encoding="utf-8", errors="replace")
+            done = subprocess.run(
+                [str(p) for p in command],
+                cwd=cwd or self.root,
+                env=self.env(),
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
         except OSError:
             return ""
         return done.stdout if done.returncode == 0 else ""
@@ -651,20 +805,31 @@ class Setup:
         if self.gpu.build == "rocm":
             say(f"GPU backend: rocm ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB; AMD support is new, see the README)")
             if not os.access("/dev/kfd", os.R_OK | os.W_OK):
-                warn("/dev/kfd is not accessible, so PyTorch cannot use the AMD GPU. Add your user to the 'render' "
-                     "and 'video' groups (sudo usermod -aG render,video $USER), log in again and run setup again.")
+                warn(
+                    "/dev/kfd is not accessible, so PyTorch cannot use the AMD GPU. Add your user to the 'render' "
+                    "and 'video' groups (sudo usermod -aG render,video $USER), log in again and run setup again."
+                )
         elif self.gpu.backend == "cuda":
-            say(f"GPU backend: cuda ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB)" if self.gpu.name else "GPU backend: cuda")
+            say(
+                f"GPU backend: cuda ({self.gpu.name}, {self.gpu.vram_gb:.0f} GB)"
+                if self.gpu.name
+                else "GPU backend: cuda"
+            )
         elif self.gpu.backend == "mps":
             say("GPU backend: mps (Apple Silicon; best effort, parts of the engine may fall back to the CPU)")
         else:
             if self.plat == "macos":
-                warn("Intel Macs are not supported: PyTorch 2.8 (OmniVoice) has no wheels for them; expect the install to fail.")
+                warn(
+                    "Intel Macs are not supported: PyTorch 2.11 (OmniVoice) has no wheels for them; expect the "
+                    "install to fail."
+                )
             if cpu_chosen:
                 say("GPU backend: cpu")
             else:
-                warn("No supported GPU found: the runtime is set up for the CPU. Training a voice will be very slow "
-                     "and speech generation several times slower than real time.")
+                warn(
+                    "No supported GPU found: the runtime is set up for the CPU. Training a voice will be very slow "
+                    "and speech generation several times slower than real time."
+                )
 
     @staticmethod
     def _existing_parent(path: Path) -> Path:
@@ -683,11 +848,15 @@ class Setup:
         if recorded is None or recorded.build == found.build:
             return found, False
         if found.backend == "cpu":
-            say(f"Keeping the {recorded.build} backend this runtime was set up for, although no GPU was found now "
-                "(--cpu switches to the CPU).")
+            say(
+                f"Keeping the {recorded.build} backend this runtime was set up for, although no GPU was found now "
+                "(--cpu switches to the CPU)."
+            )
         else:
-            say(f"Keeping the {recorded.build} backend this runtime was set up for ({found.name or found.build} found; "
-                "--gpu switches to it).")
+            say(
+                f"Keeping the {recorded.build} backend this runtime was set up for ({found.name or found.build} found; "
+                "--gpu switches to it)."
+            )
         return recorded, recorded.backend == "cpu"
 
     def _detect_gpu(self) -> Gpu:
@@ -713,27 +882,35 @@ class Setup:
     def resolve_components(self, args: argparse.Namespace) -> None:
         """``--components``, else what an earlier run installed, else everything (better_translation only with a CUDA /
         ROCm GPU); then ``--add``, ``--better-translation`` and ``--no-zero-shot-vc``. ``speech`` is always in."""
+
         def parse(value: str) -> set[str]:
             items = {x.strip() for x in value.split(",") if x.strip()}
             unknown = items - set(COMPONENTS)
             if unknown:
-                raise SetupError(f"Unknown component(s): {', '.join(sorted(unknown))} (known: {', '.join(COMPONENTS)}).")
+                raise SetupError(
+                    f"Unknown component(s): {', '.join(sorted(unknown))} (known: {', '.join(COMPONENTS)})."
+                )
             return items
 
         previous = previous_components(self.data_dir)
         if args.components:
             chosen = parse(args.components)
         elif previous is not None:
-            # An older setup (after the app was downgraded) rewrites runtime.toml without the components it does not
-            # know: a model whose weights are complete on disk is still installed.
+            # an older setup (after a downgrade) drops the components it does not know from runtime.toml
             chosen = set(previous) | {n for n in CLONE_MODELS if (self.clone_models_dir(n) / CLONE_STAMP).is_file()}
         else:
             chosen = set(COMPONENTS)
-        if "better_translation" in chosen and self.gpu.backend != "cuda" and args.better_translation != "yes" \
-                and not (previous and "better_translation" in previous):
+        if (
+            "better_translation" in chosen
+            and self.gpu.backend != "cuda"
+            and args.better_translation != "yes"
+            and not (previous and "better_translation" in previous)
+        ):
             chosen.discard("better_translation")
-            say("Better translation left out: it runs on an NVIDIA or AMD GPU (--add better_translation installs it "
-                "anyway).")
+            say(
+                "Better translation left out: it runs on an NVIDIA or AMD GPU (--add better_translation installs it "
+                "anyway)."
+            )
         if args.add:
             chosen |= parse(args.add)
         if args.better_translation == "yes":
@@ -758,40 +935,69 @@ class Setup:
         say(f"Free space there : {free:.0f} GB")
         if existing:
             say("Existing runtime found, nothing big to download (setup only fills in what is missing).")
-            if "translation" in self.components and not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED) \
-                    and not self.skip_models:
+            if (
+                "translation" in self.components
+                and not self._has(self.models_dir / NLLB_DIR, NLLB_REQUIRED)
+                and not self.skip_models
+            ):
                 say(f"The translation model for Redub will be downloaded now (about {COMPONENTS['translation']} GB).")
             if "training" in self.components and not self.rvc_python().exists():
                 say(f"Voice training (Applio/RVC, about {APPLIO_GB} GB) will be installed now.")
             if self.wants_better_translation() and not self.has_better_translation() and not self.skip_models:
-                say(f"The better translation model (NLLB-200 1.3B) will be downloaded now: about "
-                    f"{NLLB_BIG_DOWNLOAD_GB} GB, kept as {BETTER_TRANSLATION_GB} GB.")
-            if "music_removal" in self.components and not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file() \
-                    and not self.skip_models:
+                say(
+                    f"The better translation model (NLLB-200 1.3B) will be downloaded now: about "
+                    f"{NLLB_BIG_DOWNLOAD_GB} GB, kept as {BETTER_TRANSLATION_GB} GB."
+                )
+            if (
+                "music_removal" in self.components
+                and not (self.models_dir / DEMUCS_DIR / DEMUCS_FILE).is_file()
+                and not self.skip_models
+            ):
                 say(f"The music-removal model will be downloaded now (about {SEPARATION_GB} GB: Hybrid Demucs).")
-            if "ukrainian" in self.components and not (self.holos_models / HOLOS_STAMP).is_file() \
-                    and not self.skip_models:
+            if (
+                "ukrainian" in self.components
+                and not (self.holos_models / HOLOS_STAMP).is_file()
+                and not self.skip_models
+            ):
                 say(f"Ukrainian speech (HolosTTS, exact word stress, about {UKRAINIAN_GB} GB) will be installed now.")
             for name, spec in CLONE_MODELS.items():
-                if name in self.components and not (self.clone_models_dir(name) / CLONE_STAMP).is_file() \
-                        and not self.skip_models:
-                    say(f"The {spec['label']} voice-cloning model (about {COMPONENTS[name]:g} GB) will be installed now.")
+                if (
+                    name in self.components
+                    and not (self.clone_models_dir(name) / CLONE_STAMP).is_file()
+                    and not self.skip_models
+                ):
+                    say(
+                        f"The {spec['label']} voice-cloning model (about {COMPONENTS[name]:g} GB) will be "
+                        "installed now."
+                    )
             if self.zero_shot_vc and not self.has_zero_shot_vc() and not self.skip_models:
-                say(f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
-                    "now: the native accent for voices that are not trained (--no-zero-shot-vc leaves it out).")
+                say(
+                    f"The zero-shot voice converter (Seed-VC, GPL-3.0, about {ZERO_SHOT_GB:.0f} GB) will be installed "
+                    "now: the native accent for voices that are not trained (--no-zero-shot-vc leaves it out)."
+                )
             if not self._has(self.omnivoice_model, OMNIVOICE_REQUIRED) and not self.skip_models:
-                say(f"The OmniVoice speech model (every language, Ukrainian included) will be installed now: about "
+                say(
+                    f"The OmniVoice speech model (every language, Ukrainian included) will be installed now: about "
                     f"{ENGINE_GB} GB (the engine environment in <data>/runtime/engine, the model in "
-                    "<data>/runtime/models/omnivoice).")
+                    "<data>/runtime/models/omnivoice)."
+                )
             if self.legacy_indextts.is_dir():
-                say(f"{self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used; setup offers to delete it "
-                    "at the end.")
+                say(
+                    f"{self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used; setup offers to delete it "
+                    "at the end."
+                )
         else:
-            labels = {"speech": "speech engine, OmniVoice and Whisper", "training": "voice training (Applio/RVC)",
-                      "translation": "translation for Redub", "better_translation": "better translation",
-                      "native_accent": "native accent (Seed-VC, GPL-3.0)", "music_removal": "music removal",
-                      "ukrainian": "Ukrainian speech (HolosTTS)", "voxcpm": "VoxCPM2 voice cloning",
-                      "chatterbox": "Chatterbox voice cloning"}
+            labels = {
+                "speech": "speech engine, OmniVoice and Whisper",
+                "training": "voice training (Applio/RVC)",
+                "translation": "translation for Redub",
+                "better_translation": "better translation",
+                "native_accent": "native accent (Seed-VC, GPL-3.0)",
+                "music_removal": "music removal",
+                "ukrainian": "Ukrainian speech (HolosTTS)",
+                "voxcpm": "VoxCPM2 voice cloning",
+                "chatterbox": "Chatterbox voice cloning",
+            }
             chosen = [c for c in COMPONENTS if c in self.components]
             parts = ", ".join(f"{labels[c]} ~{COMPONENTS[c]:g} GB" for c in chosen)
             say(f"This will download and install about {self.install_gb():.0f} GB ({parts}) plus ~0.1 GB per voice.")
@@ -806,8 +1012,10 @@ class Setup:
             if self.force:
                 warn(f"Only {free:.0f} GB free, less than the {needed} GB needed; continuing because of --force.")
             else:
-                raise SetupError(f"Only {free:.0f} GB free in {self.data_dir}; at least {needed} GB are needed. "
-                                 f"Free up space, choose another place with --data-dir, or pass --force.")
+                raise SetupError(
+                    f"Only {free:.0f} GB free in {self.data_dir}; at least {needed} GB are needed. "
+                    f"Free up space, choose another place with --data-dir, or pass --force."
+                )
         return not existing
 
     def confirm(self) -> None:
@@ -888,9 +1096,11 @@ class Setup:
     def _linux_manager(self) -> str:
         found = next((name for name in LINUX_PACKAGES if shutil.which(name)), None)
         if found is None:
-            raise SetupError("No known package manager (apt-get, dnf, pacman, zypper): install a C/C++ compiler, "
-                             "pkg-config and the ALSA, xkbcommon, wayland, X11, fontconfig and Vulkan "
-                             "development libraries by hand.")
+            raise SetupError(
+                "No known package manager (apt-get, dnf, pacman, zypper): install a C/C++ compiler, "
+                "pkg-config and the ALSA, xkbcommon, wayland, X11, fontconfig and Vulkan "
+                "development libraries by hand."
+            )
         return found
 
     def _dpkg_installed(self, package: str) -> bool:
@@ -920,15 +1130,18 @@ class Setup:
 
     def _windows_build_tools(self) -> None:
         vswhere = Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / (
-            "Microsoft Visual Studio/Installer/vswhere.exe")
+            "Microsoft Visual Studio/Installer/vswhere.exe"
+        )
         query = [vswhere, "-latest", "-products", "*", "-requires", VC_COMPONENT, "-property", "installationPath"]
         if self.read(query).strip():
             say("Visual Studio Build Tools (C++): present.")
             return
         if not shutil.which("winget"):
-            raise SetupError("winget is missing: install the Visual Studio Build Tools with the "
-                             "'Desktop development with C++' workload by hand "
-                             "(https://visualstudio.microsoft.com/visual-cpp-build-tools/).")
+            raise SetupError(
+                "winget is missing: install the Visual Studio Build Tools with the "
+                "'Desktop development with C++' workload by hand "
+                "(https://visualstudio.microsoft.com/visual-cpp-build-tools/)."
+            )
         say("Installing the Visual Studio Build Tools with the C++ workload (about 3 GB; this takes a while)...")
         self.run([*WINGET, WINGET_BUILD_TOOLS, "--override", BUILD_TOOLS_OVERRIDE])
         if not self.read(query).strip():  # winget's exit code is unreliable (reboot pending, already installed)
@@ -1004,8 +1217,10 @@ class Setup:
                 say("Installing ffmpeg with Homebrew...")
                 self.run(["brew", "install", "ffmpeg"])
             if not shutil.which("ffmpeg"):
-                warn("ffmpeg is missing: video files and some audio formats cannot be opened. Install Homebrew "
-                     "(https://brew.sh), run 'brew install ffmpeg', then run setup again.")
+                warn(
+                    "ffmpeg is missing: video files and some audio formats cannot be opened. Install Homebrew "
+                    "(https://brew.sh), run 'brew install ffmpeg', then run setup again."
+                )
             return
         arch = "arm64" if self.arch == "arm64" else "amd64"
         url = f"https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-{arch}-static.tar.xz"
@@ -1022,7 +1237,7 @@ class Setup:
                         if source is None:
                             continue
                         target = self.ffmpeg_dir() / name
-                        with source, open(target, "wb") as out:
+                        with source, target.open("wb") as out:
                             shutil.copyfileobj(source, out)
                         target.chmod(0o755)
         if not (self.ffmpeg_dir() / "ffmpeg").is_file():
@@ -1076,7 +1291,7 @@ class Setup:
     @staticmethod
     def _download(url: str, target: Path) -> None:
         try:
-            with urllib.request.urlopen(url, timeout=120) as response, open(target, "wb") as handle:  # noqa: S310
+            with urllib.request.urlopen(url, timeout=120) as response, target.open("wb") as handle:
                 shutil.copyfileobj(response, handle)
         except OSError as error:
             raise SetupError(f"Downloading {url} failed: {error}") from error
@@ -1133,7 +1348,7 @@ class Setup:
                         source = tar.extractfile(member)
                         if source is None:
                             continue
-                        with source, open(target, "wb") as out:
+                        with source, target.open("wb") as out:
                             shutil.copyfileobj(source, out)
                         if member.mode & 0o111:
                             target.chmod(0o755)
@@ -1162,8 +1377,11 @@ class Setup:
 
     def _stamped(self, venv: Path, value: str) -> bool:
         stamp = self._stamp(venv)
-        return venv_python(venv, self.plat).exists() and stamp.is_file() \
+        return (
+            venv_python(venv, self.plat).exists()
+            and stamp.is_file()
             and stamp.read_text(encoding="utf-8").strip() == value
+        )
 
     def _new_venv(self, version: str, venv: Path, *extra: str) -> list[str]:
         return self.uv("venv", "--python", version, "--managed-python", "--allow-existing", *extra, venv)
@@ -1174,8 +1392,15 @@ class Setup:
         home = venv_home(venv)
         return home is None or _inside(home.resolve(), self.python_dir.resolve())
 
-    def _venv_step(self, label: str, venv: Path, version: str, stamp_value: str,
-                   install: Callable[[Path, Sequence[str]], bool], cwd: Path) -> None:
+    def _venv_step(
+        self,
+        label: str,
+        venv: Path,
+        version: str,
+        stamp_value: str,
+        install: Callable[[Path, Sequence[str]], bool],
+        cwd: Path,
+    ) -> None:
         """Ready, made again on a Python in <runtime>/python (see _rebuild), or installed in place."""
         restore_swapped(venv)
         py = venv_python(venv, self.plat)
@@ -1216,7 +1441,7 @@ class Setup:
             try:
                 for entry in sorted(entries, key=lambda p: not (p.is_symlink() or _is_junction(p))):
                     if entry.is_symlink() or _is_junction(entry):
-                        os.rmdir(entry) if self.plat == "windows" else entry.unlink()
+                        entry.rmdir() if self.plat == "windows" else entry.unlink()
                     elif entry.is_dir():
                         _rmtree(entry)
             except OSError as error:
@@ -1230,24 +1455,39 @@ class Setup:
             return f"on Python {old}, needs {version}"
         return None
 
-    def _rebuild(self, label: str, venv: Path, version: str, stamp_value: str, keep: bool,
-                 install: Callable[[Path, Sequence[str]], bool], cwd: Path, why: str) -> None:
+    def _rebuild(
+        self,
+        label: str,
+        venv: Path,
+        version: str,
+        stamp_value: str,
+        keep: bool,
+        install: Callable[[Path, Sequence[str]], bool],
+        cwd: Path,
+        why: str,
+    ) -> None:
         """Builds the venv again next to it, from the cache first (``keep``: pinned to the packages it has), and swaps
         it in only once that worked: the old venv stays otherwise."""
         pins = self._frozen(venv) if keep else []
         constraints = self.temp_dir() / f"{venv.parent.name}-constraints.txt"
         constraints.write_text("".join(f"{line}\n" for line in pins), encoding="utf-8")
-        say(f"{label}: {why}; making it again on Python {version} in {self.python_dir}"
-            f"{', with the same packages' if pins else ''}...")
+        say(
+            f"{label}: {why}; making it again on Python {version} in {self.python_dir}"
+            f"{', with the same packages' if pins else ''}..."
+        )
         new = venv.with_name(venv.name + ".new")
-        if not (self._runtime_python(label, version, cwd)
-                and self._build_from_cache(label, new, version, install, ["-c", str(constraints)] if pins else [], cwd)):
+        if not (
+            self._runtime_python(label, version, cwd)
+            and self._build_from_cache(label, new, version, install, ["-c", str(constraints)] if pins else [], cwd)
+        ):
             if new.exists():
                 _rmtree(new)
             if not keep:
                 raise SetupError(f"{label}: making it again on Python {version} in {self.python_dir} failed.")
-            warn(f"{label}: could not be made again on Python {version} in {self.python_dir}; the old environment is "
-                 "kept and still works (the next setup run tries again).")
+            warn(
+                f"{label}: could not be made again on Python {version} in {self.python_dir}; the old environment is "
+                "kept and still works (the next setup run tries again)."
+            )
             return
         if pins:
             now = {line.split("==")[0] for line in self._frozen(new)}
@@ -1260,15 +1500,21 @@ class Setup:
         except OSError as error:
             if new.exists():
                 _rmtree(new)
-            raise SetupError(f"{label}: the new environment could not replace the old one ({error}); the old one is "
-                             "kept. Close Mimvox and run setup again.") from None
+            raise SetupError(
+                f"{label}: the new environment could not replace the old one ({error}); the old one is "
+                "kept. Close Mimvox and run setup again."
+            ) from None
         say(f"{label}: ready, on {venv_home(venv)}.")
 
     def _runtime_python(self, label: str, version: str, cwd: Path) -> bool:
         """Python ``version`` in <runtime>/python, downloaded first when it is not there: an offline ``uv venv`` cannot
         fetch it."""
-        if self.quiet(self.uv("python", "find", "--managed-python", "--system", "--no-python-downloads", version),
-                      cwd=cwd) == 0:
+        if (
+            self.quiet(
+                self.uv("python", "find", "--managed-python", "--system", "--no-python-downloads", version), cwd=cwd
+            )
+            == 0
+        ):
             return True
         say(f"{label}: downloading Python {version} into {self.python_dir}...")
         if self.run(self.uv("python", "install", "--no-bin", "--no-registry", version), cwd=cwd) == 0:
@@ -1276,23 +1522,33 @@ class Setup:
         say(f"{label}: Python {version} could not be downloaded.")
         return False
 
-    def _build_from_cache(self, label: str, new: Path, version: str, install: Callable[[Path, Sequence[str]], bool],
-                          args: Sequence[str], cwd: Path) -> bool:
+    def _build_from_cache(
+        self,
+        label: str,
+        new: Path,
+        version: str,
+        install: Callable[[Path, Sequence[str]], bool],
+        args: Sequence[str],
+        cwd: Path,
+    ) -> bool:
         """The venv at ``new`` from the package cache (hard links, offline); the packages it lacks are downloaded only
         when that fails."""
         for extra in (["--offline"], []):
             if new.exists():
                 _rmtree(new)
             try:
-                built = self.run(self._new_venv(version, new, "--relocatable", "--offline"), cwd=cwd) == 0 \
-                    and install(venv_python(new, self.plat), [*extra, *args])
+                built = self.run(self._new_venv(version, new, "--relocatable", "--offline"), cwd=cwd) == 0 and install(
+                    venv_python(new, self.plat), [*extra, *args]
+                )
             except SetupError:
                 built = False
             if built:
                 return True
             if extra:
-                say(f"{label}: not every package is in the cache ({self.data_dir / 'cache' / 'uv'}); downloading the "
-                    "missing ones...")
+                say(
+                    f"{label}: not every package is in the cache ({self.data_dir / 'cache' / 'uv'}); downloading the "
+                    "missing ones..."
+                )
         return False
 
     def _frozen(self, venv: Path) -> list[str]:
@@ -1309,8 +1565,14 @@ class Setup:
         return True
 
     def applio_venv(self) -> None:
-        self._venv_step("Applio environment", self.applio / ".venv", APPLIO_PYTHON, self._stamp_value(APPLIO_COMMIT),
-                        self._applio_install, self.applio)
+        self._venv_step(
+            "Applio environment",
+            self.applio / ".venv",
+            APPLIO_PYTHON,
+            self._stamp_value(APPLIO_COMMIT),
+            self._applio_install,
+            self.applio,
+        )
 
     def _has(self, repo: Path, files: Sequence[str]) -> bool:
         return all((repo / f).is_file() and (repo / f).stat().st_size > 0 for f in files)
@@ -1354,13 +1616,20 @@ class Setup:
             nllb.mkdir(parents=True, exist_ok=True)
             # `hf download` through the interpreter (the venv's hf.exe stub breaks when the runtime was moved);
             # an older huggingface_hub without that CLI falls back to snapshot_download.
-            code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", NLLB_REPO, *NLLB_FILES,
-                             "--local-dir", nllb], cwd=self.runtime)
+            code = self.run(
+                [py, "-I", "-m", "huggingface_hub.cli.hf", "download", NLLB_REPO, *NLLB_FILES, "--local-dir", nllb],
+                cwd=self.runtime,
+            )
             if code != 0:
-                script = ("import sys; from huggingface_hub import snapshot_download; "
-                          "snapshot_download(sys.argv[1], local_dir=sys.argv[2], allow_patterns=sys.argv[3:])")
-                self.must([py, "-I", "-c", script, NLLB_REPO, nllb, *NLLB_FILES], "Downloading the translation model",
-                          cwd=self.runtime)
+                script = (
+                    "import sys; from huggingface_hub import snapshot_download; "
+                    "snapshot_download(sys.argv[1], local_dir=sys.argv[2], allow_patterns=sys.argv[3:])"
+                )
+                self.must(
+                    [py, "-I", "-c", script, NLLB_REPO, nllb, *NLLB_FILES],
+                    "Downloading the translation model",
+                    cwd=self.runtime,
+                )
             if not self._has(nllb, NLLB_REQUIRED):
                 raise SetupError("The translation model download finished but files are missing; run this again.")
 
@@ -1382,26 +1651,41 @@ class Setup:
         py = self.engine_python()
         if not py.exists():
             raise SetupError("The engine environment is missing, so the better translation model cannot be fetched.")
-        say(f"Better translation model: downloading {NLLB_BIG_REPO} (about {NLLB_BIG_DOWNLOAD_GB} GB, resumable; "
-            f"kept as {BETTER_TRANSLATION_GB} GB)...")
+        say(
+            f"Better translation model: downloading {NLLB_BIG_REPO} (about {NLLB_BIG_DOWNLOAD_GB} GB, resumable; "
+            f"kept as {BETTER_TRANSLATION_GB} GB)..."
+        )
         target.mkdir(parents=True, exist_ok=True)
-        code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", NLLB_BIG_REPO, *NLLB_FILES,
-                         "--local-dir", target], cwd=self.runtime)
+        code = self.run(
+            [py, "-I", "-m", "huggingface_hub.cli.hf", "download", NLLB_BIG_REPO, *NLLB_FILES, "--local-dir", target],
+            cwd=self.runtime,
+        )
         if code != 0:
-            script = ("import sys; from huggingface_hub import snapshot_download; "
-                      "snapshot_download(sys.argv[1], local_dir=sys.argv[2], allow_patterns=sys.argv[3:])")
-            self.must([py, "-I", "-c", script, NLLB_BIG_REPO, target, *NLLB_FILES],
-                      "Downloading the better translation model", cwd=self.runtime)
-        if not self._has(target, ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")):
+            script = (
+                "import sys; from huggingface_hub import snapshot_download; "
+                "snapshot_download(sys.argv[1], local_dir=sys.argv[2], allow_patterns=sys.argv[3:])"
+            )
+            self.must(
+                [py, "-I", "-c", script, NLLB_BIG_REPO, target, *NLLB_FILES],
+                "Downloading the better translation model",
+                cwd=self.runtime,
+            )
+        if not self._has(
+            target, ("config.json", "pytorch_model.bin", "sentencepiece.bpe.model", "tokenizer_config.json")
+        ):
             raise SetupError("The better translation model download finished but files are missing; run this again.")
         say("Better translation model: storing it in fp16 (about a minute)...")
         tmp = target / ".fp16"
         shutil.rmtree(tmp, ignore_errors=True)
-        self.must([py, "-I", "-c", NLLB_FP16_SCRIPT, target, tmp], "Converting the better translation model",
-                  cwd=self.runtime, extra_env={"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+        self.must(
+            [py, "-I", "-c", NLLB_FP16_SCRIPT, target, tmp],
+            "Converting the better translation model",
+            cwd=self.runtime,
+            extra_env={"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"},
+        )
         if not (tmp / "model.safetensors").is_file():
             raise SetupError(f"Converting the better translation model wrote no model.safetensors in {tmp}.")
-        os.replace(tmp / "model.safetensors", target / "model.safetensors")
+        (tmp / "model.safetensors").replace(target / "model.safetensors")
         shutil.rmtree(tmp, ignore_errors=True)
         fp32.unlink(missing_ok=True)
         if not self.has_better_translation():
@@ -1420,16 +1704,19 @@ class Setup:
     def has_zero_shot_vc(self) -> bool:
         """Checkout, weights and the stamp, as the engine's ``zsvc.installed`` checks."""
         files = [f"{sub}/{name}" for sub, _repo, _rev, names in SEEDVC_MODELS for name in names]
-        return ((self.seed_vc / "modules" / "commons.py").is_file()
-                and self._has(self.seed_vc, ("campplus_cn_common.bin",))
-                and self._has(self.seed_vc_models, (*files, SEEDVC_STAMP)))
+        return (
+            (self.seed_vc / "modules" / "commons.py").is_file()
+            and self._has(self.seed_vc, ("campplus_cn_common.bin",))
+            and self._has(self.seed_vc_models, (*files, SEEDVC_STAMP))
+        )
 
     def zero_shot_vc_runtime(self) -> None:
         py = self.engine_python()
         if not py.exists():
             raise SetupError("The engine environment is missing, so the zero-shot voice converter cannot be installed.")
         stamp = self.seed_vc_models / SEEDVC_STAMP
-        stamp_value = f"{SEEDVC_COMMIT} {' '.join(SEEDVC_PACKAGES)} {' '.join(rev for _s, _r, rev, _f in SEEDVC_MODELS)}"
+        revisions = " ".join(rev for _s, _r, rev, _f in SEEDVC_MODELS)
+        stamp_value = f"{SEEDVC_COMMIT} {' '.join(SEEDVC_PACKAGES)} {revisions}"
         if self.has_zero_shot_vc() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
             say("Zero-shot voice converter (Seed-VC): present.")
             return
@@ -1445,14 +1732,35 @@ class Setup:
                 continue
             say(f"Zero-shot voice converter: downloading {repo} ({', '.join(files)}, resumable)...")
             target.mkdir(parents=True, exist_ok=True)
-            code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", repo, *files, "--revision", rev,
-                             "--local-dir", target], cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+            code = self.run(
+                [
+                    py,
+                    "-I",
+                    "-m",
+                    "huggingface_hub.cli.hf",
+                    "download",
+                    repo,
+                    *files,
+                    "--revision",
+                    rev,
+                    "--local-dir",
+                    target,
+                ],
+                cwd=self.runtime,
+                extra_env={"HF_HUB_DISABLE_XET": "1"},
+            )
             if code != 0:
-                script = ("import sys; from huggingface_hub import hf_hub_download\n"
-                          "for f in sys.argv[4:]: hf_hub_download(sys.argv[1], f, revision=sys.argv[2], local_dir=sys.argv[3])")
-                self.must([py, "-I", "-c", script, repo, rev, target, *files],
-                          f"Downloading {repo} for the zero-shot voice converter", cwd=self.runtime,
-                          extra_env={"HF_HUB_DISABLE_XET": "1"})
+                script = (
+                    "import sys; from huggingface_hub import hf_hub_download\n"
+                    "for f in sys.argv[4:]:\n"
+                    "    hf_hub_download(sys.argv[1], f, revision=sys.argv[2], local_dir=sys.argv[3])"
+                )
+                self.must(
+                    [py, "-I", "-c", script, repo, rev, target, *files],
+                    f"Downloading {repo} for the zero-shot voice converter",
+                    cwd=self.runtime,
+                    extra_env={"HF_HUB_DISABLE_XET": "1"},
+                )
             if not self._has(target, files):
                 raise SetupError(f"The {repo} download finished but files are missing; run this again.")
         stamp.write_text(stamp_value, encoding="utf-8")
@@ -1464,22 +1772,34 @@ class Setup:
         """False when only the Ukrainian stress dictionary is missing."""
         note = self._build_note()
         say(f"Engine environment: installing torch 2.11{f' ({note})' if note else ''}, OmniVoice, Whisper...")
-        command = self.uv("pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *ENGINE_PACKAGES, *extra)
+        command = self.uv(
+            "pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *ENGINE_PACKAGES, *extra
+        )
         command += self._torch_args()
         self.must(command, "Installing the engine environment", cwd=self.runtime)
-        if self.run(self.uv("pip", "install", "--python", py, "--no-deps", *ENGINE_NO_DEPS, *extra), cwd=self.runtime) != 0:
-            warn("The Ukrainian stress dictionary could not be installed (the next setup run tries again); Ukrainian "
-                 "speech works without automatic stress.")
+        if (
+            self.run(self.uv("pip", "install", "--python", py, "--no-deps", *ENGINE_NO_DEPS, *extra), cwd=self.runtime)
+            != 0
+        ):
+            warn(
+                "The Ukrainian stress dictionary could not be installed (the next setup run tries again); Ukrainian "
+                "speech works without automatic stress."
+            )
             return False
         return True
 
     def _seedvc_install(self, py: Path, extra: Sequence[str]) -> None:
-        self.must(self.uv("pip", "install", "--python", py, *SEEDVC_PACKAGES, *extra),
-                  "Installing the zero-shot voice converter's packages", cwd=self.runtime)
+        self.must(
+            self.uv("pip", "install", "--python", py, *SEEDVC_PACKAGES, *extra),
+            "Installing the zero-shot voice converter's packages",
+            cwd=self.runtime,
+        )
 
     def engine_env(self) -> None:
-        stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {' '.join(ENGINE_NO_DEPS)} "
-                       f"{self.gpu.build} {self.plat}")
+        stamp_value = (
+            f"{' '.join(ENGINE_TORCH)} {' '.join(ENGINE_PACKAGES)} {' '.join(ENGINE_NO_DEPS)} "
+            f"{self.gpu.build} {self.plat}"
+        )
 
         def install(py: Path, extra: Sequence[str]) -> bool:
             done = self._engine_install(py, extra)
@@ -1491,36 +1811,54 @@ class Setup:
         self.nltk_data()
 
     def nltk_data(self) -> None:
-        """g2p_en's NLTK data into <venv>/nltk_data, which NLTK searches (sys.prefix) on every OS. Its import fetches
+        r"""g2p_en's NLTK data into <venv>/nltk_data, which NLTK searches (sys.prefix) on every OS. Its import fetches
         the data only when NLTK finds none, also in the shared %APPDATA%\\nltk_data or ~/nltk_data."""
         target = self.engine_venv / NLTK_DIR
-        missing = [name for kind, name in NLTK_PACKAGES
-                   if not any((target / kind / f).exists() for f in (name, f"{name}.zip"))]
+        missing = [
+            name for kind, name in NLTK_PACKAGES if not any((target / kind / f).exists() for f in (name, f"{name}.zip"))
+        ]
         py = self.engine_python()
         if not missing or not py.exists():
             return
         say(f"Engine environment: downloading NLTK's {', '.join(missing)} (a few MB) to {target}...")
-        script = ("import sys, nltk\n"
-                  "ok = [nltk.download(name, download_dir=sys.argv[1], quiet=True) for name in sys.argv[2:]]\n"
-                  "sys.exit(0 if all(ok) else 1)")
+        script = (
+            "import sys, nltk\n"
+            "ok = [nltk.download(name, download_dir=sys.argv[1], quiet=True) for name in sys.argv[2:]]\n"
+            "sys.exit(0 if all(ok) else 1)"
+        )
         if self.run([py, "-I", "-c", script, target, *missing], cwd=self.runtime) != 0:
-            warn("NLTK's data could not be downloaded (the next setup run tries again); until then the recording-text "
-                 "analysis uses NLTK data found elsewhere or a simpler method.")
+            warn(
+                "NLTK's data could not be downloaded (the next setup run tries again); until then the recording-text "
+                "analysis uses NLTK data found elsewhere or a simpler method."
+            )
 
     def holos_env(self) -> None:
-        stamp_value = (f"{' '.join(ENGINE_TORCH)} {' '.join(HOLOS_PACKAGES)} {' '.join(HOLOS_NO_DEPS)} "
-                       f"{self.gpu.build} {self.plat}")
-        self._venv_step("Ukrainian speech environment", self.holos_venv, HOLOS_PYTHON, stamp_value,
-                        self._holos_install, self.runtime)
+        stamp_value = (
+            f"{' '.join(ENGINE_TORCH)} {' '.join(HOLOS_PACKAGES)} {' '.join(HOLOS_NO_DEPS)} "
+            f"{self.gpu.build} {self.plat}"
+        )
+        self._venv_step(
+            "Ukrainian speech environment",
+            self.holos_venv,
+            HOLOS_PYTHON,
+            stamp_value,
+            self._holos_install,
+            self.runtime,
+        )
 
     def _holos_install(self, py: Path, extra: Sequence[str]) -> bool:
         note = self._build_note()
         say(f"Ukrainian speech environment: installing torch 2.11{f' ({note})' if note else ''}, HolosTTS, Stanza...")
-        command = self.uv("pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *HOLOS_PACKAGES, *extra)
+        command = self.uv(
+            "pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *HOLOS_PACKAGES, *extra
+        )
         command += self._torch_args()
         self.must(command, "Installing the Ukrainian speech environment", cwd=self.runtime)
-        self.must(self.uv("pip", "install", "--python", py, "--no-deps", *HOLOS_NO_DEPS, *extra),
-                  "Installing the Ukrainian stress dictionary", cwd=self.runtime)
+        self.must(
+            self.uv("pip", "install", "--python", py, "--no-deps", *HOLOS_NO_DEPS, *extra),
+            "Installing the Ukrainian stress dictionary",
+            cwd=self.runtime,
+        )
         return True
 
     def clone_env(self, name: str) -> None:
@@ -1531,8 +1869,9 @@ class Setup:
         def install(py: Path, extra: Sequence[str]) -> bool:
             note = self._build_note()
             say(f"{label}: installing torch 2.11{f' ({note})' if note else ''} and {spec['packages'][0]}...")
-            command = self.uv("pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *spec["packages"],
-                              *extra)
+            command = self.uv(
+                "pip", "install", "--python", py, "--compile-bytecode", *ENGINE_TORCH, *spec["packages"], *extra
+            )
             command += self._torch_args()
             self.must(command, f"Installing the {label}", cwd=self.runtime)
             return True
@@ -1547,22 +1886,35 @@ class Setup:
         target = self.clone_models_dir(name)
         stamp = target / CLONE_STAMP
         stamp_value = f"{spec['repo']}@{spec['revision']}{' + ' + spec['after'] if spec.get('after') else ''}"
-        if self._has(target, spec["required"]) and stamp.is_file() \
-                and stamp.read_text(encoding="utf-8").strip() == stamp_value:
+        if (
+            self._has(target, spec["required"])
+            and stamp.is_file()
+            and stamp.read_text(encoding="utf-8").strip() == stamp_value
+        ):
             say(f"{spec['label']} model: present.")
             return
         target.mkdir(parents=True, exist_ok=True)
         say(f"{spec['label']}: downloading {spec['repo']} (about {spec['download_gb']} GB, resumable)...")
-        script = ("import sys; from huggingface_hub import snapshot_download\n"
-                  "snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3], "
-                  "allow_patterns=sys.argv[4:] or None)")
-        self.must([py, "-I", "-c", script, spec["repo"], spec["revision"], target, *spec["files"]],
-                  f"Downloading {spec['repo']}", cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+        script = (
+            "import sys; from huggingface_hub import snapshot_download\n"
+            "snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3], "
+            "allow_patterns=sys.argv[4:] or None)"
+        )
+        self.must(
+            [py, "-I", "-c", script, spec["repo"], spec["revision"], target, *spec["files"]],
+            f"Downloading {spec['repo']}",
+            cwd=self.runtime,
+            extra_env={"HF_HUB_DISABLE_XET": "1"},
+        )
         if not self._has(target, spec["required"]):
             raise SetupError(f"The {spec['repo']} download finished but files are missing; run this again.")
         if spec.get("after"):
-            self.must([py, "-I", "-c", spec["after"]], f"Preparing {spec['label']}", cwd=self.runtime,
-                      extra_env={"PKUSEG_HOME": str(target / "pkuseg"), "HF_HOME": str(target / "hf-home")})
+            self.must(
+                [py, "-I", "-c", spec["after"]],
+                f"Preparing {spec['label']}",
+                cwd=self.runtime,
+                extra_env={"PKUSEG_HOME": str(target / "pkuseg"), "HF_HOME": str(target / "hf-home")},
+            )
         stamp.write_text(stamp_value, encoding="utf-8")
         say(f"{spec['label']}: ready.")
 
@@ -1574,27 +1926,57 @@ class Setup:
         stamp = target / HOLOS_STAMP
         stanza_dir = target / HOLOS_STANZA
         stamp_value = f"{HOLOS_REPO}@{HOLOS_REVISION} stanza {HOLOS_STANZA_PROCESSORS}"
-        if self._has(target, HOLOS_FILES) and stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == stamp_value:
+        if (
+            self._has(target, HOLOS_FILES)
+            and stamp.is_file()
+            and stamp.read_text(encoding="utf-8").strip() == stamp_value
+        ):
             say("Ukrainian speech models: present.")
             return
         target.mkdir(parents=True, exist_ok=True)
         if not self._has(target, HOLOS_FILES):
             say(f"Ukrainian speech: downloading {HOLOS_REPO} (about 0.7 GB, resumable)...")
-            code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", HOLOS_REPO, *HOLOS_FILES,
-                             "--revision", HOLOS_REVISION, "--local-dir", target], cwd=self.runtime,
-                            extra_env={"HF_HUB_DISABLE_XET": "1"})
+            code = self.run(
+                [
+                    py,
+                    "-I",
+                    "-m",
+                    "huggingface_hub.cli.hf",
+                    "download",
+                    HOLOS_REPO,
+                    *HOLOS_FILES,
+                    "--revision",
+                    HOLOS_REVISION,
+                    "--local-dir",
+                    target,
+                ],
+                cwd=self.runtime,
+                extra_env={"HF_HUB_DISABLE_XET": "1"},
+            )
             if code != 0:
-                script = ("import sys; from huggingface_hub import hf_hub_download\n"
-                          "for f in sys.argv[4:]: hf_hub_download(sys.argv[1], f, revision=sys.argv[2], local_dir=sys.argv[3])")
-                self.must([py, "-I", "-c", script, HOLOS_REPO, HOLOS_REVISION, target, *HOLOS_FILES],
-                          f"Downloading {HOLOS_REPO}", cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+                script = (
+                    "import sys; from huggingface_hub import hf_hub_download\n"
+                    "for f in sys.argv[4:]:\n"
+                    "    hf_hub_download(sys.argv[1], f, revision=sys.argv[2], local_dir=sys.argv[3])"
+                )
+                self.must(
+                    [py, "-I", "-c", script, HOLOS_REPO, HOLOS_REVISION, target, *HOLOS_FILES],
+                    f"Downloading {HOLOS_REPO}",
+                    cwd=self.runtime,
+                    extra_env={"HF_HUB_DISABLE_XET": "1"},
+                )
             if not self._has(target, HOLOS_FILES):
                 raise SetupError("The HolosTTS download finished but files are missing; run this again.")
         say("Ukrainian speech: downloading Stanza's Ukrainian models (about 0.2 GB)...")
-        script = ("import sys, stanza; stanza.download('uk', model_dir=sys.argv[1], processors=sys.argv[2], "
-                  "logging_level='WARN')")
-        self.must([py, "-I", "-c", script, stanza_dir, HOLOS_STANZA_PROCESSORS],
-                  "Downloading Stanza's Ukrainian models", cwd=self.runtime)
+        script = (
+            "import sys, stanza; stanza.download('uk', model_dir=sys.argv[1], processors=sys.argv[2], "
+            "logging_level='WARN')"
+        )
+        self.must(
+            [py, "-I", "-c", script, stanza_dir, HOLOS_STANZA_PROCESSORS],
+            "Downloading Stanza's Ukrainian models",
+            cwd=self.runtime,
+        )
         if not (stanza_dir / "resources.json").is_file() or not (stanza_dir / "uk" / "pos").is_dir():
             raise SetupError("Stanza's Ukrainian models are incomplete; run this again.")
         stamp.write_text(stamp_value, encoding="utf-8")
@@ -1610,13 +1992,22 @@ class Setup:
         else:
             say(f"OmniVoice model: downloading {OMNIVOICE_REPO} (about 3.3 GB, resumable)...")
             target.mkdir(parents=True, exist_ok=True)
-            code = self.run([py, "-I", "-m", "huggingface_hub.cli.hf", "download", OMNIVOICE_REPO, "--local-dir", target],
-                            cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+            code = self.run(
+                [py, "-I", "-m", "huggingface_hub.cli.hf", "download", OMNIVOICE_REPO, "--local-dir", target],
+                cwd=self.runtime,
+                extra_env={"HF_HUB_DISABLE_XET": "1"},
+            )
             if code != 0:
-                script = ("import sys; from huggingface_hub import snapshot_download; "
-                          "snapshot_download(sys.argv[1], local_dir=sys.argv[2])")
-                self.must([py, "-I", "-c", script, OMNIVOICE_REPO, target], "Downloading the OmniVoice model",
-                          cwd=self.runtime, extra_env={"HF_HUB_DISABLE_XET": "1"})
+                script = (
+                    "import sys; from huggingface_hub import snapshot_download; "
+                    "snapshot_download(sys.argv[1], local_dir=sys.argv[2])"
+                )
+                self.must(
+                    [py, "-I", "-c", script, OMNIVOICE_REPO, target],
+                    "Downloading the OmniVoice model",
+                    cwd=self.runtime,
+                    extra_env={"HF_HUB_DISABLE_XET": "1"},
+                )
             if not self._has(target, OMNIVOICE_REQUIRED):
                 raise SetupError("The OmniVoice download finished but files are missing; run this again.")
 
@@ -1630,8 +2021,11 @@ class Setup:
             say("Applio prerequisites: present.")
             return
         say("Applio prerequisites: downloading pretrained HiFi-GAN, rmvpe, contentvec (about 1.5 GB)...")
-        self.must([self.rvc_python(), "core.py", "prerequisites", "--pretraineds-hifigan", "--models", "--exe"],
-                  "Downloading the Applio prerequisites", cwd=self.applio)
+        self.must(
+            [self.rvc_python(), "core.py", "prerequisites", "--pretraineds-hifigan", "--models", "--exe"],
+            "Downloading the Applio prerequisites",
+            cwd=self.applio,
+        )
         if not self._has(self.applio, self.applio_required()):
             raise SetupError("The Applio prerequisites finished but files are missing; run this again.")
 
@@ -1701,8 +2095,10 @@ class Setup:
             return
         if not confirmed:
             if self.assume_yes or not sys.stdin.isatty():
-                say(f"{legacy} (IndexTTS-2.5, about 19 GB) is no longer used. Delete it yourself, or run setup with "
-                    "--remove-indextts.")
+                say(
+                    f"{legacy} (IndexTTS-2.5, about 19 GB) is no longer used. Delete it yourself, or run setup with "
+                    "--remove-indextts."
+                )
                 return
             try:
                 answer = input(f"[setup] {legacy} (IndexTTS-2.5, about 19 GB) is no longer used. Delete it now? [y/N] ")
@@ -1748,7 +2144,9 @@ class Setup:
             if head == APPLIO_COMMIT:
                 say(f"Applio: pinned commit {APPLIO_COMMIT[:9]}.")
             else:
-                problems.append(f"Applio is not at the pinned commit {APPLIO_COMMIT[:9]} (found {head[:9] or 'nothing'}).")
+                problems.append(
+                    f"Applio is not at the pinned commit {APPLIO_COMMIT[:9]} (found {head[:9] or 'nothing'})."
+                )
         checks = [("OmniVoice model", self.omnivoice_model, OMNIVOICE_REQUIRED)]
         if training:
             checks.insert(0, ("Applio prerequisites", self.applio, self.applio_required()))
@@ -1766,16 +2164,27 @@ class Setup:
         for _key, label, py in pythons:
             problems += self._check_torch(label, py)
         if self.engine_python().exists():
-            out = self.read([self.engine_python(), "-I", "-c",
-                             "import omnivoice, num2words, transformers; print(transformers.__version__)"]
-                            ).strip().splitlines()
+            out = (
+                self.read(
+                    [
+                        self.engine_python(),
+                        "-I",
+                        "-c",
+                        "import omnivoice, num2words, transformers; print(transformers.__version__)",
+                    ]
+                )
+                .strip()
+                .splitlines()
+            )
             if out:
                 say(f"Engine environment: OmniVoice + num2words, transformers {out[-1]}.")
             else:
                 problems.append("The engine environment cannot import omnivoice / num2words / transformers.")
         if self.legacy_indextts.is_dir():
-            say(f"Note: {self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used and can be deleted "
-                "(setup --remove-indextts).")
+            say(
+                f"Note: {self.legacy_indextts} (IndexTTS-2.5, about 19 GB) is no longer used and can be deleted "
+                "(setup --remove-indextts)."
+            )
         problems += self._check_media()
         return problems
 
@@ -1801,13 +2210,17 @@ class Setup:
             else:
                 problems.append("openai-whisper is missing from the engine environment (Redub transcription).")
             if has("translation"):
-                out = self.read([py, "-c", "import transformers, sentencepiece; print(transformers.__version__)"]
-                                ).strip().splitlines()
+                out = (
+                    self.read([py, "-c", "import transformers, sentencepiece; print(transformers.__version__)"])
+                    .strip()
+                    .splitlines()
+                )
                 if out:
                     say(f"transformers {out[-1]} + sentencepiece (Redub translation).")
                 else:
-                    problems.append("transformers or sentencepiece is missing from the engine environment "
-                                    "(Redub translation).")
+                    problems.append(
+                        "transformers or sentencepiece is missing from the engine environment (Redub translation)."
+                    )
         if has("translation"):
             nllb = self.models_dir / NLLB_DIR
             missing = [f for f in NLLB_REQUIRED if not (nllb / f).is_file()]
@@ -1818,8 +2231,10 @@ class Setup:
         if self.has_better_translation():
             say("Better translation model (NLLB-200 distilled 1.3B): all files present.")
         elif self.wants_better_translation():
-            say("Better translation model (NLLB-200 distilled 1.3B): not downloaded (optional; run setup to add it, "
-                "Redub uses the 600M meanwhile).")
+            say(
+                "Better translation model (NLLB-200 distilled 1.3B): not downloaded (optional; run setup to add it, "
+                "Redub uses the 600M meanwhile)."
+            )
         if not (self.models_dir / "whisper" / WHISPER_FILE).is_file():
             say("Whisper turbo checkpoint: not downloaded yet (setup fetches it; otherwise the first Redub does).")
         if has("music_removal"):
@@ -1827,14 +2242,18 @@ class Setup:
             if demucs.is_file() and demucs.stat().st_size == DEMUCS_SIZE:
                 say("Music-removal model (Hybrid Demucs): present.")
             else:
-                say(f"Music-removal model: not downloaded yet ({demucs}); media files are used with their music until "
-                    "setup fetches it.")
+                say(
+                    f"Music-removal model: not downloaded yet ({demucs}); media files are used with their music until "
+                    "setup fetches it."
+                )
         if has("native_accent"):
             if self.has_zero_shot_vc():
                 say("Zero-shot voice converter (Seed-VC): present.")
             else:
-                say("Zero-shot voice converter (Seed-VC): not installed (untrained voices have no native accent until "
-                    "setup installs it).")
+                say(
+                    "Zero-shot voice converter (Seed-VC): not installed (untrained voices have no native accent until "
+                    "setup installs it)."
+                )
         return problems
 
     def _check_torch(self, label: str, py: Path) -> list[str]:
@@ -1858,8 +2277,12 @@ class Setup:
         if self.gpu.build == "rocm" and not info["hip"]:
             return [f"{label}: torch {info['torch']} is not the ROCm build; run setup again to reinstall it."]
         if not wanted and self.gpu.build == "rocm":
-            return [f"{label}: the ROCm build of torch cannot use {self.gpu.name}. The card may be too old for these "
-                    "ROCm wheels, or /dev/kfd may be inaccessible; run setup with --cpu to use the CPU."]
+            return [
+                (
+                    f"{label}: the ROCm build of torch cannot use {self.gpu.name}. The card may be too old for these "
+                    "ROCm wheels, or /dev/kfd may be inaccessible; run setup with --cpu to use the CPU."
+                )
+            ]
         if not wanted:
             return [f"{label}: torch {info['torch']} cannot use the {self.gpu.backend} backend."]
         return []
@@ -1889,7 +2312,7 @@ def fetch_checked(url: str, target: Path, sha256: str, label: str) -> None:
     have = part.stat().st_size if part.is_file() else 0
     request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - a fixed https URL
+        with urllib.request.urlopen(request, timeout=120) as response:
             if response.status == 416:  # the .part is already complete
                 pass
             else:
@@ -1898,7 +2321,7 @@ def fetch_checked(url: str, target: Path, sha256: str, label: str) -> None:
                 total = done + int(response.headers.get("Content-Length") or 0)
                 step = max(total // 10, 1)
                 next_note = (done // step + 1) * step
-                with open(part, "ab" if resumed else "wb") as handle:
+                with part.open("ab" if resumed else "wb") as handle:
                     for block in iter(lambda: response.read(1 << 20), b""):
                         handle.write(block)
                         done += len(block)
@@ -1911,13 +2334,13 @@ def fetch_checked(url: str, target: Path, sha256: str, label: str) -> None:
     except OSError as error:
         raise SetupError(f"Downloading {label} failed ({error}); run setup again to resume.") from error
     digest = hashlib.sha256()
-    with open(part, "rb") as handle:
+    with part.open("rb") as handle:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
     if digest.hexdigest() != sha256:
         part.unlink()
         raise SetupError(f"The download of {label} is corrupt (checksum mismatch); run setup again.")
-    os.replace(part, target)
+    part.replace(target)
     say(f"Saved {target}.")
 
 
@@ -1934,12 +2357,12 @@ def fetch_demucs(models_dir: Path) -> Path:
     if have < DEMUCS_SIZE:
         request = urllib.request.Request(DEMUCS_URL, headers={"Range": f"bytes={have}-"} if have else {})
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+            with urllib.request.urlopen(request, timeout=120) as response:
                 resumed = have > 0 and response.status == 206
                 done = have if resumed else 0
                 step = DEMUCS_SIZE // 10
                 next_note = (done // step + 1) * step
-                with open(part, "ab" if resumed else "wb") as handle:
+                with part.open("ab" if resumed else "wb") as handle:
                     for block in iter(lambda: response.read(1 << 20), b""):
                         handle.write(block)
                         done += len(block)
@@ -1947,16 +2370,17 @@ def fetch_demucs(models_dir: Path) -> Path:
                             say(f"  {100 * done // DEMUCS_SIZE}% of {DEMUCS_SIZE / 1e6:.0f} MB")
                             next_note = (done // step + 1) * step
         except OSError as error:
-            raise SetupError(f"Downloading the music-removal model failed ({error}); run setup again to resume."
-                             ) from error
+            raise SetupError(
+                f"Downloading the music-removal model failed ({error}); run setup again to resume."
+            ) from error
     digest = hashlib.sha256()
-    with open(part, "rb") as handle:
+    with part.open("rb") as handle:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
     if digest.hexdigest() != DEMUCS_SHA256:
         part.unlink()
         raise SetupError("The music-removal model download is corrupt (checksum mismatch); run setup again.")
-    os.replace(part, target)
+    part.replace(target)
     say(f"Music-removal model: saved to {target}.")
     return target
 
@@ -1969,52 +2393,95 @@ def shlex_quote(text: str) -> str:
 
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="setup", description="Full setup of Mimvox: toolchains, runtime, models, runtime.toml.")
-    parser.add_argument("--data-dir", metavar="DIR",
-                        help=f"data directory (default: ${DATA_ENV}, else asked for; the default is the local app data dir + "
-                             f"{APP_DIR_NAME}, or the one in location.toml)")
-    parser.add_argument("--skip-toolchain", action="store_true", help="do not install Rust / compilers / system packages")
-    parser.add_argument("--components", metavar="LIST",
-                        help=f"what to install, comma separated ({', '.join(COMPONENTS)}; speech is always included). "
-                             "Default: what an earlier run installed, else everything (better_translation only with a "
-                             "GPU)")
+        prog="setup", description="Full setup of Mimvox: toolchains, runtime, models, runtime.toml."
+    )
+    parser.add_argument(
+        "--data-dir",
+        metavar="DIR",
+        help=f"data directory (default: ${DATA_ENV}, else asked for; the default is the local app data "
+        f"dir + {APP_DIR_NAME}, or the one in location.toml)",
+    )
+    parser.add_argument(
+        "--skip-toolchain", action="store_true", help="do not install Rust / compilers / system packages"
+    )
+    parser.add_argument(
+        "--components",
+        metavar="LIST",
+        help=f"what to install, comma separated ({', '.join(COMPONENTS)}; speech is always included). "
+        "Default: what an earlier run installed, else everything (better_translation only with a "
+        "GPU)",
+    )
     parser.add_argument("--add", metavar="LIST", help="install these components in addition to the installed ones")
-    parser.add_argument("--remove", metavar="LIST",
-                        help="delete these optional components from the runtime and leave the rest as it is "
-                             "(speech cannot be removed)")
-    parser.add_argument("--gui", action="store_true",
-                        help="run by the app: no questions and no system packages (no sudo; implies --yes and "
-                             "--skip-toolchain), plus '@@mimvox {json}' progress lines for its setup screen")
+    parser.add_argument(
+        "--remove",
+        metavar="LIST",
+        help="delete these optional components from the runtime and leave the rest as it is (speech cannot be removed)",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="run by the app: no questions and no system packages (no sudo; implies --yes and "
+        "--skip-toolchain), plus '@@mimvox {json}' progress lines for its setup screen",
+    )
     parser.add_argument("--skip-models", action="store_true", help="set the environments up but download no models")
     backend = parser.add_mutually_exclusive_group()
-    backend.add_argument("--cpu", action="store_true",
-                         help="ignore any GPU and set up the CPU backend; later runs keep it until --gpu")
-    backend.add_argument("--gpu", action="store_true",
-                         help="use this machine's GPU also when the runtime was set up with --cpu (default: keep the "
-                              "backend runtime.toml records, else detect the GPU)")
-    parser.add_argument("--yes", "-y", action="store_true",
-                        help="do not ask for confirmation (then --data-dir is required: no silent default)")
-    parser.add_argument("--force", action="store_true",
-                        help=f"continue even when the drive has less than {DISK_NEEDED_GB} GB free")
-    parser.add_argument("--quick-check", action="store_true",
-                        help="verify an existing setup (files, interpreters, torch on the GPU) and download nothing")
-    parser.add_argument("--runtime-toml-only", action="store_true",
-                        help="only (re)write runtime.toml for a runtime that already exists in the data directory")
-    parser.add_argument("--move-to", metavar="DIR",
-                        help="move the installed data directory (from --data-dir, location.toml or the default) to DIR: "
-                             "renames on the same volume, else copies with '[move] 37%% 11.4/31.0 GB' progress lines, "
-                             "fixes the paths inside the virtual environments, rewrites runtime.toml and location.toml, "
-                             "checks the result and only then deletes the old copy")
+    backend.add_argument(
+        "--cpu", action="store_true", help="ignore any GPU and set up the CPU backend; later runs keep it until --gpu"
+    )
+    backend.add_argument(
+        "--gpu",
+        action="store_true",
+        help="use this machine's GPU also when the runtime was set up with --cpu (default: keep the "
+        "backend runtime.toml records, else detect the GPU)",
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="do not ask for confirmation (then --data-dir is required: no silent default)",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help=f"continue even when the drive has less than {DISK_NEEDED_GB} GB free"
+    )
+    parser.add_argument(
+        "--quick-check",
+        action="store_true",
+        help="verify an existing setup (files, interpreters, torch on the GPU) and download nothing",
+    )
+    parser.add_argument(
+        "--runtime-toml-only",
+        action="store_true",
+        help="only (re)write runtime.toml for a runtime that already exists in the data directory",
+    )
+    parser.add_argument(
+        "--move-to",
+        metavar="DIR",
+        help="move the installed data directory (from --data-dir, location.toml or the default) to "
+        "DIR: renames on the same volume, else copies with '[move] 37%% 11.4/31.0 GB' progress "
+        "lines, fixes the paths inside the virtual environments, rewrites runtime.toml and "
+        "location.toml, checks the result and only then deletes the old copy",
+    )
     parser.add_argument("--no-check", action="store_true", help="with --move-to: skip the quick check (testing)")
-    parser.add_argument("--better-translation", choices=("auto", "yes", "no"), default="auto",
-                        help="the optional better translation model for Redub (NLLB-200 1.3B, a 5.5 GB download kept "
-                             "as 2.7 GB): auto = only with a CUDA or ROCm GPU (default), yes = also without one, no = never")
-    parser.add_argument("--no-zero-shot-vc", action="store_true",
-                        help="leave out Seed-VC (GPL-3.0, about 2 GB), the zero-shot voice converter that gives voices "
-                             "that are not trained a native accent")
-    parser.add_argument("--remove-indextts", action="store_true",
-                        help="delete <data>/runtime/index-tts (the IndexTTS-2.5 runtime of earlier versions, about 19 GB) "
-                             "without asking; without this flag setup only offers it in an interactive terminal")
+    parser.add_argument(
+        "--better-translation",
+        choices=("auto", "yes", "no"),
+        default="auto",
+        help="the optional better translation model for Redub (NLLB-200 1.3B, a 5.5 GB download kept "
+        "as 2.7 GB): auto = only with a CUDA or ROCm GPU (default), yes = also without one, "
+        "no = never",
+    )
+    parser.add_argument(
+        "--no-zero-shot-vc",
+        action="store_true",
+        help="leave out Seed-VC (GPL-3.0, about 2 GB), the zero-shot voice converter that gives voices "
+        "that are not trained a native accent",
+    )
+    parser.add_argument(
+        "--remove-indextts",
+        action="store_true",
+        help="delete <data>/runtime/index-tts (the IndexTTS-2.5 runtime of earlier versions, about "
+        "19 GB) without asking; without this flag setup only offers it in an interactive terminal",
+    )
     return parser.parse_args(argv)
 
 
@@ -2040,9 +2507,11 @@ def choose_data_dir(args: argparse.Namespace, plat: str) -> Path:
     elif not args.yes and sys.stdin.isatty():
         chosen = ask_data_dir(plat, default)
     else:
-        raise SetupError("no install location given: pass --data-dir DIR (a full setup needs about "
-                         f"{RUNTIME_GB} GB, so the place is never chosen silently), or run it in a terminal "
-                         "without --yes to be asked.")
+        raise SetupError(
+            "no install location given: pass --data-dir DIR (a full setup needs about "
+            f"{RUNTIME_GB} GB, so the place is never chosen silently), or run it in a terminal "
+            "without --yes to be asked."
+        )
     return chosen
 
 
@@ -2067,13 +2536,10 @@ def ask_data_dir(plat: str, default: Path) -> Path:
 def _rmtree(path: Path) -> None:
     def writable(func, target, _exc) -> None:  # noqa: ANN001 - shutil's callback
         # Windows refuses to delete read-only files (git objects, some wheels).
-        os.chmod(target, 0o700)
+        Path(target).chmod(0o700)
         func(target)
 
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=writable)
-    else:
-        shutil.rmtree(path, onerror=writable)
+    shutil.rmtree(path, onexc=writable)
 
 
 def remove_components(setup: Setup, value: str) -> int:
@@ -2081,12 +2547,20 @@ def remove_components(setup: Setup, value: str) -> int:
     items = [x.strip() for x in value.split(",") if x.strip()]
     unknown = [x for x in items if x not in COMPONENTS]
     if unknown or "speech" in items:
-        say(f"Failed: cannot remove {', '.join(unknown or ['speech'])} (optional components: "
-            f"{', '.join(c for c in COMPONENTS if c != 'speech')}).")
+        say(
+            f"Failed: cannot remove {', '.join(unknown or ['speech'])} (optional components: "
+            f"{', '.join(c for c in COMPONENTS if c != 'speech')})."
+        )
         return 1
-    labels = {"training": "Voice training", "translation": "Translation", "better_translation": "Better translation",
-              "native_accent": "Native accent", "music_removal": "Music removal", "ukrainian": "Ukrainian speech",
-              **{name: f"{spec['label']} voice cloning" for name, spec in CLONE_MODELS.items()}}
+    labels = {
+        "training": "Voice training",
+        "translation": "Translation",
+        "better_translation": "Better translation",
+        "native_accent": "Native accent",
+        "music_removal": "Music removal",
+        "ukrainian": "Ukrainian speech",
+        **{name: f"{spec['label']} voice cloning" for name, spec in CLONE_MODELS.items()},
+    }
     plan = [(f"remove_{c}", f"Removing {labels[c].lower()}") for c in items] + [("runtime_toml", "Finishing")]
     event(event="plan", steps=[{"id": i, "label": label} for i, label in plan])
     failed: list[str] = []
@@ -2121,7 +2595,7 @@ def remove_components(setup: Setup, value: str) -> int:
 
 
 def build_setup(args: argparse.Namespace) -> Setup:
-    global GUI  # noqa: PLW0603 - set once, before any output
+    global GUI
     if args.gui:
         GUI = True
         args.yes = True
@@ -2129,10 +2603,19 @@ def build_setup(args: argparse.Namespace) -> Setup:
     plat = host_platform()
     root = Path(__file__).resolve().parents[2]
     data_dir = choose_data_dir(args, plat)
-    return Setup(root=root, plat=plat, arch=host_arch(), data_dir=data_dir,
-                 skip_toolchain=args.skip_toolchain, skip_models=args.skip_models, force_cpu=args.cpu,
-                 force_gpu=args.gpu, assume_yes=args.yes, force=args.force, uv_path=find_uv(),
-                 )
+    return Setup(
+        root=root,
+        plat=plat,
+        arch=host_arch(),
+        data_dir=data_dir,
+        skip_toolchain=args.skip_toolchain,
+        skip_models=args.skip_models,
+        force_cpu=args.cpu,
+        force_gpu=args.gpu,
+        assume_yes=args.yes,
+        force=args.force,
+        uv_path=find_uv(),
+    )
 
 
 def run_move(args: argparse.Namespace) -> int:
@@ -2150,22 +2633,33 @@ def run_move(args: argparse.Namespace) -> int:
         fixer = mv.fix_venv_paths(new, old, windows)
         mv.out(f"Updated {len(fixer.fixed)} file(s) that held the old path")
         for path in fixer.unfixed:
-            mv.out(f"warning: could not update {path}; it still points to the old place (reinstall that package to refresh it)")
+            mv.out(
+                f"warning: could not update {path}; it still points to the old place (reinstall that package to "
+                f"refresh it)"
+            )
         gpu = recorded_gpu(new) or Gpu("cuda")
-        setup = Setup(root=Path(__file__).resolve().parents[2], plat=plat, arch=host_arch(), data_dir=new, gpu=gpu,
-                      components=previous_components(new) or set(COMPONENTS))
+        setup = Setup(
+            root=Path(__file__).resolve().parents[2],
+            plat=plat,
+            arch=host_arch(),
+            data_dir=new,
+            gpu=gpu,
+            components=previous_components(new) or set(COMPONENTS),
+        )
         setup.write_runtime_toml()  # also writes (or removes) location.toml
         mv.out("Rewrote runtime.toml and the location pointer")
         if not args.no_check:
             problems = setup.quick_check()
             if problems:
-                raise mv.MoveError("the moved runtime failed the quick check, the old copy was kept: " + "; ".join(problems))
+                raise mv.MoveError(
+                    "the moved runtime failed the quick check, the old copy was kept: " + "; ".join(problems)
+                )
             mv.out("Quick check passed")
         (new / mv.MARKER).unlink(missing_ok=True)
         if old.exists():
             mv.out(f"Deleting the old copy {old}")
             mv.remove_tree(old)
-            setup.write_location()  # the old folder may have held location.toml (the default dir is also the config dir)
+            setup.write_location()  # the old folder may have held location.toml (the default dir is the config dir too)
         mv.out("done")
         return 0
     except mv.MoveError as error:
@@ -2275,7 +2769,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     attempt("toolchain", setup.toolchains)
     applio_cloned = training and attempt(
-        "applio_source", lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio))
+        "applio_source", lambda: setup.ensure_repo("Applio", APPLIO_URL, APPLIO_COMMIT, setup.applio)
+    )
     if attempt("engine_env", setup.engine_env):
         if models:
             attempt("omnivoice", setup.omnivoice_models)

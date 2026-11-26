@@ -35,12 +35,12 @@ Opening a pull request means you agree to these terms.
 Pull requests run the title check, the linters (`.github/workflows/lint.yml`) and the tests (`.github/workflows/test.yml`), all started from `.github/workflows/ci.yml`; run them locally before pushing:
 
 ```
-uvx ruff@0.17.5 check .
+uvx ruff@0.17.5 format --check . && uvx ruff@0.17.5 check .
 cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
-cd engine && uv run --group test pytest
+uv run --group test pytest
 ```
 
-`uvx ruff@0.17.5 check --fix .` and `cargo fmt` fix most findings. Ruff's rules are in `ruff.toml`, rustfmt's in
+`uvx ruff@0.17.5 format .`, `uvx ruff@0.17.5 check --fix .` and `cargo fmt` fix most findings; code is formatted by them, never by hand. Python uses `pathlib` for paths. Ruff's rules are in `pyproject.toml`, rustfmt's in
 `rustfmt.toml`.
 
 ## Comments

@@ -1,4 +1,5 @@
 """Text to ARPAbet phonemes: g2p_en, else NLTK's CMUdict, else a letter heuristic."""
+
 from __future__ import annotations
 
 import contextlib
@@ -9,15 +10,86 @@ from functools import lru_cache
 from typing import Any
 
 PHONEMES = [
-    "AA", "AE", "AH", "AO", "AW", "AY", "B", "CH", "D", "DH", "EH", "ER", "EY", "F", "G", "HH", "IH", "IY", "JH", "K",
-    "L", "M", "N", "NG", "OW", "OY", "P", "R", "S", "SH", "T", "TH", "UH", "UW", "V", "W", "Y", "Z", "ZH",
+    "AA",
+    "AE",
+    "AH",
+    "AO",
+    "AW",
+    "AY",
+    "B",
+    "CH",
+    "D",
+    "DH",
+    "EH",
+    "ER",
+    "EY",
+    "F",
+    "G",
+    "HH",
+    "IH",
+    "IY",
+    "JH",
+    "K",
+    "L",
+    "M",
+    "N",
+    "NG",
+    "OW",
+    "OY",
+    "P",
+    "R",
+    "S",
+    "SH",
+    "T",
+    "TH",
+    "UH",
+    "UW",
+    "V",
+    "W",
+    "Y",
+    "Z",
+    "ZH",
 ]
 EXAMPLES = {
-    "AA": "odd", "AE": "at", "AH": "hut", "AO": "ought", "AW": "cow", "AY": "hide", "B": "be", "CH": "cheese",
-    "D": "dee", "DH": "thee", "EH": "Ed", "ER": "hurt", "EY": "ate", "F": "fee", "G": "green", "HH": "he",
-    "IH": "it", "IY": "eat", "JH": "gee", "K": "key", "L": "lee", "M": "me", "N": "knee", "NG": "ping", "OW": "oat",
-    "OY": "toy", "P": "pee", "R": "read", "S": "sea", "SH": "she", "T": "tea", "TH": "theta", "UH": "hood",
-    "UW": "two", "V": "vee", "W": "we", "Y": "yield", "Z": "zee", "ZH": "seizure",
+    "AA": "odd",
+    "AE": "at",
+    "AH": "hut",
+    "AO": "ought",
+    "AW": "cow",
+    "AY": "hide",
+    "B": "be",
+    "CH": "cheese",
+    "D": "dee",
+    "DH": "thee",
+    "EH": "Ed",
+    "ER": "hurt",
+    "EY": "ate",
+    "F": "fee",
+    "G": "green",
+    "HH": "he",
+    "IH": "it",
+    "IY": "eat",
+    "JH": "gee",
+    "K": "key",
+    "L": "lee",
+    "M": "me",
+    "N": "knee",
+    "NG": "ping",
+    "OW": "oat",
+    "OY": "toy",
+    "P": "pee",
+    "R": "read",
+    "S": "sea",
+    "SH": "she",
+    "T": "tea",
+    "TH": "theta",
+    "UH": "hood",
+    "UW": "two",
+    "V": "vee",
+    "W": "we",
+    "Y": "yield",
+    "Z": "zee",
+    "ZH": "seizure",
 }
 
 _state: dict[str, Any] = {"backend": None, "g2p": None, "cmu": None}
@@ -36,7 +108,7 @@ def _load() -> None:
             g = G2p()
         _state.update(backend="g2p_en", g2p=g, normalize_numbers=normalize_numbers)
         return
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -45,7 +117,7 @@ def _load() -> None:
             d = cmudict.dict()
         _state.update(backend="cmudict", cmu=d)
         return
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     _state["backend"] = "heuristic"
 
@@ -81,19 +153,80 @@ def _cmu_word(word: str) -> tuple[str, ...]:
 
 
 _DIGRAPHS = [
-    ("tch", ["CH"]), ("sch", ["S", "K"]), ("dge", ["JH"]), ("igh", ["AY"]), ("ough", ["AH", "F"]),
-    ("sion", ["ZH", "AH", "N"]), ("tion", ["SH", "AH", "N"]), ("sure", ["ZH", "ER"]), ("ture", ["CH", "ER"]),
-    ("ous", ["AH", "S"]), ("ing", ["IH", "NG"]), ("ang", ["AE", "NG"]), ("ong", ["AO", "NG"]), ("ung", ["AH", "NG"]),
-    ("sh", ["SH"]), ("ch", ["CH"]), ("th", ["TH"]), ("ph", ["F"]), ("wh", ["W"]), ("ck", ["K"]), ("qu", ["K", "W"]),
-    ("ng", ["NG"]), ("nk", ["NG", "K"]), ("kn", ["N"]), ("wr", ["R"]), ("gh", []), ("ee", ["IY"]), ("ea", ["IY"]),
-    ("oo", ["UW"]), ("ai", ["EY"]), ("ay", ["EY"]), ("oi", ["OY"]), ("oy", ["OY"]), ("ou", ["AW"]), ("ow", ["OW"]),
-    ("au", ["AO"]), ("aw", ["AO"]), ("oa", ["OW"]), ("ar", ["AA", "R"]), ("er", ["ER"]), ("ir", ["ER"]),
-    ("ur", ["ER"]), ("or", ["AO", "R"]), ("ie", ["IY"]), ("ew", ["UW"]), ("ey", ["EY"]),
+    ("tch", ["CH"]),
+    ("sch", ["S", "K"]),
+    ("dge", ["JH"]),
+    ("igh", ["AY"]),
+    ("ough", ["AH", "F"]),
+    ("sion", ["ZH", "AH", "N"]),
+    ("tion", ["SH", "AH", "N"]),
+    ("sure", ["ZH", "ER"]),
+    ("ture", ["CH", "ER"]),
+    ("ous", ["AH", "S"]),
+    ("ing", ["IH", "NG"]),
+    ("ang", ["AE", "NG"]),
+    ("ong", ["AO", "NG"]),
+    ("ung", ["AH", "NG"]),
+    ("sh", ["SH"]),
+    ("ch", ["CH"]),
+    ("th", ["TH"]),
+    ("ph", ["F"]),
+    ("wh", ["W"]),
+    ("ck", ["K"]),
+    ("qu", ["K", "W"]),
+    ("ng", ["NG"]),
+    ("nk", ["NG", "K"]),
+    ("kn", ["N"]),
+    ("wr", ["R"]),
+    ("gh", []),
+    ("ee", ["IY"]),
+    ("ea", ["IY"]),
+    ("oo", ["UW"]),
+    ("ai", ["EY"]),
+    ("ay", ["EY"]),
+    ("oi", ["OY"]),
+    ("oy", ["OY"]),
+    ("ou", ["AW"]),
+    ("ow", ["OW"]),
+    ("au", ["AO"]),
+    ("aw", ["AO"]),
+    ("oa", ["OW"]),
+    ("ar", ["AA", "R"]),
+    ("er", ["ER"]),
+    ("ir", ["ER"]),
+    ("ur", ["ER"]),
+    ("or", ["AO", "R"]),
+    ("ie", ["IY"]),
+    ("ew", ["UW"]),
+    ("ey", ["EY"]),
 ]
 _LETTERS = {
-    "a": ["AE"], "b": ["B"], "c": ["K"], "d": ["D"], "e": ["EH"], "f": ["F"], "g": ["G"], "h": ["HH"], "i": ["IH"],
-    "j": ["JH"], "k": ["K"], "l": ["L"], "m": ["M"], "n": ["N"], "o": ["AA"], "p": ["P"], "q": ["K"], "r": ["R"],
-    "s": ["S"], "t": ["T"], "u": ["AH"], "v": ["V"], "w": ["W"], "x": ["K", "S"], "y": ["Y"], "z": ["Z"],
+    "a": ["AE"],
+    "b": ["B"],
+    "c": ["K"],
+    "d": ["D"],
+    "e": ["EH"],
+    "f": ["F"],
+    "g": ["G"],
+    "h": ["HH"],
+    "i": ["IH"],
+    "j": ["JH"],
+    "k": ["K"],
+    "l": ["L"],
+    "m": ["M"],
+    "n": ["N"],
+    "o": ["AA"],
+    "p": ["P"],
+    "q": ["K"],
+    "r": ["R"],
+    "s": ["S"],
+    "t": ["T"],
+    "u": ["AH"],
+    "v": ["V"],
+    "w": ["W"],
+    "x": ["K", "S"],
+    "y": ["Y"],
+    "z": ["Z"],
 }
 _FUNCTION_DH = {"the", "this", "that", "these", "those", "they", "them", "then", "there", "than", "though"}
 _LONG = {"a": ["EY"], "e": ["IY"], "i": ["AY"], "o": ["OW"], "u": ["UW"]}
@@ -101,7 +234,7 @@ _LONG = {"a": ["EY"], "e": ["IY"], "i": ["AY"], "o": ["OW"], "u": ["UW"]}
 
 def _heuristic_word(word: str) -> tuple[str, ...]:
     if word in _FUNCTION_DH:
-        return ("DH",) + _heuristic_word(word[2:])
+        return ("DH", *_heuristic_word(word[2:]))
     out: list[str] = []
     i = 0
     w = word.replace("'", "")
@@ -131,7 +264,7 @@ def _heuristic_word(word: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-_DIGIT_WORDS = "zero one two three four five six seven eight nine".split()
+_DIGIT_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
 
 
 def _expand_digits(text: str) -> str:
@@ -144,7 +277,7 @@ def phonemes_of(text: str) -> list[str]:
     if b == "g2p_en":
         try:
             text = _state["normalize_numbers"](text)
-        except Exception:  # noqa: BLE001
+        except Exception:
             text = _expand_digits(text)
     else:
         text = _expand_digits(text)
@@ -154,7 +287,7 @@ def phonemes_of(text: str) -> list[str]:
             try:
                 out.extend(_g2p_word(word))
                 continue
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         out.extend(_cmu_word(word) if b == "cmudict" else _heuristic_word(word))
     return [p for p in out if p in EXAMPLES]

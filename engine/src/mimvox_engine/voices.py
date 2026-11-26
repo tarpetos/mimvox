@@ -1,40 +1,115 @@
 from __future__ import annotations
 
-import glob
 import json
-import os
 import re
 import shutil
 import threading
 import time
 import unicodedata
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import soundfile as sf
 
-from . import config, media, rvcfile
+from . import config, media, paths, rvcfile
 from .registry import Context, EngineError, method
 
 _LOCK = threading.RLock()
-_DURATIONS: dict[tuple[str, int, int], float] = {}
+_DURATIONS: dict[tuple[Path, int, int], float] = {}
 
 
 # The Ukrainian national transliteration (KMU 2010), plus the letters of the other Cyrillic alphabets.
 _CYR = {
-    "а": "a", "б": "b", "в": "v", "г": "h", "ґ": "g", "д": "d", "е": "e", "є": "ie", "ж": "zh", "з": "z", "и": "y",
-    "і": "i", "ї": "i", "й": "i", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s",
-    "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch", "ь": "", "ю": "iu",
-    "я": "ia", "'": "", "ʼ": "", "’": "",
-    "ё": "io", "ъ": "", "ы": "y", "э": "e", "ў": "u", "ђ": "dj", "ј": "j", "љ": "lj", "њ": "nj", "ћ": "c",
-    "џ": "dz", "ѓ": "gj", "ќ": "kj", "ѕ": "dz", "қ": "q", "ғ": "gh", "ң": "ng", "ү": "u", "ұ": "u", "һ": "h",
-    "ә": "a", "ө": "o", "ҙ": "z", "ҡ": "q", "ҫ": "s",
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "h",
+    "ґ": "g",
+    "д": "d",
+    "е": "e",
+    "є": "ie",
+    "ж": "zh",
+    "з": "z",
+    "и": "y",
+    "і": "i",
+    "ї": "i",
+    "й": "i",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "kh",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "shch",
+    "ь": "",
+    "ю": "iu",
+    "я": "ia",
+    "'": "",
+    "ʼ": "",
+    "’": "",
+    "ё": "io",
+    "ъ": "",
+    "ы": "y",
+    "э": "e",
+    "ў": "u",
+    "ђ": "dj",
+    "ј": "j",
+    "љ": "lj",
+    "њ": "nj",
+    "ћ": "c",
+    "џ": "dz",
+    "ѓ": "gj",
+    "ќ": "kj",
+    "ѕ": "dz",
+    "қ": "q",
+    "ғ": "gh",
+    "ң": "ng",
+    "ү": "u",
+    "ұ": "u",
+    "һ": "h",
+    "ә": "a",
+    "ө": "o",
+    "ҙ": "z",
+    "ҡ": "q",
+    "ҫ": "s",
 }
 _CYR_FIRST = {"є": "ye", "ї": "yi", "й": "y", "ю": "yu", "я": "ya", "ё": "yo"}
 _GREEK = {
-    "α": "a", "β": "v", "γ": "g", "δ": "d", "ε": "e", "ζ": "z", "η": "i", "θ": "th", "ι": "i", "κ": "k", "λ": "l",
-    "μ": "m", "ν": "n", "ξ": "x", "ο": "o", "π": "p", "ρ": "r", "σ": "s", "ς": "s", "τ": "t", "υ": "y", "φ": "f",
-    "χ": "ch", "ψ": "ps", "ω": "o",
+    "α": "a",
+    "β": "v",
+    "γ": "g",
+    "δ": "d",
+    "ε": "e",
+    "ζ": "z",
+    "η": "i",
+    "θ": "th",
+    "ι": "i",
+    "κ": "k",
+    "λ": "l",
+    "μ": "m",
+    "ν": "n",
+    "ξ": "x",
+    "ο": "o",
+    "π": "p",
+    "ρ": "r",
+    "σ": "s",
+    "ς": "s",
+    "τ": "t",
+    "υ": "y",
+    "φ": "f",
+    "χ": "ch",
+    "ψ": "ps",
+    "ω": "o",
 }
 _LATIN = {"ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i"}
 
@@ -63,17 +138,18 @@ def slugify(name: str) -> str:
     return slug[:48].strip("-") or "voice"
 
 
-def _write_json(path: str, obj: dict[str, Any]) -> None:
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(obj, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+def _write_json(path: str | Path, obj: dict[str, Any]) -> None:
+    path = Path(path)
+    tmp = path.with_name(f"{path.name}.tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as fh:
+        json.dump(obj, fh, ensure_ascii=False, indent=2, default=paths.json_default)
+    tmp.replace(path)
 
 
 def read_meta(data: config.DataDir, voice_id: str) -> dict[str, Any]:
-    path = os.path.join(data.voice(voice_id), "voice.json")
+    path = data.voice(voice_id) / "voice.json"
     try:
-        with open(path, encoding="utf-8") as fh:
+        with path.open(encoding="utf-8") as fh:
             meta = json.load(fh)
     except FileNotFoundError:
         raise EngineError("not_found", f"voice {voice_id!r} does not exist") from None
@@ -88,7 +164,7 @@ def update_meta(data: config.DataDir, voice_id: str, mutate: Callable[[dict[str,
     with _LOCK:
         meta = read_meta(data, voice_id)
         mutate(meta)
-        _write_json(os.path.join(data.voice(voice_id), "voice.json"), meta)
+        _write_json(data.voice(voice_id) / "voice.json", meta)
         return meta
 
 
@@ -104,26 +180,26 @@ def paused_training(meta: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _wav_seconds(path: str) -> float:
+def _wav_seconds(path: Path) -> float:
     try:
-        st = os.stat(path)
+        st = path.stat()
     except OSError:
         return 0.0
     key = (path, st.st_mtime_ns, st.st_size)
     if key not in _DURATIONS:
         try:
             _DURATIONS[key] = float(sf.info(path).duration)
-        except Exception:  # noqa: BLE001 - corrupt take: count as empty
+        except Exception:
             _DURATIONS[key] = 0.0
     return _DURATIONS[key]
 
 
-def _trained_epochs(vdir: str, meta: dict[str, Any]) -> int | None:
+def _trained_epochs(vdir: Path, meta: dict[str, Any]) -> int | None:
     if isinstance(meta.get("trained_epochs"), int):
         return meta["trained_epochs"]
     for name in ("meta.json", "train.json"):
         try:
-            with open(os.path.join(vdir, "rvc", name), encoding="utf-8") as fh:
+            with (vdir / "rvc" / name).open(encoding="utf-8") as fh:
                 value = json.load(fh).get("epochs")
             if isinstance(value, int):
                 return value
@@ -135,9 +211,9 @@ def _trained_epochs(vdir: str, meta: dict[str, Any]) -> int | None:
 def describe(data: config.DataDir, voice_id: str) -> dict[str, Any]:
     meta = read_meta(data, voice_id)
     vdir = data.voice(voice_id)
-    parts = sorted(glob.glob(os.path.join(vdir, "dataset", "part*.wav")))
+    parts = sorted((vdir / "dataset").glob("part*.wav"))
     pth, _ = data.rvc_model(voice_id)
-    trained = os.path.isfile(pth)
+    trained = pth.is_file()
     return {
         "id": meta["id"],
         "name": meta.get("name", voice_id),
@@ -155,27 +231,27 @@ def describe(data: config.DataDir, voice_id: str) -> dict[str, Any]:
     }
 
 
-def _language_references(vdir: str) -> list[str]:
-    from .dataset.reference import language_references  # noqa: PLC0415 - lazy: the dataset package imports this one
+def _language_references(vdir: str | Path) -> list[str]:
+    from .dataset.reference import language_references
 
     return language_references(vdir)
 
 
-def _reference_languages(vdir: str) -> dict[str, Any]:
-    from . import reflang  # noqa: PLC0415 - lazy, as above
+def _reference_languages(vdir: str | Path) -> dict[str, Any]:
+    from . import reflang
 
     try:
         return reflang.describe(vdir)
-    except Exception:  # noqa: BLE001 - a broken sidecar must not hide the voice
+    except Exception:
         return {"reference_language": None, "reference_languages": {}}
 
 
 def list_voice_ids(data: config.DataDir) -> list[str]:
     try:
-        names = os.listdir(data.voices)
+        dirs = list(data.voices.iterdir())
     except FileNotFoundError:
         return []
-    return sorted(n for n in names if os.path.isfile(os.path.join(data.voices, n, "voice.json")))
+    return sorted(d.name for d in dirs if (d / "voice.json").is_file())
 
 
 def _clean_name(params: dict[str, Any]) -> str:
@@ -186,7 +262,7 @@ def _clean_name(params: dict[str, Any]) -> str:
 
 
 def _clean_language(params: dict[str, Any]) -> str:
-    from .dataset import lang  # noqa: PLC0415 - lazy: keeps this module importable on its own
+    from .dataset import lang
 
     try:
         return lang.normalize_code(params.get("language")) or lang.DEFAULT
@@ -216,18 +292,21 @@ def voices_create(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     with _LOCK:
         base = slugify(name)
         vid, n = base, 2
-        while os.path.exists(data.voice(vid)):
+        while data.voice(vid).exists():
             vid, n = f"{base}-{n}", n + 1
         vdir = data.voice(vid)
-        os.makedirs(os.path.join(vdir, "dataset"))
-        _write_json(os.path.join(vdir, "voice.json"), {
-            "id": vid,
-            "name": name,
-            "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "preset": preset if isinstance(preset, str) else None,
-            "language": language,
-            "reference": "reference.wav",
-        })
+        (vdir / "dataset").mkdir(parents=True)
+        _write_json(
+            vdir / "voice.json",
+            {
+                "id": vid,
+                "name": name,
+                "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "preset": preset if isinstance(preset, str) else None,
+                "language": language,
+                "reference": "reference.wav",
+            },
+        )
     return {"voice": describe(data, vid)}
 
 
@@ -244,7 +323,7 @@ def voices_rename(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             meta["name"] = name
         if language is not None:
             meta["language"] = language
-        _write_json(os.path.join(data.voice(meta["id"]), "voice.json"), meta)
+        _write_json(data.voice(meta["id"]) / "voice.json", meta)
     return {"voice": describe(data, meta["id"])}
 
 
@@ -256,19 +335,21 @@ def voices_delete(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         read_meta(data, vid)  # not_found if missing
         shutil.rmtree(data.voice(vid))
     try:  # a paused training keeps GBs of features and checkpoints in Applio's log folder
-        from .training.resume import discard_logdir  # noqa: PLC0415 - lazy: the training package imports this module
+        from .training.resume import discard_logdir
+
         discard_logdir(ctx.runtime, vid)
-    except Exception:  # noqa: BLE001 - never fail a delete over leftovers
+    except Exception:
         pass
     return {}
 
 
 _PART_FILE = re.compile(
-    r"^part(\d+)\.(?:wav|mp3|m4a|aac|flac|ogg|oga|opus|wma|aif|aiff|mp4|mkv|mov|webm|avi)$", re.IGNORECASE)
+    r"^part(\d+)\.(?:wav|mp3|m4a|aac|flac|ogg|oga|opus|wma|aif|aiff|mp4|mkv|mov|webm|avi)$", re.IGNORECASE
+)
 _EPOCHS_IN_NAME = re.compile(r"_(\d+)e(?:_|\.)")
 
 
-def _existing_file(params: dict[str, Any], key: str, required: bool = False) -> str | None:
+def _existing_file(params: dict[str, Any], key: str, required: bool = False) -> Path | None:
     value = params.get(key)
     if value is None or value == "":
         if required:
@@ -276,17 +357,17 @@ def _existing_file(params: dict[str, Any], key: str, required: bool = False) -> 
         return None
     if not isinstance(value, str):
         raise EngineError("bad_request", f"'{key}' must be a path string")
-    path = os.path.abspath(value)
-    if not os.path.isfile(path):
+    path = Path(value).absolute()
+    if not path.is_file():
         raise EngineError("not_found", f"{key}: file not found: {path}")
     return path
 
 
-def _atomic_copy(src: str, dst: str) -> None:
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    tmp = f"{dst}.tmp"
+def _atomic_copy(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f"{dst.name}.tmp")
     shutil.copyfile(src, tmp)
-    os.replace(tmp, dst)
+    tmp.replace(dst)
 
 
 def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
@@ -300,37 +381,38 @@ def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if pth_src and (problem := rvcfile.model_problem(pth_src)):
         raise EngineError("bad_request", problem)
     ds_dir = params.get("dataset_dir")
-    parts: list[tuple[int, str]] = []
+    parts: list[tuple[int, Path]] = []
     if ds_dir not in (None, ""):
-        if not isinstance(ds_dir, str) or not os.path.isdir(ds_dir):
+        if not isinstance(ds_dir, str) or not Path(ds_dir).is_dir():
             raise EngineError("not_found", f"dataset_dir: folder not found: {ds_dir!r}")
-        for name in os.listdir(ds_dir):
-            m = _PART_FILE.match(name)
+        for entry in Path(ds_dir).absolute().iterdir():
+            m = _PART_FILE.match(entry.name)
             if m:
-                parts.append((int(m.group(1)), os.path.join(os.path.abspath(ds_dir), name)))
+                parts.append((int(m.group(1)), entry))
         parts.sort()
         if not parts:
             raise EngineError("bad_request", "dataset_dir has no part<N> audio files (wav, mp3, m4a, flac, ...)")
     if not (ref_src or parts):
         raise EngineError("bad_request", "give a 'reference_path' and/or a 'dataset_dir' with part<N>.wav files")
 
-    created = voices_create(ctx, {"name": params.get("name"), "preset": params.get("preset"),
-                                  "language": params.get("language")})["voice"]
+    created = voices_create(
+        ctx, {"name": params.get("name"), "preset": params.get("preset"), "language": params.get("language")}
+    )["voice"]
     vid = created["id"]
     vdir = data.voice(vid)
     try:
         if parts:
-            from .registry import methods  # noqa: PLC0415
+            from .registry import methods
 
             add = methods().get("dataset.add")
             if add is None:
                 raise EngineError("not_ready", "the dataset module is not available")
             for n, path in parts:
-                add(ctx, {"voice_id": vid, "part_index": n, "path": path})
+                add(ctx, {"voice_id": vid, "part_index": n, "path": str(path)})
         if ref_src:
             y, sr = media.read_audio(ref_src)
             sf.write(data.reference(vid), y, sr, subtype="PCM_16", format="WAV")
-        if not os.path.isfile(data.reference(vid)):
+        if not data.reference(vid).is_file():
             raise EngineError("bad_request", "no usable reference could be made from these recordings")
         if pth_src:
             pth, idx = data.rvc_model(vid)
@@ -339,11 +421,11 @@ def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                 _atomic_copy(idx_src, idx)
             with _LOCK:
                 meta = read_meta(data, vid)
-                m = _EPOCHS_IN_NAME.search(os.path.basename(pth_src))
+                m = _EPOCHS_IN_NAME.search(pth_src.name)
                 meta.update(trained=True, trained_at=time.strftime("%Y-%m-%dT%H:%M:%S"), imported=True)
                 if m:
                     meta["trained_epochs"] = int(m.group(1))
-                _write_json(os.path.join(vdir, "voice.json"), meta)
+                _write_json(vdir / "voice.json", meta)
     except BaseException:
         shutil.rmtree(vdir, ignore_errors=True)
         raise
@@ -353,7 +435,7 @@ def import_voice(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 @method("voices.import")
 def voices_import(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if params.get("bundle") not in (None, ""):
-        from . import voicebundle  # noqa: PLC0415 - lazy: it imports this module
+        from . import voicebundle
 
         return voicebundle.import_bundle(ctx, params)
     return import_voice(ctx, params)
@@ -361,7 +443,7 @@ def voices_import(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
 
 @method("voices.export")
 def voices_export(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
-    from . import voicebundle  # noqa: PLC0415 - lazy: it imports this module
+    from . import voicebundle
 
     vid = params.get("id")
     if not isinstance(vid, str) or not vid:
