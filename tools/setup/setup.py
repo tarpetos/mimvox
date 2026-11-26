@@ -1386,6 +1386,20 @@ class Setup:
     def _new_venv(self, version: str, venv: Path, *extra: str) -> list[str]:
         return self.uv("venv", "--python", version, "--managed-python", "--allow-existing", *extra, venv)
 
+    def refresh_venv_launchers(self) -> list[Path]:
+        """Uv's ``python.exe`` in a Windows venv holds the absolute path of its base Python; making the venv again
+        over itself writes new launchers and keeps the packages. Returns the venvs where that failed."""
+        failed = []
+        for venv in sorted(self.runtime.glob("*/.venv")):
+            version = venv_version(venv)
+            if version is None:
+                continue
+            cfg = (venv / "pyvenv.cfg").read_text(encoding="utf-8")
+            extra = ("--relocatable",) if re.search(r"^relocatable\s*=\s*true", cfg, re.MULTILINE) else ()
+            if self.quiet(self._new_venv(version, venv, *extra, "--offline")) != 0:
+                failed.append(venv)
+        return failed
+
     def on_runtime_python(self, venv: Path) -> bool:
         """Whether the venv's base Python (pyvenv.cfg ``home``) is one of <runtime>/python; runtimes set up before
         those were there use uv's default folder, which deleting the data folder leaves behind."""
@@ -2632,11 +2646,6 @@ def run_move(args: argparse.Namespace) -> int:
         mv.move_files(old, new, resume, same, args.force)
         fixer = mv.fix_venv_paths(new, old, windows)
         mv.out(f"Updated {len(fixer.fixed)} file(s) that held the old path")
-        for path in fixer.unfixed:
-            mv.out(
-                f"warning: could not update {path}; it still points to the old place (reinstall that package to "
-                f"refresh it)"
-            )
         gpu = recorded_gpu(new) or Gpu("cuda")
         setup = Setup(
             root=Path(__file__).resolve().parents[2],
@@ -2645,15 +2654,26 @@ def run_move(args: argparse.Namespace) -> int:
             data_dir=new,
             gpu=gpu,
             components=previous_components(new) or set(COMPONENTS),
+            uv_path=find_uv() if windows else "",
         )
+        if windows:
+            for venv in setup.refresh_venv_launchers():
+                mv.out(f"warning: could not make the launchers of {venv} again")
+            stale, fixer.unfixed = fixer.unfixed, []
+            for path in stale:
+                fixer.launcher(Path(path))
+        for path in fixer.unfixed:
+            mv.out(
+                f"warning: could not update {path}; it still points to the old place (reinstall that package to "
+                f"refresh it)"
+            )
         setup.write_runtime_toml()  # also writes (or removes) location.toml
         mv.out("Rewrote runtime.toml and the location pointer")
         if not args.no_check:
             problems = setup.quick_check()
             if problems:
-                raise mv.MoveError(
-                    "the moved runtime failed the quick check, the old copy was kept: " + "; ".join(problems)
-                )
+                kept = ", the old copy was kept" if old.exists() else ""
+                raise mv.MoveError(f"the moved runtime failed the quick check{kept}: " + "; ".join(problems))
             mv.out("Quick check passed")
         (new / mv.MARKER).unlink(missing_ok=True)
         if old.exists():

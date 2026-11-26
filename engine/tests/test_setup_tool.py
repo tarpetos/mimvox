@@ -399,6 +399,7 @@ def test_move_of_a_speech_only_runtime_with_its_pythons(tmp_path, monkeypatch, i
     """Uv links a Python's minor version to its patch release with an absolute link, which a rename leaves dangling."""
     monkeypatch.setattr(setup, "location_file", lambda plat: tmp_path / "config" / "location.toml")
     monkeypatch.setattr(move_runtime, "running_processes", lambda old, windows: [])
+    monkeypatch.setattr(setup.Setup, "refresh_venv_launchers", lambda self: [])
     old, new = (tmp_path / "old").resolve(), (tmp_path / "new").resolve()
     s = make(old, plat=setup.host_platform(), components={"speech"})
     pythons = s.runtime / "python"
@@ -417,3 +418,31 @@ def test_move_of_a_speech_only_runtime_with_its_pythons(tmp_path, monkeypatch, i
     assert (pythons / "cpython-3.11").resolve() == pythons / "cpython-3.11.15"
     assert moved.engine_python().resolve().is_relative_to(new)
     assert setup.toml_str(moved.engine_python()) in moved.runtime_toml.read_text(encoding="utf-8")
+
+
+def test_refresh_venv_launchers_makes_each_venv_again_over_itself(tmp_path, monkeypatch):
+    s = make(tmp_path / "data", plat="windows")
+    plain, relocatable = s.runtime / "engine" / ".venv", s.runtime / "applio" / ".venv"
+    for venv, cfg in ((plain, "version_info = 3.14.7\n"), (relocatable, "version_info = 3.12.9\nrelocatable = true\n")):
+        venv.mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text(cfg, encoding="utf-8")
+    (s.runtime / "seed-vc" / ".venv").mkdir(parents=True)
+    calls = []
+    monkeypatch.setattr(
+        s, "quiet", lambda argv, cwd=None: calls.append([str(a) for a in argv]) or (1 if "3.12" in argv else 0)
+    )
+    assert s.refresh_venv_launchers() == [relocatable]
+    assert calls == [
+        [
+            "uv",
+            "venv",
+            "--python",
+            "3.12",
+            "--managed-python",
+            "--allow-existing",
+            "--relocatable",
+            "--offline",
+            str(relocatable),
+        ],
+        ["uv", "venv", "--python", "3.14", "--managed-python", "--allow-existing", "--offline", str(plain)],
+    ]
