@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import functools
 import logging
 import os
@@ -58,7 +59,7 @@ def call_soon(fn: Callable[..., Any], *args: Any) -> None:
         loop().call_soon_threadsafe(fn, *args)
 
 
-def spawn(coro: Awaitable[T], name: str | None = None) -> asyncio.Task[T]:
+def spawn[T](coro: Awaitable[T], name: str | None = None) -> asyncio.Task[T]:
     """Keeps a strong reference until the task ends and logs an unexpected failure."""
     task = asyncio.ensure_future(coro)
     if name:
@@ -78,15 +79,15 @@ def spawn_threadsafe(coro_fn: Callable[[], Awaitable[Any]], name: str | None = N
     call_soon(lambda: spawn(coro_fn(), name))
 
 
-async def run_gpu(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def run_gpu[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     return await asyncio.get_running_loop().run_in_executor(GPU, functools.partial(fn, *args, **kwargs))
 
 
-async def run_io(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def run_io[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     return await asyncio.get_running_loop().run_in_executor(IO, functools.partial(fn, *args, **kwargs))
 
 
-def run_sync(coro: Awaitable[T]) -> T:
+def run_sync[T](coro: Awaitable[T]) -> T:
     if on_loop_thread():
         raise RuntimeError("run_sync() called on the loop thread")
     return asyncio.run_coroutine_threadsafe(coro, loop()).result()  # type: ignore[arg-type]
@@ -100,8 +101,8 @@ def detach_stdin() -> BinaryIO:
     os.dup2(null, 0)
     os.close(null)
     if os.name == "nt":
-        import ctypes  # noqa: PLC0415
-        import msvcrt  # noqa: PLC0415
+        import ctypes
+        import msvcrt
 
         k32 = ctypes.windll.kernel32
         k32.SetStdHandle.argtypes = [ctypes.c_ulong, ctypes.c_void_p]
@@ -136,10 +137,8 @@ async def read_lines(stream: BinaryIO) -> AsyncIterator[bytes]:
         except (OSError, ValueError):
             pass
         finally:
-            try:
+            with contextlib.suppress(RuntimeError):  # the loop is already closed
                 loop_.call_soon_threadsafe(queue.put_nowait, None)
-            except RuntimeError:
-                pass  # the loop is already closed
 
     threading.Thread(target=pump, name="stdin-reader", daemon=True).start()
     line = await queue.get()
@@ -164,7 +163,7 @@ async def gather_or_cancel(*aws: Awaitable[Any]) -> list[Any]:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def queue_items(queue: asyncio.Queue[T | None]) -> AsyncIterator[T]:
+async def queue_items[T](queue: asyncio.Queue[T | None]) -> AsyncIterator[T]:
     """Yield items until a ``None`` arrives."""
     item = await queue.get()
     while item is not None:
@@ -184,10 +183,18 @@ async def kill_tree(pid: int, wait_for: Awaitable[Any] | None = None, grace_s: f
     if sys.platform == "win32":
         try:
             killer = await asyncio.create_subprocess_exec(
-                "taskkill", "/F", "/T", "/PID", str(pid), stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
+                "taskkill",
+                "/F",
+                "/T",
+                "/PID",
+                str(pid),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                creationflags=NO_WINDOW,
+            )
             await asyncio.wait_for(killer.wait(), 30)
-        except (OSError, asyncio.TimeoutError):
+        except (TimeoutError, OSError):
             log.warning("taskkill of pid %s failed", pid)
         if waiter is not None:
             done, _ = await asyncio.wait({waiter}, timeout=grace_s)
@@ -205,18 +212,22 @@ async def kill_tree(pid: int, wait_for: Awaitable[Any] | None = None, grace_s: f
         return
     done, _ = await asyncio.wait({waiter}, timeout=grace_s)
     if not done:
-        try:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
         await waiter
 
 
 def kill_tree_sync(pid: int) -> None:
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=30,
-                           creationflags=NO_WINDOW, stdin=subprocess.DEVNULL)
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                timeout=30,
+                check=False,
+                creationflags=NO_WINDOW,
+                stdin=subprocess.DEVNULL,
+            )
         else:
             os.killpg(pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):

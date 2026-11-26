@@ -1,30 +1,57 @@
 """Suggest parts for imported chapters that are missing or very long, from the shape of the text, not its words."""
+
 from __future__ import annotations
 
+import itertools
 import math
 import re
 from collections import Counter
 
 from .dataset.text import count_words
 
-LONG_WORDS = 4000        # ~28 min at 145 wpm
-TARGET_WORDS = 1800      # ~12 min
+LONG_WORDS = 4000  # ~28 min at 145 wpm
+TARGET_WORDS = 1800  # ~12 min
 MIN_WORDS = 600
 WINDOW_WORDS = 300
 HEADING_MAX_WORDS = 10
 HEADING_GAP_WORDS = 150
 
 PART_WORD = {
-    "uk": "Частина", "en": "Part", "de": "Teil", "fr": "Partie", "es": "Parte", "it": "Parte", "pt": "Parte",
-    "pl": "Część", "ro": "Partea", "cs": "Část", "sk": "Časť", "ru": "Часть", "be": "Частка", "bg": "Част",
-    "nl": "Deel", "sv": "Del", "no": "Del", "da": "Del", "fi": "Osa", "et": "Osa", "hu": "Rész", "hr": "Dio",
-    "sr": "Део", "sl": "Del", "lt": "Dalis", "lv": "Daļa", "el": "Μέρος", "tr": "Bölüm", "ca": "Part",
+    "uk": "Частина",
+    "en": "Part",
+    "de": "Teil",
+    "fr": "Partie",
+    "es": "Parte",
+    "it": "Parte",
+    "pt": "Parte",
+    "pl": "Część",
+    "ro": "Partea",
+    "cs": "Část",
+    "sk": "Časť",
+    "ru": "Часть",
+    "be": "Частка",
+    "bg": "Част",
+    "nl": "Deel",
+    "sv": "Del",
+    "no": "Del",
+    "da": "Del",
+    "fi": "Osa",
+    "et": "Osa",
+    "hu": "Rész",
+    "hr": "Dio",
+    "sr": "Део",
+    "sl": "Del",
+    "lt": "Dalis",
+    "lv": "Daļa",
+    "el": "Μέρος",
+    "tr": "Bölüm",
+    "ca": "Part",
 }
 
 _SEPARATOR = re.compile(r"^[\s*⁂~#§•·◆◇○●■□—–\-_=+]+$")
 _NUMBER = re.compile(r"^(\d{1,3}|[IVXLCDM]{1,8})[.)]?$")
 _DIALOGUE = tuple("—–-\"«„“'‹")
-_SENTENCE_END = ".!?…»\"”’)]"
+_SENTENCE_END = '.!?…»"”’)]'
 _WORD = re.compile(r"[^\W\d_]{4,}")
 
 
@@ -33,7 +60,7 @@ def _is_roman(s: str) -> bool:
 
 
 def _heading_kind(p: str) -> str | None:
-    from .textimport import _heading_match  # noqa: PLC0415 - textimport imports this module lazily too
+    from .textimport import _heading_match
 
     s = p.strip()
     if not s or count_words(s) > HEADING_MAX_WORDS or len(s) > 80:
@@ -45,7 +72,12 @@ def _heading_kind(p: str) -> str | None:
     if n and (n.group(1).isdigit() or _is_roman(n.group(1))):
         return "number"
     letters = [c for c in s if c.isalpha()]
-    if len(letters) >= 3 and all(c.isupper() for c in letters) and s[-1] not in ".,;:!?…" and not s.startswith(_DIALOGUE):
+    if (
+        len(letters) >= 3
+        and all(c.isupper() for c in letters)
+        and s[-1] not in ".,;:!?…"
+        and not s.startswith(_DIALOGUE)
+    ):
         return "caps"
     return None
 
@@ -65,7 +97,7 @@ def _by_headings(paras: list[str]) -> list[tuple[str | None, list[str]]] | None:
         idx = [i for i, k in enumerate(kinds) if k == kind or (kind == "kw" and k == "single")]
         # Close lines of one kind are a list or a poem ("TRESPASSERS / WILL BE"), not chapter titles.
         near = set()
-        for a, b in zip(idx, idx[1:]):
+        for a, b in itertools.pairwise(idx):
             if cum[b] - cum[a + 1] < HEADING_GAP_WORDS:
                 near |= {a, b}
         idx = [i for i in idx if i not in near]
@@ -74,11 +106,11 @@ def _by_headings(paras: list[str]) -> list[tuple[str | None, list[str]]] | None:
             break
     if not best:
         return None
-    pre = paras[:best[0]]
+    pre = paras[: best[0]]
     pre_long = sum(_words(pre)) >= MIN_WORDS
     out: list[tuple[str | None, list[str]]] = [(None, pre)] if pre_long else []
-    for k, (a, b) in enumerate(zip(best, best[1:] + [len(paras)])):
-        body = paras[a + 1:b]
+    for k, (a, b) in enumerate(zip(best, [*best[1:], len(paras)])):
+        body = paras[a + 1 : b]
         if k == 0 and pre and not pre_long:
             body = pre + body
         out.append((paras[a].strip().rstrip("."), body))
@@ -90,7 +122,7 @@ def _scenes(paras: list[str]) -> list[list[str]] | None:
     if not cuts:
         return None
     scenes, start = [], 0
-    for i in cuts + [len(paras)]:
+    for i in [*cuts, len(paras)]:
         body = paras[start:i]
         if body:
             scenes.append(body)
@@ -172,9 +204,12 @@ def _by_length(paras: list[str]) -> list[list[str]]:
         lo, hi = cum[start] + target * 0.7, cum[start] + target * 1.3
         cands = [i for i in range(start + 1, len(paras)) if lo <= cum[i] <= hi and total - cum[i] >= MIN_WORDS]
         scored = [(s, i) for i in cands if (s := _cut_score(paras, w, i)) > -math.inf]
-        if not scored:   # paragraphs longer than the window: the sentence-ending boundary nearest to the target
-            near = [i for i in range(start + 1, len(paras)) if total - cum[i] >= MIN_WORDS
-                    and _cut_score(paras, w, i) > -math.inf]
+        if not scored:  # paragraphs longer than the window: the sentence-ending boundary nearest to the target
+            near = [
+                i
+                for i in range(start + 1, len(paras))
+                if total - cum[i] >= MIN_WORDS and _cut_score(paras, w, i) > -math.inf
+            ]
             if not near:
                 break
             i = min(near, key=lambda k: abs(cum[k] - cum[start] - target))
@@ -183,8 +218,8 @@ def _by_length(paras: list[str]) -> list[list[str]]:
             i = max(scored, key=lambda si: si[0] - 0.2 * abs(cum[si[1]] - cum[start] - target) / (target * 0.3))[1]
         cuts.append(i)
         start = i
-    bounds = [0] + cuts + [len(paras)]
-    return [paras[a:b] for a, b in zip(bounds, bounds[1:]) if paras[a:b]]
+    bounds = [0, *cuts, len(paras)]
+    return [paras[a:b] for a, b in itertools.pairwise(bounds) if paras[a:b]]
 
 
 def _split(paras: list[str]) -> tuple[list[tuple[str | None, list[str]]], str] | None:
@@ -231,7 +266,7 @@ def suggest(chapters: list[dict], lang: str | None) -> dict | None:
             n += 1
             if head:
                 t = head
-            elif head is None:         # text before the first hidden heading: the chapter's own title
+            elif head is None:  # text before the first hidden heading: the chapter's own title
                 t = title or (f"{word} {k}" if word else str(k))
             elif single:
                 t = f"{word} {k}" if word else str(k)

@@ -1,5 +1,6 @@
 """Faster OmniVoice decoding loop: same model and sampling, the CFG rows packed into one sequence with per-block
 attention, and short passes replayed as a CUDA graph (measurements: docs/performance.md, "Speech speed")."""
+
 import math
 import os
 
@@ -24,16 +25,19 @@ def _block_attention(module, query, key, value, attention_mask, dropout=0.0, sca
 
     c = _split[0]
     if c is None or attention_mask is not None or query.shape[0] != 1:
-        return sdpa_attention_forward(module, query, key, value, attention_mask, dropout=dropout, scaling=scaling,
-                                      **kwargs)
-    key = repeat_kv(key, module.num_key_value_groups)      # the unmasked kernels of torch 2.8 take no GQA
+        return sdpa_attention_forward(
+            module, query, key, value, attention_mask, dropout=dropout, scaling=scaling, **kwargs
+        )
+    key = repeat_kv(key, module.num_key_value_groups)  # the unmasked kernels of torch 2.8 take no GQA
     value = repeat_kv(value, module.num_key_value_groups)
     b, h, n, d = query.shape
     out = torch.empty((b, n, h, d), dtype=query.dtype, device=query.device)
-    out[:, :c] = F.scaled_dot_product_attention(query[:, :, :c], key[:, :, :c], value[:, :, :c],
-                                                scale=scaling).transpose(1, 2)
-    out[:, c:] = F.scaled_dot_product_attention(query[:, :, c:], key[:, :, c:], value[:, :, c:],
-                                                scale=scaling).transpose(1, 2)
+    out[:, :c] = F.scaled_dot_product_attention(
+        query[:, :, :c], key[:, :, :c], value[:, :, :c], scale=scaling
+    ).transpose(1, 2)
+    out[:, c:] = F.scaled_dot_product_attention(
+        query[:, :, c:], key[:, :, c:], value[:, :, c:], scale=scaling
+    ).transpose(1, 2)
     return out, None
 
 
@@ -59,8 +63,14 @@ def generate(model, text, language=None, voice_clone_prompt=None, speed=None, du
     cfg = OmniVoiceGenerationConfig.from_dict(kwargs)
     model.eval()
     _install(model)
-    task = model._preprocess_all(text=text, language=language, voice_clone_prompt=voice_clone_prompt,
-                                 preprocess_prompt=cfg.preprocess_prompt, speed=speed, duration=duration)
+    task = model._preprocess_all(
+        text=text,
+        language=language,
+        voice_clone_prompt=voice_clone_prompt,
+        preprocess_prompt=cfg.preprocess_prompt,
+        speed=speed,
+        duration=duration,
+    )
     short_idx, long_idx = task.get_indices(cfg, model.audio_tokenizer.config.frame_rate)
     results = [None] * task.batch_size
     for i in short_idx:
@@ -91,8 +101,15 @@ def _iterate(model, task, cfg):
 
     dev = model.device
     n_cb, mask_id = model.config.num_audio_codebook, model.config.audio_mask_id
-    inp = model._prepare_inference_inputs(task.texts[0], task.target_lens[0], task.ref_texts[0],
-                                          task.ref_audio_tokens[0], task.langs[0], task.instructs[0], cfg.denoise)
+    inp = model._prepare_inference_inputs(
+        task.texts[0],
+        task.target_lens[0],
+        task.ref_texts[0],
+        task.ref_audio_tokens[0],
+        task.langs[0],
+        task.instructs[0],
+        cfg.denoise,
+    )
     c, t = inp["input_ids"].size(2), task.target_lens[0]
     # [conditional row | unconditional row (its last t tokens)], positions restarting for the second block
     ids = torch.cat([inp["input_ids"], inp["input_ids"][:, :, -t:]], dim=2).contiguous()
@@ -138,10 +155,9 @@ def _iterate(model, task, cfg):
             flat = tokens.flatten()
             flat[top] = pred.flatten()[top]
             tokens.copy_(flat.view_as(tokens))
-            ids[0, :, c - t:c] = tokens[0]
-            ids[0, :, c:c + t] = tokens[0]
+            ids[0, :, c - t : c] = tokens[0]
+            ids[0, :, c : c + t] = tokens[0]
     finally:
         _split[0] = None
         del graph, static
     return tokens[0]
-

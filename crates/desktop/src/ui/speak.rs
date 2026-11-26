@@ -169,7 +169,6 @@ pub struct SpeakState {
     pub speed: f32,
     /// Ukrainian through HolosTTS when it is installed; off reads Ukrainian with OmniVoice like other languages.
     pub exact_stress: bool,
-    /// `auto` or the id of an installed voice-cloning model (`hello` `speech_models`).
     pub model: String,
     model_dirty: bool,
     speed_loaded: bool,
@@ -1030,7 +1029,6 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     c
 }
 
-/// The chosen model when it is installed and speaks the language, else `auto`.
 pub fn model(s: &AppState) -> String {
     let code = language(s);
     let ok = s.shell.speech_models.iter().any(|m| m.id == s.speak.model && m.languages.contains(&code));
@@ -1046,7 +1044,6 @@ fn model_help(id: &str) -> &'static str {
     }
 }
 
-/// None when no model but OmniVoice speaks the language and none was chosen.
 fn model_row(s: &AppState, p: Palette) -> Option<El> {
     let code = language(s);
     let models: Vec<(String, String)> = s

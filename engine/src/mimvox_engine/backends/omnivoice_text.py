@@ -1,9 +1,10 @@
 """Spell out digits, symbols and abbreviations that OmniVoice would misread. Standalone: the OmniVoice worker loads
 this file by its path in its own interpreter, so it imports nothing else from ``mimvox_engine``."""
+
 import importlib.util
-import os
 import re
 import unicodedata
+from pathlib import Path
 
 try:
     from num2words import num2words as _n2w
@@ -12,7 +13,7 @@ except ImportError:  # pragma: no cover - the worker venv has it; without it dig
 
 
 def _load_stress():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "omnivoice_stress.py")
+    path = Path(__file__).absolute().parent / "omnivoice_stress.py"
     spec = importlib.util.spec_from_file_location("mimvox_omnivoice_stress", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -87,12 +88,28 @@ _EN_UNITS = {"%": ("percent", "percent"), "$": ("dollar", "dollars"), "€": ("e
 def _en(text):
     text = _roman_numerals(text, "en")
     text = _ungroup(re.sub(r"(?<=\d),(?=\d{3}\b)", "", text))
-    text = re.sub(r"([$€£])\s?(\d+)\.(\d\d)\b", lambda m: f"{m.group(2)} {_EN_UNITS[m.group(1)][1]} and "
-                  f"{int(m.group(3))} {'cent' if int(m.group(3)) == 1 else 'cents'}", text)
+    text = re.sub(
+        r"([$€£])\s?(\d+)\.(\d\d)\b",
+        lambda m: (
+            f"{m.group(2)} {_EN_UNITS[m.group(1)][1]} and "
+            f"{int(m.group(3))} {'cent' if int(m.group(3)) == 1 else 'cents'}"
+        ),
+        text,
+    )
     text = re.sub(r"([$€£])\s?(\d+(?:\.\d+)?)", lambda m: f"{m.group(2)} {_EN_UNITS[m.group(1)][1]}", text)
-    text = re.sub(r"\b(\d{1,2}):(\d{2})\b", lambda m: _words(int(m.group(1)), "en") + " " + (
-        "o'clock" if m.group(2) == "00" else ("oh " if m.group(2)[0] == "0" else "") + _words(int(m.group(2)), "en")),
-        text)
+    text = re.sub(
+        r"\b(\d{1,2}):(\d{2})\b",
+        lambda m: (
+            _words(int(m.group(1)), "en")
+            + " "
+            + (
+                "o'clock"
+                if m.group(2) == "00"
+                else ("oh " if m.group(2)[0] == "0" else "") + _words(int(m.group(2)), "en")
+            )
+        ),
+        text,
+    )
 
     def ordinal(m):
         n = _int(m.group(1))
@@ -123,35 +140,90 @@ def _en(text):
 
 
 # Prepositions after which a number is in the genitive.
-_UK_GEN = {"до", "від", "з", "із", "зі", "після", "близько", "без", "для", "біля", "коло", "крім", "замість",
-           "протягом", "понад?", "більше", "менше", "щонайменше", "щонайбільше", "кількох", "серед", "навколо"}
+_UK_GEN = {
+    "до",
+    "від",
+    "з",
+    "із",
+    "зі",
+    "після",
+    "близько",
+    "без",
+    "для",
+    "біля",
+    "коло",
+    "крім",
+    "замість",
+    "протягом",
+    "понад?",
+    "більше",
+    "менше",
+    "щонайменше",
+    "щонайбільше",
+    "кількох",
+    "серед",
+    "навколо",
+}
 _UK_GEN.discard("понад?")  # "понад" takes the accusative ("понад триста років")
 _UK_LOC = {"у", "в", "на", "при", "об"}  # + a number + a locative noun ("у 5 містах") -- only with a known noun ending
 
-_UK_MONTHS_GEN = ("січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня",
-                  "жовтня", "листопада", "грудня")
+_UK_MONTHS_GEN = (
+    "січня",
+    "лютого",
+    "березня",
+    "квітня",
+    "травня",
+    "червня",
+    "липня",
+    "серпня",
+    "вересня",
+    "жовтня",
+    "листопада",
+    "грудня",
+)
 
 _UK_ABBR = [
-    (r"і т\.\s?д\.", "і так далі"), (r"т\.\s?д\.", "так далі"), (r"і т\.\s?п\.", "і тому подібне"),
-    (r"т\.\s?п\.", "тому подібне"), (r"і т\.\s?ін\.", "і таке інше"), (r"та ін\.", "та інші"),
-    (r"т\.\s?зв\.", "так званий"), (r"т\.\s?ч\.", "тому числі"), (r"напр\.", "наприклад"), (r"див\.", "дивись"),
-    (r"вул\.", "вулиця"), (r"просп\.", "проспект"), (r"обл\.", "область"), (r"р-н", "район"), (r"ім\.", "імені"),
-    (r"проф\.", "професор"), (r"акад\.", "академік"), (r"д-р", "доктор"), (r"№", "номер"),
+    (r"і т\.\s?д\.", "і так далі"),
+    (r"т\.\s?д\.", "так далі"),
+    (r"і т\.\s?п\.", "і тому подібне"),
+    (r"т\.\s?п\.", "тому подібне"),
+    (r"і т\.\s?ін\.", "і таке інше"),
+    (r"та ін\.", "та інші"),
+    (r"т\.\s?зв\.", "так званий"),
+    (r"т\.\s?ч\.", "тому числі"),
+    (r"напр\.", "наприклад"),
+    (r"див\.", "дивись"),
+    (r"вул\.", "вулиця"),
+    (r"просп\.", "проспект"),
+    (r"обл\.", "область"),
+    (r"р-н", "район"),
+    (r"ім\.", "імені"),
+    (r"проф\.", "професор"),
+    (r"акад\.", "академік"),
+    (r"д-р", "доктор"),
+    (r"№", "номер"),
 ]
 # Abbreviated units, recognized only right after a number ("5 км", "100 грн", "3 тис.", "2026 р.").
 _UK_UNIT_ABBR = r"(грн|тис|млн|млрд|км|кг|см|мм|год|хв|сек|рр|р|ст)\.?"
 # Units that agree with the number before them: (one, few, many, genitive singular for fractions).
 _UK_UNITS = {
-    "грн": ("гривня", "гривні", "гривень", "гривні"), "тис": ("тисяча", "тисячі", "тисяч", "тисячі"),
-    "млн": ("мільйон", "мільйони", "мільйонів", "мільйона"), "млрд": ("мільярд", "мільярди", "мільярдів", "мільярда"),
-    "км": ("кілометр", "кілометри", "кілометрів", "кілометра"), "кг": ("кілограм", "кілограми", "кілограмів", "кілограма"),
+    "грн": ("гривня", "гривні", "гривень", "гривні"),
+    "тис": ("тисяча", "тисячі", "тисяч", "тисячі"),
+    "млн": ("мільйон", "мільйони", "мільйонів", "мільйона"),
+    "млрд": ("мільярд", "мільярди", "мільярдів", "мільярда"),
+    "км": ("кілометр", "кілометри", "кілометрів", "кілометра"),
+    "кг": ("кілограм", "кілограми", "кілограмів", "кілограма"),
     "см": ("сантиметр", "сантиметри", "сантиметрів", "сантиметра"),
     "мм": ("міліметр", "міліметри", "міліметрів", "міліметра"),
-    "год": ("година", "години", "годин", "години"), "хв": ("хвилина", "хвилини", "хвилин", "хвилини"),
+    "год": ("година", "години", "годин", "години"),
+    "хв": ("хвилина", "хвилини", "хвилин", "хвилини"),
     "сек": ("секунда", "секунди", "секунд", "секунди"),
-    "%": ("відсоток", "відсотки", "відсотків", "відсотка"), "$": ("долар", "долари", "доларів", "долара"),
-    "€": ("євро", "євро", "євро", "євро"), "₴": ("гривня", "гривні", "гривень", "гривні"),
-    "рр": ("роки", "роки", "років", "року"), "р": ("рік", "роки", "років", "року"),
+    "%": ("відсоток", "відсотки", "відсотків", "відсотка"),
+    "$": ("долар", "долари", "доларів", "долара"),
+    "€": ("євро", "євро", "євро", "євро"),
+    "₴": ("гривня", "гривні", "гривень", "гривні"),
+    "рр": ("роки", "роки", "років", "року"),
+    "р": ("рік", "роки", "років", "року"),
 }
 _UK_FEM_UNITS = {"грн", "тис", "год", "хв", "сек", "₴"}
 
@@ -162,7 +234,7 @@ _ORD_ENDINGS = {  # nominative masculine ending -> (gen m/n, dat/loc m/n, nom f,
 
 
 def _plural(n, forms):
-    """forms = (one, few, many); 11-14 take "many"."""
+    """Forms = (one, few, many); 11-14 take "many"."""
     n = abs(int(n))
     if n % 10 == 1 and n % 100 != 11:
         return forms[0]
@@ -224,20 +296,28 @@ def _uk(text):
     # abbreviations: plain words, or a \0 marker for units that agree with a number
     for pat, rep in _UK_ABBR:
         # an abbreviation that ends a sentence keeps the full stop it shared with it
-        text = re.sub(r"(?<![\wʼ'’])" + pat + r"(?=\s*$|\s+[A-ZА-ЯІЇЄҐ])", rep + ("." if pat.endswith(".") else ""),
-                      text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"(?<![\wʼ'’])" + pat + r"(?=\s*$|\s+[A-ZА-ЯІЇЄҐ])",
+            rep + ("." if pat.endswith(".") else ""),
+            text,
+            flags=re.IGNORECASE,
+        )
         text = re.sub(r"(?<![\wʼ'’])" + pat + r"(?![\w])", rep, text, flags=re.IGNORECASE)
     text = re.sub(r"(\d)\s*" + _UK_UNIT_ABBR + r"(?![\w])", "\\1 \0\\2", text)
     # time 10:30 -> десята тридцять (after "о" -> о десятій тридцять)
-    text = re.sub(r"\b(о|об)\s+(\d{1,2}):(\d{2})\b",
-                  lambda m: f"{m.group(1)} {_uk_ord(m.group(2), 'loc_f')} {_uk_minutes(m.group(3))}", text)
-    text = re.sub(r"\b(\d{1,2}):(\d{2})\b", lambda m: f"{_uk_ord(m.group(1), 'nom_f')} {_uk_minutes(m.group(2))}",
-                  text)
+    text = re.sub(
+        r"\b(о|об)\s+(\d{1,2}):(\d{2})\b",
+        lambda m: f"{m.group(1)} {_uk_ord(m.group(2), 'loc_f')} {_uk_minutes(m.group(3))}",
+        text,
+    )
+    text = re.sub(r"\b(\d{1,2}):(\d{2})\b", lambda m: f"{_uk_ord(m.group(1), 'nom_f')} {_uk_minutes(m.group(2))}", text)
     # years: "у 2026 році", "2026 року", "2026 р.", "2026 рік", "у 1990-х"
-    text = re.sub(r"(\d{1,4})(?:-?(?:му|ому|ім|ому))?\s+(році)\b", lambda m: f"{_uk_ord(m.group(1), 'loc_m')} році",
-                  text)
-    text = re.sub(r"(\d{1,4})(?:-?(?:го|ого))?\s+(року|\0р)(?![\w])", lambda m: f"{_uk_ord(m.group(1), 'gen_m')} року",
-                  text)
+    text = re.sub(
+        r"(\d{1,4})(?:-?(?:му|ому|ім|ому))?\s+(році)\b", lambda m: f"{_uk_ord(m.group(1), 'loc_m')} році", text
+    )
+    text = re.sub(
+        r"(\d{1,4})(?:-?(?:го|ого))?\s+(року|\0р)(?![\w])", lambda m: f"{_uk_ord(m.group(1), 'gen_m')} року", text
+    )
     text = re.sub(r"(\d{4})\s+(рік)\b", lambda m: f"{_uk_ord(m.group(1), 'nom_m')} рік", text)
     text = re.sub(r"(\d{1,4})-(?:х|их)\b", lambda m: _uk_ord(m.group(1), "nom_m")[:-2] + "их", text)
     text = re.sub(r"\b([IVXL]{1,6})\s*столітті\b", lambda m: f"{_uk_ord(_roman(m.group(1)), 'loc_m')} столітті", text)
@@ -249,11 +329,29 @@ def _uk(text):
 
     text = re.sub(r"(\d+)\s*\0ст(?![\w])", century, text)
     # dates: "5 травня" -> п'ятого травня, "1-го" -> першого
-    text = re.sub(r"(\d{1,2})(?:-?(?:го|ого))?\s+(" + "|".join(_UK_MONTHS_GEN) + r")\b",
-                  lambda m: f"{_uk_ord(m.group(1), 'gen_m')} {m.group(2)}", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(\d{1,2})(?:-?(?:го|ого))?\s+(" + "|".join(_UK_MONTHS_GEN) + r")\b",
+        lambda m: f"{_uk_ord(m.group(1), 'gen_m')} {m.group(2)}",
+        text,
+        flags=re.IGNORECASE,
+    )
     # ordinal suffixes: 5-й, 3-я, 2-га, 10-те, 1-го, 7-му
-    suffix = {"й": "nom_m", "ий": "nom_m", "я": "nom_f", "а": "nom_f", "га": "nom_f", "та": "nom_f", "е": "nom_n",
-              "те": "nom_n", "го": "gen_m", "ого": "gen_m", "му": "loc_m", "ому": "loc_m", "ої": "gen_f", "ій": "loc_f"}
+    suffix = {
+        "й": "nom_m",
+        "ий": "nom_m",
+        "я": "nom_f",
+        "а": "nom_f",
+        "га": "nom_f",
+        "та": "nom_f",
+        "е": "nom_n",
+        "те": "nom_n",
+        "го": "gen_m",
+        "ого": "gen_m",
+        "му": "loc_m",
+        "ому": "loc_m",
+        "ої": "gen_f",
+        "ій": "loc_f",
+    }
 
     def suffixed(m):
         words = _uk_ord(m.group(1), suffix[m.group(2)])
@@ -261,8 +359,9 @@ def _uk(text):
 
     text = re.sub(r"(\d+)-(" + "|".join(sorted(suffix, key=len, reverse=True)) + r")\b", suffixed, text)
     # currency symbols before the number: $100 -> 100 $
-    text = re.sub(r"([$€₴])\s?" + _UK_NUM, lambda m: f"{m.group(2)}{',' + m.group(3) if m.group(3) else ''} {m.group(1)}",
-                  text)
+    text = re.sub(
+        r"([$€₴])\s?" + _UK_NUM, lambda m: f"{m.group(2)}{',' + m.group(3) if m.group(3) else ''} {m.group(1)}", text
+    )
 
     # a number (optionally after a preposition) followed by a unit that agrees with it
     unit_re = "|".join(re.escape(u) for u in sorted(("%", "$", "€", "₴"), key=len, reverse=True))
@@ -288,8 +387,9 @@ def _uk(text):
             noun = _plural(n, forms[:3])
         return f"{prep or ''}{words} {noun}"
 
-    text = re.sub(r"(\b\w+\s+)?" + _UK_NUM + r"\s*(?:(" + unit_re + r")|\0(" + marker_re + r"))(?![\w])", with_unit,
-                  text)
+    text = re.sub(
+        r"(\b\w+\s+)?" + _UK_NUM + r"\s*(?:(" + unit_re + r")|\0(" + marker_re + r"))(?![\w])", with_unit, text
+    )
     text = re.sub(r"\0(" + marker_re + r")(?![\w])", lambda m: _UK_UNITS[m.group(1)][2], text)
     text = text.replace("\0", "")
     text = re.sub(r"(?<!\d)%", " відсотків", text)
@@ -320,9 +420,22 @@ def _uk(text):
 
 
 _ROMAN_KEYWORDS = {
-    "uk": {"розділ": "nom_m", "том": "nom_m", "акт": "nom_m", "параграф": "nom_m", "випуск": "nom_m",
-           "глава": "nom_f", "частина": "nom_f", "книга": "nom_f", "дія": "nom_f", "сцена": "nom_f", "пісня": "nom_f"},
-    "en": dict.fromkeys(("chapter", "part", "book", "volume", "vol.", "act", "scene", "section", "canto", "letter"), ""),
+    "uk": {
+        "розділ": "nom_m",
+        "том": "nom_m",
+        "акт": "nom_m",
+        "параграф": "nom_m",
+        "випуск": "nom_m",
+        "глава": "nom_f",
+        "частина": "nom_f",
+        "книга": "nom_f",
+        "дія": "nom_f",
+        "сцена": "nom_f",
+        "пісня": "nom_f",
+    },
+    "en": dict.fromkeys(
+        ("chapter", "part", "book", "volume", "vol.", "act", "scene", "section", "canto", "letter"), ""
+    ),
     "ru": dict.fromkeys(("глава", "часть", "книга", "том", "действие"), ""),
     "be": dict.fromkeys(("раздзел", "частка", "кніга", "том"), ""),
     "pl": dict.fromkeys(("rozdział", "część", "księga", "tom", "akt"), ""),
@@ -332,8 +445,29 @@ _ROMAN_KEYWORDS = {
     "it": dict.fromkeys(("capitolo", "parte", "libro", "volume", "atto"), ""),
     "pt": dict.fromkeys(("capítulo", "parte", "livro", "volume", "ato"), ""),
 }
-_EN_NUMBERED = {"war", "phase", "type", "class", "grade", "level", "stage", "episode", "round", "figure", "table",
-                "appendix", "article", "item", "series", "season", "mark", "model", "unit", "lesson", "exercise"}
+_EN_NUMBERED = {
+    "war",
+    "phase",
+    "type",
+    "class",
+    "grade",
+    "level",
+    "stage",
+    "episode",
+    "round",
+    "figure",
+    "table",
+    "appendix",
+    "article",
+    "item",
+    "series",
+    "season",
+    "mark",
+    "model",
+    "unit",
+    "lesson",
+    "exercise",
+}
 # Cyrillic І, Х, С stand in for I, X, C in many Ukrainian and Russian books.
 _ROMAN_LOOKALIKE = str.maketrans("ІХС", "IXC")
 _ROMAN = r"[IVXLCDMІХС]+"
@@ -364,8 +498,9 @@ def _roman_numerals(text, lang):
 
     if keywords:
         names = "|".join(re.escape(k) for k in sorted(keywords, key=len, reverse=True))
-        text = re.sub(r"(?<![\w])(" + names + r")\s+(" + _ROMAN + r")(?![\w])", after_keyword, text,
-                      flags=re.IGNORECASE)
+        text = re.sub(
+            r"(?<![\w])(" + names + r")\s+(" + _ROMAN + r")(?![\w])", after_keyword, text, flags=re.IGNORECASE
+        )
 
     def alone(m):
         n = _roman_value(m.group(2))
@@ -387,9 +522,11 @@ def _roman_numerals(text, lang):
         upper = r"[A-Z][a-z]+" if lang == "en" else r"[А-ЯІЇЄҐ][а-яіїєґʼ'’]+"
         text = re.sub(r"(?<![\w])(" + upper + r")\s+([IVXLC]{2,}|V|X)(?![\w])(?!\s*(?:ст\.|століт|cent))", regnal, text)
     if lang == "uk":
+
         def lone(m):
             n = _roman_value(m.group(1))
             return m.group(0) if n is None else _uk_ord(n, "nom_m")
+
         text = re.sub(r"(?<![\w])([IVXLC]{2,}|V|X)(?![\w])(?!\s*(?:ст\.|столітт))", lone, text)
     return text
 

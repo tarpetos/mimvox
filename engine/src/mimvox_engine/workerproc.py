@@ -1,9 +1,11 @@
 """Async client of a persistent JSON-lines worker process. One owner task per worker writes the requests and a reader
 task resolves their futures, so concurrent callers never interleave and no lock is held while a reply is awaited.
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
 import json
 import logging
@@ -12,7 +14,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from . import aio, memguard
+from . import aio, memguard, paths
 
 log = logging.getLogger("mimvox.worker")
 
@@ -36,10 +38,17 @@ class WorkerCancelled(Exception):
 
 
 class _Request:
-    __slots__ = ("id", "msg", "done", "progress", "timeout", "stall", "seen", "start", "abandoned")
+    __slots__ = ("abandoned", "done", "id", "msg", "progress", "seen", "stall", "start", "timeout")
 
-    def __init__(self, rid: int, msg: dict[str, Any], progress: Progress | None, timeout: float | None,
-                 start: bool, stall: float | None = None) -> None:
+    def __init__(
+        self,
+        rid: int,
+        msg: dict[str, Any],
+        progress: Progress | None,
+        timeout: float | None,
+        start: bool,
+        stall: float | None = None,
+    ) -> None:
         self.id = rid
         self.msg = msg
         self.done: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
@@ -65,7 +74,7 @@ async def make_room(asking: WorkerClient) -> list[str]:
             freed.append(other.name)
             for hook in other.on_release:
                 hook()
-        except Exception as exc:  # noqa: BLE001 - best effort: the retry reports what still does not fit
+        except Exception as exc:
             log.warning("the %s worker could not release its models: %s", other.name, exc)
     return freed
 
@@ -109,9 +118,16 @@ class WorkerClient:
     def busy(self) -> bool:
         return self.current is not None or (self._queue is not None and not self._queue.empty())
 
-    async def call(self, op: str, params: dict[str, Any] | None = None, progress: Progress | None = None,
-                   timeout: float | None = None, start: bool = True, retry: bool = True,
-                   stall: float | None = None) -> dict[str, Any]:
+    async def call(
+        self,
+        op: str,
+        params: dict[str, Any] | None = None,
+        progress: Progress | None = None,
+        timeout: float | None = None,
+        start: bool = True,
+        retry: bool = True,
+        stall: float | None = None,
+    ) -> dict[str, Any]:
         """A worker that dies under the request is restarted and the request retried once (``retry``), but not while the
         engine shuts down.
         ``start=False``: answer ``{}`` without starting a process when none is running. ``stall``: the request
@@ -129,12 +145,23 @@ class WorkerClient:
             freed = await make_room(self)
             if not freed:
                 raise
-            log.warning("%s: not enough GPU memory for %s; %s released their models, retrying once", self.name, op,
-                        ", ".join(freed))
+            log.warning(
+                "%s: not enough GPU memory for %s; %s released their models, retrying once",
+                self.name,
+                op,
+                ", ".join(freed),
+            )
         return await self._call_once(op, params, progress, timeout, start, stall)
 
-    async def _call_once(self, op: str, params: dict[str, Any] | None, progress: Progress | None,
-                         timeout: float | None, start: bool, stall: float | None = None) -> dict[str, Any]:
+    async def _call_once(
+        self,
+        op: str,
+        params: dict[str, Any] | None,
+        progress: Progress | None,
+        timeout: float | None,
+        start: bool,
+        stall: float | None = None,
+    ) -> dict[str, Any]:
         req = _Request(next(self._ids), {"op": op, **(params or {})}, progress, timeout, start, stall)
         memguard.refresh()
         self._ensure_owner()
@@ -151,8 +178,12 @@ class WorkerClient:
     def cancel_current(self, op: str | None = None, when: Callable[[dict[str, Any]], bool] | None = None) -> None:
         """Its caller gets ``WorkerCancelled``, or the result if the op cannot stop any more."""
         cur = self.current
-        if (cur is not None and (op is None or cur.msg.get("op") == op) and (when is None or when(cur.msg))
-                and self.alive()):
+        if (
+            cur is not None
+            and (op is None or cur.msg.get("op") == op)
+            and (when is None or when(cur.msg))
+            and self.alive()
+        ):
             self._write({"op": "cancel", "id": cur.id})
 
     def _ensure_owner(self) -> None:
@@ -174,7 +205,7 @@ class WorkerClient:
                         raise WorkerDied(f"the engine is shutting down: the {self.name} worker is not started again")
                     await self._spawn()
                 await self._exchange(req)
-            except Exception as exc:  # noqa: BLE001 - the error belongs to this request
+            except Exception as exc:
                 if not req.done.done():
                     req.done.set_exception(exc)
             finally:
@@ -201,15 +232,22 @@ class WorkerClient:
             kwargs["creationflags"] = aio.NO_WINDOW
         log.info("starting the %s worker", self.name)
         proc = await asyncio.create_subprocess_exec(
-            *self.argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=None, env=self.env,
-            limit=64 * 1024 * 1024, **kwargs)
+            *self.argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=None,
+            env=self.env,
+            limit=64 * 1024 * 1024,
+            **kwargs,
+        )
         self._proc, self.pid = proc, proc.pid
         self._ready = loop.create_future()
         exited: asyncio.Future[int] = loop.create_future()
         self._exited = exited
         aio.spawn(self._read(proc, exited), name=f"{self.name}-reader")
-        done, _ = await asyncio.wait({self._ready, exited}, timeout=self.start_timeout,
-                                     return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(
+            {self._ready, exited}, timeout=self.start_timeout, return_when=asyncio.FIRST_COMPLETED
+        )
         if self._ready in done and not self._ready.cancelled():
             log.info("%s worker ready (pid %s)", self.name, proc.pid)
             return
@@ -247,8 +285,8 @@ class WorkerClient:
         try:
             msg = json.loads(raw)
             if not isinstance(msg, dict):
-                raise ValueError("not an object")
-        except ValueError:
+                raise TypeError("not an object")
+        except (ValueError, TypeError):
             log.warning("unexpected %s worker output: %s", self.name, raw[:300])
             return
         if "event" in msg:
@@ -266,7 +304,7 @@ class WorkerClient:
             if req.progress is not None and not req.abandoned:
                 try:
                     req.progress(msg["progress"])
-                except Exception:  # noqa: BLE001 - a progress callback must not break the channel
+                except Exception:
                     log.exception("%s progress callback failed", self.name)
             return
         del self._pending[req.id]
@@ -277,15 +315,18 @@ class WorkerClient:
         elif msg.get("code") == "cancelled":
             req.done.set_exception(WorkerCancelled())
         else:
-            req.done.set_exception(WorkerError(str(msg.get("code") or "internal"), str(msg.get("error") or "failed"),
-                                               bool(msg.get("permanent"))))
+            req.done.set_exception(
+                WorkerError(
+                    str(msg.get("code") or "internal"), str(msg.get("error") or "failed"), bool(msg.get("permanent"))
+                )
+            )
 
     def _write(self, obj: dict[str, Any]) -> None:
         proc = self._proc
         if proc is None or proc.stdin is None or proc.returncode is not None:
             return
         try:
-            proc.stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+            proc.stdin.write((json.dumps(obj, ensure_ascii=False, default=paths.json_default) + "\n").encode("utf-8"))
         except (OSError, RuntimeError) as exc:
             log.warning("%s worker pipe closed: %s", self.name, exc)
 
@@ -305,10 +346,8 @@ class WorkerClient:
                 done, _ = await asyncio.wait({exited}, timeout=5.0)
                 if done:
                     return
-        try:
+        with contextlib.suppress(ProcessLookupError):
             proc.kill()
-        except ProcessLookupError:
-            pass
         if exited is not None:
             await asyncio.shield(exited)
 

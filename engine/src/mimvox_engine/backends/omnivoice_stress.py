@@ -3,8 +3,10 @@
 Measured: an upper-case vowel put a final stress on it 63 % of the time (52 % unmarked); U+0301 there pulled it a
 syllable earlier. ``omnivoice_text.py`` loads this file by path, so it imports only the standard library.
 """
+
 import os
 import re
+from pathlib import Path
 
 ACUTE = "\u0301"
 _GRAVE = "\u0300"
@@ -22,12 +24,12 @@ _dict = None
 
 def _mark(word, i):
     if not any(c.isalpha() for c in word[:i]):
-        return word[:i + 1] + ACUTE + word[i + 1:]   # a word-initial vowel: a capital there means nothing
-    return word[:i] + word[i].upper() + word[i + 1:]
+        return word[: i + 1] + ACUTE + word[i + 1 :]  # a word-initial vowel: a capital there means nothing
+    return word[:i] + word[i].upper() + word[i + 1 :]
 
 
 def _convert(word):
-    """Marks in ``word`` are U+0301 after a vowel or "\\0" before one."""
+    r"""Marks in ``word`` are U+0301 after a vowel or "\\0" before one."""
     plain, stressed = [], []
     for i, c in enumerate(word):
         if c == "\0":
@@ -39,7 +41,7 @@ def _convert(word):
         else:
             plain.append(c)
     text = "".join(plain)
-    if not stressed or text.isupper():   # a word in capitals cannot show an upper-case mark
+    if not stressed or text.isupper():  # a word in capitals cannot show an upper-case mark
         return text
     for k in sorted(set(stressed), reverse=True):
         text = _mark(text, k)
@@ -66,7 +68,7 @@ def _load():
             import ukrainian_word_stress
 
             trie = marisa_trie.BytesTrie()
-            trie.load(os.path.join(os.path.dirname(ukrainian_word_stress.__file__), "data", "stress.trie"))
+            trie.load(Path(ukrainian_word_stress.__file__).parent / "data" / "stress.trie")
             _dict = trie
         except (ImportError, OSError, RuntimeError):
             pass
@@ -87,10 +89,10 @@ def _stress_of(trie, word):
         return None
     readings = {tuple(item.partition(b"\xfe")[0]) for item in value.split(b"\xff") if item}
     if len(readings) != 1:
-        return None   # a heteronym: the model decides
+        return None  # a heteronym: the model decides
     accents = next(iter(readings))
     if len(accents) != 1:
-        return None   # two accepted stresses (по́ми́лка), or a compound
+        return None  # two accepted stresses (по́ми́лка), or a compound
     i = accents[0] - 1
     return i if 0 <= i < len(word) and word[i] in _VOWELS else None
 

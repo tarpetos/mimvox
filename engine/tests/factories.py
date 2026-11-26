@@ -1,6 +1,6 @@
 import base64
-import os
 import zipfile
+from pathlib import Path
 
 JPEG = b"\xff\xd8\xff\xe0" + b"JFIF-test-jpeg" * 10
 PNG = b"\x89PNG\r\n\x1a\n" + b"test-png" * 10
@@ -70,15 +70,17 @@ def write_zip(path, members, mimetype=None):
     return str(path)
 
 
-def epub(path, version="3.0", metadata="<dc:title>Test Book</dc:title>", chapters=None, toc="nav", extra_items="",
-         files=None):
+def epub(
+    path, version="3.0", metadata="<dc:title>Test Book</dc:title>", chapters=None, toc="nav", extra_items="", files=None
+):
     """An EPUB of ``chapters`` (title, paragraphs); ``toc`` is "nav", "ncx" or "both"."""
     chapters = chapters if chapters is not None else [(f"Chapter {n}", body_paras(f"chapter {n}")) for n in (1, 2)]
     docs = [(f"c{n}", f"c{n}.xhtml") for n in range(1, len(chapters) + 1)]
     entries = [(t, h) for (t, _), (_, h) in zip(chapters, docs)]
     members = {"META-INF/container.xml": CONTAINER}
-    members["OEBPS/content.opf"] = opf(version, metadata, docs, extra_items, nav_doc=toc in ("nav", "both"),
-                                       ncx_doc=toc in ("ncx", "both"))
+    members["OEBPS/content.opf"] = opf(
+        version, metadata, docs, extra_items, nav_doc=toc in ("nav", "both"), ncx_doc=toc in ("ncx", "both")
+    )
     for (title, paras), (_, href) in zip(chapters, docs):
         members[f"OEBPS/{href}"] = xhtml(title, paras)
     if toc in ("nav", "both"):
@@ -99,8 +101,7 @@ def fb2(path, title_info, sections, binaries=""):
         f'xmlns:l="http://www.w3.org/1999/xlink"><description><title-info>{title_info}</title-info></description>'
         f"<body>{secs}</body>{binaries}</FictionBook>"
     )
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(doc)
+    Path(path).write_text(doc, encoding="utf-8")
     return str(path)
 
 
@@ -112,7 +113,8 @@ def docx(path, blocks, core=None):
     """``blocks``: (style id or None, text)."""
     w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     ps = "".join(
-        "<w:p>" + (f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else "")
+        "<w:p>"
+        + (f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else "")
         + f"<w:r><w:t>{text}</w:t></w:r></w:p>"
         for style, text in blocks
     )
@@ -135,9 +137,11 @@ def odt(path, blocks, meta=None):
     body = "".join(
         f'<text:h text:outline-level="{lvl}">{t}</text:h>' if lvl else f"<text:p>{t}</text:p>" for lvl, t in blocks
     )
-    members = {"content.xml": f'<?xml version="1.0"?><office:document-content xmlns:office="{office}" '
-                              f'xmlns:text="{text_ns}"><office:body><office:text>{body}</office:text></office:body>'
-                              "</office:document-content>"}
+    members = {
+        "content.xml": f'<?xml version="1.0"?><office:document-content xmlns:office="{office}" '
+        f'xmlns:text="{text_ns}"><office:body><office:text>{body}</office:text></office:body>'
+        "</office:document-content>"
+    }
     if meta:
         members["meta.xml"] = (
             f'<?xml version="1.0"?><office:document-meta xmlns:office="{office}" '
@@ -148,6 +152,5 @@ def odt(path, blocks, meta=None):
 
 
 def text_file(path, text, encoding="utf-8"):
-    with open(path, "wb") as fh:
-        fh.write(text.encode(encoding))
-    return str(os.fspath(path))
+    Path(path).write_bytes(text.encode(encoding))
+    return str(path)

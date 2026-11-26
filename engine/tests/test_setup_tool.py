@@ -28,8 +28,11 @@ def make(data_dir, plat="linux", **kw):
 def write_runtime(s, backend="cpu", components=("speech",)):
     s.data_dir.mkdir(parents=True, exist_ok=True)
     listed = ", ".join(f'"{c}"' for c in components)
-    s.runtime_toml.write_text(f"[python]\nengine = {setup.toml_str(s.engine_python())}\n\n[device]\n"
-                              f'backend = "{backend}"\n\n[setup]\ncomponents = [{listed}]\n', encoding="utf-8")
+    s.runtime_toml.write_text(
+        f"[python]\nengine = {setup.toml_str(s.engine_python())}\n\n[device]\n"
+        f'backend = "{backend}"\n\n[setup]\ncomponents = [{listed}]\n',
+        encoding="utf-8",
+    )
 
 
 def fake_runtime(s, components=("speech",)):
@@ -54,8 +57,10 @@ def nvidia(monkeypatch):
 
 @pytest.fixture
 def interpreters(monkeypatch):
-    monkeypatch.setattr(setup.Setup, "read",
-                        lambda self, command, cwd=None: TORCH_CPU if "import json, torch" in str(command[-1]) else "1.0\n")
+    def read(self, command, cwd=None):
+        return TORCH_CPU if "import json, torch" in str(command[-1]) else "1.0\n"
+
+    monkeypatch.setattr(setup.Setup, "read", read)
 
 
 def test_a_cpu_runtime_stays_on_the_cpu(tmp_path, nvidia, capsys):
@@ -119,7 +124,7 @@ class FakeUv:
     def __init__(self, s):
         self.s, self.calls, self.fail = s, [], lambda argv: False
         self.freeze = {}
-        self.python = True  # Python 3.14 is in <runtime>/python
+        self.python = True
 
     def run(self, command, cwd=None, extra_env=None):
         argv = [str(part) for part in command]
@@ -162,7 +167,7 @@ def fake_uv(tmp_path, monkeypatch):
 
 
 def old_python(s, tmp_path):
-    """The engine venv as setup made it before <runtime>/python: from uv's default folder (%APPDATA%\\uv\\python)."""
+    r"""The engine venv as setup made it before <runtime>/python: from uv's default folder (%APPDATA%\\uv\\python)."""
     home = tmp_path / "Roaming" / "uv" / "python" / "cpython-3.11-windows-x86_64-none"
     (s.engine_venv / "pyvenv.cfg").write_text(f"home = {home}\nversion_info = 3.11\n", encoding="utf-8")
     (s.engine_venv / "old-file").write_bytes(b"")
@@ -253,7 +258,7 @@ def test_runtime_toml_names_an_installed_clone_model(tmp_path, monkeypatch):
     text = s.runtime_toml.read_text(encoding="utf-8")
     assert f"voxcpm = {setup.toml_str(s.clone_python('voxcpm'))}" in text
     assert f"voxcpm_model = {setup.toml_str(s.clone_models_dir('voxcpm'))}" in text
-    assert "chatterbox" not in text.split("[setup]")[0]  # no interpreter yet: left out until it is installed
+    assert "chatterbox" not in text.split("[setup]")[0]
     assert s.component_paths("voxcpm") == [s.runtime / "voxcpm", s.runtime / "models" / "voxcpm"]
 
 
@@ -262,7 +267,7 @@ def test_a_clone_model_an_older_setup_left_out_is_kept(tmp_path):
     write_runtime(s, components=("speech", "ukrainian"))
     (s.clone_models_dir("chatterbox")).mkdir(parents=True)
     (s.clone_models_dir("chatterbox") / setup.CLONE_STAMP).write_text("x", encoding="utf-8")
-    (s.clone_models_dir("voxcpm")).mkdir(parents=True)  # an interrupted download: no stamp
+    (s.clone_models_dir("voxcpm")).mkdir(parents=True)
     s.resolve_components(setup.parse_args([]))
     assert s.components == {"speech", "ukrainian", "chatterbox"}
 
@@ -270,8 +275,13 @@ def test_a_clone_model_an_older_setup_left_out_is_kept(tmp_path):
 def test_pythons_no_environment_uses_are_removed(fake_uv, capsys):
     s, _uv = fake_uv
     running = f"{sys.version_info.major}.{sys.version_info.minor}"
-    names = ["cpython-3.11.15-linux-x86_64-gnu", "cpython-3.11-linux-x86_64-gnu", f"cpython-{running}.1-linux-x86_64-gnu",
-             f"cpython-{setup.ENGINE_PYTHON}.7-linux-x86_64-gnu", ".lock"]
+    names = [
+        "cpython-3.11.15-linux-x86_64-gnu",
+        "cpython-3.11-linux-x86_64-gnu",
+        f"cpython-{running}.1-linux-x86_64-gnu",
+        f"cpython-{setup.ENGINE_PYTHON}.7-linux-x86_64-gnu",
+        ".lock",
+    ]
     for name in names:
         if name != "cpython-3.11-linux-x86_64-gnu":
             (s.python_dir / name).mkdir(parents=True, exist_ok=True)
@@ -282,7 +292,8 @@ def test_pythons_no_environment_uses_are_removed(fake_uv, capsys):
         minor.symlink_to(s.python_dir / "cpython-3.11.15-linux-x86_64-gnu")
     s.remove_unused_pythons()
     left = {p.name for p in s.python_dir.iterdir()}
-    assert left >= {f"cpython-{running}.1-linux-x86_64-gnu", f"cpython-{setup.ENGINE_PYTHON}.7-linux-x86_64-gnu", ".lock"}
+    kept = {f"cpython-{running}.1-linux-x86_64-gnu", f"cpython-{setup.ENGINE_PYTHON}.7-linux-x86_64-gnu", ".lock"}
+    assert left >= kept
     assert not left & {"cpython-3.11.15-linux-x86_64-gnu", "cpython-3.11-linux-x86_64-gnu"}
     assert "Removing Python 3.11" in capsys.readouterr().out
 
@@ -318,7 +329,7 @@ def test_a_rebuild_fetches_the_python_first_and_the_packages_from_the_cache(tmp_
     assert len(python_install) == 1
     install = uv.calls[python_install[0]]
     assert install[-1] == setup.ENGINE_PYTHON and {"--no-bin", "--no-registry"} <= set(install)
-    later = uv.calls[python_install[0] + 1:]
+    later = uv.calls[python_install[0] + 1 :]
     assert all("--offline" in argv for argv in later if argv[1:2] == ["venv"] or argv[1:3] == ["pip", "install"])
     assert len(uv.venv_calls()) == 1
     assert s.on_runtime_python(s.engine_venv)
@@ -366,7 +377,7 @@ def test_nltk_data_goes_into_the_engine_venv(fake_uv):
     s.engine_env()
     (download,) = [argv for argv in uv.calls if "download_dir" in " ".join(argv)]
     assert download[download.index("-c") + 2] == str(target)
-    assert download[download.index("-c") + 3:] == [name for _kind, name in setup.NLTK_PACKAGES]
+    assert download[download.index("-c") + 3 :] == [name for _kind, name in setup.NLTK_PACKAGES]
     for kind, name in setup.NLTK_PACKAGES:
         (target / kind).mkdir(parents=True, exist_ok=True)
         (target / kind / f"{name}.zip").write_bytes(b"")
@@ -381,11 +392,11 @@ def _link(target, link):
 
         _winapi.CreateJunction(str(target), str(link))
     else:
-        os.symlink(target, link, target_is_directory=True)
+        link.symlink_to(target, target_is_directory=True)
 
 
 def test_move_of_a_speech_only_runtime_with_its_pythons(tmp_path, monkeypatch, interpreters):
-    """uv links a Python's minor version to its patch release with an absolute link, which a rename leaves dangling."""
+    """Uv links a Python's minor version to its patch release with an absolute link, which a rename leaves dangling."""
     monkeypatch.setattr(setup, "location_file", lambda plat: tmp_path / "config" / "location.toml")
     monkeypatch.setattr(move_runtime, "running_processes", lambda old, windows: [])
     old, new = (tmp_path / "old").resolve(), (tmp_path / "new").resolve()
@@ -397,11 +408,12 @@ def test_move_of_a_speech_only_runtime_with_its_pythons(tmp_path, monkeypatch, i
     _link(release, pythons / "cpython-3.11")
     if os.name != "nt":
         s.engine_python().parent.mkdir(parents=True)
-        os.symlink(pythons / "cpython-3.11" / "bin" / "python3.11", s.engine_python())
+        s.engine_python().symlink_to(pythons / "cpython-3.11" / "bin" / "python3.11")
     fake_runtime(s)
     assert setup.run_move(setup.parse_args(["--data-dir", str(old), "--move-to", str(new)])) == 0
     assert not old.exists()
     moved = make(new, plat=setup.host_platform())
-    assert Path(os.path.realpath(new / "runtime" / "python" / "cpython-3.11")) == new / "runtime" / "python" / "cpython-3.11.15"
-    assert Path(os.path.realpath(moved.engine_python())).is_relative_to(new)
+    pythons = new / "runtime" / "python"
+    assert (pythons / "cpython-3.11").resolve() == pythons / "cpython-3.11.15"
+    assert moved.engine_python().resolve().is_relative_to(new)
     assert setup.toml_str(moved.engine_python()) in moved.runtime_toml.read_text(encoding="utf-8")

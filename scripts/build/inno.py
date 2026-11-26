@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build the Windows installer (setup.exe) with a pinned, portable Inno Setup. Run by build-win.ps1:
+"""Build the Windows installer (setup.exe) with a pinned, portable Inno Setup, run by build-win.ps1.
 
-    inno.py --version 0.1.6 --arch x64|arm64 --stage <folder> --out <dist> --cache <folder for Inno Setup>
+inno.py --version 0.1.6 --arch x64|arm64 --stage <folder> --out <dist> --cache <folder for Inno Setup>
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,7 +46,8 @@ BAD = "#FF7A85"
 
 # Pinned, because the download is executed: the digest GitHub publishes for the release asset.
 INNO_VERSION = "6.7.3"
-INNO_URL = f"https://github.com/jrsoftware/issrc/releases/download/is-{INNO_VERSION.replace('.', '_')}/innosetup-{INNO_VERSION}.exe"
+INNO_TAG = f"is-{INNO_VERSION.replace('.', '_')}"
+INNO_URL = f"https://github.com/jrsoftware/issrc/releases/download/{INNO_TAG}/innosetup-{INNO_VERSION}.exe"
 INNO_SHA256 = "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
 
 # Inno's image areas at 100-250 % display scaling: Setup picks the closest.
@@ -68,7 +70,7 @@ def colorref(colour: str) -> str:
 
 
 def draw_banner(width: int, height: int, out: Path) -> None:
-    from PIL import Image, ImageDraw, ImageFilter, ImageFont  # noqa: PLC0415 - only the Windows build draws
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
     top, bottom = rgb(BG_TOP), rgb(BG_BOTTOM)
     base = Image.new("RGB", (width, height))
@@ -116,7 +118,7 @@ def draw_banner(width: int, height: int, out: Path) -> None:
 
 
 def draw_small(side: int, out: Path) -> None:
-    from PIL import Image  # noqa: PLC0415
+    from PIL import Image
 
     small = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     inner = round(side * 0.78)
@@ -139,13 +141,30 @@ def draw_images(folder: Path) -> tuple[list[Path], list[Path]]:
 
 # Must match crates/engine-client/src/lib.rs, APP_MUTEX (held by the app and by mimvox-server).
 APP_MUTEX = "Local\\Mimvox-running"
+
+
 # Inno's uninstall entry: <AppId>_is1 under the install mode's root (HKA: per user here).
 def uninstall_key(app_id: str) -> str:
     return f"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{app_id}_is1"
+
+
 # Never delete the data folder blindly: a folder the user chose may hold other files. A ".tmp" is a write cut short.
 ENGINE_ENTRIES = ("runtime", "cache", "tmp", "runtime.toml", "runtime.toml.tmp", "engine.lock")
-USER_ENTRIES = ("voices", "outputs", "books", "logs", "api", "settings.json", "settings.json.tmp", "components.json",
-                "components.json.tmp", "book-draft.json", "book-draft.json.tmp", "speak-text.txt", "speak-text.txt.tmp")
+USER_ENTRIES = (
+    "voices",
+    "outputs",
+    "books",
+    "logs",
+    "api",
+    "settings.json",
+    "settings.json.tmp",
+    "components.json",
+    "components.json.tmp",
+    "book-draft.json",
+    "book-draft.json.tmp",
+    "speak-text.txt",
+    "speak-text.txt.tmp",
+)
 # Restart Manager cannot close it when its client gave it no console; it is stateless and clients start it again.
 MCP_BINARY = "mimvox-mcp.exe"
 
@@ -487,7 +506,8 @@ begin
     Title.Font.Style := [fsBold];
     Title.AdjustHeight();
     OptionApp := NewOption(Title.Top + Title.Height + ScaleY(14), 'Only the app',
-      'Your voices, results, settings and the speech engine stay. Installing Mimvox again continues where you left off.', D1);
+      'Your voices, results, settings and the speech engine stay. ' +
+      'Installing Mimvox again continues where you left off.', D1);
     OptionEngine := NewOption(D1.Top + D1.Height + ScaleY(12), 'The app, the speech engine and its models',
       'Frees almost all the space Mimvox uses. Your voices, recordings, results and settings stay.', D2);
     OptionAll := NewOption(D2.Top + D2.Height + ScaleY(12), 'Everything',
@@ -510,7 +530,8 @@ begin
     RunningNotice.Left := ScaleX(24);
     RunningNotice.Top := AllWarning.Top + AllWarning.Height + ScaleY(14);
     RunningNotice.Width := ChoiceForm.ClientWidth - ScaleX(48);
-    RunningNotice.Caption := 'Mimvox or mimvox-server is running. Close it to uninstall: this window notices by itself.';
+    RunningNotice.Caption := 'Mimvox or mimvox-server is running. ' +
+      'Close it to uninstall: this window notices by itself.';
     RunningNotice.AdjustHeight();
     RunningNotice.StyleElements := RunningNotice.StyleElements - [seFont];
     RunningNotice.Font.Color := @BAD@;
@@ -668,13 +689,19 @@ end;
 def uninstall_code(app_id: str) -> str:
     def lines(entries: tuple[str, ...]) -> str:
         return "\n".join(f"  RemoveEntry(Data, '{name}');" for name in entries)
-    return (UNINSTALL_CODE.replace("@KEY@", uninstall_key(app_id)).replace("@DIM@", colorref(TEXT_DIM))
-            .replace("@BAD@", colorref(BAD)).replace("@ENGINE@", lines(ENGINE_ENTRIES))
-            .replace("@USER@", lines(USER_ENTRIES)))
+
+    return (
+        UNINSTALL_CODE.replace("@KEY@", uninstall_key(app_id))
+        .replace("@DIM@", colorref(TEXT_DIM))
+        .replace("@BAD@", colorref(BAD))
+        .replace("@ENGINE@", lines(ENGINE_ENTRIES))
+        .replace("@USER@", lines(USER_ENTRIES))
+    )
 
 
-def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], smalls: list[Path],
-        app_id: str = APP) -> str:
+def iss(
+    version: str, arch: str, stage: Path, out: Path, banners: list[Path], smalls: list[Path], app_id: str = APP
+) -> str:
     arch_allowed = "arm64" if arch == "arm64" else "x64compatible"
     base = f"mimvox_{version}_{arch}-setup"
     lines = [
@@ -719,8 +746,10 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         f"OutputBaseFilename={base}",
         "",
         "[Messages]",
-        "WelcomeLabel2=This installs [name/ver] on your computer.%n%nThe speech engine and its models are not in "
-        "this installer: the app downloads them on its first start, and you choose which parts you want.",
+        (
+            "WelcomeLabel2=This installs [name/ver] on your computer.%n%nThe speech engine and its models are not in "
+            "this installer: the app downloads them on its first start, and you choose which parts you want."
+        ),
         f"FinishedLabel={APP} is installed. On its first start it sets up the speech engine for you.",
         # No Ready page: this page's button installs.
         "SelectDirBrowseLabel=To install, click Install. To choose a different folder, click Browse.",
@@ -786,8 +815,11 @@ def iss(version: str, arch: str, stage: Path, out: Path, banners: list[Path], sm
         "  end;",
         "end;",
         "",
-        *RUNNING_CODE.replace("@MUTEX@", APP_MUTEX).replace("@MCP@", MCP_BINARY).replace("@BAD@", colorref(BAD))
-        .replace("@TEXT@", colorref(TEXT)).split("\n"),
+        *RUNNING_CODE.replace("@MUTEX@", APP_MUTEX)
+        .replace("@MCP@", MCP_BINARY)
+        .replace("@BAD@", colorref(BAD))
+        .replace("@TEXT@", colorref(TEXT))
+        .split("\n"),
         "procedure InitializeWizard;",
         "begin",
         "  { The app's palette: the header strip is smoked glass, titles in the text colour, the rest dimmer. }",
@@ -864,14 +896,25 @@ def ensure_iscc(cache: Path) -> Path:
     installer = cache / f"innosetup-{INNO_VERSION}.exe"
     if not installer.is_file():
         print(f"[inno] Downloading Inno Setup {INNO_VERSION}...", flush=True)
-        with urllib.request.urlopen(INNO_URL, timeout=300) as response:  # noqa: S310 - pinned https URL
+        with urllib.request.urlopen(INNO_URL, timeout=300) as response:
             data = response.read()
         if hashlib.sha256(data).hexdigest() != INNO_SHA256:
             raise SystemExit(f"[inno] {INNO_URL}: checksum mismatch")
         installer.write_bytes(data)
     print(f"[inno] Unpacking Inno Setup into {iscc.parent}...", flush=True)
-    subprocess.run([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CURRENTUSER",
-                    "/PORTABLE=1", f"/DIR={iscc.parent}"], check=True)
+    subprocess.run(
+        [
+            str(installer),
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/CURRENTUSER",
+            "/PORTABLE=1",
+            f"/DIR={iscc.parent}",
+        ],
+        check=True,
+    )
     if not iscc.is_file():
         raise SystemExit(f"[inno] Inno Setup did not unpack {iscc}")
     return iscc
@@ -884,9 +927,12 @@ def main() -> int:
     parser.add_argument("--stage", type=Path, required=True, help="mimvox.exe and the bundled resources")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--cache", type=Path, required=True, help="where the portable Inno Setup is kept")
-    parser.add_argument("--app-id", default=APP,
-                        help="Inno's AppId (default: Mimvox); tests use another, e.g. MimvoxTest, so a test install "
-                             "and its uninstall never touch the real install's entry")
+    parser.add_argument(
+        "--app-id",
+        default=APP,
+        help="Inno's AppId (default: Mimvox); tests use another, e.g. MimvoxTest, so a test install "
+        "and its uninstall never touch the real install's entry",
+    )
     args = parser.parse_args()
     if not (args.stage / BINARY).is_file():
         raise SystemExit(f"[inno] {args.stage / BINARY} is missing")
@@ -894,8 +940,10 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         banners, smalls = draw_images(Path(tmp) / "images")
         script = Path(tmp) / "mimvox.iss"
-        script.write_text(iss(args.version, args.arch, args.stage.resolve(), args.out.resolve(), banners, smalls,
-                              args.app_id), encoding="utf-8-sig")
+        script.write_text(
+            iss(args.version, args.arch, args.stage.resolve(), args.out.resolve(), banners, smalls, args.app_id),
+            encoding="utf-8-sig",
+        )
         iscc = ensure_iscc(args.cache)
         print(f"[inno] Compiling {script.name}...", flush=True)
         subprocess.run([str(iscc), "/Q", str(script)], check=True)

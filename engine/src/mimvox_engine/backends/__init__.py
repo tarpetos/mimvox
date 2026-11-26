@@ -1,14 +1,16 @@
 """Text-to-speech backends: the first registered backend that speaks a language and is ``available()`` wins."""
+
 from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
 @dataclass(frozen=True)
 class SynthParams:
-    out_path: str
+    out_path: str | Path
     temperature: float = 0.8
     quality: str = "best"
     duration_factor: float = 1.0  # 1 / speed: below 1 is faster
@@ -96,16 +98,18 @@ def languages() -> set[str]:
     return out
 
 
-def primary() -> "TtsBackend":
-    from .omnivoice import OMNIVOICE  # noqa: PLC0415
+def primary() -> TtsBackend:
+    from .omnivoice import OMNIVOICE
+
     all_backends()
     return OMNIVOICE
 
 
 def _builtin() -> None:
-    from .clone import CHATTERBOX, VOXCPM  # noqa: PLC0415
-    from .holos import HOLOS  # noqa: PLC0415
-    from .omnivoice import OMNIVOICE  # noqa: PLC0415
+    from .clone import CHATTERBOX, VOXCPM
+    from .holos import HOLOS
+    from .omnivoice import OMNIVOICE
+
     register(HOLOS)
     register(OMNIVOICE)
     register(VOXCPM)

@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import mimvox_engine
 import pytest
@@ -59,7 +60,7 @@ TIE = "Я ведаю, што ты прыйдзеш заўтра. Ён не ха�
 
 @pytest.mark.parametrize("text", [TIE, "la"])
 def test_detection_does_not_depend_on_the_hash_seed(text):
-    src = os.path.dirname(os.path.dirname(mimvox_engine.__file__))
+    src = str(Path(mimvox_engine.__file__).parent.parent)
     code = f"from mimvox_engine.dataset import lang; print(lang.detect({text!r}, among=lang.DETECTABLE))"
     seen = set()
     for seed in range(4):
@@ -87,7 +88,7 @@ def test_normalize_code(value, code):
 
 
 def test_normalize_code_rejects_unknown():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unsupported language 'xx'"):
         lang.normalize_code("xx")
 
 

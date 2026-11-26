@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import re
 import time
 from collections import deque
@@ -18,10 +19,10 @@ class Tracker:
         self.frac = 0.0
         self.epoch = 0
         self.epochs_done = 0
-        self._phase = 0            # extract: 0 pitch, 1 embeddings
+        self._phase = 0  # extract: 0 pitch, 1 embeddings
         self._epoch_marks: deque[float] = deque(maxlen=31)
         self.last_step: int | None = None
-        self._batches_seen = 0     # counted: cached data is shuffled, so batch ids are not ordered
+        self._batches_seen = 0  # counted: cached data is shuffled, so batch ids are not ordered
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage
@@ -82,12 +83,12 @@ class Tracker:
             return None
         marks = list(self._epoch_marks)
         # slow outliers (checkpoint saves) are ignored, so one slow epoch does not double the estimate
-        gaps = sorted(b - a for a, b in zip(marks, marks[1:]))
+        gaps = sorted(b - a for a, b in itertools.pairwise(marks))
         median = gaps[len(gaps) // 2]
         typical = [g for g in gaps if g <= 1.5 * median] or gaps
         per_epoch = sum(typical) / len(typical)
         remaining = max(0, self.total_epochs - self.epochs_done)
-        return int(round(per_epoch * remaining + 20))  # +20 s for the final export and index
+        return round(per_epoch * remaining + 20)  # +20 s for the final export and index
 
     def snapshot(self) -> dict:
         lo, hi = WEIGHTS[self.stage]

@@ -1,10 +1,11 @@
 """Voice-cloning models beside OmniVoice, each in its own venv and worker process. A model loads on its first use, so
 an installed one costs no memory until it speaks."""
+
 from __future__ import annotations
 
 import logging
-import os
 import time
+from pathlib import Path
 from typing import Any
 
 from .. import aio, components, config, media, reflang
@@ -15,7 +16,7 @@ from . import SynthParams, TtsBackend
 
 log = logging.getLogger("mimvox.clone")
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = Path(__file__).absolute().parent
 STAMP = ".mimvox-setup-ok"
 LOAD_TIMEOUT_S = 600.0
 SYNTH_TIMEOUT_S = 600.0
@@ -25,33 +26,39 @@ CPU_STALL_S = 900.0
 class WorkerBackend(TtsBackend):
     """``missing`` (not installed), ``idle`` (installed, loads when it first speaks), ``ready`` or ``paused``."""
 
-    def __init__(self, name: str, label: str, languages: frozenset[str], required: tuple[str, ...],
-                 transcript: bool) -> None:
+    def __init__(
+        self, name: str, label: str, languages: frozenset[str], required: tuple[str, ...], transcript: bool
+    ) -> None:
         self.name, self.label, self.languages = name, label, languages
         self.required = required
-        self.transcript = transcript  # the model clones best from the clip together with what it says
+        self.transcript = transcript
         self._client: WorkerClient | None = None
         self._runtime: dict[str, Any] = {}
         self._status = "missing"
         self._loaded = False
         self.last_load: dict[str, Any] = {}
 
-    def python(self, runtime: dict[str, Any]) -> str | None:
+    def python(self, runtime: dict[str, Any]) -> Path | None:
         return config.runtime_path(runtime, "python", self.name)
 
-    def model_dir(self, runtime: dict[str, Any]) -> str | None:
+    def model_dir(self, runtime: dict[str, Any]) -> Path | None:
         d = config.runtime_path(runtime, "paths", f"{self.name}_model")
         if d:
             return d
         root = config.runtime_root(runtime)
-        return os.path.join(root, "models", self.name) if root else None
+        return root / "models" / self.name if root else None
 
     def installed(self, runtime: dict[str, Any], honour_off: bool = True) -> bool:
         if honour_off and components.off(self.name):
             return False
         py, model = self.python(runtime), self.model_dir(runtime)
-        return bool(py and model and os.path.isfile(py) and os.path.isfile(os.path.join(model, STAMP))
-                    and all(os.path.isfile(os.path.join(model, f)) for f in self.required))
+        return bool(
+            py
+            and model
+            and py.is_file()
+            and (model / STAMP).is_file()
+            and all((model / f).is_file() for f in self.required)
+        )
 
     def status(self) -> str:
         return self._status
@@ -66,12 +73,21 @@ class WorkerBackend(TtsBackend):
     def _ensure_client(self) -> WorkerClient:
         if self._client is None:
             model_dir = self.model_dir(self._runtime)
-            argv = [self.python(self._runtime), *isolated(), os.path.join(HERE, f"{self.name}_worker.py"),
-                    "--model-dir", model_dir, "--device", self._device()]
-            # Their libraries write caches into the user's home (diffusers in ~/.cache/huggingface, pkuseg in
-            # ~/.pkuseg); setup puts what they need there.
-            env = child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HOME=os.path.join(model_dir, "hf-home"),
-                            PKUSEG_HOME=os.path.join(model_dir, "pkuseg"))
+            argv = [
+                self.python(self._runtime),
+                *isolated(),
+                HERE / f"{self.name}_worker.py",
+                "--model-dir",
+                model_dir,
+                "--device",
+                self._device(),
+            ]
+            env = child_env(
+                HF_HUB_OFFLINE="1",
+                TRANSFORMERS_OFFLINE="1",
+                HF_HOME=str(model_dir / "hf-home"),
+                PKUSEG_HOME=str(model_dir / "pkuseg"),
+            )
             self._client = WorkerClient(self.name, argv, env, start_timeout=240.0)
             self._client.on_release.append(self._unloaded)
         return self._client
@@ -140,13 +156,13 @@ class WorkerBackend(TtsBackend):
         """The clip and, when known, the stretch of it that OmniVoice transcribed (start, end, text)."""
         if params.reference_text:
             return {"ref": reference, "ref_text": params.reference_text}
-        from .omnivoice import OMNIVOICE, reference_for  # noqa: PLC0415 - no import cycle at load time
+        from .omnivoice import OMNIVOICE, reference_for
 
         ref = reference_for(reference, lang)
         side = reflang.read_sidecar(ref)
         if self.transcript and side is None and OMNIVOICE.status() == "ready":
             try:
-                await OMNIVOICE.warm(ref, lang)  # transcribes the clip with Whisper and writes the sidecar
+                await OMNIVOICE.warm(ref, lang)
             except EngineError as exc:
                 log.warning("%s: no transcript of %s (%s); cloning from the audio only", self.label, ref, exc.message)
             side = reflang.read_sidecar(ref)
@@ -164,14 +180,24 @@ class WorkerBackend(TtsBackend):
         await self._ensure_loaded()
         prompt = await self._prompt(reference, lang, params)
         t0 = time.time()
-        res = await self._call("synth", {"text": text, "lang": lang, "out": params.out_path, **prompt,
-                                         "quality": params.quality, "expressiveness": params.temperature},
-                               **self._limits())
+        res = await self._call(
+            "synth",
+            {
+                "text": text,
+                "lang": lang,
+                "out": params.out_path,
+                **prompt,
+                "quality": params.quality,
+                "expressiveness": params.temperature,
+            },
+            **self._limits(),
+        )
         out = str(res.get("out") or params.out_path)
-        if abs(float(params.duration_factor or 1.0) - 1.0) > 0.01:  # no speed control in these models
+        if abs(float(params.duration_factor or 1.0) - 1.0) > 0.01:
             await aio.run_io(_stretch, out, 1.0 / float(params.duration_factor))
-        log.info("%s %s: %.2fs for %.2fs of audio", self.label, lang, time.time() - t0,
-                 float(res.get("duration_s", 0.0)))
+        log.info(
+            "%s %s: %.2fs for %.2fs of audio", self.label, lang, time.time() - t0, float(res.get("duration_s", 0.0))
+        )
         return out
 
 
@@ -182,17 +208,78 @@ def _stretch(path: str, rate: float) -> None:
         au.write_wav(path, done[0], sr)
 
 
-# VoxCPM2's 30 languages (model card).
-VOXCPM_LANGS = frozenset({"ar", "my", "zh", "da", "nl", "en", "fi", "fr", "de", "el", "he", "hi", "id", "it", "ja",
-                          "km", "ko", "lo", "ms", "no", "pl", "pt", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi"})
-# Chatterbox Multilingual's 23 (chatterbox.mtl_tts.SUPPORTED_LANGUAGES).
-CHATTERBOX_LANGS = frozenset({"ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "it", "ja", "ko", "ms",
-                              "nl", "no", "pl", "pt", "ru", "sv", "sw", "tr", "zh"})
+VOXCPM_LANGS = frozenset(
+    {
+        "ar",
+        "my",
+        "zh",
+        "da",
+        "nl",
+        "en",
+        "fi",
+        "fr",
+        "de",
+        "el",
+        "he",
+        "hi",
+        "id",
+        "it",
+        "ja",
+        "km",
+        "ko",
+        "lo",
+        "ms",
+        "no",
+        "pl",
+        "pt",
+        "ru",
+        "es",
+        "sw",
+        "sv",
+        "tl",
+        "th",
+        "tr",
+        "vi",
+    }
+)
+CHATTERBOX_LANGS = frozenset(
+    {
+        "ar",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "fi",
+        "fr",
+        "he",
+        "hi",
+        "it",
+        "ja",
+        "ko",
+        "ms",
+        "nl",
+        "no",
+        "pl",
+        "pt",
+        "ru",
+        "sv",
+        "sw",
+        "tr",
+        "zh",
+    }
+)
 
 _ALL: list[WorkerBackend] = []
 
-VOXCPM = WorkerBackend("voxcpm", "VoxCPM2", VOXCPM_LANGS, ("model.safetensors", "audiovae.pth", "config.json"),
-                       transcript=True)
-CHATTERBOX = WorkerBackend("chatterbox", "Chatterbox", CHATTERBOX_LANGS,
-                           ("t3_mtl23ls_v2.safetensors", "s3gen.pt", "ve.pt", "conds.pt"), transcript=False)
+VOXCPM = WorkerBackend(
+    "voxcpm", "VoxCPM2", VOXCPM_LANGS, ("model.safetensors", "audiovae.pth", "config.json"), transcript=True
+)
+CHATTERBOX = WorkerBackend(
+    "chatterbox",
+    "Chatterbox",
+    CHATTERBOX_LANGS,
+    ("t3_mtl23ls_v2.safetensors", "s3gen.pt", "ve.pt", "conds.pt"),
+    transcript=False,
+)
 _ALL += [VOXCPM, CHATTERBOX]

@@ -5,11 +5,13 @@ watermark.
 
 Ops: see ``clone_worker.py``.
 """
+
 import importlib.util
 import os
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("mimvox_clone_worker", os.path.join(HERE, "clone_worker.py"))
+HERE = Path(__file__).absolute().parent
+_spec = importlib.util.spec_from_file_location("mimvox_clone_worker", HERE / "clone_worker.py")
 common = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(common)
 INP, OUT = common.kit.open_channels()  # before torch: it prints, also from C code
@@ -27,8 +29,8 @@ def _patch(model_dir):
 
     def local_first(*a, filename=None, **kw):
         # It looks for Cangjie5_TC.json (Chinese) in an HF cache layout; setup keeps the files flat in model_dir.
-        path = os.path.join(model_dir, filename or "")
-        return path if filename and os.path.isfile(path) else real(*a, filename=filename, **kw)
+        path = Path(model_dir) / (filename or "")
+        return str(path) if filename and path.is_file() else real(*a, filename=filename, **kw)
 
     tokenizer.hf_hub_download = local_first
     step = asa.AlignmentStreamAnalyzer.step
@@ -52,10 +54,9 @@ def load(model_dir, device):
 
 
 def speak(model, text, lang, prompt, req):
-    # Expressiveness 0.8 (the engine's default) is Chatterbox's own default exaggeration of 0.5.
     exaggeration = round(max(0.25, min(1.0, 0.5 * float(req.get("expressiveness") or 0.8) / 0.8)), 3)
-    st = os.stat(prompt["wav"])
-    key = (os.path.abspath(req["ref"]), req.get("start"), req.get("end"), st.st_size, exaggeration)
+    st = Path(prompt["wav"]).stat()
+    key = (Path(req["ref"]).absolute(), req.get("start"), req.get("end"), st.st_size, exaggeration)
     if _conds["key"] != key:
         model.prepare_conditionals(prompt["wav"], exaggeration=exaggeration)
         _conds["key"] = key

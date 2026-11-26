@@ -9,35 +9,35 @@ from typing import Any
 import numpy as np
 from scipy.signal import resample_poly, sosfilt, sosfilt_zi
 
-BUDGET_TOKENS = 90          # OmniVoice tokens: ~270 characters, ~15 s
-EXPRESSIVENESS = 0.6        # steadier than Speak's 0.8; the user's setting wins
+BUDGET_TOKENS = 90  # OmniVoice tokens: ~270 characters, ~15 s
+EXPRESSIVENESS = 0.6  # steadier than Speak's 0.8; the user's setting wins
 
 PAUSES: dict[str, int] = {  # silence heard after a segment (ms), by how it ends
-    "clause": 220,      # a long sentence cut at , ; : —
+    "clause": 220,  # a long sentence cut at , ; : —
     "sentence": 440,
     "question": 440,
     "exclaim": 440,
-    "ellipsis": 620,    # … mid-paragraph
-    "dialogue": 650,    # a paragraph end followed by a dialogue line
-    "paragraph": 820,   # any other paragraph end
-    "title": 1200,      # after the chapter title
-    "end": 700,         # the end of a chapter file (the next file starts with LEAD_MS)
+    "ellipsis": 620,  # … mid-paragraph
+    "dialogue": 650,  # a paragraph end followed by a dialogue line
+    "paragraph": 820,  # any other paragraph end
+    "title": 1200,  # after the chapter title
+    "end": 700,  # the end of a chapter file (the next file starts with LEAD_MS)
 }
-LEAD_MS = 1600              # silence at the start of every chapter file
-FADE_MS = 8                 # fade in / out at every cut
-TRIM_DB = -42.0             # trim: frames quieter than this relative to the loudest frame are silence...
-TRIM_PAD_MS = (30, 60)      # ...keeping this much before the first / after the last loud frame (breath, decay)
+LEAD_MS = 1600  # silence at the start of every chapter file
+FADE_MS = 8  # fade in / out at every cut
+TRIM_DB = -42.0  # trim: frames quieter than this relative to the loudest frame are silence...
+TRIM_PAD_MS = (30, 60)  # ...keeping this much before the first / after the last loud frame (breath, decay)
 
 TARGET_LUFS = -18.0
 PEAK_DBFS = -1.0
 MAX_GAIN_DB = 18.0
 
-LOUDNESS_OUTLIER_DB = 4.0   # a segment this far from the running median is made again (once)
+LOUDNESS_OUTLIER_DB = 4.0  # a segment this far from the running median is made again (once)
 PITCH_OUTLIER_ST = 4.0
-RATE_RANGE = (0.62, 1.6)    # seconds per character relative to the running median (outside: words skipped / babble)
-LEVEL_TOLERANCE_DB = 1.5    # level steps within this stay (natural dynamics); larger ones are pulled back to it
+RATE_RANGE = (0.62, 1.6)  # seconds per character relative to the running median (outside: words skipped / babble)
+LEVEL_TOLERANCE_DB = 1.5  # level steps within this stay (natural dynamics); larger ones are pulled back to it
 LEVEL_MAX_FIX_DB = 6.0
-JUDGE_MIN_CHARS = 25        # shorter segments (a title, "Yes.") neither judge nor are judged
+JUDGE_MIN_CHARS = 25  # shorter segments (a title, "Yes.") neither judge nor are judged
 JUDGE_HISTORY = 25
 JUDGE_MIN_HISTORY = 4
 
@@ -52,15 +52,15 @@ def clean_text(text: str) -> str:
         p = re.sub(r"\s+", " ", par).strip()
         if not p:
             continue
-        p = re.sub(r"\.\s?\.\s?\.(?:\s?\.)*", "…", p)                 # ... / . . . -> …
-        p = re.sub(r"(?<=\S) ?--+ ?(?=\S)", " — ", p)                # word--word / word -- word
-        p = re.sub(r"(?<=\w) [-–] (?=\w)", " — ", p)                 # spaced hyphen or en dash between words
-        p = re.sub(r"^[-–]\s", "— ", p)                              # a dialogue line opened with a hyphen
+        p = re.sub(r"\.\s?\.\s?\.(?:\s?\.)*", "…", p)  # ... / . . . -> …
+        p = re.sub(r"(?<=\S) ?--+ ?(?=\S)", " — ", p)  # word--word / word -- word
+        p = re.sub(r"(?<=\w) [-–] (?=\w)", " — ", p)  # spaced hyphen or en dash between words
+        p = re.sub(r"^[-–]\s", "— ", p)  # a dialogue line opened with a hyphen
         p = p.replace("―", "—").replace("``", "“").replace("''", "”")
         p = re.sub(r"!{2,}", "!", p)
         p = re.sub(r"\?{2,}", "?", p)
         p = re.sub(r"\s+([,.;:?!…])", r"\1", p)
-        p = re.sub(r"([,;:])(?=[^\s\d\"'”’»)\]])", r"\1 ", p)          # a missing space after , ; :
+        p = re.sub(r"([,;:])(?=[^\s\d\"'”’»)\]])", r"\1 ", p)  # a missing space after , ; :
         pars.append(re.sub(r" {2,}", " ", p).strip())
     return "\n\n".join(pars)
 
@@ -73,7 +73,7 @@ def _end_kind(seg: str) -> str:
     tail = seg.rstrip().rstrip(_CLOSERS).rstrip()
     if tail.endswith("…"):
         return "ellipsis"
-    if tail.endswith("?") or tail.endswith("?!"):
+    if tail.endswith(("?", "?!")):
         return "question"
     if tail.endswith("!"):
         return "exclaim"
@@ -85,7 +85,7 @@ def _end_kind(seg: str) -> str:
 def segments(title: str | None, text: str, count: Callable[[str], int]) -> list[tuple[str, int, str]]:
     """``(segment, pause_after_ms, kind)``; the ``title``, when given, is a segment of its own."""
     pars = [p for p in clean_text(text).split("\n\n") if p.strip()]
-    from . import tts  # noqa: PLC0415 - tts imports the speech stack; narration stays importable without it
+    from . import tts
 
     out: list[tuple[str, int, str]] = []
     if title and title.strip():
@@ -149,10 +149,14 @@ def _k_sos(sr: int) -> np.ndarray:
     w0 = 2 * math.pi * fc / sr
     al = math.sin(w0) / (2 * q)
     c = math.cos(w0)
-    s1 = [a_ * ((a_ + 1) + (a_ - 1) * c + 2 * math.sqrt(a_) * al), -2 * a_ * ((a_ - 1) + (a_ + 1) * c),
-          a_ * ((a_ + 1) + (a_ - 1) * c - 2 * math.sqrt(a_) * al),
-          (a_ + 1) - (a_ - 1) * c + 2 * math.sqrt(a_) * al, 2 * ((a_ - 1) - (a_ + 1) * c),
-          (a_ + 1) - (a_ - 1) * c - 2 * math.sqrt(a_) * al]
+    s1 = [
+        a_ * ((a_ + 1) + (a_ - 1) * c + 2 * math.sqrt(a_) * al),
+        -2 * a_ * ((a_ - 1) + (a_ + 1) * c),
+        a_ * ((a_ + 1) + (a_ - 1) * c - 2 * math.sqrt(a_) * al),
+        (a_ + 1) - (a_ - 1) * c + 2 * math.sqrt(a_) * al,
+        2 * ((a_ - 1) - (a_ + 1) * c),
+        (a_ + 1) - (a_ - 1) * c - 2 * math.sqrt(a_) * al,
+    ]
     q2, fc2 = 0.5003270373238773, 38.13547087602444
     w0 = 2 * math.pi * fc2 / sr
     al = math.sin(w0) / (2 * q2)
@@ -169,10 +173,7 @@ def _gated(energies: np.ndarray) -> float | None:
     (-70 LUFS) and relative (-10 LU) gates. None for silence."""
     if len(energies) == 0:
         return None
-    if len(energies) < 4:
-        z = np.array([energies.mean()])
-    else:
-        z = np.convolve(energies, np.ones(4) / 4.0, mode="valid")
+    z = np.array([energies.mean()]) if len(energies) < 4 else np.convolve(energies, np.ones(4) / 4.0, mode="valid")
     lk = -0.691 + 10 * np.log10(z + 1e-20)
     z = z[lk > -70.0]
     if len(z) == 0:
@@ -187,7 +188,7 @@ def lufs(x: np.ndarray, sr: int) -> float | None:
     y = sosfilt(_k_sos(sr), np.asarray(x, dtype=np.float64))
     n = len(y) // sub
     if n == 0:
-        return _gated(np.array([np.mean(y ** 2)])) if len(y) else None
+        return _gated(np.array([np.mean(y**2)])) if len(y) else None
     return _gated(np.mean(y[: n * sub].reshape(n, sub) ** 2, axis=1))
 
 
@@ -200,7 +201,7 @@ def f0_track(x: np.ndarray, sr: int) -> np.ndarray:
         return np.zeros(0)
     idx = np.arange(win)[None, :] + hop * np.arange(n)[:, None]
     fr = y[idx] * np.hanning(win)[None, :]
-    rms = np.sqrt(np.mean(fr ** 2, axis=1))
+    rms = np.sqrt(np.mean(fr**2, axis=1))
     spec = np.fft.rfft(fr, 1024, axis=1)
     ac = np.fft.irfft(np.abs(spec) ** 2, 1024, axis=1)[:, :win]
     ac /= ac[:, :1] + 1e-12
@@ -216,12 +217,16 @@ def measure(x: np.ndarray, sr: int, chars: int) -> dict[str, Any]:
     f0 = f0_track(x, sr)
     v = f0[f0 > 0]
     dur = len(x) / float(sr)
-    return {"lufs": lufs(x, sr), "f0": float(np.median(v)) if len(v) >= 5 else None, "dur": round(dur, 3),
-            "spc": dur / max(chars, 1), "chars": chars}
+    return {
+        "lufs": lufs(x, sr),
+        "f0": float(np.median(v)) if len(v) >= 5 else None,
+        "dur": round(dur, 3),
+        "spc": dur / max(chars, 1),
+        "chars": chars,
+    }
 
 
 class Judge:
-
     def __init__(self) -> None:
         self.hist: deque[dict[str, Any]] = deque(maxlen=JUDGE_HISTORY)
 
@@ -231,9 +236,11 @@ class Judge:
 
     def medians(self) -> tuple[float | None, float | None, float | None]:
         h = list(self.hist)
-        return (self._med([m["lufs"] for m in h if m.get("lufs") is not None]),
-                self._med([m["f0"] for m in h if m.get("f0")]),
-                self._med([m["spc"] for m in h]))
+        return (
+            self._med([m["lufs"] for m in h if m.get("lufs") is not None]),
+            self._med([m["f0"] for m in h if m.get("f0")]),
+            self._med([m["spc"] for m in h]),
+        )
 
     def deviation(self, m: dict[str, Any]) -> tuple[float, list[str]]:
         """How far ``m`` is from the running medians (1.0 = at an outlier limit) and the limits it passes."""
@@ -275,7 +282,6 @@ class Judge:
 
 
 class ChapterMeter:
-
     def __init__(self, sr: int) -> None:
         self.sr = sr
         self.sub = sr // 10
@@ -294,7 +300,7 @@ class ChapterMeter:
         n = len(y) // self.sub
         if n:
             self.energies.extend(np.mean(y[: n * self.sub].reshape(n, self.sub) ** 2, axis=1).tolist())
-        self.acc = y[n * self.sub:]
+        self.acc = y[n * self.sub :]
 
     def loudness(self) -> float | None:
         return _gated(np.asarray(self.energies))

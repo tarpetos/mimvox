@@ -27,7 +27,6 @@ def kill_all_sync() -> None:
 
 
 class Step:
-
     def __init__(self, cmd: list[str], cwd: str, env: dict[str, str] | None = None) -> None:
         self.cmd = cmd
         self.cwd = cwd
@@ -51,8 +50,14 @@ class Step:
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUTF8", "1")
         proc = await asyncio.create_subprocess_exec(
-            *self.cmd, cwd=self.cwd, env=env, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, **aio.new_group_kwargs())
+            *self.cmd,
+            cwd=self.cwd,
+            env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            **aio.new_group_kwargs(),
+        )
         self.proc = proc
         _LIVE.add(proc)
         try:

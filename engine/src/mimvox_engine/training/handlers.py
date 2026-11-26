@@ -2,6 +2,7 @@
 
 A pause stops Applio only after a checkpoint is confirmed on disk (``_Watch``), or when ``PAUSE_PATIENCE_S`` runs out.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -13,10 +14,11 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .. import aio, config, tts, voices
+from .. import aio, config, paths, tts, voices
 from ..registry import Context, EngineError, method
 from .plan import (
     MIN_TRAIN_MINUTES,
@@ -47,7 +49,7 @@ _VOICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
 _FINAL_PTH = re.compile(r"^(?P<m>.+)_(?P<e>\d+)e_(?P<s>\d+)s\.pth$")
 
 # Only the event loop changes these, so no locks.
-_runs: dict[str, "_Run"] = {}
+_runs: dict[str, _Run] = {}
 _active: str | None = None
 
 
@@ -111,16 +113,24 @@ class _Watch:
     """Applio prints the end-of-epoch line before it saves the checkpoint, so the save of epoch ``e`` is complete only
     once a line of epoch ``e + 1`` shows up; a kill in between would tear the files."""
 
-    def __init__(self, run: "_Run", tracker: Tracker, logdir: Path, total: int, saved: tuple[int, int] | None,
-                 spe: int | None, on_confirm) -> None:
+    def __init__(
+        self,
+        run: _Run,
+        tracker: Tracker,
+        logdir: Path,
+        total: int,
+        saved: tuple[int, int] | None,
+        spe: int | None,
+        on_confirm: Callable[[int, int, int | None], None],
+    ) -> None:
         self.run, self.tracker, self.logdir, self.total = run, tracker, logdir, total
         self.every = checkpoint_every(total)
-        self.saved = saved                      # (epoch, step) of the newest confirmed checkpoint
-        self.spe = spe                          # steps per epoch
+        self.saved = saved  # (epoch, step) of the newest confirmed checkpoint
+        self.spe = spe  # steps per epoch
         self.inflight: tuple[int, int] | None = None
         self.on_confirm = on_confirm
         self.last_done = tracker.epochs_done
-        self._books: asyncio.Future[Any] | None = None   # bookkeeping writes run in order
+        self._books: asyncio.Future[Any] | None = None  # bookkeeping writes run in order
 
     def feed(self) -> None:
         t = self.tracker
@@ -144,7 +154,7 @@ class _Watch:
             try:
                 await aio.run_io(prune_checkpoints, self.logdir, step_no)
                 await aio.run_io(self.on_confirm, epoch, step_no, spe)
-            except Exception:  # noqa: BLE001 - bookkeeping must never break the training
+            except Exception:
                 log.exception("checkpoint bookkeeping failed")
 
         self._books = aio.spawn(work(), name="train-checkpoint")
@@ -170,20 +180,20 @@ class _Watch:
 
 def _atomic_json(path: Path, data: dict[str, Any]) -> None:
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=paths.json_default), encoding="utf-8")
+    tmp.replace(path)
 
 
 def _atomic_copy(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(dst.name + ".tmp")
     shutil.copyfile(src, tmp)
-    os.replace(tmp, dst)
+    tmp.replace(dst)
 
 
 def _dataset_sig(dataset_dir: Path) -> str:
     """A paused run only resumes on the data it extracted its features from."""
-    h = hashlib.sha1()
+    h = hashlib.sha1(usedforsecurity=False)
     for p in dataset_parts(dataset_dir):
         st = p.stat()
         h.update(f"{p.name}:{st.st_size}:{st.st_mtime_ns}".encode())
@@ -198,12 +208,14 @@ def _paused_info(ctx: Context, voice_id: str) -> dict[str, Any] | None:
 
 def _set_meta(ctx: Context, voice_id: str, **changes: Any) -> None:
     """A value of ``None`` removes the key."""
+
     def mutate(meta: dict[str, Any]) -> None:
         for k, v in changes.items():
             if v is None:
                 meta.pop(k, None)
             else:
                 meta[k] = v
+
     voices.update_meta(config.data_dir(ctx), voice_id, mutate)
 
 
@@ -227,9 +239,8 @@ async def train_start(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(voice_id, str) or not _VOICE_ID.match(voice_id):
         raise EngineError("bad_request", "voice_id is missing or invalid")
     epochs = params.get("epochs")
-    if epochs is not None:
-        if isinstance(epochs, bool) or not isinstance(epochs, int) or not 1 <= epochs <= 2000:
-            raise EngineError("bad_request", "epochs must be an integer from 1 to 2000, or null for auto")
+    if epochs is not None and (isinstance(epochs, bool) or not isinstance(epochs, int) or not 1 <= epochs <= 2000):
+        raise EngineError("bad_request", "epochs must be an integer from 1 to 2000, or null for auto")
     restart = params.get("restart", False)
     if not isinstance(restart, bool):
         raise EngineError("bad_request", "restart must be true or false")
@@ -271,8 +282,9 @@ def _dataset_seconds(dataset_dir: Path) -> tuple[int, float]:
     return len(parts), sum(wav_seconds(p) for p in parts)
 
 
-async def _launch(ctx: Context, voice_id: str, voice_dir: Path, epochs: int | None, resume: dict[str, Any] | None,
-                  discard_first: bool) -> dict[str, Any]:
+async def _launch(
+    ctx: Context, voice_id: str, voice_dir: Path, epochs: int | None, resume: dict[str, Any] | None, discard_first: bool
+) -> dict[str, Any]:
     global _active
     await aio.run_io(_check_runtime, ctx)
     nparts, seconds = await aio.run_io(_dataset_seconds, voice_dir / "dataset")
@@ -291,7 +303,7 @@ async def _launch(ctx: Context, voice_id: str, voice_dir: Path, epochs: int | No
         raise EngineError("busy", "a training is already running")
     if tts.is_busy():
         raise EngineError("busy", "a generation is running; wait for it or cancel it before training")
-    _active = voice_id   # no await since the checks: the loop makes check-and-take atomic
+    _active = voice_id  # no await since the checks: the loop makes check-and-take atomic
     run = _Run()
     gpu = contextlib.AsyncExitStack()
     try:
@@ -348,8 +360,17 @@ async def train_cancel(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     raise EngineError("bad_request", "job or voice_id is missing")
 
 
-async def _job(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path, total: int, seconds: float,
-               gpu: contextlib.AsyncExitStack, resume: dict[str, Any] | None) -> None:
+async def _job(
+    ctx: Context,
+    job: str,
+    run: _Run,
+    voice_id: str,
+    voice_dir: Path,
+    total: int,
+    seconds: float,
+    gpu: contextlib.AsyncExitStack,
+    resume: dict[str, Any] | None,
+) -> None:
     global _active
     started = time.monotonic()
     _runs[job] = run
@@ -369,7 +390,7 @@ async def _job(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path
         ctx.emit("train.error", {"code": "internal", "message": _explain(e) + kept}, job=job)
     except EngineError as e:
         ctx.emit("train.error", {"code": e.code, "message": e.message}, job=job)
-    except Exception as e:  # noqa: BLE001 - always answer the app
+    except Exception as e:
         if run.kept_epoch is not None:
             kept = f" Progress up to epoch {run.kept_epoch} was kept; you can resume from there."
         ctx.emit("train.error", {"code": "internal", "message": f"Training failed: {e}{kept}"}, job=job)
@@ -393,8 +414,17 @@ def _explain(e: _StepFailed) -> str:
     return f"Training failed in the {e.stage} step (exit code {e.code}): {last}"
 
 
-async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path, total: int, seconds: float,
-                 started: float, resume: dict[str, Any] | None) -> None:
+async def _train(
+    ctx: Context,
+    job: str,
+    run: _Run,
+    voice_id: str,
+    voice_dir: Path,
+    total: int,
+    seconds: float,
+    started: float,
+    resume: dict[str, Any] | None,
+) -> None:
     applio = Path(ctx.runtime["paths"]["applio"])
     interp = str(ctx.runtime["python"]["rvc"])
     backend = str(ctx.runtime.get("device", {}).get("backend", "cuda"))
@@ -419,7 +449,7 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
 
     async def step(stage: str, args: list[str]) -> None:
         if aio.closing():
-            raise _Shutdown()
+            raise _Shutdown
         s = Step([interp, core, *args], cwd=str(applio))
         run.step = s
         if run.pause_stop:
@@ -440,19 +470,24 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
         if code == 0 and any("Training failed for model" in ln for ln in s.tail):
             code = 1  # Applio reports a crashed training worker on its output but still exits with 0
         if aio.closing():
-            raise _Shutdown()
+            raise _Shutdown
         if ctx.cancelled(job):
-            raise _Cancelled()
+            raise _Cancelled
         if run.pause_stop:
-            raise _Paused()
+            raise _Paused
         if s.killed:
-            raise _Cancelled()
+            raise _Cancelled
         if code != 0:
             raise _StepFailed(stage, code, list(s.tail))
 
     def marker(dataset_sig: str, **kw: Any) -> dict[str, Any]:
-        return {"model_name": model, "total_epochs": total, "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "dataset_sig": dataset_sig, **kw}
+        return {
+            "model_name": model,
+            "total_epochs": total,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "dataset_sig": dataset_sig,
+            **kw,
+        }
 
     try:
         start_epoch = 0
@@ -467,8 +502,11 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
                 step_no = await aio.run_io(repair, logdir)
                 spe = resume.get("steps_per_epoch") if isinstance(resume.get("steps_per_epoch"), int) else None
                 if step_no is not None:
-                    ep = resume["epoch"] if resume.get("checkpoint_step") == step_no else (
-                        step_no // spe if spe else resume["epoch"])
+                    ep = (
+                        resume["epoch"]
+                        if resume.get("checkpoint_step") == step_no
+                        else (step_no // spe if spe else resume["epoch"])
+                    )
                     start_epoch = min(int(ep), total - 1)
                     saved = (start_epoch, step_no)
                 else:
@@ -481,48 +519,101 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
             applog.write(f"[plan] resume: skip_prepare={skip_prepare} start_epoch={start_epoch}\n")
 
         sig = await aio.run_io(_dataset_sig, voice_dir / "dataset")
-        await aio.run_io(_set_meta, ctx, voice_id, training_paused=None, training_run=marker(
-            sig, **({"checkpoint_epoch": saved[0], "checkpoint_step": saved[1]} if saved else {}),
-            **({"steps_per_epoch": spe} if spe else {})))
+        await aio.run_io(
+            _set_meta,
+            ctx,
+            voice_id,
+            training_paused=None,
+            training_run=marker(
+                sig,
+                **({"checkpoint_epoch": saved[0], "checkpoint_step": saved[1]} if saved else {}),
+                **({"steps_per_epoch": spe} if spe else {}),
+            ),
+        )
 
         if not skip_prepare:
             # stale features would be reused
             await aio.run_io(shutil.rmtree, logdir, ignore_errors=True)
             tracker.set_stage("preprocess")
             emit(force=True)
-            await step("preprocess", [
-                "preprocess", "--model-name", model, "--dataset-path", str(voice_dir / "dataset"),
-                "--sample-rate", str(SAMPLE_RATE), "--cut-preprocess", "Automatic",
-                "--chunk-len", "3.0", "--overlap-len", "0.3", "--normalization-mode", "pre",
-            ])
+            await step(
+                "preprocess",
+                [
+                    "preprocess",
+                    "--model-name",
+                    model,
+                    "--dataset-path",
+                    str(voice_dir / "dataset"),
+                    "--sample-rate",
+                    str(SAMPLE_RATE),
+                    "--cut-preprocess",
+                    "Automatic",
+                    "--chunk-len",
+                    "3.0",
+                    "--overlap-len",
+                    "0.3",
+                    "--normalization-mode",
+                    "pre",
+                ],
+            )
 
             tracker.set_stage("extract")
             emit(force=True)
-            await step("extract", [
-                "extract", "--model-name", model, "--f0-method", "rmvpe", "--gpu", "0",
-                "--sample-rate", str(SAMPLE_RATE), "--embedder-model", "contentvec",
-            ])
+            await step(
+                "extract",
+                [
+                    "extract",
+                    "--model-name",
+                    model,
+                    "--f0-method",
+                    "rmvpe",
+                    "--gpu",
+                    "0",
+                    "--sample-rate",
+                    str(SAMPLE_RATE),
+                    "--embedder-model",
+                    "contentvec",
+                ],
+            )
 
         free_gb, _total_gb = await aio.run_io(free_vram_gb)
         if batch is None or cache is None:
             batch, cache = pick_batch_size(free_gb, seconds, backend)
-        applog.write(f"[plan] epochs={total} batch={batch} cache_in_gpu={cache} free_vram_gb={free_gb} "
-                     f"dataset_s={seconds:.0f}\n")
+        applog.write(
+            f"[plan] epochs={total} batch={batch} cache_in_gpu={cache} free_vram_gb={free_gb} dataset_s={seconds:.0f}\n"
+        )
 
         def on_confirm(epoch: int, step_no: int, steps_per_epoch: int | None) -> None:  # IO pool
-            _set_meta(ctx, voice_id, training_run=marker(
-                sig, checkpoint_epoch=epoch, checkpoint_step=step_no, batch_size=batch, cache_in_gpu=cache,
-                **({"steps_per_epoch": steps_per_epoch} if steps_per_epoch else {})))
+            _set_meta(
+                ctx,
+                voice_id,
+                training_run=marker(
+                    sig,
+                    checkpoint_epoch=epoch,
+                    checkpoint_step=step_no,
+                    batch_size=batch,
+                    cache_in_gpu=cache,
+                    **({"steps_per_epoch": steps_per_epoch} if steps_per_epoch else {}),
+                ),
+            )
 
         for attempt in range(3):
             tracker.set_stage("train")
             tracker.epoch = tracker.epochs_done = start_epoch
             tracker.frac = start_epoch / total
             run.watch = _Watch(run, tracker, logdir, total, saved, spe, on_confirm)
-            await aio.run_io(_set_meta, ctx, voice_id, training_run=marker(
-                sig, batch_size=batch, cache_in_gpu=cache,
-                **({"checkpoint_epoch": saved[0], "checkpoint_step": saved[1]} if saved else {}),
-                **({"steps_per_epoch": spe} if spe else {})))
+            await aio.run_io(
+                _set_meta,
+                ctx,
+                voice_id,
+                training_run=marker(
+                    sig,
+                    batch_size=batch,
+                    cache_in_gpu=cache,
+                    **({"checkpoint_epoch": saved[0], "checkpoint_step": saved[1]} if saved else {}),
+                    **({"steps_per_epoch": spe} if spe else {}),
+                ),
+            )
             emit(force=True)
             try:
                 await step("train", _train_args(model, total, batch, cache))
@@ -562,14 +653,25 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
         rvc_dir = voice_dir / "rvc"
         await aio.run_io(_atomic_copy, pth, rvc_dir / "model.pth")
         await aio.run_io(_atomic_copy, index, rvc_dir / "model.index")
-        await aio.run_io(_set_meta, ctx, voice_id, trained=True, trained_epochs=done_epochs,
-                         trained_at=time.strftime("%Y-%m-%dT%H:%M:%S"), training_run=None, training_paused=None)
+        await aio.run_io(
+            _set_meta,
+            ctx,
+            voice_id,
+            trained=True,
+            trained_epochs=done_epochs,
+            trained_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            training_run=None,
+            training_paused=None,
+        )
 
         tracker.set_stage("index")
         tracker.frac = 1.0
         emit(force=True)
-        ctx.emit("train.done", {"voice_id": voice_id, "epochs": done_epochs,
-                                "elapsed_s": round(time.monotonic() - started, 1)}, job=job)
+        ctx.emit(
+            "train.done",
+            {"voice_id": voice_id, "epochs": done_epochs, "elapsed_s": round(time.monotonic() - started, 1)},
+            job=job,
+        )
     except _Paused:
         paused = True
         if run.watch is not None:
@@ -589,8 +691,9 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
         # A failure while learning (out of memory, a crashed worker) keeps what was saved so it can be resumed.
         if run.watch is not None:
             await run.watch.settle()
-        step_no = (await aio.run_io(repair, logdir)
-                   if tracker.stage == "train" and await aio.run_io(logdir.is_dir) else None)
+        step_no = (
+            await aio.run_io(repair, logdir) if tracker.stage == "train" and await aio.run_io(logdir.is_dir) else None
+        )
         watch = run.watch
         spe_now = watch.spe if watch else None
         epoch_now: int | None = None
@@ -604,13 +707,23 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
         if step_no is not None and epoch_now is not None and epoch_now < total:
             kept = True
             run.kept_epoch = epoch_now
-            await aio.run_io(_set_meta, ctx, voice_id, training_run=None, training_paused={
-                "epoch": epoch_now, "total_epochs": total, "model_name": model, "interrupted": True,
-                "paused_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "dataset_sig": _dataset_sig(voice_dir / "dataset"), "checkpoint_step": step_no,
-                **({"steps_per_epoch": spe_now} if spe_now else {}),
-                **({"batch_size": batch, "cache_in_gpu": bool(cache)} if batch else {}),
-            })
+            await aio.run_io(
+                _set_meta,
+                ctx,
+                voice_id,
+                training_run=None,
+                training_paused={
+                    "epoch": epoch_now,
+                    "total_epochs": total,
+                    "model_name": model,
+                    "interrupted": True,
+                    "paused_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "dataset_sig": _dataset_sig(voice_dir / "dataset"),
+                    "checkpoint_step": step_no,
+                    **({"steps_per_epoch": spe_now} if spe_now else {}),
+                    **({"batch_size": batch, "cache_in_gpu": bool(cache)} if batch else {}),
+                },
+            )
         else:
             await aio.run_io(_set_meta, ctx, voice_id, training_run=None, training_paused=None)
         raise
@@ -623,8 +736,9 @@ async def _train(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Pa
             await aio.run_io(shutil.rmtree, logdir, ignore_errors=True)
 
 
-def _commit_pause(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path, logdir: Path, total: int,
-                  model: str) -> None:
+def _commit_pause(
+    ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: Path, logdir: Path, total: int, model: str
+) -> None:
     watch = run.watch
     tracker = run.tracker
     step_no = repair(logdir)  # also drops a torn newer pair, so Applio cannot pick it up on resume
@@ -639,7 +753,9 @@ def _commit_pause(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: P
             epoch = watch.saved[0]
     train_args = _read_plan(ctx, voice_id)
     info = {
-        "epoch": epoch, "total_epochs": total, "model_name": model,
+        "epoch": epoch,
+        "total_epochs": total,
+        "model_name": model,
         "paused_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "dataset_sig": _dataset_sig(voice_dir / "dataset"),
         **({"steps_per_epoch": spe} if spe else {}),
@@ -647,10 +763,17 @@ def _commit_pause(ctx: Context, job: str, run: _Run, voice_id: str, voice_dir: P
         **train_args,
     }
     _set_meta(ctx, voice_id, training_run=None, training_paused=info)
-    ctx.emit("train.paused", {
-        "voice_id": voice_id, "epoch": epoch, "total_epochs": total, "paused_at": info["paused_at"],
-        "reached_epoch": tracker.epochs_done if tracker else epoch,
-    }, job=job)
+    ctx.emit(
+        "train.paused",
+        {
+            "voice_id": voice_id,
+            "epoch": epoch,
+            "total_epochs": total,
+            "paused_at": info["paused_at"],
+            "reached_epoch": tracker.epochs_done if tracker else epoch,
+        },
+        job=job,
+    )
 
 
 def _read_plan(ctx: Context, voice_id: str) -> dict[str, Any]:
@@ -690,30 +813,55 @@ def recover_interrupted(ctx: Context) -> None:
                         epoch = int(run.get("checkpoint_epoch") or 0)
                     if epoch < total:
                         try:
-                            when = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(
-                                (logdir / f"G_{step_no}.pth").stat().st_mtime))
+                            when = time.strftime(
+                                "%Y-%m-%dT%H:%M:%S", time.localtime((logdir / f"G_{step_no}.pth").stat().st_mtime)
+                            )
                         except OSError:
                             when = time.strftime("%Y-%m-%dT%H:%M:%S")
                         info = {
-                            "epoch": epoch, "total_epochs": total, "model_name": model_name(vid),
-                            "paused_at": when, "interrupted": True, "checkpoint_step": step_no,
-                            **{k: run[k] for k in ("steps_per_epoch", "dataset_sig", "batch_size", "cache_in_gpu")
-                               if k in run},
+                            "epoch": epoch,
+                            "total_epochs": total,
+                            "model_name": model_name(vid),
+                            "paused_at": when,
+                            "interrupted": True,
+                            "checkpoint_step": step_no,
+                            **{
+                                k: run[k]
+                                for k in ("steps_per_epoch", "dataset_sig", "batch_size", "cache_in_gpu")
+                                if k in run
+                            },
                         }
             _set_meta(ctx, vid, training_run=None, training_paused=info)
-            log.info("training of %s was interrupted: %s", vid,
-                     f"resumable from epoch {info['epoch']}" if info else "nothing to resume")
-        except Exception:  # noqa: BLE001 - one broken voice must not stop the engine from starting
+            log.info(
+                "training of %s was interrupted: %s",
+                vid,
+                f"resumable from epoch {info['epoch']}" if info else "nothing to resume",
+            )
+        except Exception:
             log.exception("could not check the interrupted training of %s", vid)
 
 
 def _train_args(model: str, total: int, batch: int, cache: bool) -> list[str]:
     args = [
-        "train", "--model-name", model, "--sample-rate", str(SAMPLE_RATE), "--total-epoch", str(total),
+        "train",
+        "--model-name",
+        model,
+        "--sample-rate",
+        str(SAMPLE_RATE),
+        "--total-epoch",
+        str(total),
         # No --save-only-latest: it overwrites the checkpoint in place, so a kill during the save would destroy it.
-        "--save-every-epoch", str(checkpoint_every(total)),
-        "--batch-size", str(batch), "--gpu", "0", "--pretrained", "--vocoder", "HiFi-GAN",
-        "--index-algorithm", "Auto",
+        "--save-every-epoch",
+        str(checkpoint_every(total)),
+        "--batch-size",
+        str(batch),
+        "--gpu",
+        "0",
+        "--pretrained",
+        "--vocoder",
+        "HiFi-GAN",
+        "--index-algorithm",
+        "Auto",
     ]
     if cache:
         args.append("--cache-data-in-gpu")
@@ -737,6 +885,6 @@ def _drop_checkpoints(logdir: Path) -> None:
 
 async def on_shutdown() -> None:
     """The run's marker stays in ``voice.json``, so the next engine start resumes it as interrupted."""
-    from . import proc  # noqa: PLC0415
+    from . import proc
 
     await proc.kill_all()

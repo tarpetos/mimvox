@@ -1,5 +1,6 @@
 """Applio resumes from the highest-numbered G/D pair and ``--save-only-latest`` overwrites the only checkpoint in
 place, so here an older pair is removed only once the next epoch runs."""
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,7 @@ log = logging.getLogger("mimvox.training")
 
 # epochs between G/D checkpoints (about 1.3 GB written each time at 40 kHz); MIMVOX_CHECKPOINT_EVERY for tests
 CHECKPOINT_EVERY = max(1, int(os.environ.get("MIMVOX_CHECKPOINT_EVERY", "5")))
-PAUSE_PATIENCE_S = 90.0       # a pause waits at most this long for the next checkpoint save
+PAUSE_PATIENCE_S = 90.0  # a pause waits at most this long for the next checkpoint save
 _CKPT = re.compile(r"^(?P<kind>[GD])_(?P<step>\d+)\.pth$")
 _WEIGHTS = re.compile(r"^(?P<m>.+)_(?P<e>\d+)e_(?P<s>\d+)s\.pth$")
 FEATURE_DIRS = ("sliced_audios", "extracted", "f0", "f0_voiced")
@@ -102,11 +103,14 @@ def _pid_is_applio(pid: int) -> bool:
         if sys.platform == "win32":
             out = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                check=False,
             ).stdout.lower()
             return "python" in out
-        with open(f"/proc/{pid}/cmdline", "rb") as fh:
-            return b"train.py" in fh.read()
+        return b"train.py" in Path(f"/proc/{pid}/cmdline").read_bytes()
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -124,8 +128,13 @@ def kill_orphans(logdir: Path) -> None:
         log.warning("stopping an orphaned Applio training worker (pid %s)", pid)
         try:
             if sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=30,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=30,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    check=False,
+                )
             else:
                 os.kill(pid, 9)
         except (OSError, subprocess.SubprocessError):

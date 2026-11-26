@@ -4,11 +4,13 @@
 
 Ops: see ``clone_worker.py``.
 """
+
 import importlib.util
 import os
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("mimvox_clone_worker", os.path.join(HERE, "clone_worker.py"))
+HERE = Path(__file__).absolute().parent
+_spec = importlib.util.spec_from_file_location("mimvox_clone_worker", HERE / "clone_worker.py")
 common = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(common)
 INP, OUT = common.kit.open_channels()  # before torch: it prints, also from C code
@@ -21,14 +23,18 @@ def load(model_dir, device):
     from voxcpm import VoxCPM
 
     # optimize=False: torch.compile took ~60 s at every start for a ~8 % faster generation (RTX 4070).
-    return VoxCPM.from_pretrained(model_dir, load_denoiser=False, optimize=False, local_files_only=True,
-                                  device=device)
+    return VoxCPM.from_pretrained(model_dir, load_denoiser=False, optimize=False, local_files_only=True, device=device)
 
 
 def speak(model, text, lang, prompt, req):
     extra = {"prompt_wav_path": prompt["wav"], "prompt_text": prompt["text"]} if prompt["text"] else {}
-    wav = model.generate(text=text, reference_wav_path=prompt["wav"], cfg_value=2.0,
-                         inference_timesteps=STEPS.get(req.get("quality"), STEPS["best"]), **extra)
+    wav = model.generate(
+        text=text,
+        reference_wav_path=prompt["wav"],
+        cfg_value=2.0,
+        inference_timesteps=STEPS.get(req.get("quality"), STEPS["best"]),
+        **extra,
+    )
     return wav, model.tts_model.sample_rate
 
 

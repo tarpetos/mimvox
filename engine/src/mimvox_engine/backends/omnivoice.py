@@ -1,4 +1,5 @@
 """OmniVoice in a worker process: a native crash cannot take the engine down, and ending it frees the GPU at once."""
+
 from __future__ import annotations
 
 import logging
@@ -6,6 +7,7 @@ import os
 import sys
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 from .. import aio, config, worker_kit
@@ -15,7 +17,7 @@ from . import SynthParams, TtsBackend
 
 log = logging.getLogger("mimvox.omnivoice")
 
-WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "omnivoice_worker.py")
+WORKER = Path(__file__).absolute().parent / "omnivoice_worker.py"
 
 BEST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_STEPS", "32"))
 FAST_STEPS = int(os.environ.get("MIMVOX_OMNIVOICE_FAST_STEPS", "16"))
@@ -31,10 +33,13 @@ POS_TEMP_DEFAULT = 5.0
 
 def sampling_for(expressiveness: float) -> dict[str, float]:
     e = max(0.1, min(1.5, float(expressiveness)))
-    return {"position_temperature": round(POS_TEMP_DEFAULT * e / EXPR_DEFAULT, 3),
-            "class_temperature": round(max(0.0, e - EXPR_DEFAULT), 3)}
+    return {
+        "position_temperature": round(POS_TEMP_DEFAULT * e / EXPR_DEFAULT, 3),
+        "class_temperature": round(max(0.0, e - EXPR_DEFAULT), 3),
+    }
 
-SYNTH_TIMEOUT_S = 300.0   # includes a first-time reference transcription and a cold model load
+
+SYNTH_TIMEOUT_S = 300.0  # includes a first-time reference transcription and a cold model load
 LOAD_TIMEOUT_S = 300.0
 # On the CPU a segment took 190-213 s and a first reference transcription 125 s on an 8 GB laptop: no fixed limit, the
 # worker reports each model pass and only a silence this long ends it.
@@ -43,38 +48,90 @@ CPU_RAM_NEED_GB = float(os.environ.get("MIMVOX_CPU_RAM_NEED_GB", "11"))  # the w
 
 # Languages with at least ~100 h of OmniVoice training data (its docs/languages.md): quality drops below that.
 LANGS: dict[str, str] = {
-    "en": "en", "zh": "zh", "ja": "ja", "es": "es", "fr": "fr", "de": "de", "ru": "ru", "pt": "pt", "yue": "yue",
-    "th": "th", "it": "it", "ko": "ko", "vi": "vi", "id": "id", "no": "no", "ca": "ca", "hr": "hr", "lt": "lt",
-    "sk": "sk", "sv": "sv", "el": "el", "nl": "nl", "bg": "bg", "sr": "sr", "uk": "uk",
-    "be": "be", "da": "da", "kk": "kk", "lv": "lv", "sl": "sl", "ar": "arb",
-    "et": "et", "pl": "pl", "bs": "bs", "is": "is", "mt": "mt", "eu": "eu", "fi": "fi", "ta": "ta", "sw": "sw",
-    "fa": "fa", "bn": "bn", "as": "as", "mn": "mn", "hu": "hu", "ba": "ba", "te": "te", "ur": "ur", "gl": "gl",
-    "ml": "ml", "ka": "ka", "mr": "mr", "cs": "cs", "pa": "pa", "cy": "cy", "kn": "kn", "tr": "tr", "hi": "hi",
-    "uz": "uz", "ne": "npi",
+    "en": "en",
+    "zh": "zh",
+    "ja": "ja",
+    "es": "es",
+    "fr": "fr",
+    "de": "de",
+    "ru": "ru",
+    "pt": "pt",
+    "yue": "yue",
+    "th": "th",
+    "it": "it",
+    "ko": "ko",
+    "vi": "vi",
+    "id": "id",
+    "no": "no",
+    "ca": "ca",
+    "hr": "hr",
+    "lt": "lt",
+    "sk": "sk",
+    "sv": "sv",
+    "el": "el",
+    "nl": "nl",
+    "bg": "bg",
+    "sr": "sr",
+    "uk": "uk",
+    "be": "be",
+    "da": "da",
+    "kk": "kk",
+    "lv": "lv",
+    "sl": "sl",
+    "ar": "arb",
+    "et": "et",
+    "pl": "pl",
+    "bs": "bs",
+    "is": "is",
+    "mt": "mt",
+    "eu": "eu",
+    "fi": "fi",
+    "ta": "ta",
+    "sw": "sw",
+    "fa": "fa",
+    "bn": "bn",
+    "as": "as",
+    "mn": "mn",
+    "hu": "hu",
+    "ba": "ba",
+    "te": "te",
+    "ur": "ur",
+    "gl": "gl",
+    "ml": "ml",
+    "ka": "ka",
+    "mr": "mr",
+    "cs": "cs",
+    "pa": "pa",
+    "cy": "cy",
+    "kn": "kn",
+    "tr": "tr",
+    "hi": "hi",
+    "uz": "uz",
+    "ne": "npi",
     # Under 100 h but tested: 13 % of words wrong, against 22 % for Polish and 39 % for Hungarian.
     "ro": "ro",
 }
 
 
-def omnivoice_python(runtime: dict[str, Any]) -> str:
-    return config.runtime_path(runtime, "python", "omnivoice") or sys.executable
+def omnivoice_python(runtime: dict[str, Any]) -> Path:
+    return config.runtime_path(runtime, "python", "omnivoice") or Path(sys.executable)
 
 
-def omnivoice_model_dir(runtime: dict[str, Any]) -> str | None:
+def omnivoice_model_dir(runtime: dict[str, Any]) -> Path | None:
     d = config.runtime_path(runtime, "paths", "omnivoice_model")
     if d:
         return d
     root = _runtime_root(runtime)
-    return os.path.join(root, "models", "omnivoice") if root else None
+    return root / "models" / "omnivoice" if root else None
 
 
-def _runtime_root(runtime: dict[str, Any]) -> str | None:
+def _runtime_root(runtime: dict[str, Any]) -> Path | None:
     return config.runtime_root(runtime)
 
 
 def installed(runtime: dict[str, Any]) -> bool:
     py, model = omnivoice_python(runtime), omnivoice_model_dir(runtime)
-    return bool(py and model and os.path.isfile(py) and os.path.isfile(os.path.join(model, "model.safetensors")))
+    return bool(py and model and py.is_file() and (model / "model.safetensors").is_file())
 
 
 class OmniVoiceBackend(TtsBackend):
@@ -103,15 +160,27 @@ class OmniVoiceBackend(TtsBackend):
     def _ensure_client(self, runtime: dict[str, Any]) -> WorkerClient:
         if self._client is None:
             py, model = omnivoice_python(runtime), omnivoice_model_dir(runtime)
-            whisper_dir = os.path.join(os.path.dirname(model), "whisper") if model else ""
+            whisper_dir = model.parent / "whisper" if model else ""
             device = config.backend(runtime)
             self._device = device if device in ("cuda", "mps", "cpu") else "cuda"
-            argv = [py, *isolated(), WORKER, "--model-dir", model, "--whisper-dir", whisper_dir,
-                    "--device", self._device, "--prompt-cache", str(PROMPT_CACHE)]
+            argv = [
+                py,
+                *isolated(),
+                WORKER,
+                "--model-dir",
+                model,
+                "--whisper-dir",
+                whisper_dir,
+                "--device",
+                self._device,
+                "--prompt-cache",
+                str(PROMPT_CACHE),
+            ]
             if self.unload_after_s > 0:
                 argv += ["--unload-after", str(self.unload_after_s)]
-            self._client = WorkerClient("omnivoice", argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"),
-                                        start_timeout=240.0)
+            self._client = WorkerClient(
+                "omnivoice", argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"), start_timeout=240.0
+            )
             self._client.on_release.append(self._warm.clear)
         return self._client
 
@@ -120,8 +189,11 @@ class OmniVoiceBackend(TtsBackend):
         loaded)."""
         if not installed(runtime):
             self._status = "missing"
-            log.warning("OmniVoice is not installed (venv %s, model %s); run setup", omnivoice_python(runtime),
-                        omnivoice_model_dir(runtime))
+            log.warning(
+                "OmniVoice is not installed (venv %s, model %s); run setup",
+                omnivoice_python(runtime),
+                omnivoice_model_dir(runtime),
+            )
             return
         self._status = "loading"
         if config.backend(runtime) == "cpu":
@@ -188,12 +260,21 @@ class OmniVoiceBackend(TtsBackend):
         speed = 1.0 / max(0.5, min(2.0, float(params.duration_factor or 1.0)))
         t0 = time.time()
         try:
-            res = await self._client.call("synth", {"text": text, "lang": lang, "model_lang": model_lang, "ref": ref,
-                                                    "out": params.out_path, "steps": steps, "speed": round(speed, 4),
-                                                    **sampling_for(params.temperature),
-                                                    **({"ref_text": params.reference_text} if params.reference_text
-                                                       else {})},
-                                          **self.limits())
+            res = await self._client.call(
+                "synth",
+                {
+                    "text": text,
+                    "lang": lang,
+                    "model_lang": model_lang,
+                    "ref": ref,
+                    "out": params.out_path,
+                    "steps": steps,
+                    "speed": round(speed, 4),
+                    **sampling_for(params.temperature),
+                    **({"ref_text": params.reference_text} if params.reference_text else {}),
+                },
+                **self.limits(),
+            )
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
         except WorkerError as exc:
@@ -203,8 +284,13 @@ class OmniVoiceBackend(TtsBackend):
         except WorkerDied as exc:
             raise EngineError("internal", f"the OmniVoice worker stopped: {exc}") from exc
         self._mark_warm(ref)
-        log.info("OmniVoice %s: %.2fs for %.2fs of audio (%d steps)", lang, time.time() - t0,
-                 float(res.get("duration_s", 0.0)), steps)
+        log.info(
+            "OmniVoice %s: %.2fs for %.2fs of audio (%d steps)",
+            lang,
+            time.time() - t0,
+            float(res.get("duration_s", 0.0)),
+            steps,
+        )
         return str(res.get("out") or params.out_path)
 
     async def warm(self, reference: str, lang: str = "en", reference_text: str | None = None) -> None:
@@ -212,8 +298,9 @@ class OmniVoiceBackend(TtsBackend):
             return
         ref = reference if reference_text else reference_for(reference, lang)
         try:
-            await self._client.call("warm", {"ref": ref, **({"ref_text": reference_text} if reference_text else {})},
-                                    **self.limits())
+            await self._client.call(
+                "warm", {"ref": ref, **({"ref_text": reference_text} if reference_text else {})}, **self.limits()
+            )
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "warm-up cancelled") from exc
         except WorkerError as exc:
@@ -239,7 +326,7 @@ class OmniVoiceBackend(TtsBackend):
         if exc.code == "no_memory" and self.on_cpu():
             self._warm.clear()
 
-    def _mark_warm(self, ref: str) -> None:
+    def _mark_warm(self, ref: str | Path) -> None:
         sig = _sig(ref)
         if sig is None:
             return
@@ -259,17 +346,19 @@ class OmniVoiceBackend(TtsBackend):
         self._warm = OrderedDict()
 
 
-def reference_for(reference: str, lang: str) -> str:
-    alt = os.path.join(os.path.dirname(reference), f"reference_{(lang or '').lower()}.wav")
-    return alt if lang and os.path.isfile(alt) else reference
+def reference_for(reference: str | Path, lang: str) -> Path:
+    reference = Path(reference)
+    alt = reference.parent / f"reference_{(lang or '').lower()}.wav"
+    return alt if lang and alt.is_file() else reference
 
 
-def _sig(path: str) -> tuple | None:
+def _sig(path: str | Path) -> tuple | None:
+    path = Path(path)
     try:
-        st = os.stat(path)
+        st = path.stat()
     except OSError:
         return None
-    return (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    return (path.absolute(), st.st_mtime_ns, st.st_size)
 
 
 OMNIVOICE = OmniVoiceBackend()

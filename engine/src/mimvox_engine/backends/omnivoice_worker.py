@@ -1,7 +1,8 @@
 """OmniVoice worker. Standalone: imports nothing from ``mimvox_engine``.
 
-    python -I omnivoice_worker.py --model-dir <data>/runtime/models/omnivoice --whisper-dir <data>/runtime/models/whisper
-                                  [--device cuda|cpu|mps] [--unload-after S] [--exit-after S] [--prompt-cache N]
+    python -I omnivoice_worker.py --model-dir <data>/runtime/models/omnivoice
+                                  --whisper-dir <data>/runtime/models/whisper [--device cuda|cpu|mps]
+                                  [--unload-after S] [--exit-after S] [--prompt-cache N]
 
 Ops (wire format: ``worker_kit.py``):
   load     {}                                         -> {"load_s","device","vram_gb"}
@@ -16,6 +17,7 @@ Ops (wire format: ``worker_kit.py``):
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"}, {"event":"exit","reason":"idle"}. On the CPU an op
 also sends {"id","progress":{"alive":true}} at most every 2 s while a model runs (the engine's no-progress watchdog).
 """
+
 import argparse
 import collections
 import gc
@@ -24,8 +26,9 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = Path(__file__).absolute().parent
 
 
 def _load_by_path(name, path):
@@ -35,7 +38,7 @@ def _load_by_path(name, path):
     return mod
 
 
-kit = _load_by_path("mimvox_worker_kit", os.path.join(os.path.dirname(HERE), "worker_kit.py"))
+kit = _load_by_path("mimvox_worker_kit", HERE.parent / "worker_kit.py")
 INP, OUT = kit.open_channels()  # before torch / transformers: they print, also from C code
 
 ap = argparse.ArgumentParser()
@@ -55,11 +58,14 @@ import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 
-text_norm = _load_by_path("mimvox_omnivoice_text", os.path.join(HERE, "omnivoice_text.py"))
-whisper_half = _load_by_path("mimvox_whisper_half", os.path.join(os.path.dirname(HERE), "whisper_half.py"))
+text_norm = _load_by_path("mimvox_omnivoice_text", HERE / "omnivoice_text.py")
+whisper_half = _load_by_path("mimvox_whisper_half", HERE.parent / "whisper_half.py")
 # MIMVOX_OMNIVOICE_FAST=0 keeps the library's own decoding loop.
-fast = _load_by_path("mimvox_omnivoice_fast", os.path.join(HERE, "omnivoice_fast.py")) \
-    if os.environ.get("MIMVOX_OMNIVOICE_FAST", "1") != "0" else None
+fast = (
+    _load_by_path("mimvox_omnivoice_fast", HERE / "omnivoice_fast.py")
+    if os.environ.get("MIMVOX_OMNIVOICE_FAST", "1") != "0"
+    else None
+)
 
 # A whole 19 s reference cloned barely better than a 7 s cut (ECAPA 0.86 vs 0.84) but peaked at 6.9 GB VRAM instead
 # of 3.9, which next to the RVC worker filled a 12 GB card: longer clips are cut to whole sentences.
@@ -68,8 +74,8 @@ REF_CUT_MIN_S, REF_CUT_MAX_S, REF_CUT_TARGET_S = 7.0, REF_MAX_S, 10.0
 # fp16 Whisper turbo: 1.6 GB of weights plus decoding; on the CPU otherwise (10-20 s per clip).
 WHISPER_NEED_GB = float(os.environ.get("MIMVOX_WHISPER_NEED_GB", "2.6"))
 SIDECAR_VERSION = 3
-# Measured in fp32: the worker peaked at 7.45 GB (Windows) and 7.1 GB (Linux) with Whisper loaded; the system, the engine
-# and the app need about 3.5 GB beside it.
+# Measured in fp32: the worker peaked at 7.45 GB (Windows) and 7.1 GB (Linux) with Whisper loaded; the system, the
+# engine and the app need about 3.5 GB beside it.
 CPU_RAM_NEED_GB = float(os.environ.get("MIMVOX_CPU_RAM_NEED_GB", "11"))
 # Measured on an 8 GB laptop: the first voice-clone prompt after loading took the worker from 3.6 to 6.8 GB in 6 s.
 CPU_PROMPT_GB = float(os.environ.get("MIMVOX_CPU_PROMPT_GB", "3.2"))
@@ -98,9 +104,12 @@ def _rss_gb():
             from ctypes import wintypes
 
             class _C(ctypes.Structure):
-                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t)] + \
-                           [(f"f{i}", ctypes.c_size_t) for i in range(6)]
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                ] + [(f"f{i}", ctypes.c_size_t) for i in range(6)]
 
             k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
             k32.GetCurrentProcess.restype = wintypes.HANDLE
@@ -110,9 +119,10 @@ def _rss_gb():
             psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb)
             return round(c.WorkingSetSize / 2**30, 2)
         import resource
-        with open("/proc/self/statm") as f:
+
+        with Path("/proc/self/statm").open() as f:
             return round(int(f.read().split()[1]) * resource.getpagesize() / 2**30, 2)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 0.0
 
 
@@ -126,7 +136,7 @@ def _device():
 
 
 def _heartbeat(*_args):
-    """Progress for the engine's no-progress watchdog: on the CPU a segment may take minutes, so it has no fixed limit."""
+    """Progress for the engine's no-progress watchdog: on the CPU a segment may take minutes, with no fixed limit."""
     now = time.monotonic()
     if now - _beat["at"] >= BEAT_S and kit_worker.current is not None:
         _beat["at"] = now
@@ -165,7 +175,7 @@ def _trim_working_set():
             k32.GetCurrentProcess.restype = ctypes.c_void_p
             ctypes.windll.psapi.EmptyWorkingSet.argtypes = [ctypes.c_void_p]
             ctypes.windll.psapi.EmptyWorkingSet(k32.GetCurrentProcess())
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -189,8 +199,8 @@ def _idle_unload():
 
 
 def _sig(path):
-    st = os.stat(path)
-    return [os.path.abspath(path), st.st_mtime_ns, st.st_size]
+    st = Path(path).stat()
+    return [Path(path).absolute(), st.st_mtime_ns, st.st_size]
 
 
 def _load_mono(path):
@@ -209,8 +219,10 @@ def _whisper_device():
     if free >= WHISPER_NEED_GB:
         kit.gpu_fence(start=True)
         return "cuda"
-    _log(f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (Whisper needs "
-         f"{WHISPER_NEED_GB:.1f}): transcribing the reference on the CPU")
+    _log(
+        f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (Whisper needs "
+        f"{WHISPER_NEED_GB:.1f}): transcribing the reference on the CPU"
+    )
     return "cpu"
 
 
@@ -284,7 +296,7 @@ def _pick_window(segs, total):
                 break
             if d < REF_CUT_MIN_S:
                 continue
-            questions = sum(1 for s in segs[i:j + 1] if s[2].rstrip().endswith(("?", "!")))
+            questions = sum(1 for s in segs[i : j + 1] if s[2].rstrip().endswith(("?", "!")))
             score = abs(d - REF_CUT_TARGET_S) + 3.0 * questions
             if best_score is None or score < best_score:
                 best, best_score = (i, j), score
@@ -292,20 +304,20 @@ def _pick_window(segs, total):
         keep = [s for s in segs if s[1] <= REF_CUT_MAX_S] or segs[:1]
         return 0.0, min(total, keep[-1][1] if keep else REF_CUT_MAX_S), " ".join(s[2] for s in keep)
     i, j = best
-    return max(0.0, segs[i][0] - 0.05), min(total, segs[j][1] + 0.15), " ".join(s[2] for s in segs[i:j + 1])
+    return max(0.0, segs[i][0] - 0.05), min(total, segs[j][1] + 0.15), " ".join(s[2] for s in segs[i : j + 1])
 
 
 def _reference(ref, ref_text=None):
     """(mono float32, sr, transcript); a clip up to REF_MAX_S with a known ``ref_text`` skips Whisper and sidecar."""
     sig = _sig(ref)
-    side = os.path.splitext(ref)[0] + ".omnivoice.json"
+    side = _sidecar(ref)
     x, sr = _load_mono(ref)
     total = len(x) / sr
     if ref_text and total <= REF_MAX_S:
         return x, sr, ref_text
     cached = None
     try:
-        with open(side, encoding="utf-8") as fh:
+        with side.open(encoding="utf-8") as fh:
             cached = json.load(fh)
         if cached.get("version") != SIDECAR_VERSION or cached.get("sig") != sig[1:]:
             cached = None
@@ -321,21 +333,34 @@ def _reference(ref, ref_text=None):
             a, b, text = _pick_window(segs, total)
         else:
             a, b, text = 0.0, total, " ".join(s[2] for s in segs)
-        cached = {"version": SIDECAR_VERSION, "sig": sig[1:], "start": round(a, 3), "end": round(b, 3), "text": text,
-                  "language": language}
+        cached = {
+            "version": SIDECAR_VERSION,
+            "sig": sig[1:],
+            "start": round(a, 3),
+            "end": round(b, 3),
+            "text": text,
+            "language": language,
+        }
         _write_sidecar(side, cached)
-        _log(f"reference {ref} ({language or '?'}): {a:.2f}-{b:.2f}s of {total:.1f}s chosen in "
-             f"{time.time() - t0:.1f}s: {text!r}")
-    cut = x[int(cached["start"] * sr):int(cached["end"] * sr)]
+        _log(
+            f"reference {ref} ({language or '?'}): {a:.2f}-{b:.2f}s of {total:.1f}s chosen in "
+            f"{time.time() - t0:.1f}s: {text!r}"
+        )
+    cut = x[int(cached["start"] * sr) : int(cached["end"] * sr)]
     return cut, sr, cached["text"]
+
+
+def _sidecar(ref):
+    ref = Path(ref)
+    return ref.with_name(ref.stem + ".omnivoice.json")
 
 
 def _write_sidecar(side, cached):
     try:
-        tmp = side + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
+        tmp = side.with_name(side.name + ".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
             json.dump(cached, fh, ensure_ascii=False, indent=1)
-        os.replace(tmp, side)
+        tmp.replace(side)
     except OSError as exc:
         _log(f"could not cache the reference transcript: {exc}")
 
@@ -356,9 +381,10 @@ def _prompt(ref, ref_text=None):
 
 
 def _check_ram(grow_gb=0.0):
-    """On the CPU, before every model pass that may grow the worker by ``grow_gb``. Every step reads all the weights: on a
-    computer whose RAM cannot hold the worker, or once a part of them is paged out, each segment waits minutes on the
-    disk. A refusal releases the model, as most of that memory is the worker's own; the next request loads it again."""
+    """On the CPU, before every model pass that may grow the worker by ``grow_gb``. Every step reads all the weights:
+    on a computer whose RAM cannot hold the worker, or once a part of them is paged out, each segment waits minutes on
+    the disk. A refusal releases the model, as most of that memory is the worker's own; the next request loads it
+    again."""
     if not _on_cpu():
         return
     model = _state["model"]
@@ -385,14 +411,14 @@ def op_warm(req):
 
 def op_inspect(req):
     ref = req.get("ref")
-    if not ref or not os.path.isfile(ref):
+    if not ref or not Path(ref).is_file():
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
     _check_ram()
     t0 = time.time()
     _reference(ref)
-    side = os.path.splitext(ref)[0] + ".omnivoice.json"
+    side = _sidecar(ref)
     try:
-        with open(side, encoding="utf-8") as fh:
+        with side.open(encoding="utf-8") as fh:
             cached = json.load(fh)
     except (OSError, ValueError) as exc:
         raise kit.OpError("internal", f"no sidecar for {ref}: {exc}") from None
@@ -408,7 +434,7 @@ def op_synth(req):
     text, out, ref = req.get("text"), req.get("out"), req.get("ref")
     if not isinstance(text, str) or not text.strip() or not out or not ref:
         raise kit.OpError("bad_request", "synth needs 'text', 'ref' and 'out'")
-    if not os.path.isfile(ref):
+    if not Path(ref).is_file():
         raise kit.OpError("not_found", f"reference clip not found: {ref}")
     lang = str(req.get("lang") or "").lower() or None
     _check_ram()
@@ -433,7 +459,7 @@ def op_synth(req):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()  # the RVC worker shares the card
     sr = int(_state["model"].sampling_rate)
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    Path(out).absolute().parent.mkdir(parents=True, exist_ok=True)
     sf.write(out, np.clip(audio, -1.0, 1.0), sr, subtype="PCM_16")
     return {"out": out, "sr": sr, "duration_s": round(len(audio) / sr, 3), "gen_s": round(gen_s, 3), "text": text}
 
@@ -448,7 +474,7 @@ def _generate(**kw):
             return fast.generate(model, **kw)
         except fast.Unsupported:
             pass
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if kit.is_vram_error(exc):
                 raise
             _log(f"fast decoding failed ({type(exc).__name__}: {exc}); using the library's decoding from now on")
@@ -470,14 +496,17 @@ def _zs_op(name):
         if "mod" not in _zs:
             if name in ("release", "status"):
                 return {"loaded": False} if name == "status" else {}
-            spec = importlib.util.spec_from_file_location("mimvox_zsvc_hosted",
-                                                          os.path.join(os.path.dirname(HERE), "zsvc_worker.py"))
+            spec = importlib.util.spec_from_file_location("mimvox_zsvc_hosted", HERE.parent / "zsvc_worker.py")
             mod = importlib.util.module_from_spec(spec)
-            mod.__hosted__ = {"kit": kit, "worker": kit_worker,
-                              "argv": ["--seed-vc", req["seed_vc"], "--models", req["models"], "--device", args.device]}
+            mod.__hosted__ = {
+                "kit": kit,
+                "worker": kit_worker,
+                "argv": ["--seed-vc", req["seed_vc"], "--models", req["models"], "--device", args.device],
+            }
             spec.loader.exec_module(mod)
             _zs["mod"] = mod
         return _zs["mod"].OPS[name](req)
+
     return run
 
 
@@ -488,10 +517,21 @@ if args.exit_after > 0 or kit.IDLE_EXIT_S > 0:
     idle.append((args.exit_after or kit.IDLE_EXIT_S, "exit"))
 if _device() == "cpu":
     torch.nn.modules.module.register_module_forward_pre_hook(_heartbeat)
-kit_worker = kit.Worker("omnivoice", INP, OUT,
-                        {"load": op_load, "synth": op_synth, "warm": op_warm, "inspect": op_inspect, "release": op_release,
-                         "status": op_status, "ping": lambda _r: {},
-                         **{f"zs_{name}": _zs_op(name) for name in ("load", "convert", "warm", "release", "status")}},
-                        idle=idle)
+kit_worker = kit.Worker(
+    "omnivoice",
+    INP,
+    OUT,
+    {
+        "load": op_load,
+        "synth": op_synth,
+        "warm": op_warm,
+        "inspect": op_inspect,
+        "release": op_release,
+        "status": op_status,
+        "ping": lambda _r: {},
+        **{f"zs_{name}": _zs_op(name) for name in ("load", "convert", "warm", "release", "status")},
+    },
+    idle=idle,
+)
 kit_worker.run()
 os._exit(0)

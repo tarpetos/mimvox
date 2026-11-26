@@ -168,9 +168,12 @@ picks the backend for the segment's language and awaits one call (`backends/__in
 ```python
 class TtsBackend(abc.ABC):
     name: str
-    languages: frozenset[str]          # ISO 639-1 codes
-    async def synthesize(self, text, lang, reference, params: SynthParams) -> str: ...   # writes a WAV, returns its path
+    languages: frozenset[str]  # ISO 639-1 codes
+
+    async def synthesize(self, text, lang, reference, params: SynthParams) -> str: ...  # writes a WAV, returns its path
+
     # optional: status(), load(runtime), release(), count_tokens(text), is_warm(reference), forget_reference()
+
 
 SynthParams(out_path, temperature=0.8, quality="best", duration_factor=1.0, first=False)
 ```

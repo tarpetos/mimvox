@@ -1,4 +1,5 @@
 """French: grapheme-cluster heuristic (no G2P model or lexicon is shipped; good enough to measure phoneme coverage)."""
+
 from __future__ import annotations
 
 from ._common import words
@@ -8,34 +9,147 @@ NAME = "French"
 NATIVE = "Français"
 
 PHONEMES = [
-    "i", "e", "ɛ", "a", "ɔ", "o", "u", "y", "ø", "œ", "ə", "ɛ̃", "ɑ̃", "ɔ̃", "j", "w", "ɥ",
-    "p", "b", "t", "d", "k", "g", "f", "v", "s", "z", "ʃ", "ʒ", "m", "n", "ɲ", "l", "ʁ",
+    "i",
+    "e",
+    "ɛ",
+    "a",
+    "ɔ",
+    "o",
+    "u",
+    "y",
+    "ø",
+    "œ",
+    "ə",
+    "ɛ̃",
+    "ɑ̃",
+    "ɔ̃",
+    "j",
+    "w",
+    "ɥ",
+    "p",
+    "b",
+    "t",
+    "d",
+    "k",
+    "g",
+    "f",
+    "v",
+    "s",
+    "z",
+    "ʃ",
+    "ʒ",
+    "m",
+    "n",
+    "ɲ",
+    "l",
+    "ʁ",
 ]
 EXAMPLES = {
-    "i": "lit", "e": "été", "ɛ": "mère", "a": "chat", "ɔ": "porte", "o": "beau", "u": "loup", "y": "rue",
-    "ø": "deux", "œ": "peur", "ə": "petit", "ɛ̃": "vin", "ɑ̃": "temps", "ɔ̃": "bon", "j": "fille", "w": "oui",
-    "ɥ": "nuit", "p": "pain", "b": "bon", "t": "tête", "d": "doux", "k": "cou", "g": "gare", "f": "feu",
-    "v": "vous", "s": "sel", "z": "rose", "ʃ": "chat", "ʒ": "joue", "m": "main", "n": "nez", "ɲ": "montagne",
-    "l": "lune", "ʁ": "rouge",
+    "i": "lit",
+    "e": "été",
+    "ɛ": "mère",
+    "a": "chat",
+    "ɔ": "porte",
+    "o": "beau",
+    "u": "loup",
+    "y": "rue",
+    "ø": "deux",
+    "œ": "peur",
+    "ə": "petit",
+    "ɛ̃": "vin",
+    "ɑ̃": "temps",
+    "ɔ̃": "bon",
+    "j": "fille",
+    "w": "oui",
+    "ɥ": "nuit",
+    "p": "pain",
+    "b": "bon",
+    "t": "tête",
+    "d": "doux",
+    "k": "cou",
+    "g": "gare",
+    "f": "feu",
+    "v": "vous",
+    "s": "sel",
+    "z": "rose",
+    "ʃ": "chat",
+    "ʒ": "joue",
+    "m": "main",
+    "n": "nez",
+    "ɲ": "montagne",
+    "l": "lune",
+    "ʁ": "rouge",
 }
-DIGITS = "zéro un deux trois quatre cinq six sept huit neuf".split()
+DIGITS = ["zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf"]
 
 _FUNCTION = {
-    "le": ["l", "ə"], "je": ["ʒ", "ə"], "de": ["d", "ə"], "ce": ["s", "ə"], "me": ["m", "ə"], "te": ["t", "ə"],
-    "se": ["s", "ə"], "ne": ["n", "ə"], "que": ["k", "ə"], "les": ["l", "e"], "des": ["d", "e"], "mes": ["m", "e"],
-    "tes": ["t", "e"], "ses": ["s", "e"], "ces": ["s", "e"], "et": ["e"], "est": ["ɛ"], "es": ["ɛ"], "un": ["ɛ̃"],
-    "une": ["y", "n"], "il": ["i", "l"], "ils": ["i", "l"], "elle": ["ɛ", "l"], "elles": ["ɛ", "l"], "a": ["a"],
-    "à": ["a"], "y": ["i"], "on": ["ɔ̃"], "en": ["ɑ̃"], "au": ["o"], "aux": ["o"], "eu": ["y"], "plus": ["p", "l", "y"],
-    "fils": ["f", "i", "s"], "os": ["ɔ", "s"], "tous": ["t", "u", "s"], "six": ["s", "i", "s"], "dix": ["d", "i", "s"],
-    "sept": ["s", "ɛ", "t"], "huit": ["ɥ", "i", "t"], "neuf": ["n", "œ", "f"], "oeuf": ["œ", "f"], "œuf": ["œ", "f"],
-    "monsieur": ["m", "ə", "s", "j", "ø"], "femme": ["f", "a", "m"], "second": ["s", "ə", "g", "ɔ̃"],
+    "le": ["l", "ə"],
+    "je": ["ʒ", "ə"],
+    "de": ["d", "ə"],
+    "ce": ["s", "ə"],
+    "me": ["m", "ə"],
+    "te": ["t", "ə"],
+    "se": ["s", "ə"],
+    "ne": ["n", "ə"],
+    "que": ["k", "ə"],
+    "les": ["l", "e"],
+    "des": ["d", "e"],
+    "mes": ["m", "e"],
+    "tes": ["t", "e"],
+    "ses": ["s", "e"],
+    "ces": ["s", "e"],
+    "et": ["e"],
+    "est": ["ɛ"],
+    "es": ["ɛ"],
+    "un": ["ɛ̃"],
+    "une": ["y", "n"],
+    "il": ["i", "l"],
+    "ils": ["i", "l"],
+    "elle": ["ɛ", "l"],
+    "elles": ["ɛ", "l"],
+    "a": ["a"],
+    "à": ["a"],
+    "y": ["i"],
+    "on": ["ɔ̃"],
+    "en": ["ɑ̃"],
+    "au": ["o"],
+    "aux": ["o"],
+    "eu": ["y"],
+    "plus": ["p", "l", "y"],
+    "fils": ["f", "i", "s"],
+    "os": ["ɔ", "s"],
+    "tous": ["t", "u", "s"],
+    "six": ["s", "i", "s"],
+    "dix": ["d", "i", "s"],
+    "sept": ["s", "ɛ", "t"],
+    "huit": ["ɥ", "i", "t"],
+    "neuf": ["n", "œ", "f"],
+    "oeuf": ["œ", "f"],
+    "œuf": ["œ", "f"],
+    "monsieur": ["m", "ə", "s", "j", "ø"],
+    "femme": ["f", "a", "m"],
+    "second": ["s", "ə", "g", "ɔ̃"],
 }
 _ER_PRONOUNCED = {"mer", "fer", "hier", "cher", "fier", "hiver", "amer", "enfer", "super", "hamster"}
 _ILL_AS_IL = ("ville", "mille", "tranquill")
 _VOWEL_L = set("aeiouyéèêëàâîïôûùüœæ")
 _FINAL_SILENT = set("sxztdpg")
-_SIMPLE_C = {"b": "b", "d": "d", "f": "f", "k": "k", "l": "l", "m": "m", "n": "n", "p": "p", "r": "ʁ", "t": "t",
-             "v": "v", "w": "w", "z": "z", "j": "ʒ"}
+_SIMPLE_C = {
+    "b": "b",
+    "d": "d",
+    "f": "f",
+    "k": "k",
+    "l": "l",
+    "m": "m",
+    "n": "n",
+    "p": "p",
+    "r": "ʁ",
+    "t": "t",
+    "v": "v",
+    "w": "w",
+    "z": "z",
+    "j": "ʒ",
+}
 
 
 def _strip_silent(w: str) -> tuple[str, list[str]]:
@@ -81,13 +195,21 @@ def word_phonemes(word: str) -> list[str]:
             return w[i + k] if i + k < n else "#"  # noqa: B023 - called only within this iteration
 
         if r.startswith("eau"):
-            out.append("o"); i += 3; continue  # noqa: E702
+            out.append("o")
+            i += 3
+            continue
         if r.startswith(("ien",)) and _nasal_ok(w, i + 3):
-            out += ["j", "ɛ̃"]; i += 3; continue  # noqa: E702
+            out += ["j", "ɛ̃"]
+            i += 3
+            continue
         if r.startswith("oin") and _nasal_ok(w, i + 3):
-            out += ["w", "ɛ̃"]; i += 3; continue  # noqa: E702
+            out += ["w", "ɛ̃"]
+            i += 3
+            continue
         if r.startswith(("ain", "ein", "aim")) and _nasal_ok(w, i + 3):
-            out.append("ɛ̃"); i += 3; continue  # noqa: E702
+            out.append("ɛ̃")
+            i += 3
+            continue
         if r.startswith("ill") and i > 0:
             if prev in _VOWEL_L:
                 out.append("j")
@@ -98,10 +220,12 @@ def word_phonemes(word: str) -> list[str]:
             i += 3
             continue
         if r == "il" and prev in _VOWEL_L:
-            out.append("j"); i += 2; continue  # noqa: E702
+            out.append("j")
+            i += 2
+            continue
         if r.startswith(("aill", "eill", "euill", "ouill")) or r in ("ail", "eil", "euil", "ouil"):
             v = {"a": ["a"], "e": ["ɛ"], "u": ["œ"], "o": ["u"]}[c if c != "e" or nxt != "u" else "u"]
-            out += v + ["j"]
+            out += [*v, "j"]
             i += next((len(p) for p in ("aill", "eill", "euill", "ouill") if r.startswith(p)), len(r))
             continue
         if r.startswith(("ay", "oy", "uy")) and (at(2) in _VOWEL_L or (at(2) == "#" and tail)):
@@ -109,23 +233,41 @@ def word_phonemes(word: str) -> list[str]:
             i += 2
             continue
         if r.startswith(("au",)):
-            out.append("o"); i += 2; continue  # noqa: E702
+            out.append("o")
+            i += 2
+            continue
         if r.startswith(("ai", "ei")):
-            out.append("ɛ"); i += 2; continue  # noqa: E702
+            out.append("ɛ")
+            i += 2
+            continue
         if r.startswith(("oi", "oî")):
-            out += ["w", "a"]; i += 2; continue  # noqa: E702
+            out += ["w", "a"]
+            i += 2
+            continue
         if r.startswith(("ou", "où", "oû")):
-            out.append("w" if at(2) in _VOWEL_L else "u"); i += 2; continue  # noqa: E702
+            out.append("w" if at(2) in _VOWEL_L else "u")
+            i += 2
+            continue
         if r.startswith(("œu", "eu")):
-            out.append("œ" if at(2) in "rlfvn" and at(2) else "ø"); i += 2; continue  # noqa: E702
+            out.append("œ" if at(2) in "rlfvn" and at(2) else "ø")
+            i += 2
+            continue
         if c in "ae" and nxt in "nm" and _nasal_ok(w, i + 2):
-            out.append("ɑ̃"); i += 2; continue  # noqa: E702
+            out.append("ɑ̃")
+            i += 2
+            continue
         if c == "o" and nxt in "nm" and _nasal_ok(w, i + 2):
-            out.append("ɔ̃"); i += 2; continue  # noqa: E702
+            out.append("ɔ̃")
+            i += 2
+            continue
         if c in "iuy" and nxt in "nm" and _nasal_ok(w, i + 2):
-            out.append("ɛ̃"); i += 2; continue  # noqa: E702
+            out.append("ɛ̃")
+            i += 2
+            continue
         if r.startswith("tion") and i > 0:
-            out += ["s", "j", "ɔ̃"]; i += 4; continue  # noqa: E702
+            out += ["s", "j", "ɔ̃"]
+            i += 4
+            continue
         if c == "u" or c in "ûù":
             if nxt == "i" or (nxt in _VOWEL_L and prev not in "qg"):
                 out.append("ɥ")
@@ -136,65 +278,99 @@ def word_phonemes(word: str) -> list[str]:
             i += 1
             continue
         if c in "iïî":
-            out.append("j" if nxt in _VOWEL_L and i > 0 else "i"); i += 1; continue  # noqa: E702
+            out.append("j" if nxt in _VOWEL_L and i > 0 else "i")
+            i += 1
+            continue
         if c == "y":
             if prev in _VOWEL_L and nxt in _VOWEL_L:
-                out += ["j"] if prev in "ou" else ["j"]
+                out.append("j")
             else:
                 out.append("j" if nxt in _VOWEL_L else "i")
             i += 1
             continue
         if c == "é":
-            out.append("e"); i += 1; continue  # noqa: E702
+            out.append("e")
+            i += 1
+            continue
         if c in "èêë":
-            out.append("ɛ"); i += 1; continue  # noqa: E702
+            out.append("ɛ")
+            i += 1
+            continue
         if c in "aàâ":
-            out.append("a"); i += 1; continue  # noqa: E702
+            out.append("a")
+            i += 1
+            continue
         if c in "oô":
-            out.append("o" if (i == n - 1 or c == "ô") and not tail else "ɔ"); i += 1; continue  # noqa: E702
+            out.append("o" if (i == n - 1 or c == "ô") and not tail else "ɔ")
+            i += 1
+            continue
         if c == "œ":
-            out.append("œ"); i += 1; continue  # noqa: E702
+            out.append("œ")
+            i += 1
+            continue
         if c == "e":
             k = 0
             while i + 1 + k < n and w[i + 1 + k] not in _VOWEL_L:
                 k += 1
             if i == n - 1:
                 out.append("ə")
-            elif nxt == "x":
-                out.append("ɛ")
-            elif k >= 2 and not r.startswith(("ech", "eph", "eth", "egn")) or (i + 1 + k >= n and k >= 1):
+            elif (
+                nxt == "x" or (k >= 2 and not r.startswith(("ech", "eph", "eth", "egn"))) or (i + 1 + k >= n and k >= 1)
+            ):
                 out.append("ɛ")
             else:
                 out.append("ə")
             i += 1
             continue
         if r.startswith("gn"):
-            out.append("ɲ"); i += 2; continue  # noqa: E702
+            out.append("ɲ")
+            i += 2
+            continue
         if r.startswith("ch"):
-            out.append("ʃ"); i += 2; continue  # noqa: E702
+            out.append("ʃ")
+            i += 2
+            continue
         if r.startswith("ph"):
-            out.append("f"); i += 2; continue  # noqa: E702
+            out.append("f")
+            i += 2
+            continue
         if r.startswith("th"):
-            out.append("t"); i += 2; continue  # noqa: E702
+            out.append("t")
+            i += 2
+            continue
         if r.startswith("qu"):
-            out.append("k"); i += 2; continue  # noqa: E702
+            out.append("k")
+            i += 2
+            continue
         if r.startswith("gu") and at(2) in "eiyéèê":
-            out.append("g"); i += 2; continue  # noqa: E702
+            out.append("g")
+            i += 2
+            continue
         if c == "g":
-            out.append("ʒ" if nxt in "eiyéèê" else "g"); i += 1; continue  # noqa: E702
+            out.append("ʒ" if nxt in "eiyéèê" else "g")
+            i += 1
+            continue
         if c == "c":
-            out.append("s" if nxt in "eiyéèê" else "k"); i += 1; continue  # noqa: E702
+            out.append("s" if nxt in "eiyéèê" else "k")
+            i += 1
+            continue
         if c == "ç":
-            out.append("s"); i += 1; continue  # noqa: E702
+            out.append("s")
+            i += 1
+            continue
         if c == "s":
             if nxt == "s":
-                out.append("s"); i += 2; continue  # noqa: E702
-            out.append("z" if prev in _VOWEL_L and nxt in _VOWEL_L else "s"); i += 1; continue  # noqa: E702
+                out.append("s")
+                i += 2
+                continue
+            out.append("z" if prev in _VOWEL_L and nxt in _VOWEL_L else "s")
+            i += 1
+            continue
         if c == "x":
             out += ["g", "z"] if prev == "e" and i == 1 and nxt in _VOWEL_L else ["k", "s"]
             i += 1
             continue
-        if c == "h" or c == "'":
+        if c in {"h", "'"}:
             i += 1
             continue
         if c == nxt:
@@ -208,7 +384,8 @@ def word_phonemes(word: str) -> list[str]:
 
 def phonemes_of(text: str) -> list[str]:
     out: list[str] = []
-    for w in words(text, DIGITS):
+    for word in words(text, DIGITS):
+        w = word
         if "'" in w:
             head, _, rest = w.partition("'")
             if head.endswith("qu"):

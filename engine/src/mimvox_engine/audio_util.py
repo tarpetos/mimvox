@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-import os
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
@@ -21,7 +21,7 @@ def int16_to_float(x: np.ndarray) -> np.ndarray:
     return (np.asarray(x, dtype=np.float32).reshape(-1)) / 32768.0
 
 
-def read_mono(path: str) -> tuple[np.ndarray, int]:
+def read_mono(path: str | Path) -> tuple[np.ndarray, int]:
     data, sr = sf.read(path, dtype="float32", always_2d=True)
     return data.mean(axis=1) if data.shape[1] > 1 else data[:, 0], sr
 
@@ -44,8 +44,8 @@ def concat(parts: list[np.ndarray], gap_ms: float = 0.0, sr: int = OUT_SR) -> np
     return np.concatenate(out)
 
 
-def write_wav(path: str, data: np.ndarray, sr: int = OUT_SR) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+def write_wav(path: str | Path, data: np.ndarray, sr: int = OUT_SR) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     frames = data.T if data.ndim == 2 else data
     sf.write(path, np.clip(frames, -1.0, 1.0), sr, subtype="PCM_16", format="WAV")
 

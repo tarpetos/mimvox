@@ -2,12 +2,13 @@
 
 Runs in its own venv: its fork of ``ukrainian-word-stress`` has the same package name as the one the engine venv uses.
 """
+
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 from .. import components, config
@@ -17,7 +18,7 @@ from . import SynthParams, TtsBackend
 
 log = logging.getLogger("mimvox.holos")
 
-WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holos_worker.py")
+WORKER = Path(__file__).absolute().parent / "holos_worker.py"
 STAMP = ".mimvox-setup-ok"
 REQUIRED = ("holos.pt", "voice_encoder.pt", "voices.pt")
 VOICE_CACHE = 4
@@ -25,24 +26,25 @@ LOAD_TIMEOUT_S = 300.0
 SYNTH_TIMEOUT_S = 600.0
 
 
-def holos_python(runtime: dict[str, Any]) -> str | None:
+def holos_python(runtime: dict[str, Any]) -> Path | None:
     return config.runtime_path(runtime, "python", "holos")
 
 
-def holos_model_dir(runtime: dict[str, Any]) -> str | None:
+def holos_model_dir(runtime: dict[str, Any]) -> Path | None:
     d = config.runtime_path(runtime, "paths", "holos_model")
     if d:
         return d
     root = config.runtime_root(runtime)
-    return os.path.join(root, "models", "holos") if root else None
+    return root / "models" / "holos" if root else None
 
 
 def installed(runtime: dict[str, Any], honour_off: bool = True) -> bool:
     if honour_off and components.off("ukrainian"):
         return False
     py, model = holos_python(runtime), holos_model_dir(runtime)
-    return bool(py and model and os.path.isfile(py) and os.path.isfile(os.path.join(model, STAMP))
-                and all(os.path.isfile(os.path.join(model, f)) for f in REQUIRED))
+    return bool(
+        py and model and py.is_file() and (model / STAMP).is_file() and all((model / f).is_file() for f in REQUIRED)
+    )
 
 
 class HolosBackend(TtsBackend):
@@ -65,10 +67,20 @@ class HolosBackend(TtsBackend):
     def _ensure_client(self, runtime: dict[str, Any]) -> WorkerClient:
         if self._client is None:
             device = config.backend(runtime)
-            argv = [holos_python(runtime), *isolated(), WORKER, "--model-dir", holos_model_dir(runtime),
-                    "--device", device if device in ("cuda", "mps", "cpu") else "cuda", "--voice-cache", str(VOICE_CACHE)]
-            self._client = WorkerClient("holos", argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"),
-                                        start_timeout=240.0)
+            argv = [
+                holos_python(runtime),
+                *isolated(),
+                WORKER,
+                "--model-dir",
+                holos_model_dir(runtime),
+                "--device",
+                device if device in ("cuda", "mps", "cpu") else "cuda",
+                "--voice-cache",
+                str(VOICE_CACHE),
+            ]
+            self._client = WorkerClient(
+                "holos", argv, child_env(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1"), start_timeout=240.0
+            )
             self._client.on_release.append(self._warm.clear)
         return self._client
 
@@ -89,7 +101,7 @@ class HolosBackend(TtsBackend):
         log.info("HolosTTS ready: %s", self.last_load)
 
     async def release(self) -> None:
-        if self._status == "ready" or self._status == "loading":
+        if self._status in {"ready", "loading"}:
             self._status = "paused"
         self._warm.clear()
         if self._client is not None:
@@ -108,8 +120,11 @@ class HolosBackend(TtsBackend):
         speed = 1.0 / max(0.5, min(2.0, float(params.duration_factor or 1.0)))
         t0 = time.time()
         try:
-            res = await self._client.call("synth", {"text": text, "ref": ref, "out": params.out_path,
-                                                    "speed": round(speed, 4)}, timeout=SYNTH_TIMEOUT_S)
+            res = await self._client.call(
+                "synth",
+                {"text": text, "ref": ref, "out": params.out_path, "speed": round(speed, 4)},
+                timeout=SYNTH_TIMEOUT_S,
+            )
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
         except WorkerError as exc:
@@ -140,7 +155,7 @@ class HolosBackend(TtsBackend):
         except (WorkerError, WorkerDied, WorkerCancelled) as exc:
             raise EngineError("internal", f"HolosTTS: {exc}") from exc
 
-    def _mark_warm(self, ref: str) -> None:
+    def _mark_warm(self, ref: str | Path) -> None:
         sig = _sig(ref)
         if sig is None:
             return
@@ -160,17 +175,19 @@ class HolosBackend(TtsBackend):
         self._warm = OrderedDict()
 
 
-def _reference_for(reference: str) -> str:
-    alt = os.path.join(os.path.dirname(reference), "reference_uk.wav")
-    return alt if os.path.isfile(alt) else reference
+def _reference_for(reference: str | Path) -> Path:
+    reference = Path(reference)
+    alt = reference.parent / "reference_uk.wav"
+    return alt if alt.is_file() else reference
 
 
-def _sig(path: str) -> tuple | None:
+def _sig(path: str | Path) -> tuple | None:
+    path = Path(path)
     try:
-        st = os.stat(path)
+        st = path.stat()
     except OSError:
         return None
-    return (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    return (path.absolute(), st.st_mtime_ns, st.st_size)
 
 
 HOLOS = HolosBackend()

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import soundfile as sf
 
+from .. import paths
 from ..registry import EngineError, method
 from . import pace, quality
 from ._audio import HOP_S, read_audio, resample, write_wav
@@ -18,7 +19,7 @@ TARGET_ACTIVE_RMS_DB = -20.0
 MAX_PEAK = 0.9
 MAX_GAIN_DB = 40.0
 TRIM_PAD_S = 0.25
-TRIM_MIN_FRAMES = 5            # 50 ms: ignores clicks
+TRIM_MIN_FRAMES = 5  # 50 ms: ignores clicks
 MAX_RATE = 48000
 MEDIA_POOL = "reference_media.wav"
 
@@ -27,12 +28,12 @@ _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 _PART_RE = re.compile(r"^part(\d+)\.wav$")
 
 
-def _voice_dir(ctx: Any, params: dict[str, Any]) -> str:
+def _voice_dir(ctx: Any, params: dict[str, Any]) -> Path:
     vid = params.get("voice_id")
     if not isinstance(vid, str) or not _ID_RE.match(vid):
         raise EngineError("bad_request", "Missing or invalid 'voice_id'.")
-    vdir = os.path.join(ctx.data_dir, "voices", vid)
-    if not os.path.isdir(vdir):
+    vdir = Path(ctx.data_dir) / "voices" / vid
+    if not vdir.is_dir():
         raise EngineError("not_found", f"Voice not found: {vid}")
     return vdir
 
@@ -44,21 +45,21 @@ def _part_index(params: dict[str, Any]) -> int:
     return n
 
 
-def _ddir(vdir: str) -> str:
-    return os.path.join(vdir, "dataset")
+def _ddir(vdir: str | Path) -> Path:
+    return Path(vdir) / "dataset"
 
 
-def _part_path(vdir: str, n: int) -> str:
-    return os.path.join(_ddir(vdir), f"part{n}.wav")
+def _part_path(vdir: str | Path, n: int) -> Path:
+    return _ddir(vdir) / f"part{n}.wav"
 
 
-def _meta_path(vdir: str) -> str:
-    return os.path.join(_ddir(vdir), "meta.json")
+def _meta_path(vdir: str | Path) -> Path:
+    return _ddir(vdir) / "meta.json"
 
 
-def _load_meta(vdir: str) -> dict[str, Any]:
+def _load_meta(vdir: str | Path) -> dict[str, Any]:
     try:
-        with open(_meta_path(vdir), encoding="utf-8") as f:
+        with _meta_path(vdir).open(encoding="utf-8") as f:
             meta = json.load(f)
         if isinstance(meta, dict) and isinstance(meta.get("parts"), dict):
             return meta
@@ -67,17 +68,18 @@ def _load_meta(vdir: str) -> dict[str, Any]:
     return {"version": 1, "parts": {}}
 
 
-def _save_meta(vdir: str, meta: dict[str, Any]) -> None:
-    os.makedirs(_ddir(vdir), exist_ok=True)
-    tmp = _meta_path(vdir) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=1)
-    os.replace(tmp, _meta_path(vdir))
+def _save_meta(vdir: str | Path, meta: dict[str, Any]) -> None:
+    _ddir(vdir).mkdir(parents=True, exist_ok=True)
+    path = _meta_path(vdir)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=1, default=paths.json_default)
+    tmp.replace(path)
 
 
-def _existing_parts(vdir: str) -> list[int]:
+def _existing_parts(vdir: str | Path) -> list[int]:
     try:
-        names = os.listdir(_ddir(vdir))
+        names = [p.name for p in _ddir(vdir).iterdir()]
     except OSError:
         return []
     return sorted(int(m.group(1)) for n in names if (m := _PART_RE.match(n)))
@@ -125,29 +127,29 @@ def _fade(y: np.ndarray, sr: int, sec: float = 0.01) -> np.ndarray:
     return y
 
 
-def _titles(vdir: str) -> dict[int, str]:
+def _titles(vdir: str | Path) -> dict[int, str]:
     try:
-        with open(os.path.join(vdir, "voice.json"), encoding="utf-8") as f:
+        with (Path(vdir) / "voice.json").open(encoding="utf-8") as f:
             vmeta = json.load(f)
         preset_id = vmeta.get("preset")
         if not isinstance(preset_id, str):
             return {}
-        from .presets import get_preset  # noqa: PLC0415
+        from .presets import get_preset
 
         language = vmeta.get("language")
         preset = get_preset(preset_id, language if isinstance(language, str) else None)
         return {p["index"]: p["title"] for p in preset["parts"]} if preset else {}
-    except Exception:  # noqa: BLE001 - titles are only a hint for the reference pick
+    except Exception:
         return {}
 
 
-def _usable(vdir: str, meta: dict[str, Any]) -> set[int]:
+def _usable(vdir: str | Path, meta: dict[str, Any]) -> set[int]:
     have = {n for n in _existing_parts(vdir) if str(n) in meta["parts"]}
     ok = {n for n in have if meta["parts"][str(n)].get("verdict") != "bad"}
     return ok or have
 
 
-def _ensure_analysed(vdir: str, meta: dict[str, Any]) -> bool:
+def _ensure_analysed(vdir: str | Path, meta: dict[str, Any]) -> bool:
     """Analyses parts stored before the pace analysis existed. True when meta changed."""
     changed = False
     for n in _existing_parts(vdir):
@@ -160,22 +162,29 @@ def _ensure_analysed(vdir: str, meta: dict[str, Any]) -> bool:
     return changed
 
 
-def rank_candidates(vdir: str, meta: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
+def rank_candidates(vdir: str | Path, meta: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
     """Best first; ``meta`` must be analysed."""
     return pace.rank(meta["parts"], _titles(vdir), _usable(vdir, meta))
 
 
-def write_reference(vdir: str, meta: dict[str, Any], part: int, start_s: float, end_s: float, **extra: Any) -> None:
+def write_reference(
+    vdir: str | Path, meta: dict[str, Any], part: int, start_s: float, end_s: float, **extra: Any
+) -> None:
     y, sr = read_audio(_part_path(vdir, part))
-    clip = _fade(y[int(start_s * sr): int(end_s * sr)], sr)
-    write_wav(os.path.join(vdir, "reference.wav"), clip, sr)
-    meta["reference"] = {"part": part, "start_s": round(start_s, 3), "end_s": round(end_s, 3),
-                         "duration_s": round(len(clip) / sr, 2), **extra}
+    clip = _fade(y[int(start_s * sr) : int(end_s * sr)], sr)
+    write_wav(Path(vdir) / "reference.wav", clip, sr)
+    meta["reference"] = {
+        "part": part,
+        "start_s": round(start_s, 3),
+        "end_s": round(end_s, 3),
+        "duration_s": round(len(clip) / sr, 2),
+        **extra,
+    }
 
 
-def cut_media(vdir: str, start_s: float, end_s: float) -> tuple[np.ndarray, int]:
+def cut_media(vdir: str | Path, start_s: float, end_s: float) -> tuple[np.ndarray, int]:
     """Read without loading the whole pool; ``not_found`` when there is no pool."""
-    path = os.path.join(vdir, MEDIA_POOL)
+    path = Path(vdir) / MEDIA_POOL
     try:
         sr = int(sf.info(path).samplerate)
         y, _ = sf.read(path, start=int(start_s * sr), stop=int(end_s * sr), dtype="float32", always_2d=False)
@@ -186,10 +195,10 @@ def cut_media(vdir: str, start_s: float, end_s: float) -> tuple[np.ndarray, int]
     return _fade(np.ascontiguousarray(y, dtype=np.float32), sr), sr
 
 
-def _keep_manual(vdir: str, meta: dict[str, Any], cur: dict[str, Any], changed_part: int | None) -> bool:
-    ref_path = os.path.join(vdir, "reference.wav")
+def _keep_manual(vdir: str | Path, meta: dict[str, Any], cur: dict[str, Any], changed_part: int | None) -> bool:
+    ref_path = Path(vdir) / "reference.wav"
     if cur.get("source") == "media":
-        if os.path.isfile(ref_path):
+        if ref_path.is_file():
             return True
         pool = meta.get("media") if isinstance(meta.get("media"), dict) else {}
         if not cur.get("pool") or cur.get("pool") != pool.get("pool"):
@@ -201,17 +210,17 @@ def _keep_manual(vdir: str, meta: dict[str, Any], cur: dict[str, Any], changed_p
         write_wav(ref_path, clip, sr)
         return True
     part = cur.get("part")
-    if isinstance(part, int) and os.path.isfile(_part_path(vdir, part)) and part != changed_part:
-        if not os.path.isfile(ref_path):
+    if isinstance(part, int) and _part_path(vdir, part).is_file() and part != changed_part:
+        if not ref_path.is_file():
             write_reference(vdir, meta, part, cur["start_s"], cur["end_s"], manual=True)
         return True
     return False
 
 
-def _refresh_reference(vdir: str, meta: dict[str, Any], changed_part: int | None = None) -> None:
+def _refresh_reference(vdir: str | Path, meta: dict[str, Any], changed_part: int | None = None) -> None:
     """A manual choice is kept until its part is removed or re-recorded (``changed_part``); one from the media pool
     until another clip is chosen."""
-    ref_path = os.path.join(vdir, "reference.wav")
+    ref_path = Path(vdir) / "reference.wav"
     cur = meta.get("reference")
     if isinstance(cur, dict) and cur.get("manual"):
         if _keep_manual(vdir, meta, cur, changed_part):
@@ -222,26 +231,36 @@ def _refresh_reference(vdir: str, meta: dict[str, Any], changed_part: int | None
     ranked, _ = rank_candidates(vdir, meta)
     if not ranked:
         meta.pop("reference", None)
-        if os.path.isfile(ref_path):
-            os.remove(ref_path)
+        if ref_path.is_file():
+            ref_path.unlink()
         return
     best = ranked[0]
-    same = (isinstance(cur, dict) and cur.get("part") == best["part"] and cur.get("start_s") == round(best["start_s"], 3)
-            and cur.get("end_s") == round(best["end_s"], 3) and best["part"] != changed_part)
-    if same and os.path.isfile(ref_path):
+    same = (
+        isinstance(cur, dict)
+        and cur.get("part") == best["part"]
+        and cur.get("start_s") == round(best["start_s"], 3)
+        and cur.get("end_s") == round(best["end_s"], 3)
+        and best["part"] != changed_part
+    )
+    if same and ref_path.is_file():
         return  # unchanged: rewriting would only force the speech model to condition on the speaker again
     write_reference(vdir, meta, best["part"], best["start_s"], best["end_s"])
 
 
-def _analyse_stored(vdir: str, n: int) -> dict[str, Any]:
+def _analyse_stored(vdir: str | Path, n: int) -> dict[str, Any]:
     y, sr = read_audio(_part_path(vdir, n))
     m = quality.measure(y, sr)
     verdict, issues = quality.assess(m)
-    return {"verdict": verdict, "issues": issues, "snr_db": round(m["snr_db"], 1),
-            "clipping_pct": round(m["clipping_pct"], 3), **pace.analyse_part(y, sr)}
+    return {
+        "verdict": verdict,
+        "issues": issues,
+        "snr_db": round(m["snr_db"], 1),
+        "clipping_pct": round(m["clipping_pct"], 3),
+        **pace.analyse_part(y, sr),
+    }
 
 
-def _summary(vdir: str, meta: dict[str, Any]) -> dict[str, Any]:
+def _summary(vdir: str | Path, meta: dict[str, Any]) -> dict[str, Any]:
     changed = False
     parts = []
     for n in _existing_parts(vdir):
@@ -251,10 +270,16 @@ def _summary(vdir: str, meta: dict[str, Any]) -> dict[str, Any]:
             changed = True
         try:
             dur = sf.info(_part_path(vdir, n)).duration
-        except Exception:  # noqa: BLE001
+        except Exception:
             dur = 0.0
-        parts.append({"index": n, "duration_s": round(dur, 2), "verdict": info.get("verdict", "ok"),
-                      "issues": info.get("issues", [])})
+        parts.append(
+            {
+                "index": n,
+                "duration_s": round(dur, 2),
+                "verdict": info.get("verdict", "ok"),
+                "issues": info.get("issues", []),
+            }
+        )
     stale = [k for k in meta["parts"] if int(k) not in {p["index"] for p in parts}]
     for k in stale:
         del meta["parts"][k]
@@ -284,7 +309,7 @@ def _summary(vdir: str, meta: dict[str, Any]) -> dict[str, Any]:
         "level": level,
         "message": message,
         "recommended_epochs": recommended_epochs(usable),
-        "has_reference": os.path.isfile(os.path.join(vdir, "reference.wav")),
+        "has_reference": (Path(vdir) / "reference.wav").is_file(),
     }
     if meta.get("reference"):
         out["reference"] = meta["reference"]
@@ -310,12 +335,14 @@ def dataset_add(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     verdict, issues = quality.assess(m1, float(expected) if isinstance(expected, (int, float)) else None)
     y = normalise(y, m1)
     with _LOCK:
-        os.makedirs(_ddir(vdir), exist_ok=True)
+        _ddir(vdir).mkdir(parents=True, exist_ok=True)
         write_wav(_part_path(vdir, n), y, sr)
         meta = _load_meta(vdir)
         others = {k: v for k, v in meta["parts"].items() if k != str(n)}
         meta["parts"][str(n)] = {
-            "verdict": verdict, "issues": issues, "snr_db": round(m1["snr_db"], 1),
+            "verdict": verdict,
+            "issues": issues,
+            "snr_db": round(m1["snr_db"], 1),
             "clipping_pct": round(m1["clipping_pct"], 3),
             **pace.analyse_part(y, sr, pace.voice_median_rate(others)),
         }
@@ -334,8 +361,8 @@ def dataset_remove(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     n = _part_index(params)
     with _LOCK:
         path = _part_path(vdir, n)
-        if os.path.isfile(path):
-            os.remove(path)
+        if path.is_file():
+            path.unlink()
         meta = _load_meta(vdir)
         meta["parts"].pop(str(n), None)
         _refresh_reference(vdir, meta, changed_part=n)

@@ -1,9 +1,10 @@
 import asyncio
+import itertools
 import json
-import os
 import threading
 import time
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -54,8 +55,8 @@ def no_quality_checks(monkeypatch):
 
 @pytest.fixture
 def data(tmp_path):
-    os.makedirs(tmp_path / "tmp")
-    return config.DataDir(str(tmp_path))
+    (tmp_path / "tmp").mkdir(parents=True)
+    return config.DataDir(tmp_path)
 
 
 def make(data, read_titles=False):
@@ -65,8 +66,23 @@ def make(data, read_titles=False):
 
 
 def voice(backend=None):
-    return book._Voice(backend or Backend(), "en", "", "", "", 0.0, None, accent.Choice("own", "auto", None), None, 0.0, 0.8,
-                       "fast", 1.0, "wav", {})
+    return book._Voice(
+        backend or Backend(),
+        "en",
+        "",
+        "",
+        "",
+        0.0,
+        None,
+        accent.Choice("own", "auto", None),
+        None,
+        0.0,
+        0.8,
+        "fast",
+        1.0,
+        "wav",
+        {},
+    )
 
 
 def run(data, bid, on_start=None, backend=None):
@@ -89,16 +105,15 @@ def run(data, bid, on_start=None, backend=None):
 
 
 def read_json(path):
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def chapters_on_disk(data, bid):
     b, st = book._load(data, bid)
     out = []
     for c, cs in zip(b["chapters"], st["chapters"]):
-        f = os.path.join(b["folder"], c["file"] + ".wav")
-        out.append((cs["status"], cs.get("segment"), cs.get("segments"), os.path.isfile(f)))
+        f = Path(b["folder"]) / (c["file"] + ".wav")
+        out.append((cs["status"], cs.get("segment"), cs.get("segments"), f.is_file()))
     return st["status"], out
 
 
@@ -114,7 +129,7 @@ def assert_finished(data, bid):
     assert status == "done"
     assert all(s == "done" and file for s, _, _, file in chs)
     _, st = book._load(data, bid)
-    assert all(os.path.isfile(cs["segments_path"]) for cs in st["chapters"])
+    assert all(Path(cs["segments_path"]).is_file() for cs in st["chapters"])
 
 
 def test_reads_a_book(data):
@@ -131,7 +146,7 @@ def test_reads_a_book(data):
     assert len(rows) == cs["segments"]
     assert rows[0] == {**rows[0], "kind": "title", "text": "Chapter 1", "start": narration.LEAD_MS / 1000}
     assert all("kind" not in r for r in rows[1:])
-    assert all(a["end"] <= b["start"] for a, b in zip(rows, rows[1:]))
+    assert all(a["end"] <= b["start"] for a, b in itertools.pairwise(rows))
     assert all(r["start"] < r["end"] <= doc["duration_s"] for r in rows)
     w, sr = sf.read(cs["path"])
     assert abs(len(w) / sr - doc["duration_s"]) < 1e-3
@@ -182,7 +197,7 @@ def test_crash_after_the_last_commit_then_resume_finishes_the_chapter(data, monk
     real = book._finish_chapter
 
     def crash(*args):
-        raise Crash()
+        raise Crash
 
     monkeypatch.setattr(book, "_finish_chapter", crash)
     first = run(data, bid)
@@ -284,12 +299,12 @@ def test_reread_and_cancel_remove_the_timing_file(data):
     ctx = Ctx(data.root)
     out = asyncio.run(book.book_reread(ctx, {"id": bid, "chapters": [0]}))
     assert out["chapter_list"][0]["segments_path"] is None
-    assert not os.path.exists(first) and not os.path.exists(st["chapters"][0]["path"])
-    assert os.path.isfile(second)
+    assert not Path(first).exists() and not Path(st["chapters"][0]["path"]).exists()
+    assert Path(second).is_file()
 
     book._write_json(first, {})
     asyncio.run(book.book_cancel(ctx, {"id": bid}))
-    assert not os.path.exists(first) and os.path.isfile(second)
+    assert not Path(first).exists() and Path(second).is_file()
     _, st = book._load(data, bid)
     assert st["status"] == "cancelled" and st["chapters"][1]["status"] == "done"
 
@@ -304,24 +319,35 @@ def commit_chapter(data, bid, state, k, segs, lengths, rng):
 
 
 def test_segment_timing_matches_the_audio(tmp_path):
-    data = types.SimpleNamespace(root=str(tmp_path), outputs=str(tmp_path / "outputs"))
+    data = types.SimpleNamespace(root=tmp_path, outputs=tmp_path / "outputs")
     bid = "b1"
-    bk = {"id": bid, "title": "T", "folder": str(tmp_path / "out"), "settings": {"read_titles": True},
-          "chapters": [{"title": "Chapter One", "text": "x", "file": "01 - One"},
-                       {"title": "Two", "text": "y", "file": "02 - Two"}]}
-    os.makedirs(tmp_path / "books" / bid / "work")
+    bk = {
+        "id": bid,
+        "title": "T",
+        "folder": str(tmp_path / "out"),
+        "settings": {"read_titles": True},
+        "chapters": [
+            {"title": "Chapter One", "text": "x", "file": "01 - One"},
+            {"title": "Two", "text": "y", "file": "02 - Two"},
+        ],
+    }
+    (tmp_path / "books" / bid / "work").mkdir(parents=True)
     state = book._new_state(bk)
     rng = np.random.default_rng(1)
-    segs = [("Chapter One.", 1200, "title"), ("First sentence here.", 440, "sentence"), ("A clause,", 220, "clause"),
-            ("Last one.", 700, "end")]
+    segs = [
+        ("Chapter One.", 1200, "title"),
+        ("First sentence here.", 440, "sentence"),
+        ("A clause,", 220, "clause"),
+        ("Last one.", 700, "end"),
+    ]
     commit_chapter(data, bid, state, 0, segs, [30001, 51234, 17777, 40000], rng)
     path = book._finish_chapter(data, bid, bk, state, 0, "wav")
 
     cs = state["chapters"][0]
-    assert cs["segments_path"] == book._timing_path(data, bid, 0)
-    assert not os.path.exists(book._segs_path(data, bid, 0))
+    assert Path(cs["segments_path"]) == book._timing_path(data, bid, 0)
+    assert not book._segs_path(data, bid, 0).exists()
     doc = read_json(cs["segments_path"])
-    assert doc["path"] == path and doc["chapter"] == 0
+    assert doc["path"] == str(path) and doc["chapter"] == 0
     assert [r.get("kind") for r in doc["segments"]] == ["title", None, None, None]
     assert [r["text"] for r in doc["segments"]] == ["Chapter One", "First sentence here.", "A clause,", "Last one."]
     assert doc["segments"][0]["start"] == narration.LEAD_MS / 1000
@@ -332,14 +358,21 @@ def test_segment_timing_matches_the_audio(tmp_path):
     edges = [0] + [x for r in doc["segments"] for x in (round(r["start"] * sr), round(r["end"] * sr))] + [len(w)]
     for j in range(0, len(edges), 2):
         a, b = edges[j], edges[j + 1]
-        assert not np.any(w[a + (ms if j else 0):max(a, b - ms)]), ("silence expected", j)
+        assert not np.any(w[a + (ms if j else 0) : max(a, b - ms)]), ("silence expected", j)
     for j in range(1, len(edges) - 1, 2):
         a, b = edges[j], edges[j + 1]
-        assert np.all(w[a + ms:b - ms] != 0), ("speech expected", j)
+        assert np.all(w[a + ms : b - ms] != 0), ("speech expected", j)
         assert w[a - ms] == 0 and w[a + ms] != 0 and w[b + ms] == 0 and w[b - ms] != 0
 
-    commit_chapter(data, bid, state, 1, [("A very long", 220, "clause"), ("title.", 1200, "title"),
-                                         ("Body.", 700, "end")], [9000, 9000, 9000], rng)
+    commit_chapter(
+        data,
+        bid,
+        state,
+        1,
+        [("A very long", 220, "clause"), ("title.", 1200, "title"), ("Body.", 700, "end")],
+        [9000, 9000, 9000],
+        rng,
+    )
     book._finish_chapter(data, bid, bk, state, 1, "wav")
     doc = read_json(state["chapters"][1]["segments_path"])
     assert [r.get("kind") for r in doc["segments"]] == ["title", "title", None]
@@ -349,7 +382,8 @@ def test_segment_timing_matches_the_audio(tmp_path):
 def test_timeline_needs_every_stat():
     assert book.timeline([["a", 440, "end"]], [], 3.0) is None
     assert book.timeline([["a", 440, "end"]], [{"i": 0, "at": 1.6, "dur": 1.0}], 3.0) == [
-        {"text": "a", "start": 1.6, "end": 2.6}]
+        {"text": "a", "start": 1.6, "end": 2.6}
+    ]
     assert book.timeline([["a", 440, "end"]], [{"i": 0, "at": 1.6, "dur": 9.0}], 3.0)[0]["end"] == 3.0
 
 
@@ -396,7 +430,7 @@ def test_start_with_a_ref_stores_it(data, starts):
     out = start(data, "pub-1")
     assert out["ref"] == "pub-1" and out["existing"] is False and out["status"] == "running"
     assert starts == [out["id"]]
-    assert read_json(os.path.join(book.book_dir(data, out["id"]), "book.json"))["ref"] == "pub-1"
+    assert read_json(book.book_dir(data, out["id"]) / "book.json")["ref"] == "pub-1"
     assert [b["ref"] for b in books(data)] == ["pub-1"]
     assert asyncio.run(book.book_get(Ctx(data.root), {"id": out["id"]}))["ref"] == "pub-1"
 
@@ -432,8 +466,16 @@ def test_start_with_the_ref_of_a_finished_book_starts_nothing(data, starts):
     book._RUNNING.clear()
     set_status(data, first["id"], "done")
     again = start(data, "pub-1")
-    assert again == {"id": first["id"], "folder": first["folder"], "chapters": 2, "words": first["words"],
-                     "ref": "pub-1", "existing": True, "job": None, "status": "done"}
+    assert again == {
+        "id": first["id"],
+        "folder": first["folder"],
+        "chapters": 2,
+        "words": first["words"],
+        "ref": "pub-1",
+        "existing": True,
+        "job": None,
+        "status": "done",
+    }
     assert starts == [first["id"]] and len(books(data)) == 1
 
 
@@ -512,8 +554,9 @@ def test_the_same_ref_twice_at_once_starts_one_book(data, starts):
     p = {"title": "T", "voice_id": "v", "language": "en", "chapters": chapters, "ref": "pub-1"}
 
     async def both():
-        return await asyncio.gather(*(book.book_start(Ctx(data.root), dict(p)) for _ in range(2)),
-                                    return_exceptions=True)
+        return await asyncio.gather(
+            *(book.book_start(Ctx(data.root), dict(p)) for _ in range(2)), return_exceptions=True
+        )
 
     a, b = asyncio.run(both())
     assert isinstance(a, dict) and isinstance(b, book.EngineError) and b.code == "busy"

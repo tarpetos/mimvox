@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage the runtime resources the installers bundle into crates/desktop/target/bundle-resources/ (the layout the app
 looks for at runtime, see crates/desktop/Packager.toml)."""
+
 from __future__ import annotations
 
 import argparse
@@ -24,8 +25,17 @@ OPTIONAL_FILES = ["DISCLAIMER.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "LICENSE
 UV_VERSION = "0.12.18"
 UV_RELEASES = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}"
 IGNORE = shutil.ignore_patterns(
-    "__pycache__", "*.pyc", "*.pyo", ".venv", "venv", ".pytest_cache", ".ruff_cache", ".mypy_cache",
-    "*.egg-info", ".DS_Store", "Thumbs.db",
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "*.egg-info",
+    ".DS_Store",
+    "Thumbs.db",
 )
 
 
@@ -62,7 +72,8 @@ def stage_uv(targets: list[str]) -> None:
     if any("linux" in t for t in targets):
         # The AppImage tool (linuxdeploy) rewrites every ELF file in the AppDir and breaks the static uv, so Linux
         # gets it gzipped; the app unpacks it on first use (crates/desktop/src/ui/setuprun.rs, uv_path).
-        import gzip  # noqa: PLC0415
+        import gzip
+
         packed = out_dir / "uv.gz"
         packed.write_bytes(gzip.compress(uv_binary(targets[0]), compresslevel=9))
         print(f"[stage] uv {UV_VERSION} ({targets[0]}) -> {packed}")
@@ -83,9 +94,12 @@ def stage_uv(targets: list[str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stage the installers' bundled resources.")
-    parser.add_argument("--uv", metavar="TARGET[,TARGET]",
-                        help="also bundle uv for this target (e.g. x86_64-unknown-linux-musl); two comma-separated "
-                             "targets make a macOS universal binary")
+    parser.add_argument(
+        "--uv",
+        metavar="TARGET[,TARGET]",
+        help="also bundle uv for this target (e.g. x86_64-unknown-linux-musl); two comma-separated "
+        "targets make a macOS universal binary",
+    )
     args = parser.parse_args()
     missing = [d for d in REQUIRED_DIRS if not (REPO / d).is_dir()]
     if missing:

@@ -40,7 +40,6 @@ impl IntoResponse for OpenAiError {
     }
 }
 
-/// The engine's voice-cloning models; any other `model` (OpenAI's tts-1, ...) means the engine's choice.
 const ENGINE_MODELS: [&str; 3] = ["omnivoice", "voxcpm", "chatterbox"];
 
 #[derive(Deserialize)]

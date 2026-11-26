@@ -74,7 +74,6 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
 
       - name: pytest
-        working-directory: engine
         env:
           UV_PYTHON: "3.14"
         run: uv run --group test pytest
