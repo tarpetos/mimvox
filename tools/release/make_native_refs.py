@@ -3,7 +3,7 @@
 
 The clips are modifications of the CMU ARCTIC recordings (licence: CMU_ARCTIC_COPYING.txt next to them).
 
-    uv run --no-project --python 3.11 --with numpy,scipy,soundfile,librosa python tools/release/make_native_refs.py
+    uv run --no-project --python 3.14 --with numpy,scipy,soundfile,librosa python tools/release/make_native_refs.py
 """
 from __future__ import annotations
 

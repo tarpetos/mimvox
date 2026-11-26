@@ -29,7 +29,7 @@ one; without one they run on the processor, which works but is several times slo
 | **Linux** x64 | **Yes** (CUDA) | **Yes** (ROCm, new; tested on an RX 9070 XT) | n/a | Processor only | Yes, slow |
 | **macOS** Apple Silicon (M1 and later) | n/a | n/a | **Yes** (MPS; validated on a MacBook Pro with M5 Pro) | n/a | n/a |
 
-Intel Macs are not supported: the official PyTorch builds for them stopped at 2.2, and the speech engine needs 2.8 or
+Intel Macs are not supported: the official PyTorch builds for them stopped at 2.2, and the speech engine needs 2.11 or
 newer. ARM64 Windows and Linux (Snapdragon laptops, ARM boards) are not built: their GPUs are not supported by
 PyTorch, so everything would run on the processor, and nobody has tried them.
 

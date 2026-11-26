@@ -38,7 +38,7 @@ flowchart LR
         UI --- CLI
     end
 
-    subgraph ENG["Engine venv (Python 3.11, torch 2.8, transformers 5)"]
+    subgraph ENG["Engine venv (Python 3.14, torch 2.11, transformers 5)"]
         SRV["Server<br/>asyncio loop: requests, job tasks, events"]
         DS["Dataset<br/>recording checks, text analysis"]
         TTS["Speech backend<br/>OmniVoice client"]
@@ -78,7 +78,7 @@ flowchart LR
 
 ### Why these processes
 
-- **Two Python environments.** The engine environment (OmniVoice, Whisper, NLLB) runs Python 3.11 with torch 2.8 and
+- **Two Python environments.** The engine environment (OmniVoice, Whisper, NLLB) runs Python 3.14 with torch 2.11 and
   transformers 5; Applio runs Python 3.12 with torch 2.11. They cannot share one environment, so RVC lives in its own,
   behind a worker process.
 - **Models in worker processes.** OmniVoice, RVC and Whisper/NLLB/Demucs each run in a persistent worker: a native crash cannot

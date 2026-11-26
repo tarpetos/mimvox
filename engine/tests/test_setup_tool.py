@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 TOOLS = Path(__file__).resolve().parents[2] / "tools" / "setup"
-TORCH_CPU = '{"torch": "2.8.0+cpu", "cuda": false, "mps": false, "name": "", "hip": false}'
+TORCH_CPU = '{"torch": "2.11.0+cpu", "cuda": false, "mps": false, "name": "", "hip": false}'
 
 
 def _load(name, filename):
@@ -119,7 +119,7 @@ class FakeUv:
     def __init__(self, s):
         self.s, self.calls, self.fail = s, [], lambda argv: False
         self.freeze = {}
-        self.python = True  # Python 3.11 is in <runtime>/python
+        self.python = True  # Python 3.14 is in <runtime>/python
 
     def run(self, command, cwd=None, extra_env=None):
         argv = [str(part) for part in command]
@@ -132,13 +132,14 @@ class FakeUv:
             self.python = True
         if argv[1:2] == ["venv"]:
             if not self.python and "--offline" in argv:
-                return 2  # "No interpreter found for Python 3.11 in managed installations"
+                return 2  # "No interpreter found for Python 3.14 in managed installations"
             venv = Path(argv[-1])
             venv_python = setup.venv_python(venv, self.s.plat)
             venv_python.parent.mkdir(parents=True, exist_ok=True)
             venv_python.write_bytes(b"")
-            home = self.s.python_dir / "cpython-3.11-linux-x86_64-gnu" / "bin"
-            (venv / "pyvenv.cfg").write_text(f"home = {home}\n", encoding="utf-8")
+            version = argv[argv.index("--python") + 1]
+            home = self.s.python_dir / f"cpython-{version}-linux-x86_64-gnu" / "bin"
+            (venv / "pyvenv.cfg").write_text(f"home = {home}\nversion_info = {version}.0\n", encoding="utf-8")
         return 0
 
     def read(self, command, cwd=None):
@@ -203,6 +204,70 @@ def test_a_venv_from_outside_the_runtime_is_made_again_with_its_packages(tmp_pat
     uv.calls.clear()
     s.engine_env()
     assert uv.venv_calls() == []
+
+
+def on_older_python(s, version="3.11"):
+    """The engine venv as an earlier version of setup made it: in <runtime>/python, on an older Python."""
+    home = s.python_dir / f"cpython-{version}-linux-x86_64-gnu" / "bin"
+    (s.engine_venv / "pyvenv.cfg").write_text(f"home = {home}\nversion_info = {version}.15\n", encoding="utf-8")
+    (s.engine_venv / ".mimvox-setup-ok").write_text("torch==2.8.0 torchaudio==2.8.0 cpu linux", encoding="utf-8")
+    (s.engine_venv / "old-file").write_bytes(b"")
+
+
+def test_a_venv_on_an_older_python_is_made_again_on_the_new_one(fake_uv, capsys):
+    s, uv = fake_uv
+    on_older_python(s)
+    s.engine_env()
+    (venv_call,) = uv.venv_calls()
+    assert venv_call[venv_call.index("--python") + 1] == setup.ENGINE_PYTHON
+    install = next(argv for argv in uv.calls if argv[1:3] == ["pip", "install"])
+    assert "-c" not in install
+    assert setup.venv_version(s.engine_venv) == setup.ENGINE_PYTHON
+    assert not (s.engine_venv / "old-file").exists()
+    assert sorted(p.name for p in s.engine_venv.parent.iterdir()) == [".venv"]
+    assert f"on Python 3.11, needs {setup.ENGINE_PYTHON}" in capsys.readouterr().out
+    uv.calls.clear()
+    s.engine_env()
+    assert uv.venv_calls() == []
+
+
+def test_a_failed_python_upgrade_keeps_the_old_venv(fake_uv):
+    s, uv = fake_uv
+    on_older_python(s)
+    uv.fail = lambda argv: argv[1:3] == ["pip", "install"]
+    with pytest.raises(setup.SetupError):
+        s.engine_env()
+    assert setup.venv_version(s.engine_venv) == "3.11"
+    assert (s.engine_venv / "old-file").exists()
+    assert sorted(p.name for p in s.engine_venv.parent.iterdir()) == [".venv"]
+
+
+def test_pythons_no_environment_uses_are_removed(fake_uv, capsys):
+    s, _uv = fake_uv
+    running = f"{sys.version_info.major}.{sys.version_info.minor}"
+    names = ["cpython-3.11.15-linux-x86_64-gnu", "cpython-3.11-linux-x86_64-gnu", f"cpython-{running}.1-linux-x86_64-gnu",
+             f"cpython-{setup.ENGINE_PYTHON}.7-linux-x86_64-gnu", ".lock"]
+    for name in names:
+        if name != "cpython-3.11-linux-x86_64-gnu":
+            (s.python_dir / name).mkdir(parents=True, exist_ok=True)
+    minor = s.python_dir / "cpython-3.11-linux-x86_64-gnu"
+    if os.name == "nt":
+        minor.mkdir()
+    else:
+        minor.symlink_to(s.python_dir / "cpython-3.11.15-linux-x86_64-gnu")
+    s.remove_unused_pythons()
+    left = {p.name for p in s.python_dir.iterdir()}
+    assert left >= {f"cpython-{running}.1-linux-x86_64-gnu", f"cpython-{setup.ENGINE_PYTHON}.7-linux-x86_64-gnu", ".lock"}
+    assert not left & {"cpython-3.11.15-linux-x86_64-gnu", "cpython-3.11-linux-x86_64-gnu"}
+    assert "Removing Python 3.11" in capsys.readouterr().out
+
+
+def test_a_python_a_venv_still_uses_is_kept(fake_uv):
+    s, _uv = fake_uv
+    on_older_python(s)
+    (s.python_dir / "cpython-3.11.15-linux-x86_64-gnu").mkdir(parents=True)
+    s.remove_unused_pythons()
+    assert (s.python_dir / "cpython-3.11.15-linux-x86_64-gnu").is_dir()
 
 
 def test_a_rebuild_downloads_what_the_cache_lacks(tmp_path, fake_uv, capsys):
