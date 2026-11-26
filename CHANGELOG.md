@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+* **Linux:** the window no longer has a second, grey title bar above its own on GNOME (Wayland): it draws its own
+  minimize, maximize and close buttons as on Windows, moves by its header, resizes by its edges and corners, and
+  rounds its corners. Tiling window managers (i3, sway, Hyprland and others) keep their own frame.
+* **AppImage:** at each start it adds itself to the list of apps with its icon, keeps that entry pointing at the file
+  after an update renames it, and shows its icon on the file in the file manager. The dock shows Mimvox's icon for
+  the window (the AppImage and the .deb alike).
+
 ## 0.6.0
 
 * **More voice-cloning models:** two optional parts add other models beside OmniVoice: **VoxCPM2** (6 GB, 30
