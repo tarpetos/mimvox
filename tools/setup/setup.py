@@ -722,7 +722,9 @@ class Setup:
         if args.components:
             chosen = parse(args.components)
         elif previous is not None:
-            chosen = set(previous)
+            # An older setup (after the app was downgraded) rewrites runtime.toml without the components it does not
+            # know: a model whose weights are complete on disk is still installed.
+            chosen = set(previous) | {n for n in CLONE_MODELS if (self.clone_models_dir(n) / CLONE_STAMP).is_file()}
         else:
             chosen = set(COMPONENTS)
         if "better_translation" in chosen and self.gpu.backend != "cuda" and args.better_translation != "yes" \

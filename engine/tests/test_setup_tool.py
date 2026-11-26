@@ -256,6 +256,16 @@ def test_runtime_toml_names_an_installed_clone_model(tmp_path):
     assert s.component_paths("voxcpm") == [s.runtime / "voxcpm", s.runtime / "models" / "voxcpm"]
 
 
+def test_a_clone_model_an_older_setup_left_out_is_kept(tmp_path):
+    s = make(tmp_path / "data")
+    write_runtime(s, components=("speech", "ukrainian"))
+    (s.clone_models_dir("chatterbox")).mkdir(parents=True)
+    (s.clone_models_dir("chatterbox") / setup.CLONE_STAMP).write_text("x", encoding="utf-8")
+    (s.clone_models_dir("voxcpm")).mkdir(parents=True)  # an interrupted download: no stamp
+    s.resolve_components(setup.parse_args([]))
+    assert s.components == {"speech", "ukrainian", "chatterbox"}
+
+
 def test_pythons_no_environment_uses_are_removed(fake_uv, capsys):
     s, _uv = fake_uv
     running = f"{sys.version_info.major}.{sys.version_info.minor}"
