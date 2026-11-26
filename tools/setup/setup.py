@@ -108,12 +108,12 @@ HOLOS_PACKAGES = (
     "holos-tts==0.4", "stanza==1.15.1", "transformers==5.23.0", "huggingface-hub==2.4.0", "marisa-trie==1.4.1",
     "librosa==0.11.0", "soundfile==0.14.0", "numpy==2.4.6", "scipy==1.17.1", "num2words==0.5.14",
     # archives at pinned commits, not git: setup works without git (and its certificate setup)
-    "ipa-uk @ https://gh.ali360.cloudns.ch/patriotyk/ipa-uk/archive/3faf05ec50fd4880965b6c76f8e479a4f82117f5.zip",
-    "ukrainian-accentor @ https://gh.ali360.cloudns.ch/egorsmkv/ukrainian-accentor/archive/"
+    "ipa-uk @ https://github.com/patriotyk/ipa-uk/archive/3faf05ec50fd4880965b6c76f8e479a4f82117f5.zip",
+    "ukrainian-accentor @ https://github.com/egorsmkv/ukrainian-accentor/archive/"
     "3dff5ecd2ac91e879086c0e2a7f1ce079603c9f1.zip",
 )
 # --no-deps: its metadata asks for ukrainian-accentor from git (installed above from the same commit's archive).
-HOLOS_NO_DEPS = ("ukrainian-word-stress @ https://gh.ali360.cloudns.ch/patriotyk/ukrainian-word-stress/archive/"
+HOLOS_NO_DEPS = ("ukrainian-word-stress @ https://github.com/patriotyk/ukrainian-word-stress/archive/"
                  "d5b37ea0abe9711930d9c3b0b13edec5a0675512.zip",)
 HOLOS_REPO = "patriotyk/HolosTTS"
 HOLOS_REVISION = "main"
