@@ -242,7 +242,8 @@ def test_a_failed_python_upgrade_keeps_the_old_venv(fake_uv):
     assert sorted(p.name for p in s.engine_venv.parent.iterdir()) == [".venv"]
 
 
-def test_runtime_toml_names_an_installed_clone_model(tmp_path):
+def test_runtime_toml_names_an_installed_clone_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "location_file", lambda plat: tmp_path / "location.toml")
     s = make(tmp_path / "data")
     s.components = {"speech", "voxcpm", "chatterbox"}
     for py in (s.engine_python(), s.clone_python("voxcpm")):
