@@ -23,6 +23,8 @@
 * **Linux microphones:** the list shows each microphone once by its name (*HD-Audio Generic · ALC897 Analog*)
   instead of ALSA's plugins and device codes (*pipewire*, *hw:CARD=Generic,DEV=0*).
 * Speak's **Clear the text** button stays in place, disabled, when there is no text.
+* In setup's list, a part that cannot be unticked (the speech engine, the last voice-cloning model) keeps the same
+  checkbox, dimmed, instead of a smaller grey one.
 
 ## 0.6.0
 

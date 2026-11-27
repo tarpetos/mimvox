@@ -600,6 +600,17 @@ pub(crate) mod kit {
     }
 
     pub fn checkbox(p: &Palette, checked: bool, label: &str, on_toggle: impl Fn(&mut AppState) + 'static) -> El {
+        checkbox_if(p, checked, true, label, on_toggle)
+    }
+
+    /// A disabled one keeps its look, dimmed.
+    pub fn checkbox_if(
+        p: &Palette,
+        checked: bool,
+        enabled: bool,
+        label: &str,
+        on_toggle: impl Fn(&mut AppState) + 'static,
+    ) -> El {
         let mark = if checked {
             el().size(20.0, 20.0).radius(radius::CONTROL * 0.4).fill(p.accent).child(
                 rune::canvas(
@@ -612,17 +623,16 @@ pub(crate) mod kit {
         } else {
             el().size(20.0, 20.0).radius(radius::CONTROL * 0.4).fill(p.well).border(1.0, p.rim_top)
         };
-        row()
+        let b = row()
             .key("checkbox")
             .role("checkbox")
             .label(label.to_string())
             .checked(checked)
-            .focusable(true)
             .gap(12.0)
             .w_full()
             .items_start()
-            .on_press(on_toggle)
             .child(mark.mt(1.0))
-            .child(text(label.to_string()).font(ty::BODY).color(p.text).wrap().grow(1.0).min_w(0.0))
+            .child(text(label.to_string()).font(ty::BODY).color(p.text).wrap().grow(1.0).min_w(0.0));
+        if enabled { b.focusable(true).on_press(on_toggle) } else { b.disabled(true).opacity(0.5) }
     }
 }
