@@ -82,7 +82,8 @@ fn target_strip(s: &AppState, p: Pal) -> El {
     let r = &s.record;
     let active = crate::ui::shell::active_voice(s);
     let new = r.for_new || active.is_none();
-    let mut line = row().key("record-for").w_full().gap(12.0).center_y().flex_wrap().child(txt(
+    // As tall as the name field, so the field appearing does not push the page down.
+    let mut line = row().key("record-for").w_full().min_h(42.0).gap(12.0).center_y().flex_wrap().child(txt(
         "This is for",
         13.0,
         600.0,
