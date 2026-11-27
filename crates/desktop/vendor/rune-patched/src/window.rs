@@ -162,7 +162,7 @@ pub(crate) trait AnyHost {
     /// when that wake arrives.
     fn apply_pending(&mut self, _event_loop: &ActiveEventLoop) {}
     /// Shows, restores and activates it as the default reopen.
-    fn reopen(&mut self, _event_loop: &ActiveEventLoop) {}
+    fn reopen(&mut self, _event_loop: &ActiveEventLoop, _token: Option<String>) {} // PATCH
 }
 
 /// Builds every host, attaching its shortcut and menu guards, before any resumes: a window's
@@ -315,7 +315,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let proxy = self.proxy.clone();
             crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android"))))] // PATCH
         {
             let proxy = self.proxy.clone();
             crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());

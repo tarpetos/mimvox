@@ -58,7 +58,7 @@ impl<S: 'static> AnyHost for Host<S> {
         self.in_turn(|h| h.reopen_hook_in_turn(event_loop, has_visible_windows))
     }
     fn apply_pending(&mut self, event_loop: &ActiveEventLoop) { self.in_turn(|h| h.apply_pending_in_turn(event_loop)) }
-    fn reopen(&mut self, event_loop: &ActiveEventLoop) { self.in_turn(|h| h.reopen_in_turn(event_loop)) }
+    fn reopen(&mut self, event_loop: &ActiveEventLoop, token: Option<String>) { self.in_turn(|h| h.reopen_in_turn(event_loop, token)) } // PATCH
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) { self.in_turn(|h| h.new_events_in_turn(event_loop, cause)) }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) -> bool { self.in_turn(|h| h.about_to_wait_in_turn(event_loop)) }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) { self.in_turn(|h| h.resumed_in_turn(event_loop)) }
@@ -144,9 +144,9 @@ impl<S: 'static> Host<S> {
         self.publish();
     }
 
-    fn reopen_in_turn(&mut self, event_loop: &ActiveEventLoop) {
+    fn reopen_in_turn(&mut self, event_loop: &ActiveEventLoop, token: Option<String>) { // PATCH
         if !self.started || self.life.finished() { return; }
-        self.open(event_loop, None);
+        self.open(event_loop, token); // PATCH
         self.shell(event_loop);
         // winit's focus does nothing while the window is still deminiaturizing.
         #[cfg(target_os = "macos")]

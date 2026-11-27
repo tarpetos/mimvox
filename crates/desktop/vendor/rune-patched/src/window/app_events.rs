@@ -47,8 +47,15 @@ impl Windows {
         if event_loop.exiting() { return; }
         #[cfg(target_os = "macos")]
         crate::platform::reopen::unhide();
-        if let Some(Some(host)) = crate::platform::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.get_mut(i)) {
-            host.reopen(event_loop);
+        #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))] // PATCH
+        let token = crate::open_url::instance::take_token(); // PATCH
+        #[cfg(not(all(unix, not(target_os = "ios"), not(target_os = "android"))))] // PATCH
+        let token = None; // PATCH
+        let target = crate::platform::reopen::target(&candidates(&self.hosts)); // PATCH
+        #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))] // PATCH
+        let target = target.or_else(|| candidates(&self.hosts).iter().position(|c| c.main && c.reopenable && c.visible)); // PATCH
+        if let Some(Some(host)) = target.and_then(|i| self.hosts.get_mut(i)) { // PATCH
+            host.reopen(event_loop, token); // PATCH
         }
         // Windows: a launch while the app runs brings its front window forward, restored, as
         // AppKit's activation does on macOS; the launch let this process take the foreground.
