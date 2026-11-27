@@ -2439,7 +2439,8 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--remove",
         metavar="LIST",
-        help="delete these optional components from the runtime and leave the rest as it is (speech cannot be removed)",
+        help="delete these optional components from the runtime and leave the rest as it is (speech and the last "
+        "voice-cloning model cannot be removed)",
     )
     parser.add_argument(
         "--gui",

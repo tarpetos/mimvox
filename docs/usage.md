@@ -146,9 +146,9 @@ options (all of them: `./setup.sh --help`):
 | `--quick-check` | Verify an existing install, download nothing. |
 | `--move-to DIR` | Move an existing install to `DIR` (see below). |
 | `--better-translation no` | Leave out the better translation model (NLLB-200 1.3B); `yes` adds it also without a GPU. |
-| `--components LIST` | Install exactly these parts (`speech,training,translation,better_translation,native_accent,music_removal`); later runs keep the same set. |
+| `--components LIST` | Install exactly these parts (`speech`, at least one voice-cloning model of `omnivoice,voxcpm,chatterbox`, and any of `training,translation,better_translation,native_accent,music_removal,ukrainian`); later runs keep the same set. |
 | `--add LIST` | Add parts to an existing install. |
-| `--remove LIST` | Delete these optional parts from an existing install (speech cannot be removed). |
+| `--remove LIST` | Delete these optional parts from an existing install (speech and the last voice-cloning model cannot be removed). |
 | `--skip-toolchain` | Install no toolchains or system packages (the app's own setup runs this way, with `--gui`). |
 
 ### Moving the data folder later
