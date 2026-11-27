@@ -19,10 +19,15 @@ TRANSLATE_BEAMS = 5  # measured: 4 -> 5 costs about 5 % more time
 START_TIMEOUT_S = 120.0
 OP_TIMEOUT_S = 900.0
 SEPARATOR_FILE = Path("demucs") / "hdemucs_high_trained.pt"
+ASR_FILE = Path("whisper") / "large-v3-turbo.pt"
 
 
 def separator_path(data_root: str | Path) -> Path:
     return Path(data_root) / "runtime" / "models" / SEPARATOR_FILE
+
+
+def asr_path(data_root: str | Path) -> Path:
+    return Path(data_root) / "runtime" / "models" / ASR_FILE
 
 
 class Cancelled(Exception):
@@ -98,6 +103,14 @@ class SpeechWorker:
         return await self.request(
             "transcribe", {"audio": audio_npy, "language": language, "model": ASR_MODEL}, progress
         )
+
+    async def detect_language(
+        self, audio_npy: str | Path, windows: list[list[float]], allow_cuda: bool | None = None
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"audio": audio_npy, "windows": windows, "model": ASR_MODEL}
+        if allow_cuda is not None:
+            params["allow_cuda"] = bool(allow_cuda) and self.allow_cuda
+        return await self.request("detect_language", params)
 
     async def translate(
         self,

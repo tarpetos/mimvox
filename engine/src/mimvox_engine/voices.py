@@ -168,6 +168,20 @@ def update_meta(data: config.DataDir, voice_id: str, mutate: Callable[[dict[str,
         return meta
 
 
+def has_recordings(data: config.DataDir, voice_id: str) -> bool:
+    return any((data.voice(voice_id) / "dataset").glob("part*.wav")) or data.rvc_model(voice_id)[0].is_file()
+
+
+def adopt_language(data: config.DataDir, voice_id: str, code: str) -> bool:
+    """A voice without recordings takes ``code``, the language heard in its media; True when it did."""
+    with _LOCK:
+        read_meta(data, voice_id)
+        if has_recordings(data, voice_id):
+            return False
+        update_meta(data, voice_id, lambda meta: meta.update(language=code))
+        return True
+
+
 def paused_training(meta: dict[str, Any]) -> dict[str, Any] | None:
     p = meta.get("training_paused")
     if not isinstance(p, dict) or not isinstance(p.get("epoch"), int) or not isinstance(p.get("total_epochs"), int):

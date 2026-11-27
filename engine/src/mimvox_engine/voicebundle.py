@@ -217,7 +217,10 @@ def _clean_meta(raw: bytes) -> dict[str, Any]:
     try:
         meta["language"] = lang.normalize_code(meta.get("language")) or lang.DEFAULT
     except ValueError as exc:
-        raise _bad(str(exc)) from None
+        heard = reflang.norm(meta.get("language"))  # a voice made from media keeps the language heard in it
+        if not heard or not re.fullmatch(r"[a-z]{2,3}", heard):
+            raise _bad(str(exc)) from None
+        meta["language"] = heard
     return {k: v for k, v in meta.items() if k not in _VOLATILE}
 
 

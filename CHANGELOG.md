@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+* **Voices made from files** are in the language spoken or sung in them: Record listens to several stretches of the
+  cleaned speech and sets the voice's language from them, instead of using the reading language. A Chinese music video
+  no longer makes a voice *recorded in Spanish*; the result card says *Language: Chinese (heard in the files)*.
+
 ## 0.6.2
 
 * **One running copy on Linux and macOS:** starting Mimvox again while it runs brings its window forward instead of

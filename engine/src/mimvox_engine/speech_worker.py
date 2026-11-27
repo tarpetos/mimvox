@@ -8,6 +8,9 @@ Ops (all params optional unless stated):
   load_asr    {"model":"turbo","allow_cuda":true}                              -> {"device","half","model","load_s"}
   transcribe  {"audio":"<.npy 16 kHz mono float32>"(required),"language":null|"uk","model":"turbo","allow_cuda":true}
               -> {"language","device","segments":[{start,end,text}]}
+  detect_language {"audio":"<.npy 16 kHz mono float32>"(required),"windows":[[start_s,end_s],...],"model":"turbo",
+                   "allow_cuda":true}
+              -> {"device","windows":[{"start","end","probs":{"<code>":p}}]} (each window's 5 likeliest languages)
   translate   {"texts":[...](required),"src":"ukr_Cyrl"(required),"tgt":"eng_Latn","allow_cuda":true,"num_beams":4,
                "translator":null|"nllb-1.3b"|"nllb-600m","join":false,"gaps":[s],"glossary":true}
               -> {"texts":[...],"device","untranslated":[i],"translator","model","joined":[[i]],"elapsed_s",
@@ -20,7 +23,7 @@ Ops (all params optional unless stated):
   release_gpu / unload                                                         -> {"free_gb"}
   status                                                                       -> {"asr","mt","sep","translators",
                                                                                    "rss_gb","peak_rss_gb","free_gb"}
-Progress replies: {"id":N,"progress":{"stage":"load_model|transcribe|translate|separate","pct":0-100}}.
+Progress replies: {"id":N,"progress":{"stage":"load_model|transcribe|detect_language|translate|separate","pct":0-100}}.
 Events: {"event":"ready"}, {"event":"unloaded","reason":"idle"} (models dropped after UNLOAD_S idle),
 {"event":"exit","reason":"idle"} (the process exits after EXIT_S idle).
 """
@@ -82,6 +85,7 @@ MERGE_MIN_CHARS = 50
 JOIN_MAX_TEXTS = 4
 JOIN_MAX_CHARS = 320
 JOIN_MAX_GAP_S = 2.5
+LANG_TOP = 5
 
 Cancelled = kit.Cancelled
 OpError = kit.OpError
@@ -360,6 +364,56 @@ def op_transcribe(req):
             for s in res.get("segments", [])
         ],
     }
+
+
+def _window_languages(slot, audio, spans):
+    torch = _torch()
+    import numpy as np
+    import whisper
+
+    model = slot.obj
+    half = next(model.parameters()).dtype == torch.float16
+    out = []
+    for k, (a, b) in enumerate(spans):
+        check_cancel()
+        clip = np.ascontiguousarray(audio[int(a * 16000) : int(b * 16000)], dtype=np.float32)
+        if len(clip) == 0:
+            continue
+        mel = whisper.log_mel_spectrogram(whisper.pad_or_trim(torch.from_numpy(clip)), n_mels=model.dims.n_mels)
+        mel = mel.to(model.device)
+        _, probs = model.detect_language(mel.half() if half else mel)
+        top = sorted(probs.items(), key=lambda kv: -kv[1])[:LANG_TOP]
+        out.append({"start": float(a), "end": float(b), "probs": {c: round(float(p), 4) for c, p in top}})
+        progress("detect_language", 100.0 * (k + 1) / len(spans))
+    return out
+
+
+def op_detect_language(req):
+    import numpy as np
+
+    audio = np.load(req["audio"])
+    spans = req.get("windows") or [[0.0, len(audio) / 16000]]
+    name = req.get("model", "turbo")
+    allow = req.get("allow_cuda", True)
+    for attempt in (1, 2):
+        check_cancel()
+        slot = ensure_asr(name, allow)
+        progress("detect_language", 0)
+        t1 = time.time()
+        try:
+            windows = _window_languages(slot, audio, spans)
+            break
+        except Cancelled:
+            raise
+        except Exception as exc:
+            if attempt == 1 and slot.half:
+                log(f"fp16 language detection failed ({type(exc).__name__}: {exc}); reloading with the stock loader")
+                _half_broken[0] = True
+                unload(ASR)
+                continue
+            raise
+    log(f"whisper heard the language of {len(windows)} window(s) in {time.time() - t1:.1f}s on {slot.device}")
+    return {"device": slot.device, "windows": windows}
 
 
 def _transformers_major():
@@ -857,6 +911,7 @@ def op_release(_req):
 OPS = {
     "load_asr": op_load_asr,
     "transcribe": op_transcribe,
+    "detect_language": op_detect_language,
     "translate": op_translate,
     "separate_vocals": op_separate_vocals,
     "status": op_status,

@@ -437,6 +437,7 @@ impl RecordState {
         }
         let typed = self.files.name.text.trim();
         let name = if typed.is_empty() { "My voice".to_owned() } else { typed.to_owned() };
+        // A stand-in: media.combine gives the new voice the language heard in the files.
         let language = self.lang().to_owned();
         if self.request(
             "voices.create",
@@ -449,7 +450,7 @@ impl RecordState {
     }
 
     fn files_combine(&mut self, voice_id: String, name: String, paths: &[PathBuf]) {
-        let mut params = json!({ "paths": paths });
+        let mut params = json!({ "paths": paths, "voice_id": voice_id, "language": "auto" });
         if let Some(on) = super::refmedia::saved_remove_music() {
             params["remove_music"] = json!(on);
         }
@@ -807,6 +808,10 @@ impl RecordState {
                         "Background music removed from {music} file{}.",
                         if music == 1 { "" } else { "s" }
                     ));
+                }
+                if v.get("language_set").and_then(Value::as_bool).unwrap_or(false) {
+                    notes.push(format!("Language: {} (heard in the files).", super::lang::name(st(v, "language"))));
+                    self.voices_dirty = true;
                 }
                 // A part number of its own, away from the reading parts (1, 2, ...), so neither replaces the other.
                 let part = 1000

@@ -2053,7 +2053,7 @@
     {
       "name": "media.combine",
       "summary": "Combine media files into one clean WAV",
-      "description": "Joins many audio/video files of one speaker into one cleaned mono 16-bit 44.1 kHz WAV under <data>/tmp/combined/ (at most 20 minutes). Unreadable files or files without clear speech are skipped; none usable is bad_request. A plain request without progress events.",
+      "description": "Joins many audio/video files of one speaker into one cleaned mono 16-bit 44.1 kHz WAV under <data>/tmp/combined/ (at most 20 minutes). Unreadable files or files without clear speech are skipped; none usable is bad_request. With language \"auto\" it also detects the language spoken in the result, and gives it to voice_id when that voice has no recordings yet. A plain request without progress events.",
       "job": false,
       "params": {
         "type": "object",
@@ -2080,6 +2080,21 @@
             ],
             "default": "auto",
             "description": "Remove background music: true (every file), false (never) or \"auto\" (null too): video files with an SNR under 35 dB, only on CUDA with no training holding the GPU"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "auto",
+              null
+            ],
+            "description": "\"auto\": detect the language spoken in the combined result with Whisper (up to 5 windows of 30 s over the whole result, their probabilities summed); left out or null: no detection"
+          },
+          "voice_id": {
+            "type": "string",
+            "description": "With language \"auto\": a voice with no recordings and no trained model takes the detected language"
           }
         },
         "required": [
@@ -2160,6 +2175,17 @@
               "type": "string",
               "description": "File name"
             }
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Language detected in the result (e.g. \"zh\"), null when not asked, unsure or Whisper is missing"
+          },
+          "language_set": {
+            "type": "boolean",
+            "description": "voice_id's language was set to the detected one"
           },
           "music_removed": {
             "type": "boolean",

@@ -5,18 +5,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import soundfile as sf
 
-from .. import aio, components, config, media, speech
+from .. import aio, components, config, media, reflang, speech
 from ..registry import Context, EngineError, method
 from . import pace, quality, store
-from ._audio import HOP_S, write_wav
+from ._audio import HOP_S, resample, write_wav
 
 log = logging.getLogger("mimvox.media_ref")
 
@@ -36,6 +38,10 @@ KEEP_TOTAL = 24
 N_SHOW, MAX_SHOW_PER_FILE = 5, 2
 # Measured: a clean recording has 40-60 dB here, speech over music 10-30 dB.
 AUTO_BACKGROUND_SNR_DB = 35.0
+ASR_SR = 16000
+LANG_WIN_S = 30.0  # Whisper hears 30 s at a time
+LANG_WINDOWS_GPU, LANG_WINDOWS_CPU = 5, 3
+LANG_MIN_SHARE = 0.5
 
 _RUNNING: dict[str, str] = {}  # voice id -> job id; loop thread only
 
@@ -351,6 +357,99 @@ def _language(ctx: Context, vid: str, value: Any) -> str | None:
     return None if code == own.split("-")[0] else code
 
 
+def language_windows(total_s: float, count: int, win_s: float = LANG_WIN_S) -> list[tuple[float, float]]:
+    """Up to ``count`` windows of ``win_s`` spread evenly from the pool's start to its end."""
+    if total_s <= win_s or count <= 1:
+        start = max((total_s - win_s) / 2.0, 0.0)
+        return [(round(start, 3), round(min(start + win_s, total_s), 3))]
+    n = min(count, math.ceil(total_s / win_s))
+    step = (total_s - win_s) / (n - 1)
+    return [(round(k * step, 3), round(k * step + win_s, 3)) for k in range(n)]
+
+
+def vote_language(windows: list[dict[str, Any]]) -> tuple[str | None, float]:
+    """(best code, its share): each window's probabilities summed, weighted by the seconds it heard."""
+    totals: dict[str, float] = {}
+    heard = 0.0
+    for w in windows:
+        span = max(float(w.get("end", 0.0)) - float(w.get("start", 0.0)), 0.0)
+        probs = w.get("probs") or {}
+        if span <= 0.0 or not probs:
+            continue
+        heard += span
+        for code, p in probs.items():
+            c = reflang.norm(code)
+            if c:
+                totals[c] = totals.get(c, 0.0) + span * float(p)
+    if not totals:
+        return None, 0.0
+    code, mass = max(totals.items(), key=lambda kv: kv[1])
+    return code, mass / heard
+
+
+def pick_language(windows: list[dict[str, Any]], speakable: Callable[[str], bool]) -> str | None:
+    code, share = vote_language(windows)
+    if code is None or share < LANG_MIN_SHARE or not speakable(code):
+        return None
+    return code
+
+
+def _speakable(code: str) -> bool:
+    from .. import backends
+    from . import lang
+
+    return code in lang.LANGUAGES or backends.for_language(code) is not None
+
+
+def _window_audio(pool: np.ndarray, spans: list[tuple[float, float]]) -> tuple[np.ndarray, list[list[float]]]:
+    """IO thread. The pool's windows at 16 kHz back to back, and where each one lies in that clip."""
+    clips: list[np.ndarray] = []
+    local: list[list[float]] = []
+    pos = 0
+    for a, b in spans:
+        y = resample(pool[int(a * SR) : int(b * SR)].astype(np.float32) / 32768.0, SR, ASR_SR)
+        clips.append(y)
+        local.append([round(pos / ASR_SR, 3), round((pos + len(y)) / ASR_SR, 3)])
+        pos += len(y)
+    return np.concatenate(clips), local
+
+
+async def detect_language(ctx: Context, pool: np.ndarray, gpu: bool) -> str | None:
+    """The language spoken in ``pool`` (16-bit, ``SR``); None when Whisper is unsure, missing or fails."""
+    data = config.data_dir(ctx)
+    if len(pool) == 0 or not await aio.run_io(speech.asr_path(data.root).is_file):
+        return None
+    spans = language_windows(len(pool) / SR, LANG_WINDOWS_GPU if gpu else LANG_WINDOWS_CPU)
+    npy = data.tmp / f"language-{time.time_ns():x}.npy"
+    try:
+        clip, local = await aio.run_io(_window_audio, pool, spans)
+        await aio.run_io(_save_npy, npy, clip)
+        del clip
+        res = await speech.get(ctx.runtime, data.root).detect_language(npy, local, gpu)
+    except speech.SpeechError as exc:
+        log.warning("language detection: %s", exc.message)
+        return None
+    except speech.Cancelled:
+        log.warning("language detection was interrupted")
+        return None
+    finally:
+        await aio.run_io(_remove, npy)
+    windows = list(res.get("windows") or [])
+    best, share = vote_language(windows)
+    code = pick_language(windows, _speakable)
+    log.info("language of %d window(s): %s (%s, %.0f %%)", len(windows), code or "not set", best, share * 100.0)
+    return code
+
+
+def _wants_language(params: dict[str, Any]) -> bool:
+    value = params.get("language")
+    if value is None:
+        return False
+    if value == "auto":
+        return True
+    raise EngineError("bad_request", "'language' must be \"auto\" or left out")
+
+
 def _paths(params: dict[str, Any]) -> list[Path]:
     paths = params.get("paths")
     if not isinstance(paths, list) or not paths or not all(isinstance(p, str) and p for p in paths):
@@ -395,8 +494,16 @@ async def reference_from_media(ctx: Context, params: dict[str, Any]) -> dict[str
 
 @method("media.combine")
 async def combine(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
+    from .. import voices
+
     paths = _paths(params)
-    sep = _Separator(ctx, _music_mode(params), f"combine-{time.time_ns():x}")
+    music = _music_mode(params)
+    detect = _wants_language(params)
+    data = config.data_dir(ctx)
+    vid = params.get("voice_id")
+    if vid is not None:
+        vid = str((await aio.run_io(voices.read_meta, data, str(vid)))["id"])
+    sep = _Separator(ctx, music, f"combine-{time.time_ns():x}")
     out_dir = Path(ctx.data_dir) / "tmp" / "combined"
     pieces: list[np.ndarray] = []
     files: list[dict[str, Any]] = []
@@ -437,9 +544,17 @@ async def combine(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
             "bad_request",
             "None of the files has usable speech: " + "; ".join(f"{x['name']}: {x['reason']}" for x in skipped),
         )
+    pool = await aio.run_io(np.concatenate, pieces)
+    pieces.clear()
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"combined-{time.strftime('%Y%m%d-%H%M%S')}-{len(files)}files.wav"
-    await aio.run_io(_write_pool, out, pieces)
+    await aio.run_io(_write_pool, out, [pool])
+    language, adopted = None, False
+    if detect and not (vid and await aio.run_io(voices.has_recordings, data, vid)):
+        language = await detect_language(ctx, pool, sep.gpu)
+        if language and vid:
+            adopted = await aio.run_io(voices.adopt_language, data, vid, language)
+    del pool
     log.info(
         "media.combine: %d file(s) -> %s (%.1f s), %d skipped, music removed from %d",
         len(files),
@@ -454,6 +569,8 @@ async def combine(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
         "files": files,
         "skipped": skipped,
         "unused": unused,
+        "language": language,
+        "language_set": adopted,
         **sep.summary(),
     }
 

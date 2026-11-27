@@ -264,6 +264,9 @@ grow with the length; cancel is checked per segment; progress per segment), and 
   says why (`music_removed`, `music_reason`).
 - On the GPU it is fast (45 s of audio in 0.6 s, 0.76 GB peak VRAM on an RTX 4070), so it fits next to OmniVoice and
   RVC; with less than 1.2 GB free it runs on the CPU. `release_gpu` drops it like Whisper and NLLB.
+- `media.combine` with `"language":"auto"` also asks the speech worker's `detect_language` (Whisper turbo) for the
+  language of up to 5 windows of 30 s spread over the cleaned result, sums their probabilities and gives an empty voice
+  (`voice_id`) the winner, so a voice made from files is in the language spoken in them, not the reading language.
 
 ## Training path
 
