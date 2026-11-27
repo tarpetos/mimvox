@@ -254,10 +254,11 @@ async def respeak(
     pitch: int = 0,
     zs: zsvc.Bound | None = None,
     timing: str = "keep",
+    backend: backends.TtsBackend | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Speech is never cut and two clips never overlap: a clip that does not fit pushes the following ones later, and
     the track grows past ``total_s`` when it must."""
-    backend = backends.for_language(lang)
+    backend = backend or backends.for_language(lang)
     if backend is None:
         raise EngineError("bad_request", f"no voice model speaks {lang!r}")
     if timing not in TIMINGS:

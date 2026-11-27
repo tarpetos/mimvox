@@ -416,7 +416,7 @@ def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str,
         raise EngineError("bad_request", "'exact_stress' must be true or false")
     model = params.get("model") or "auto"
     if model != "auto":
-        return lang, _named_model(model, lang)
+        return lang, named_model(model, lang)
     backend = backends.for_language(lang, skip=() if exact else ("holos",))
     if backend is None:
         raise EngineError(
@@ -425,7 +425,7 @@ def speech_language(params: dict[str, Any], key: str = "language") -> tuple[str,
     return lang, backend
 
 
-def _named_model(model: Any, lang: str) -> backends.TtsBackend:
+def named_model(model: Any, lang: str) -> backends.TtsBackend:
     backend = backends.by_name(model) if isinstance(model, str) else None
     if backend is None or backend.name == "holos":
         raise EngineError(

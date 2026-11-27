@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from mimvox_engine import backends, tts
 from mimvox_engine.backends import clone
+from mimvox_engine.redub import handlers
 from mimvox_engine.registry import EngineError
 
 TOOLS = Path(__file__).resolve().parents[2] / "tools" / "setup"
@@ -181,3 +182,29 @@ def test_a_small_card_keeps_less_vram_free(monkeypatch):
     monkeypatch.delenv("MIMVOX_VRAM_RESERVE_GB", raising=False)
     assert worker_kit.vram_reserve_gb(4 * 2**30) == worker_kit.SMALL_CARD_RESERVE_GB
     assert worker_kit.vram_reserve_gb(12 * 2**30) == worker_kit.VRAM_RESERVE_GB
+
+
+def redub_voice(model):
+    voice = handlers._Voice.__new__(handlers._Voice)
+    voice.model = model
+    return voice
+
+
+def test_redub_speaks_with_the_model_picked(tmp_path):
+    probe(install(tmp_path, "voxcpm", "chatterbox"))
+    assert handlers._model({"model": "chatterbox"}) == "chatterbox"
+    assert redub_voice("voxcpm").backend("pl") is clone.VOXCPM
+    with pytest.raises(EngineError) as e:
+        redub_voice("chatterbox").backend("uk")
+    assert e.value.code == "bad_request"
+    assert redub_voice("auto").backend("pl") is backends.for_language("pl")
+
+
+def test_redub_refuses_an_unknown_or_missing_model(tmp_path):
+    probe(install(tmp_path, "chatterbox"))
+    with pytest.raises(EngineError) as e:
+        handlers._model({"model": "voxcpm"})
+    assert e.value.code == "not_ready"
+    with pytest.raises(EngineError) as e:
+        handlers._model({"model": "holos"})
+    assert e.value.code == "bad_request"

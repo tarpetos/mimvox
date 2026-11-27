@@ -1507,7 +1507,11 @@ importable format, also video) and convert it themselves: the app never has to.
 
 ### `redub.dub` (the whole pipeline in one job)
 `{"path","voice_id","source_language":"auto","target_language":"en","translator":null,"review":false,"voice_match":1.0,"expressiveness":0.8,
-"quality":"best","speed":1.0,"timing":"keep","output_format"?:"wav","output"?:"audio","keep_background"?:false}` -> `{"job"}`
+"quality":"best","speed":1.0,"timing":"keep","output_format"?:"wav","output"?:"audio","keep_background"?:false,"model"?:"auto"}` -> `{"job"}`
+- `model` (`auto` | `omnivoice` | `voxcpm` | `chatterbox`, default `auto`) picks the voice-cloning model as for
+  `tts.generate`: `auto` is the first installed model that speaks the language (HolosTTS for Ukrainian, then OmniVoice,
+  VoxCPM2, Chatterbox); a named one that is not installed is `not_ready`, one that does not speak `target_language`
+  `bad_request`. `redub.render` (respeak) takes it the same way.
 - Decode -> transcribe in the source language -> translate every segment to `target_language` -> **speak** in that
   language (the same respeak render as `redub.render`, see below, with the translated segments at their original times)
   -> save. One job, one GPU slot for the whole run; the speech worker releases the GPU before the speak stage starts.
@@ -1548,7 +1552,7 @@ importable format, also video) and convert it themselves: the app never has to.
 ### `redub.render`
 `{"voice_id","path","mode":"convert|respeak","segments"?:[{"start","end","text"}],"language"?:"uk","translated"?:false,
 "voice_match":1.0,"expressiveness":0.8,"quality":"best","speed":1.0,"timing"?:"keep","output_format"?:"wav",
-"output"?:"audio","keep_background"?:false,"result_mode"?:"dub"}` -> `{"job"}`
+"output"?:"audio","keep_background"?:false,"result_mode"?:"dub","model"?:"auto"}` -> `{"job"}`
 - `result_mode: "dub"` (with `respeak`) only changes what the result's sidecar records: the finish of a reviewed
   Translate & dub is a respeak the app lists as a dub.
 - `convert`: the voice's RVC model is run over the **whole source** (voice, noise and music alike) in chunks of about

@@ -106,6 +106,24 @@ impl Run {
     }
 }
 
+/// The language Redub's speech is in, for the Model choice (none in Convert voice).
+pub fn speech_language(s: &AppState) -> Option<String> {
+    match s.redub.mode {
+        RedubMode::Dub => {
+            Some(s.redub.transcript_lang.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| s.redub.to.clone()))
+        }
+        RedubMode::Respeak => respeak_lang(s),
+        RedubMode::Convert => None,
+    }
+}
+
+fn with_model(s: &AppState, params: &mut serde_json::Value) {
+    let model = speech_language(s).map(|l| speak::model_for(s, &l)).unwrap_or_else(|| "auto".into());
+    if model != "auto" {
+        params["model"] = json!(model);
+    }
+}
+
 fn translating(s: &AppState) -> bool {
     s.redub.translate && super::setuprun::has(s, "translation")
 }
@@ -822,7 +840,7 @@ fn start_dub(s: &mut AppState) {
     }
     let (Some(src), Some(voice)) = (s.redub.file.clone(), shell::active_voice(s).cloned()) else { return };
     let out = formats::output_format(s);
-    let (method, params) = protocol::redub_dub(&RedubDubParams {
+    let (method, mut params) = protocol::redub_dub(&RedubDubParams {
         path: &src.path,
         voice_id: &voice.id,
         source_language: &s.redub.from,
@@ -838,6 +856,7 @@ fn start_dub(s: &mut AppState) {
         timing: timing(&s.redub),
         output: output(&s.redub),
     });
+    with_model(s, &mut params);
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
         return;
@@ -898,6 +917,7 @@ fn start_render(s: &mut AppState) {
     if mode == RedubMode::Dub {
         params["result_mode"] = json!("dub");
     }
+    with_model(s, &mut params);
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
         return;
@@ -2588,6 +2608,13 @@ fn scene_dub_ready(s: &mut AppState) {
     demo_history(s);
 }
 
+fn scene_model_menu(s: &mut AppState) {
+    scene_dub_ready(s);
+    speak::demo_models(s);
+    s.speak.model = "voxcpm".into();
+    s.speak.model_menu = true;
+}
+
 fn demo_video(s: &mut AppState) {
     if let Some(f) = s.redub.file.as_mut() {
         f.path = "/tmp/game-tour.mp4".into();
@@ -2913,6 +2940,7 @@ pub fn scenes() -> &'static [super::Scene] {
         ("redub_dub_done", scene_dub_done),
         ("redub_respeak_foreign", scene_respeak_foreign),
         ("redub_respeak_transcription", scene_respeak_transcription),
+        ("redub_model_menu", scene_model_menu),
         ("redub_respeak_no_translation", scene_respeak_no_translation),
         ("redub_empty", scene_empty),
         ("redub_drop_hover", scene_drop_hover),

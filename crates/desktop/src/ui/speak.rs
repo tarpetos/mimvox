@@ -172,7 +172,7 @@ pub struct SpeakState {
     pub exact_stress: bool,
     pub model: String,
     model_dirty: bool,
-    model_menu: bool,
+    pub(crate) model_menu: bool,
     speed_loaded: bool,
     /// What `speak-text.txt` holds, so the text is written only when it changed.
     text_saved: Option<String>,
@@ -1006,12 +1006,12 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
     // Redub shares this panel but chooses its languages itself.
     if s.screen == Screen::Speak {
         c = c.child(language_row(s, p));
-        if let Some(row) = model_row(s, p) {
-            c = c.child(row);
-        }
-        if accent_applies(s, &language(s)) {
-            c = c.child(accent_block(s, p, "speak-accent"));
-        }
+    }
+    if let Some(row) = model_row(s, p) {
+        c = c.child(row);
+    }
+    if s.screen == Screen::Speak && accent_applies(s, &language(s)) {
+        c = c.child(accent_block(s, p, "speak-accent"));
     }
     // Ukrainian with exact stress (HolosTTS) reads like a narrator: no sampling to make livelier, no decoding steps.
     let narrator = s.screen == Screen::Speak && exact_ukrainian(s);
@@ -1032,9 +1032,22 @@ pub(crate) fn style_panel(s: &AppState, p: Palette) -> El {
 }
 
 pub fn model(s: &AppState) -> String {
-    let code = language(s);
-    let ok = s.shell.speech_models.iter().any(|m| m.id == s.speak.model && m.languages.contains(&code));
+    model_for(s, &language(s))
+}
+
+/// The Model choice for text in `code`: Auto when the chosen model does not speak it.
+pub fn model_for(s: &AppState, code: &str) -> String {
+    let ok = s.shell.speech_models.iter().any(|m| m.id == s.speak.model && m.languages.iter().any(|l| l == code));
     if ok { s.speak.model.clone() } else { "auto".into() }
+}
+
+/// Speak's language, or the language Redub speaks (none in Convert voice).
+fn model_language(s: &AppState) -> Option<String> {
+    match s.screen {
+        Screen::Speak => Some(language(s)),
+        Screen::Redub => super::redub::speech_language(s),
+        _ => None,
+    }
 }
 
 fn model_help(id: &str) -> &'static str {
@@ -1065,8 +1078,8 @@ fn model_row(s: &AppState, p: Palette) -> Option<El> {
     if s.shell.speech_models.len() < 2 {
         return None;
     }
-    let code = language(s);
-    let chosen = model(s);
+    let code = model_language(s)?;
+    let chosen = model_for(s, &code);
     let unsupported = (s.speak.model != "auto" && chosen == "auto")
         .then(|| s.shell.speech_models.iter().find(|m| m.id == s.speak.model))
         .flatten()
@@ -1102,14 +1115,15 @@ fn model_row(s: &AppState, p: Palette) -> Option<El> {
 }
 
 pub fn model_overlay(s: &AppState, p: Palette) -> Option<El> {
-    if !s.speak.model_menu || s.screen != Screen::Speak {
+    if !s.speak.model_menu {
         return None;
     }
+    let code = model_language(s)?;
     let scrim = el()
         .key("speak-model-scrim")
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
         .on_press(|s: &mut AppState| s.speak.model_menu = false);
-    let chosen = model(s);
+    let chosen = model_for(s, &code);
     let mut ids = vec!["auto".to_owned()];
     ids.extend(s.shell.speech_models.iter().map(|m| m.id.clone()));
     let mut list = col().w_full().gap(2.0);
@@ -1178,6 +1192,9 @@ pub fn model_languages(s: &AppState) -> Option<&[String]> {
 fn pick_model(s: &mut AppState, id: &str) {
     s.speak.model = id.to_owned();
     s.speak.model_dirty = true;
+    if s.screen != Screen::Speak {
+        return;
+    }
     let Some(langs) = model_languages(s).map(<[String]>::to_vec) else { return };
     if langs.contains(&language(s)) {
         return;
@@ -1602,7 +1619,7 @@ pub fn scene_language_uk(s: &mut AppState) {
     s.speak.languages.insert("me".into(), "uk".into());
 }
 
-fn demo_models(s: &mut AppState) {
+pub(crate) fn demo_models(s: &mut AppState) {
     use crate::engine::protocol::SpeechModel;
     let model = |id: &str, name: &str, langs: &[&str]| SpeechModel {
         id: id.into(),
