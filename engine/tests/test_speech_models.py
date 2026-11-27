@@ -131,3 +131,53 @@ def test_the_runtime_folder_is_found_without_applio_or_omnivoice(tmp_path):
 
     py = tmp_path / "runtime" / "engine" / ".venv" / "bin" / "python"
     assert config.runtime_root({"python": {"engine": str(py)}, "paths": {}}) == tmp_path / "runtime"
+
+
+def test_a_model_that_does_not_fit_on_the_gpu_moves_to_the_processor(tmp_path, monkeypatch):
+    import asyncio
+
+    from mimvox_engine.workerproc import WorkerError
+
+    b = clone.CHATTERBOX
+    runtime = install(tmp_path, "chatterbox")
+    runtime["device"] = {"backend": "cuda"}
+    b.probe(runtime)
+    monkeypatch.setattr(b, "_cpu", False)
+    monkeypatch.setattr(b, "_client", None)
+    made = []
+
+    class Client:
+        def __init__(self, device):
+            self.device, self.calls = device, []
+
+        async def call(self, op, params, **kw):
+            self.calls.append(op)
+            if self.device == "cuda":
+                raise WorkerError("no_vram", "no room")
+            return {"op": op}
+
+        async def stop(self):
+            pass
+
+    def ensure(self):
+        if self._client is None:
+            self._client = Client(self._device())
+            made.append(self._client)
+        return self._client
+
+    async def nothing_to_stop(_client):
+        return []
+
+    monkeypatch.setattr(clone.WorkerBackend, "_ensure_client", ensure)
+    monkeypatch.setattr(clone, "stop_idle", nothing_to_stop)
+    assert asyncio.run(b._call("synth", {})) == {"op": "synth"}
+    assert [c.device for c in made] == ["cuda", "cpu"]
+    assert made[1].calls == ["load", "synth"]
+
+
+def test_a_small_card_keeps_less_vram_free(monkeypatch):
+    from mimvox_engine import worker_kit
+
+    monkeypatch.delenv("MIMVOX_VRAM_RESERVE_GB", raising=False)
+    assert worker_kit.vram_reserve_gb(4 * 2**30) == worker_kit.SMALL_CARD_RESERVE_GB
+    assert worker_kit.vram_reserve_gb(12 * 2**30) == worker_kit.VRAM_RESERVE_GB

@@ -32,6 +32,8 @@ class OpError(Exception):
 # into system RAM instead of failing, starving the desktop; so every worker caps its PyTorch allocator itself.
 
 VRAM_RESERVE_GB = float(os.environ.get("MIMVOX_VRAM_RESERVE_GB", "1.5"))
+# Measured on a 4 GB GTX 1650: the 1.5 GB reserve left Chatterbox 2.6 GB, too little to speak a sentence.
+SMALL_CARD_GB, SMALL_CARD_RESERVE_GB = 6.0, 0.5
 # Measured: an idle Mimvox that kept its workers held 19 GB of commit and 6.6 GB of RAM. 0 keeps workers forever.
 IDLE_EXIT_S = float(os.environ.get("MIMVOX_IDLE_EXIT_S", "600"))
 NO_VRAM = "not enough free GPU memory: close programs that use the graphics card (games, video, browsers) and try again"
@@ -80,8 +82,17 @@ def gpu_free_gb():
     torch = _cuda_torch(start=True)
     if torch is None:
         return 0.0
-    free, _total = torch.cuda.mem_get_info()
-    return max(0.0, free / 2**30 - VRAM_RESERVE_GB)
+    free, total = torch.cuda.mem_get_info()
+    return max(0.0, free / 2**30 - vram_reserve_gb(total))
+
+
+def vram_reserve_gb(total=None):
+    if "MIMVOX_VRAM_RESERVE_GB" in os.environ:
+        return VRAM_RESERVE_GB
+    if total is None:
+        torch = _cuda_torch()
+        total = torch.cuda.mem_get_info()[1] if torch is not None else None
+    return SMALL_CARD_RESERVE_GB if total is not None and total / 2**30 <= SMALL_CARD_GB else VRAM_RESERVE_GB
 
 
 def gpu_fence(start=False):
@@ -92,7 +103,7 @@ def gpu_fence(start=False):
     try:
         free, total = torch.cuda.mem_get_info()
         held = torch.cuda.memory_reserved()
-        allow = held + max(0, free - int(VRAM_RESERVE_GB * 2**30))
+        allow = held + max(0, free - int(vram_reserve_gb(total) * 2**30))
         torch.cuda.set_per_process_memory_fraction(max(0.01, min(1.0, allow / total)))
         return allow / 2**30
     except Exception:

@@ -220,7 +220,7 @@ def _whisper_device():
         kit.gpu_fence(start=True)
         return "cuda"
     _log(
-        f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (Whisper needs "
+        f"only {free:.1f} GB of VRAM free beyond the {kit.vram_reserve_gb():.1f} GB reserve (Whisper needs "
         f"{WHISPER_NEED_GB:.1f}): transcribing the reference on the CPU"
     )
     return "cpu"
