@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+* **Redub without the translation model:** Re-speak's **Translate the transcript** is disabled, with the install card
+  under it, instead of failing with *The engine is still loading its models*. Speak and Redub now show the engine's
+  own reason when something is not installed, instead of that message.
+
 ## 0.6.1
 
 * **Linux:** the window no longer has a second, grey title bar above its own on GNOME (Wayland): it draws its own
