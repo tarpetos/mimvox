@@ -98,3 +98,13 @@ the caption cells' width, and the app's buttons are ordinary elements under the 
 
 Touched: `src/window/chrome.rs`, `src/window/create.rs`, `src/window/events.rs`, `src/window/native.rs`,
 `src/input/cursor/os.rs` (`OsCursor::forget`). Lines are marked `PATCH`.
+
+### Patch 8: an element without a transition of its own leaves at once
+
+Upstream gives every element a 0.2 s fade in and a 0.15 s fade out. When the app swaps one element for another in the
+same place (Turn off / Remove for a delete confirmation, one version's notes for another's), the old one kept fading
+out over the new one, and a card that lost children shrank while they were still drawn, so they stuck out of it. The
+default now fades in as before and removes at once (`default_transition`: the exit spring is `Spring::NONE`).
+Elements that set `El::transition` (menus, popovers, toasts) keep theirs.
+
+Touched: `src/runtime/commit/apply.rs`. Lines are marked `PATCH`.
