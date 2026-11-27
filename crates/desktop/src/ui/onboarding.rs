@@ -261,7 +261,7 @@ pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
     }
     let (title, detail) = if running {
         let step = setuprun::current(s).map(|st| st.label.clone()).unwrap_or_else(|| "Starting…".into());
-        (format!("Updating the runtime: {step}"), setuprun::last_line(s).unwrap_or("").to_owned())
+        (format!("Updating the runtime: {step}"), setuprun::status_line(s))
     } else if let setuprun::Phase::Error(e) = &s.setup.phase {
         ("The setup update stopped".to_owned(), e.clone())
     } else if s.setup.phase == setuprun::Phase::Stopped {

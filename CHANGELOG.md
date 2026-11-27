@@ -10,8 +10,9 @@
   `redub.render` take `model`.
 * **Setup's progress bar** no longer leaps to the end: setup checks which parts are already installed before it
   starts, and a part that downloads less than its estimate keeps the bar where it is.
-* **Setup's status line** shows a download's progress as text (*model.safetensors: 41% · 1.35G/3.30G · 01:01 left*)
-  instead of a terminal progress bar.
+* **Setup's status line** counts what the running part has downloaded (*Downloaded 412 MB of about 900 MB*) instead
+  of a file counter that stays at *0/3* until a file is complete, and shows other progress as text instead of a
+  terminal progress bar.
 
 ## 0.6.1
 
