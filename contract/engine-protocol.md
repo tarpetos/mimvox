@@ -905,7 +905,9 @@ environment (`backends/voxcpm_worker.py`, `backends/chatterbox_worker.py`, shari
 - **Loading.** A model loads on its first use (the `models` event does not cover it), and only one of the two is
   loaded at a time: the other's worker ends first. When the card is still short of memory after the idle workers
   released their models (`no_vram`), the idle worker processes end too and the request is tried once more; they start
-  again on their next request. On a 12 GB card a switch between models costs 10-20 s.
+  again on their next request. A model that still does not fit runs on the processor until the engine restarts (a
+  4 GB GTX 1650: Chatterbox about 90 s for a sentence). A card of 6 GB or less keeps 0.5 GB of VRAM free instead of
+  1.5 GB (`MIMVOX_VRAM_RESERVE_GB` sets it). On a 12 GB card a switch between models costs 10-20 s.
 - **Reference.** The worker clones from the clip (`reference_<lang>.wav` when it exists). VoxCPM2 clones best from the
   clip together with what it says: it uses the stretch of the clip Whisper transcribed (its `.omnivoice.json`), and
   asks the OmniVoice worker to transcribe the clip first when there is no transcript yet (Whisper only: the worker
