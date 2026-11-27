@@ -19,7 +19,10 @@
   stopped instead of showing the last download line as an error.
 * **After the first setup** the app opens **Record**, not the empty voice list.
 * **While setup runs** the "voice engine stopped" banner with its **Retry** no longer shows: the engine starts again by
-  itself when setup is done.
+  itself when setup is done. The status button and **Settings** say *Setting up · 43%* instead of *Engine stopped*,
+  without **Retry**.
+* The start screen no longer shows the voice menu, and its status button only shows the state there (*Not
+  installed*, *Setting up · 43%*, *Setup stopped*): Settings opens after **Get started**.
 * **Linux microphones:** the list shows each microphone once by its name (*HD-Audio Generic · ALC897 Analog*)
   instead of ALSA's plugins and device codes (*pipewire*, *hw:CARD=Generic,DEV=0*).
 * Speak's **Clear the text** button stays in place, disabled, when there is no text.
