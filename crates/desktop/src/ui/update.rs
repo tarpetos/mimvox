@@ -816,14 +816,15 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
     }
     let older = order == Ordering::Less;
     let mut foot = foot;
-    if older {
+    if older && kind != Kind::Never {
         foot = foot.child(kit::notice(&p, Tone::Warning,
             "An older version: what came after it is gone until you update again. Your voices, results and settings stay, \
              and it offers the newest version again when it starts."));
     }
     let version = v.to_owned();
+    // Without an installer to run, the header's Release page is the way to a version: no second button for it.
     let button = match kind {
-        Kind::Auto => {
+        Kind::Auto => Some({
             let label = if older { format!("Install {v}") } else { format!("Update to {v}") };
             let b = Button::new(label)
                 .small()
@@ -832,20 +833,19 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
                 .disabled(downloading(s))
                 .on_press(move |s| start_install(s, version.clone()));
             if older { b.secondary() } else { b.primary() }
-        }
-        Kind::Manual | Kind::Never => Button::new("Download page")
-            .primary()
-            .small()
-            .icon(&icons::OPEN)
-            .key("updates-install")
-            .on_press(move |s| s.update.open = Some(update::release_page(&version))),
+        }),
+        Kind::Manual | Kind::Never => None,
     };
     let note = if downloading(s) {
         "Another version is downloading."
-    } else if kind == Kind::Auto {
-        "It downloads in the background and installs when you close Mimvox (or at once with Restart now)."
     } else {
-        ""
+        match kind {
+            Kind::Auto => {
+                "It downloads in the background and installs when you close Mimvox (or at once with Restart now)."
+            }
+            Kind::Manual => "Release page (above) has its installers.",
+            Kind::Never => "A development build installs nothing: Release page (above) has the installers.",
+        }
     };
     foot.child(
         row()
@@ -853,7 +853,7 @@ fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
             .gap(10.0)
             .center_y()
             .child(text(note).font(ty::CAPTION).color(p.text_faint).wrap().grow(1.0).min_w(0.0))
-            .child(button.build(p)),
+            .children(button.map(|b| b.build(p))),
     )
 }
 
@@ -909,6 +909,11 @@ pub fn scene_newer(s: &mut AppState) {
     s.update.checked = Some((Tone::Accent, "Mimvox 0.6.2 is available.".into()));
 }
 
+pub fn scene_dev(s: &mut AppState) {
+    scene_older(s);
+    s.update.kind = Some(Kind::Never);
+}
+
 pub fn scene_older(s: &mut AppState) {
     demo(s, true);
     s.update.selected = Some("0.2.0".into());
@@ -935,6 +940,7 @@ pub fn scenes() -> &'static [super::Scene] {
     &[
         ("updates_newer", scene_newer),
         ("updates_older", scene_older),
+        ("updates_dev", scene_dev),
         ("updates_downloading", scene_downloading),
         ("updates_loading", scene_loading),
         ("updates_waiting", scene_waiting),
