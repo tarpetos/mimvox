@@ -485,7 +485,7 @@ def test_a_step_reports_progress_from_what_it_writes(tmp_path, monkeypatch, caps
     time.sleep(1.1)
     assert meter.stop() == pytest.approx(6.0)
     sent = [json.loads(line.removeprefix("@@mimvox ")) for line in capsys.readouterr().out.splitlines()]
-    assert sent[0] == {"event": "progress", "id": "omnivoice", "done": 0.5}
+    assert sent[0] == {"event": "progress", "id": "omnivoice", "done": 0.5, "gb": 1.0}
     assert sent[-1]["done"] == 0.97
 
 
@@ -494,3 +494,18 @@ def test_step_sizes_follow_the_device(tmp_path):
     assert gpu.step_gb("engine_env") > cpu.step_gb("engine_env")
     assert cpu.step_gb("chatterbox_models") == setup.CLONE_MODELS["chatterbox"]["download_gb"]
     assert cpu.step_gb("runtime_toml") == 0.05
+
+
+def test_a_step_already_in_place_is_known_before_the_run(tmp_path):
+    s = make(tmp_path / "data")
+    assert not s.step_present("whisper")
+    whisper = s.models_dir / "whisper" / setup.WHISPER_FILE
+    whisper.parent.mkdir(parents=True)
+    whisper.write_bytes(b"x")
+    assert s.step_present("whisper")
+    assert not s.step_present("chatterbox_models")
+    stamp = s.clone_models_dir("chatterbox") / setup.CLONE_STAMP
+    stamp.parent.mkdir(parents=True)
+    stamp.write_text("ok")
+    assert s.step_present("chatterbox_models")
+    assert not s.step_present("runtime_toml")

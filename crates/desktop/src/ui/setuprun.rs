@@ -35,6 +35,8 @@ pub struct Step {
     pub done: f32,
     /// False when it found everything in place: left out of the progress.
     pub work: bool,
+    /// GB it wrote so far, as setup measures it.
+    pub written: Option<f32>,
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -434,6 +436,7 @@ fn on_event(s: &mut AppState, v: &Value) {
                             gb: st.get("gb").and_then(Value::as_f64).unwrap_or(0.2) as f32,
                             done: 0.0,
                             work: true,
+                            written: None,
                         })
                         .collect()
                 })
@@ -451,12 +454,16 @@ fn on_event(s: &mut AppState, v: &Value) {
                 step.state = state;
                 step.message = v.get("message").and_then(Value::as_str).map(str::to_owned);
                 step.work = v.get("work").and_then(Value::as_bool).unwrap_or(true);
+                if let Some(gb) = v.get("gb").and_then(Value::as_f64) {
+                    step.written = Some(gb as f32);
+                }
             }
         }
         Some("progress") => {
             let id = str_of("id");
             if let Some(step) = s.setup.steps.iter_mut().find(|st| st.id == id) {
                 step.done = v.get("done").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+                step.written = v.get("gb").and_then(Value::as_f64).map(|g| g as f32);
             }
         }
         Some("done") => s.setup.phase = Phase::Finished(v.get("ok").and_then(Value::as_bool).unwrap_or(false)),
@@ -528,13 +535,20 @@ pub fn stop_on_exit() {
 pub fn progress(s: &AppState) -> f32 {
     let counted = s.setup.steps.iter().filter(|st| st.work || !matches!(st.state, StepState::Ok | StepState::Skipped));
     let (mut total, mut done) = (0.0, 0.0);
+    // A finished step weighs what it wrote and a running one at least that, so a size guessed wrong never jumps.
     for st in counted {
-        total += st.gb;
-        done += match st.state {
-            StepState::Waiting => 0.0,
-            StepState::Running => st.gb * st.done,
-            _ => st.gb,
+        let (weight, part) = match (st.state, st.written) {
+            (StepState::Waiting, _) => (st.gb, 0.0),
+            (StepState::Running, Some(w)) => {
+                let weight = st.gb.max(w);
+                (weight, w.min(weight * 0.97))
+            }
+            (StepState::Running, None) => (st.gb, st.gb * st.done),
+            (_, Some(w)) => (w.max(0.01), w.max(0.01)),
+            (_, None) => (st.gb, st.gb),
         };
+        total += weight;
+        done += part;
     }
     if total > 0.0 { (done / total).clamp(0.0, 1.0) } else { 0.0 }
 }
@@ -634,6 +648,7 @@ pub fn scene_running(s: &mut AppState) {
             message: None,
             gb: 1.0,
             work: true,
+            written: None,
         })
         .collect();
     s.setup.log = [
@@ -917,6 +932,24 @@ mod tests {
         feed(&mut s, serde_json::json!({"event": "step", "id": "chatterbox_env", "state": "run"}));
         feed(&mut s, serde_json::json!({"event": "progress", "id": "chatterbox_env", "done": 0.5}));
         assert!((progress(&s) - 0.65 / 4.3).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_step_that_wrote_less_than_its_size_does_not_jump_the_bar() {
+        let mut s = AppState::default();
+        s.setup.phase = Phase::Running;
+        let plan = serde_json::json!({"event": "plan", "steps": [
+            {"id": "holos_env", "label": "Ukrainian speech: environment", "gb": 0.6},
+            {"id": "holos_models", "label": "Ukrainian speech: models", "gb": 0.9},
+            {"id": "chatterbox_env", "label": "Chatterbox: environment", "gb": 0.05},
+        ]});
+        feed(&mut s, plan);
+        feed(&mut s, serde_json::json!({"event": "step", "id": "holos_env", "state": "run"}));
+        feed(&mut s, serde_json::json!({"event": "progress", "id": "holos_env", "done": 0.17, "gb": 0.1}));
+        let running = progress(&s);
+        feed(&mut s, serde_json::json!({"event": "step", "id": "holos_env", "state": "ok", "work": true, "gb": 0.1}));
+        let after = progress(&s);
+        assert!(after >= running && after - running < 0.05, "{running} -> {after}");
     }
 
     #[test]

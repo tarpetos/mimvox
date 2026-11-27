@@ -8,6 +8,8 @@
 * **Redub's Model choice:** the Style panel shows **Model** in Translate & dub and Re-speak too (the same choice as
   Speak), and Redub speaks with the model picked instead of always using *Auto*. For programs, `redub.dub` and
   `redub.render` take `model`.
+* **Setup's progress bar** no longer leaps to the end: setup checks which parts are already installed before it
+  starts, and a part that downloads less than its estimate keeps the bar where it is.
 * **Setup's status line** shows a download's progress as text (*model.safetensors: 41% · 1.35G/3.30G · 01:01 left*)
   instead of a terminal progress bar.
 

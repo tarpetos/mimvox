@@ -409,7 +409,7 @@ class StepMeter:
             done = min(self.written_gb() * 1e9 / self.expected, 0.97)
             if done - sent >= 0.005:
                 sent = done
-                event(event="progress", id=self.step, done=round(done, 3))
+                event(event="progress", id=self.step, done=round(done, 3), gb=round(self.written_gb(), 3))
 
     def stop(self) -> float:
         self._stop.set()
@@ -774,6 +774,33 @@ class Setup:
             sizes[f"{name}_env"] = COMPONENTS[name] - float(spec["download_gb"])
             sizes[f"{name}_models"] = float(spec["download_gb"])
         return sizes.get(step, 0.05)
+
+    def step_present(self, step: str) -> bool:
+        """What a step would find in place, checked before the run so the app's progress leaves it out."""
+        models = self.models_dir
+        checks: dict[str, Callable[[], bool]] = {
+            "toolchain": lambda: True,
+            "applio_source": (self.applio / ".git").exists,
+            "engine_env": lambda: self.engine_python().exists(),
+            "omnivoice": lambda: self._has(self.omnivoice_model, OMNIVOICE_REQUIRED),
+            "whisper": (models / "whisper" / WHISPER_FILE).is_file,
+            "speech_models": lambda: self._has(models / NLLB_DIR, NLLB_REQUIRED),
+            "better_translation": self.has_better_translation,
+            "separation": (models / DEMUCS_DIR / DEMUCS_FILE).is_file,
+            "zero_shot_vc": self.has_zero_shot_vc,
+            "holos_env": lambda: self.holos_python().exists(),
+            "holos_models": (self.holos_models / HOLOS_STAMP).is_file,
+            "applio_env": lambda: self.rvc_python().exists(),
+            "applio_models": lambda: self._has(self.applio, self.applio_required()),
+        }
+        for name in CLONE_MODELS:
+            checks[f"{name}_env"] = lambda n=name: self.clone_python(n).exists()
+            checks[f"{name}_models"] = lambda n=name: (self.clone_models_dir(n) / CLONE_STAMP).is_file()
+        check = checks.get(step)
+        try:
+            return bool(check and check())
+        except OSError:
+            return False
 
     def env(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
         env = dict(os.environ)
@@ -2836,7 +2863,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan.append(("applio_models", "Voice training: models"))
     plan.append(("runtime_toml", "Finishing"))
     labels = dict(plan)
-    event(event="plan", steps=[{"id": i, "label": label, "gb": round(setup.step_gb(i), 2)} for i, label in plan])
+    event(
+        event="plan",
+        steps=[
+            {"id": i, "label": label, "gb": 0.05 if setup.step_present(i) else round(setup.step_gb(i), 2)}
+            for i, label in plan
+        ],
+    )
 
     def attempt(step_id: str, step) -> bool:  # noqa: ANN001 - a bound method
         event(event="step", id=step_id, state="run")
@@ -2852,7 +2885,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         finally:
             wrote = meter.stop() if meter else 0.0
         # A step that found everything in place wrote nothing: the app leaves it out of the progress.
-        event(event="step", id=step_id, state="ok", work=wrote >= 0.05)
+        event(event="step", id=step_id, state="ok", work=wrote >= 0.05, gb=round(wrote, 3))
         return True
 
     def skipped(*step_ids: str) -> None:
