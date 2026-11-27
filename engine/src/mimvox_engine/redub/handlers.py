@@ -446,6 +446,13 @@ def _record(
     )
 
 
+def _model(params: dict[str, Any]) -> str:
+    model = params.get("model") or "auto"
+    if model != "auto" and not any(b.name == model for b in backends.selectable()):
+        tts.named_model(model, "")
+    return model
+
+
 class _Voice:
     def __init__(self, ctx: Context, data: config.DataDir, params: dict[str, Any]) -> None:
         self.voice_id = str(params.get("voice_id") or "")
@@ -461,6 +468,7 @@ class _Voice:
         self.timing = params.get("timing") or "keep"
         if self.timing not in render.TIMINGS:
             raise EngineError("bad_request", '\'timing\' must be "keep" or "natural"')
+        self.model = _model(params)
         self.pth, self.idx = data.rvc_model(self.voice_id)
         self.trained = self.pth.is_file()
         self.ref = data.reference(self.voice_id)
@@ -502,13 +510,19 @@ class _Voice:
             how["zs"] = tts.zero_shot(self.ctx, choice, self.zs_worker, self.ref, self.quality)
         return {**choice.fields(), **native.fields()}, how
 
+    def backend(self, lang: str) -> backends.TtsBackend:
+        if self.model != "auto":
+            return tts.named_model(self.model, lang)
+        backend = backends.for_language(lang)
+        if backend is None:
+            raise EngineError("bad_request", f"no voice model speaks {lang!r}")
+        return backend
+
     def respeak_worker(self, lang: str = "en") -> rvc.RvcWorker | None:
         st = tts.models_status()
         if not self.ref.is_file():
             raise EngineError("not_found", "this voice has no recording yet (reference.wav is missing)")
-        backend = backends.for_language(lang)
-        if backend is None:
-            raise EngineError("bad_request", f"no voice model speaks {lang!r}")
+        backend = self.backend(lang)
         try:
             tts.check_backend_ready(backend)
         except EngineError as exc:
@@ -542,6 +556,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
     forced = out.video and voice.timing != "keep"  # the picture does not wait
     if out.video:
         voice.timing = "keep"
+    voice.backend(target)
     worker = None if review else voice.respeak_worker(target)
     choice = voice.accent_for(target)
     await aio.run_io(_check_speech_ready, data, lang != target)
@@ -615,6 +630,7 @@ async def redub_dub(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                 pitch=how.get("pitch", 0),
                 zs=how.get("zs"),
                 timing=voice.timing,
+                backend=voice.backend(target),
             )
             accent_fields.update(await voice.ref_fields(accent.Choice(accent_fields["accent"]), target))
             saved, final, vfields = await _finish(data, path, track, stems, out, out_fmt, emit, workdir, target, note)
@@ -759,6 +775,7 @@ async def redub_render(ctx: Context, params: dict[str, Any]) -> dict[str, Any]:
                     pitch=how.get("pitch", 0),
                     zs=how.get("zs"),
                     timing=voice.timing,
+                    backend=voice.backend(lang),
                 )
                 extra = {k: stats[k] for k in _STATS}
                 extra["language"] = lang

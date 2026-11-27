@@ -5,6 +5,9 @@
 * **Redub without the translation model:** Re-speak's **Translate the transcript** is disabled, with the install card
   under it, instead of failing with *The engine is still loading its models*. Speak and Redub now show the engine's
   own reason when something is not installed, instead of that message.
+* **Redub's Model choice:** the Style panel shows **Model** in Translate & dub and Re-speak too (the same choice as
+  Speak), and Redub speaks with the model picked instead of always using *Auto*. For programs, `redub.dub` and
+  `redub.render` take `model`.
 * **Setup's status line** shows a download's progress as text (*model.safetensors: 41% · 1.35G/3.30G · 01:01 left*)
   instead of a terminal progress bar.
 
