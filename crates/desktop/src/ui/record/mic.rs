@@ -29,8 +29,10 @@ pub enum Test {
 
 #[derive(Default)]
 pub struct MicState {
-    /// Input device names; the first is the system default.
+    /// Input device names; except on Linux, the first is the system default.
     pub devices: Vec<String>,
+    /// What the list shows for each of `devices` (empty: the names).
+    pub labels: Vec<String>,
     pub loaded: bool,
     listing: bool,
     pub open: bool,
@@ -57,8 +59,10 @@ impl RecordState {
         }
         let spawned = std::thread::Builder::new().name("mic-list".into()).spawn(move || {
             let list = guard(|| Ok(audio::input_devices())).unwrap_or_default();
+            let labels = list.iter().map(|d| audio::device_label(d)).collect();
             events::post(move |s| {
                 s.record.mic.listing = false;
+                s.record.mic.labels = labels;
                 s.record.mic_apply_devices(list);
             });
         });
@@ -219,8 +223,13 @@ pub fn settle(s: &mut AppState) -> bool {
     changed
 }
 
+fn label(r: &RecordState, name: &str) -> String {
+    let at = r.mic.devices.iter().position(|d| d == name);
+    at.and_then(|i| r.mic.labels.get(i)).cloned().unwrap_or_else(|| name.to_owned())
+}
+
 fn current_label(r: &RecordState) -> String {
-    r.input_device.clone().unwrap_or_else(|| "System default".to_string())
+    r.input_device.as_deref().map_or_else(|| "System default".to_string(), |d| label(r, d))
 }
 
 pub fn chip(r: &RecordState, p: Pal) -> El {
@@ -332,7 +341,8 @@ pub fn overlay(r: &RecordState, p: Pal) -> Option<El> {
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
         .on_press(|s: &mut AppState| s.record.mic_set_open(false));
 
-    let default_name = r.mic.devices.first().cloned();
+    let first_is_default = !cfg!(target_os = "linux");
+    let default_name = r.mic.devices.first().filter(|_| first_is_default).map(|d| label(r, d));
     let mut list = col().w_full().gap(2.0).child(device_row(
         p,
         "mic-default".into(),
@@ -345,8 +355,8 @@ pub fn overlay(r: &RecordState, p: Pal) -> Option<El> {
         list = list.child(device_row(
             p,
             format!("mic-dev-{i}"),
-            d.clone(),
-            (i == 0).then(|| "System default device".to_string()),
+            label(r, d),
+            (first_is_default && i == 0).then(|| "System default device".to_string()),
             r.input_device.as_deref() == Some(d.as_str()),
             Some(d.clone()),
         ));

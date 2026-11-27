@@ -767,12 +767,10 @@ fn text_panel(s: &AppState, p: Palette, cx: &mut Cx<AppState>) -> El {
         s.speak.text.focused = true;
     });
     // Set apart from undo and redo: it is the destructive one.
-    let clear = (!s.speak.text.text.is_empty()).then(|| {
-        icon_button(p, "speak-clear", &icons::TRASH, "Clear the text", |s: &mut AppState| {
-            replace_text(&mut s.speak.text, "")
-        })
-        .ml(8.0)
-    });
+    let clear = icon_button_if(p, "speak-clear", &icons::TRASH, "Clear the text", !s.speak.text.text.is_empty(), |s| {
+        replace_text(&mut s.speak.text, "")
+    })
+    .ml(8.0);
     let head = row()
         .key("speak-head")
         .pin(None, Some(14.5), Some(22.0), None)
@@ -782,7 +780,7 @@ fn text_panel(s: &AppState, p: Palette, cx: &mut Cx<AppState>) -> El {
         .children((!meta.is_empty()).then(|| text(meta).font(ty::CAPTION).color(p.text_faint).min_w(0.0).truncate()))
         .child(undo)
         .child(redo)
-        .children(clear)
+        .child(clear)
         .child(open)
         .child(super::book::mode_switch(s, p));
     // The head is pinned over the panel's top edge: in a narrow window it stops short of the title.

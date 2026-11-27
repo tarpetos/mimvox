@@ -1,7 +1,10 @@
 import importlib.util
+import json
 import os
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -469,3 +472,25 @@ def test_the_last_voice_model_is_not_removed(tmp_path):
     s.components = {"speech", "omnivoice"}
     assert setup.remove_components(s, "omnivoice") == 1
     assert (s.omnivoice_model / "model.safetensors").is_file()
+
+
+def test_a_step_reports_progress_from_what_it_writes(tmp_path, monkeypatch, capsys):
+    used = [10 * 10**9]
+    monkeypatch.setattr(setup, "GUI", True)
+    monkeypatch.setattr(setup.shutil, "disk_usage", lambda _path: SimpleNamespace(used=used[0]))
+    meter = setup.StepMeter(tmp_path, "omnivoice", 2.0)
+    used[0] += 10**9
+    time.sleep(1.3)
+    used[0] += 5 * 10**9
+    time.sleep(1.1)
+    assert meter.stop() == pytest.approx(6.0)
+    sent = [json.loads(line.removeprefix("@@mimvox ")) for line in capsys.readouterr().out.splitlines()]
+    assert sent[0] == {"event": "progress", "id": "omnivoice", "done": 0.5}
+    assert sent[-1]["done"] == 0.97
+
+
+def test_step_sizes_follow_the_device(tmp_path):
+    cpu, gpu = make(tmp_path / "a"), make(tmp_path / "b", gpu=setup.Gpu("cuda"))
+    assert gpu.step_gb("engine_env") > cpu.step_gb("engine_env")
+    assert cpu.step_gb("chatterbox_models") == setup.CLONE_MODELS["chatterbox"]["download_gb"]
+    assert cpu.step_gb("runtime_toml") == 0.05

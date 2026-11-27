@@ -1210,6 +1210,7 @@ fn voice_menu(s: &AppState, p: Palette) -> El {
 
 fn engine_banner(s: &AppState, p: Palette) -> Option<El> {
     let (title, detail) = match &s.shell.engine {
+        EngineStatus::Stopped { .. } if super::setuprun::running(s) => return None,
         EngineStatus::Stopped { code, detail } => (
             "The voice engine stopped".to_owned(),
             if detail.is_empty() {
