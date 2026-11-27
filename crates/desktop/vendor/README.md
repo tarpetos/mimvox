@@ -108,3 +108,13 @@ default now fades in as before and removes at once (`default_transition`: the ex
 Elements that set `El::transition` (menus, popovers, toasts) keep theirs.
 
 Touched: `src/runtime/commit/apply.rs`. Lines are marked `PATCH`.
+
+### Patch 9: file drops on Wayland
+
+winit 0.30 reports file drags only on X11, Windows and macOS: on a Wayland session nothing could be dropped on the
+window. `platform::wayland_drop` binds `wl_data_device` on winit's own display connection, in a private queue (as
+`platform::activation` does), accepts an offer with `text/uri-list` over the window's surface, reads the list through a
+pipe when the drag enters (waiting at most 0.5 s for the source app), and hands `Host::flush_files` the same enter,
+move, drop and leave steps, in window points, as Windows' OLE target (`platform::win32::drop_target`).
+
+Touched: `src/platform/wayland_drop.rs` (new), `src/platform.rs`, `src/window/events.rs`. Lines are marked `PATCH`.

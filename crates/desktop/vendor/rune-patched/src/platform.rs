@@ -8,6 +8,8 @@ pub(crate) mod display_link;
 pub mod embed;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(crate) mod layer_shell;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(crate) mod wayland_drop; // PATCH
 #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) mod layer_shell_machine;
 #[cfg(target_os = "macos")]
