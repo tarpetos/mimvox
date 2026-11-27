@@ -124,3 +124,10 @@ def test_the_last_voice_model_stays_on(tmp_path, no_omnivoice):
     with pytest.raises(EngineError) as e:
         asyncio.run(components.components_set(ctx, {"id": "chatterbox", "on": False}))
     assert e.value.code == "bad_request"
+
+
+def test_the_runtime_folder_is_found_without_applio_or_omnivoice(tmp_path):
+    from mimvox_engine import config
+
+    py = tmp_path / "runtime" / "engine" / ".venv" / "bin" / "python"
+    assert config.runtime_root({"python": {"engine": str(py)}, "paths": {}}) == tmp_path / "runtime"
