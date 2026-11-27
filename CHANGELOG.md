@@ -1,13 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.6.2
 
 * **One running copy on Linux and macOS:** starting Mimvox again while it runs brings its window forward instead of
   opening a second one with its own engine, as on Windows.
 * **Linux:** files can be dropped on the window on Wayland (GNOME, KDE and others), not only on X11.
 * **Smoother screens:** an element that is replaced leaves at once instead of fading out over the new one, and the
   side column, the Updates foot, voice cards and Record's picker no longer jump while they change.
-
 * **Redub without the translation model:** Re-speak's **Translate the transcript** is disabled, with the install card
   under it, instead of failing with *The engine is still loading its models*. Speak and Redub now show the engine's
   own reason when something is not installed, instead of that message.

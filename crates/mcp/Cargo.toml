@@ -1,6 +1,6 @@
 [package]
 name = "mimvox-mcp"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 description = "MCP server for Mimvox, a client of its local HTTP API"
 license = "PolyForm-Noncommercial-1.0.0"
