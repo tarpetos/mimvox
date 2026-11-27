@@ -417,6 +417,7 @@ fn estimate_segments(text: &str) -> usize {
 
 fn friendly_error(code: &str, message: &str) -> String {
     match code {
+        "not_ready" if !message.is_empty() && !message.contains("loading") => shell::sentence(message),
         "not_ready" => "The engine is still loading its models. Try again in a moment.".into(),
         "busy" if message.contains("book") => "A book is being read. Pause it in Book mode to speak other text.".into(),
         "busy" => "The engine is busy with another job. Try again when it finishes.".into(),

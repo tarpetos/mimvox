@@ -106,11 +106,16 @@ impl Run {
     }
 }
 
-fn respeak_lang(r: &RedubState) -> Option<String> {
+fn translating(s: &AppState) -> bool {
+    s.redub.translate && super::setuprun::has(s, "translation")
+}
+
+fn respeak_lang(s: &AppState) -> Option<String> {
+    let r = &s.redub;
     if let Some(l) = r.transcript_lang.as_deref().filter(|l| !l.trim().is_empty()) {
         return Some(l.to_owned());
     }
-    if r.translate {
+    if translating(s) {
         return Some(r.to.clone());
     }
     (!r.from.eq_ignore_ascii_case("auto")).then(|| r.from.clone())
@@ -455,13 +460,15 @@ fn transcription_choices(s: &AppState, p: Palette) -> El {
     let busy = r.busy();
     let from = lang::chip(&p, "respeak-from", &from_label(&r.from), lang::Target::RedubFrom, !busy);
     let to_name = lang_name(&r.to);
-    let translate = kit::checkbox(&p, r.translate, "Translate the transcript", |s| {
+    let installed = super::setuprun::has(s, "translation");
+    let on = translating(s);
+    let translate = kit::checkbox_if(&p, on, installed, "Translate the transcript", |s| {
         if !s.redub.busy() {
             s.redub.translate = !s.redub.translate;
         }
     });
     let mut tr = row().w_full().gap(12.0).center_y().child(el().grow(1.0).min_w(0.0).child(translate));
-    if r.translate {
+    if on {
         tr = tr.child(row().gap(8.0).center_y().child(text("To").font(ty::LABEL).color(p.text)).child(lang::chip(
             &p,
             "respeak-to",
@@ -470,7 +477,9 @@ fn transcription_choices(s: &AppState, p: Palette) -> El {
             !busy,
         )));
     }
-    let tr_note = if r.translate {
+    let tr_note = if !installed {
+        "Needs the translation model: install it below.".to_owned()
+    } else if on {
         format!("The transcript is written in {to_name}, so your cloned voice speaks {to_name}.")
     } else {
         "Your voice speaks the transcript in its own language.".to_owned()
@@ -494,6 +503,7 @@ fn transcription_choices(s: &AppState, p: Palette) -> El {
                 .child(tr)
                 .child(text(tr_note).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)),
         )
+        .children((!installed).then(|| super::setuprun::install_card(s, p, "translation", "")))
         .child(transcribe_row(s, p))
 }
 
@@ -784,7 +794,7 @@ fn start_transcribe(s: &mut AppState) {
     let Some(path) = s.redub.file.as_ref().map(|f| f.path.clone()) else { return };
     let to = s.redub.to.clone();
     let (method, params) =
-        protocol::redub_transcribe(&path, &s.redub.from, s.redub.translate.then_some(to.as_str()), translator(s));
+        protocol::redub_transcribe(&path, &s.redub.from, translating(s).then_some(to.as_str()), translator(s));
     let Some(req) = shell::request(s, method, params) else {
         shell::toast(s, Tone::Danger, "Could not reach the engine.");
         return;
@@ -867,7 +877,7 @@ fn start_render(s: &mut AppState) {
     // A reviewed dub and a Re-speak in English offer the accent choice (Convert keeps the original speech).
     let accent = match mode {
         RedubMode::Dub => speak::accent_param(s, s.redub.transcript_lang.as_deref().unwrap_or(&s.redub.to)),
-        RedubMode::Respeak => respeak_lang(&s.redub).and_then(|l| speak::accent_param(s, &l)),
+        RedubMode::Respeak => respeak_lang(s).and_then(|l| speak::accent_param(s, &l)),
         RedubMode::Convert => None,
     };
     let (method, mut params) = protocol::redub_render(
@@ -952,6 +962,7 @@ pub fn remove_result(s: &mut AppState, id: u64) {
 
 fn friendly_error(code: &str, message: &str) -> String {
     match code {
+        "not_ready" if !message.is_empty() && !message.contains("loading") => shell::sentence(message),
         "not_ready" => "The engine is still loading its models. Try again in a moment.".into(),
         "busy" => "The engine is busy with another job. Try again when it finishes.".into(),
         "not_found" => "That file or voice could not be found.".into(),
@@ -1810,7 +1821,7 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
             .filter(|l| !l.trim().is_empty())
             .map(lang_name)
             .unwrap_or_else(|| from_label(&r.from));
-        let summary = if r.translate {
+        let summary = if translating(s) {
             format!("{heard} · translated to {to_name}")
         } else {
             format!("{heard} · not translated")
@@ -1827,7 +1838,7 @@ fn respeak_block(s: &AppState, p: Palette) -> El {
         if pinned {
             options = options.child(el().w_full().pb(6.0).child(transcription_choices(s, p)));
         }
-        if respeak_lang(r).is_some_and(|l| speak::accent_applies(s, &l)) {
+        if respeak_lang(s).is_some_and(|l| speak::accent_applies(s, &l)) {
             options = options.child(accent_section(s, p, "respeak-accent"));
         }
         options = options.child(output_section(s, p, "respeak"));
@@ -2818,6 +2829,12 @@ fn scene_respeak_transcription(s: &mut AppState) {
     s.redub.fold = Some(Fold::Transcription);
 }
 
+fn scene_respeak_no_translation(s: &mut AppState) {
+    scene_respeak_transcription(s);
+    s.shell.components = Some(vec!["speech".into(), "chatterbox".into()]);
+    s.redub.translate = true;
+}
+
 fn scene_respeak_foreign(s: &mut AppState) {
     scene_transcript(s);
     s.redub.transcript_lang = Some("he".into());
@@ -2896,6 +2913,7 @@ pub fn scenes() -> &'static [super::Scene] {
         ("redub_dub_done", scene_dub_done),
         ("redub_respeak_foreign", scene_respeak_foreign),
         ("redub_respeak_transcription", scene_respeak_transcription),
+        ("redub_respeak_no_translation", scene_respeak_no_translation),
         ("redub_empty", scene_empty),
         ("redub_drop_hover", scene_drop_hover),
         ("redub_file", scene_file),

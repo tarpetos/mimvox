@@ -1110,7 +1110,7 @@ fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>)
 }
 
 /// An engine message (lower case, no full stop) as a sentence.
-fn sentence(message: &str) -> String {
+pub fn sentence(message: &str) -> String {
     let mut chars = message.trim().chars();
     let mut out: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
     if !out.ends_with(['.', '!', '?']) {
