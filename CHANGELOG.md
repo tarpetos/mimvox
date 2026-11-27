@@ -9,8 +9,8 @@
   Speak), and Redub speaks with the model picked instead of always using *Auto*. For programs, `redub.dub` and
   `redub.render` take `model`.
 * **Setup's progress bar** no longer leaps to the end: setup checks which parts are already installed before it
-  starts, asks Hugging Face for the exact size of each model it downloads, and a part that downloads less than its
-  estimate keeps the bar where it is.
+  starts and leaves them out of the bar, asks Hugging Face for the exact size of each model it downloads, and a part
+  that downloads less than its estimate keeps the bar where it is.
 * **Setup's status line** counts what the running part has downloaded (*Downloaded 412 MB of about 900 MB*) instead
   of a file counter that stays at *0/3* until a file is complete, and shows other progress as text instead of a
   terminal progress bar.

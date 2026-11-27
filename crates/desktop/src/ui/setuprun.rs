@@ -558,7 +558,12 @@ pub fn progress(s: &AppState) -> f32 {
         total += weight;
         done += part;
     }
-    if total > 0.0 { (done / total).clamp(0.0, 1.0) } else { 0.0 }
+    if total > 0.0 {
+        return (done / total).clamp(0.0, 1.0);
+    }
+    let steps = s.setup.steps.len().max(1) as f32;
+    s.setup.steps.iter().filter(|st| !matches!(st.state, StepState::Waiting | StepState::Running)).count() as f32
+        / steps
 }
 
 pub fn current(s: &AppState) -> Option<&Step> {
@@ -1006,6 +1011,24 @@ mod tests {
         feed(&mut s, serde_json::json!({"event": "step", "id": "zero_shot_vc", "state": "run"}));
         feed(&mut s, serde_json::json!({"event": "size", "id": "zero_shot_vc", "gb": 1.6}));
         feed(&mut s, serde_json::json!({"event": "progress", "id": "zero_shot_vc", "done": 0.8, "gb": 1.55}));
+        assert!(progress(&s) > 0.95, "{}", progress(&s));
+    }
+
+    #[test]
+    fn steps_already_in_place_do_not_hold_the_bar_back() {
+        let mut s = AppState::default();
+        s.setup.phase = Phase::Running;
+        feed(
+            &mut s,
+            serde_json::json!({"event": "plan", "steps": [
+                {"id": "holos_models", "label": "Ukrainian speech: models", "gb": 0.935},
+                {"id": "chatterbox_env", "label": "Chatterbox: environment", "gb": 0.0},
+                {"id": "chatterbox_models", "label": "Chatterbox: model", "gb": 0.0},
+                {"id": "runtime_toml", "label": "Finishing", "gb": 0.0},
+            ]}),
+        );
+        feed(&mut s, serde_json::json!({"event": "step", "id": "holos_models", "state": "run"}));
+        feed(&mut s, serde_json::json!({"event": "progress", "id": "holos_models", "done": 0.99, "gb": 0.92}));
         assert!(progress(&s) > 0.95, "{}", progress(&s));
     }
 
