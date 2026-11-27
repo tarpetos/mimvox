@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
@@ -384,12 +385,21 @@ def event(**fields: object) -> None:
 class StepMeter:
     """Sends ``progress`` events for a running step from how much the data drive filled against the step's size."""
 
+    current: StepMeter | None = None
+
     def __init__(self, folder: Path, step: str, gb: float) -> None:
         self.folder, self.step, self.expected = folder, step, max(gb, 0.05) * 1e9
         self.start = self._used()
+        self.peak = 0.0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._watch, daemon=True)
+        StepMeter.current = self
         self._thread.start()
+
+    def expect(self, remaining_bytes: int) -> None:
+        """The step's size is what it wrote so far plus ``remaining_bytes`` still to download."""
+        self.expected = max(self.written_gb() * 1e9 + remaining_bytes, 0.05e9)
+        event(event="size", id=self.step, gb=round(self.expected / 1e9, 3))
 
     def _used(self) -> int:
         folder = self.folder
@@ -401,7 +411,9 @@ class StepMeter:
             return 0
 
     def written_gb(self) -> float:
-        return max(0, self._used() - self.start) / 1e9
+        """The most the step had on the drive at once: a download converted and deleted still counts."""
+        self.peak = max(self.peak, max(0, self._used() - self.start) / 1e9)
+        return self.peak
 
     def _watch(self) -> None:
         sent = 0.0
@@ -414,7 +426,41 @@ class StepMeter:
     def stop(self) -> float:
         self._stop.set()
         self._thread.join()
+        if StepMeter.current is self:
+            StepMeter.current = None
         return self.written_gb()
+
+
+def expect_download(remaining_bytes: int | None) -> None:
+    if remaining_bytes is not None and StepMeter.current is not None:
+        StepMeter.current.expect(remaining_bytes)
+
+
+def hf_bytes(repo: str, target: Path, files: Sequence[str] = (), revision: str = "main") -> int | None:
+    """What a Hugging Face download still has to fetch into ``target`` (``files`` empty: the whole repo); ``None``
+    when the Hub cannot be asked."""
+    endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    url = f"{endpoint}/api/models/{repo}/tree/{urllib.parse.quote(revision, safe='')}?recursive=true"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            listing = json.load(response)
+    except (OSError, ValueError):
+        return None
+    sizes = {
+        e["path"]: int((e.get("lfs") or {}).get("size") or e.get("size") or 0)
+        for e in listing
+        if isinstance(e, dict) and e.get("type") == "file" and "path" in e
+    }
+    wanted = [p for p in sizes if not files or p in files]
+    return sum(sizes[p] for p in wanted if not ((target / p).is_file() and (target / p).stat().st_size == sizes[p]))
+
+
+def url_bytes(url: str) -> int | None:
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=15) as response:
+            return int(response.headers.get("Content-Length") or 0) or None
+    except (OSError, ValueError):
+        return None
 
 
 def warn(line: str) -> None:
@@ -1711,6 +1757,7 @@ class Setup:
             say("Whisper turbo checkpoint: present.")
             return
         say("Whisper turbo checkpoint: downloading (about 1.6 GB, resumable)...")
+        expect_download(url_bytes(WHISPER_URL))
         fetch_checked(WHISPER_URL, whisper_dir / WHISPER_FILE, WHISPER_SHA256, "the Whisper checkpoint")
 
     def speech_models(self) -> None:
@@ -1723,6 +1770,7 @@ class Setup:
         else:
             say(f"Translation model: downloading {NLLB_REPO} (about 2.5 GB, resumable)...")
             nllb.mkdir(parents=True, exist_ok=True)
+            expect_download(hf_bytes(NLLB_REPO, nllb, NLLB_FILES))
             # `hf download` through the interpreter (the venv's hf.exe stub breaks when the runtime was moved);
             # an older huggingface_hub without that CLI falls back to snapshot_download.
             code = self.run(
@@ -1765,6 +1813,8 @@ class Setup:
             f"kept as {BETTER_TRANSLATION_GB} GB)..."
         )
         target.mkdir(parents=True, exist_ok=True)
+        fetch = hf_bytes(NLLB_BIG_REPO, target, NLLB_FILES)
+        expect_download(None if fetch is None else fetch + int(BETTER_TRANSLATION_GB * 1e9))
         code = self.run(
             [py, "-I", "-m", "huggingface_hub.cli.hf", "download", NLLB_BIG_REPO, *NLLB_FILES, "--local-dir", target],
             cwd=self.runtime,
@@ -1808,6 +1858,7 @@ class Setup:
             say("Music-removal model (Hybrid Demucs): present.")
             return
         say(f"Music-removal model: downloading Hybrid Demucs (about {DEMUCS_SIZE / 1e6:.0f} MB, resumable)...")
+        expect_download(DEMUCS_SIZE)
         fetch_demucs(self.models_dir)
 
     def has_zero_shot_vc(self) -> bool:
@@ -1835,6 +1886,8 @@ class Setup:
             self._seedvc_install(py, [])
         if self.skip_models:
             return
+        sizes = [hf_bytes(repo, self.seed_vc_models / sub, files, rev) for sub, repo, rev, files in SEEDVC_MODELS]
+        expect_download(None if None in sizes else sum(s or 0 for s in sizes))
         for sub, repo, rev, files in SEEDVC_MODELS:
             target = self.seed_vc_models / sub
             if self._has(target, files):
@@ -2004,6 +2057,7 @@ class Setup:
             return
         target.mkdir(parents=True, exist_ok=True)
         say(f"{spec['label']}: downloading {spec['repo']} (about {spec['download_gb']} GB, resumable)...")
+        expect_download(hf_bytes(spec["repo"], target, spec["files"], spec["revision"]))
         script = (
             "import sys; from huggingface_hub import snapshot_download\n"
             "snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3], "
@@ -2045,6 +2099,8 @@ class Setup:
         target.mkdir(parents=True, exist_ok=True)
         if not self._has(target, HOLOS_FILES):
             say(f"Ukrainian speech: downloading {HOLOS_REPO} (about 0.7 GB, resumable)...")
+            fetch = hf_bytes(HOLOS_REPO, target, HOLOS_FILES, HOLOS_REVISION)
+            expect_download(None if fetch is None else fetch + 200_000_000)
             code = self.run(
                 [
                     py,
@@ -2101,6 +2157,7 @@ class Setup:
         else:
             say(f"OmniVoice model: downloading {OMNIVOICE_REPO} (about 3.3 GB, resumable)...")
             target.mkdir(parents=True, exist_ok=True)
+            expect_download(hf_bytes(OMNIVOICE_REPO, target))
             code = self.run(
                 [py, "-I", "-m", "huggingface_hub.cli.hf", "download", OMNIVOICE_REPO, "--local-dir", target],
                 cwd=self.runtime,

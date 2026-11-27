@@ -459,6 +459,14 @@ fn on_event(s: &mut AppState, v: &Value) {
                 }
             }
         }
+        Some("size") => {
+            let id = str_of("id");
+            if let (Some(step), Some(gb)) =
+                (s.setup.steps.iter_mut().find(|st| st.id == id), v.get("gb").and_then(Value::as_f64))
+            {
+                step.gb = gb as f32;
+            }
+        }
         Some("progress") => {
             let id = str_of("id");
             if let Some(step) = s.setup.steps.iter_mut().find(|st| st.id == id) {
@@ -985,6 +993,20 @@ mod tests {
             status_line(&s),
             "412 MB of about 900 MB · Ukrainian speech: downloading Stanza's Ukrainian models (about 0.2 GB)..."
         );
+    }
+
+    #[test]
+    fn the_size_setup_finds_replaces_the_estimate() {
+        let mut s = AppState::default();
+        s.setup.phase = Phase::Running;
+        feed(
+            &mut s,
+            serde_json::json!({"event": "plan", "steps": [{"id": "zero_shot_vc", "label": "Native accent converter", "gb": 2.0}]}),
+        );
+        feed(&mut s, serde_json::json!({"event": "step", "id": "zero_shot_vc", "state": "run"}));
+        feed(&mut s, serde_json::json!({"event": "size", "id": "zero_shot_vc", "gb": 1.6}));
+        feed(&mut s, serde_json::json!({"event": "progress", "id": "zero_shot_vc", "done": 0.8, "gb": 1.55}));
+        assert!(progress(&s) > 0.95, "{}", progress(&s));
     }
 
     #[test]
