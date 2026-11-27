@@ -5,7 +5,11 @@
     <a href="https://github.com/tarpetos/mimvox/releases/latest"><img src="https://img.shields.io/github/v/release/tarpetos/mimvox?label=release&color=e8743b" alt="Latest release"></a>
     <a href="https://github.com/tarpetos/mimvox/actions/workflows/merged.yml"><img src="https://img.shields.io/github/actions/workflow/status/tarpetos/mimvox/merged.yml?branch=master&label=CI" alt="CI of the last merged pull request"></a>
     <a href="https://github.com/tarpetos/mimvox/releases"><img src="https://img.shields.io/github/downloads/tarpetos/mimvox/total?label=downloads" alt="Downloads"></a>
-    <img src="https://img.shields.io/badge/runs%20on-Linux%20·%20Windows%20·%20macOS-0a7bbb" alt="Runs on Linux, Windows and macOS">
+  </p>
+  <p>
+    <a href="https://github.com/tarpetos/mimvox/releases/latest"><img src="docs/badges/windows.svg" alt="Download for Windows" height="48"></a>
+    <a href="https://github.com/tarpetos/mimvox/releases/latest"><img src="docs/badges/macos.svg" alt="Download for macOS" height="48"></a>
+    <a href="https://github.com/tarpetos/mimvox/releases/latest"><img src="docs/badges/linux.svg" alt="Download for Linux" height="48"></a>
   </p>
   <p><strong>Clone your own voice on your own computer, then type text in English, Ukrainian or about 60 other languages and hear it in your voice.</strong></p>
 </div>
