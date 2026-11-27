@@ -317,7 +317,7 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
 
     let info_col = col().grow(1.0).min_w(0.0).gap(6.0).child(title).child(meta);
 
-    let mut actions = row().gap(8.0).center_y();
+    let mut actions = row().key(format!("voice-actions-{}", info.id)).gap(8.0).center_y().instant_changes();
     if renaming.is_some() {
         actions = actions.child(kit::button(p, "Save", BtnKind::Primary, true, commit_rename)).child(kit::button(
             p,
@@ -352,7 +352,7 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     if active {
         card = card.border(1.5, p.accent);
     }
-    let compact = renaming.is_none() && !confirming;
+    let compact = renaming.is_none();
     let mut top = row().w_full().gap(14.0).center_y().child(avatar).child(info_col);
     if compact {
         top = top.child(actions);
