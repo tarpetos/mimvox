@@ -62,12 +62,30 @@ pub struct Component {
     pub what: &'static str,
 }
 
-pub const COMPONENTS: [Component; 9] = [
+pub const COMPONENTS: [Component; 10] = [
     Component {
         id: "speech",
-        label: "Speech",
-        gb: 12.6,
-        what: "Speak and Book in about 60 languages, and Redub's Re-speak. Always installed.",
+        label: "Speech engine",
+        gb: 9.3,
+        what: "The engine and Whisper, which every voice model and Redub use. Always installed.",
+    },
+    Component {
+        id: "omnivoice",
+        label: "OmniVoice",
+        gb: 3.3,
+        what: "Voice cloning in about 60 languages, the fastest. Speak, Book and Redub.",
+    },
+    Component {
+        id: "voxcpm",
+        label: "VoxCPM2",
+        gb: 6.0,
+        what: "Voice cloning in 30 languages: closest to your voice in other languages, slower.",
+    },
+    Component {
+        id: "chatterbox",
+        label: "Chatterbox",
+        gb: 4.3,
+        what: "Voice cloning in 23 languages: very close to your voice in English, slower.",
     },
     Component {
         id: "training",
@@ -100,19 +118,9 @@ pub const COMPONENTS: [Component; 9] = [
         gb: 1.5,
         what: "Ukrainian with exact word stress in Speak, Book and Redub (HolosTTS): every word as the dictionary and the sentence say.",
     },
-    Component {
-        id: "voxcpm",
-        label: "VoxCPM2",
-        gb: 6.0,
-        what: "Another voice-cloning model for Speak and Book: 30 languages, closest to your voice in other languages, slower.",
-    },
-    Component {
-        id: "chatterbox",
-        label: "Chatterbox",
-        gb: 4.3,
-        what: "Another voice-cloning model for Speak and Book: 23 languages, very close to your voice in English, slower.",
-    },
 ];
+
+pub const SPEECH_MODELS: [&str; 3] = ["omnivoice", "voxcpm", "chatterbox"];
 
 pub fn component(id: &str) -> Option<&'static Component> {
     COMPONENTS.iter().find(|c| c.id == id)
@@ -577,7 +585,7 @@ pub fn scene_running(s: &mut AppState) {
         ("toolchain", "System tools"),
         ("applio_source", "Voice training tools: source"),
         ("engine_env", "Speech engine"),
-        ("omnivoice", "Speech model"),
+        ("omnivoice", "OmniVoice: model"),
         ("speech_models", "Transcription and translation models"),
         ("zero_shot_vc", "Native accent converter"),
         ("applio_env", "Voice training tools: environment"),
@@ -606,33 +614,29 @@ pub fn chosen_gb(s: &AppState) -> f32 {
 
 pub fn chooser(s: &AppState, p: Palette) -> El {
     use super::voices::kit;
-    let mut list = col().key("setup-components").w_full().gap(10.0);
+    let left_out = |id: &str| s.setup.left_out.iter().any(|x| x == id);
+    let models_on = SPEECH_MODELS.iter().filter(|m| !left_out(m)).count();
     let mut total = 0.0;
-    for c in &COMPONENTS {
-        let required = c.id == "speech";
-        let on = required || !s.setup.left_out.iter().any(|x| x == c.id);
+    let mut row_for = |c: &'static Component| {
+        let id = c.id;
+        let required = id == "speech";
+        let on = required || !left_out(id);
         if on {
             total += c.gb;
         }
         let label = format!("{} · {:.1} GB{}", c.label, c.gb, if required { " · required" } else { "" });
-        let id = c.id;
-        let toggle = move |s: &mut AppState| {
-            if id == "speech" {
-                return;
-            }
-            if let Some(i) = s.setup.left_out.iter().position(|x| x == id) {
-                s.setup.left_out.remove(i);
-            } else {
-                s.setup.left_out.push(id.to_owned());
-            }
-        };
-        let check = if required {
+        let last_model = on && models_on == 1 && SPEECH_MODELS.contains(&id);
+        let check = if required || last_model {
             row()
                 .w_full()
                 .gap(12.0)
                 .items_start()
                 .opacity(0.5)
-                .help("Always installed: everything else builds on it.")
+                .help(if required {
+                    "Always installed: everything else builds on it."
+                } else {
+                    "At least one voice-cloning model is installed."
+                })
                 .child(
                     el().size(20.0, 20.0)
                         .radius(super::theme::radius::CONTROL * 0.4)
@@ -642,21 +646,39 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
                 )
                 .child(text(label).font(ty::BODY).color(p.text))
         } else {
-            kit::checkbox(&p, on, &label, toggle)
+            kit::checkbox(&p, on, &label, move |s: &mut AppState| {
+                if let Some(i) = s.setup.left_out.iter().position(|x| x == id) {
+                    s.setup.left_out.remove(i);
+                } else {
+                    s.setup.left_out.push(id.to_owned());
+                }
+            })
         };
-        list = list.child(
-            col()
-                .key(format!("component-{id}"))
-                .w_full()
-                .gap(2.0)
-                .child(check)
-                .child(text(c.what).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0)),
-        );
+        col()
+            .key(format!("component-{id}"))
+            .w_full()
+            .gap(2.0)
+            .child(check)
+            .child(text(c.what).font(ty::CAPTION).color(p.text_faint).wrap().pl(32.0))
+    };
+    let mut list = col().key("setup-components").w_full().gap(10.0);
+    let speech = COMPONENTS.iter().filter(|c| c.id == "speech");
+    for c in speech {
+        list = list.child(row_for(c));
+    }
+    list = list.child(text("Voice-cloning models · at least one").font(ty::OVERLINE).color(p.text_faint).pt(4.0));
+    for c in COMPONENTS.iter().filter(|c| SPEECH_MODELS.contains(&c.id)) {
+        list = list.child(row_for(c));
+    }
+    list = list.child(text("More").font(ty::OVERLINE).color(p.text_faint).pt(4.0));
+    for c in COMPONENTS.iter().filter(|c| c.id != "speech" && !SPEECH_MODELS.contains(&c.id)) {
+        list = list.child(row_for(c));
     }
     let all = s.setup.left_out.is_empty();
+    let keep = SPEECH_MODELS.iter().copied().find(|m| !left_out(m)).unwrap_or("omnivoice");
     let toggle_all = move |s: &mut AppState| {
         s.setup.left_out = if all {
-            COMPONENTS.iter().filter(|c| c.id != "speech").map(|c| c.id.to_owned()).collect()
+            COMPONENTS.iter().filter(|c| c.id != "speech" && c.id != keep).map(|c| c.id.to_owned()).collect()
         } else {
             Vec::new()
         };

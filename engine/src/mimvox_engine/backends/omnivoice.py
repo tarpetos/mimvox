@@ -10,7 +10,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from .. import aio, config, worker_kit
+from .. import aio, components, config, worker_kit
 from ..registry import EngineError
 from ..workerproc import WorkerCancelled, WorkerClient, WorkerDied, WorkerError, child_env, isolated
 from . import SynthParams, TtsBackend
@@ -129,9 +129,15 @@ def _runtime_root(runtime: dict[str, Any]) -> Path | None:
     return config.runtime_root(runtime)
 
 
-def installed(runtime: dict[str, Any]) -> bool:
-    py, model = omnivoice_python(runtime), omnivoice_model_dir(runtime)
-    return bool(py and model and py.is_file() and (model / "model.safetensors").is_file())
+def core_installed(runtime: dict[str, Any]) -> bool:
+    return omnivoice_python(runtime).is_file()
+
+
+def installed(runtime: dict[str, Any], honour_off: bool = True) -> bool:
+    if honour_off and components.off("omnivoice"):
+        return False
+    model = omnivoice_model_dir(runtime)
+    return bool(model and core_installed(runtime) and (model / "model.safetensors").is_file())
 
 
 class OmniVoiceBackend(TtsBackend):
@@ -147,15 +153,27 @@ class OmniVoiceBackend(TtsBackend):
         self.unload_after_s = unload_after_s
         self.last_load: dict[str, Any] = {}
         self._no_memory = ""
+        self._runtime: dict[str, Any] | None = None
+        self._absent = False
+        self._paused = False
 
     def status(self) -> str:
         return self._status
+
+    def available(self) -> bool:
+        return self._status != "missing"
+
+    def probe(self, runtime: dict[str, Any]) -> None:
+        self._runtime = runtime
+        if not installed(runtime):
+            self._absent, self._status = True, "missing"
 
     def status_message(self) -> str | None:
         return self._no_memory if self._status == "no_memory" else None
 
     def set_status(self, status: str) -> None:
-        self._status = status
+        if not self._absent:
+            self._status = status
 
     def _ensure_client(self, runtime: dict[str, Any]) -> WorkerClient:
         if self._client is None:
@@ -187,7 +205,9 @@ class OmniVoiceBackend(TtsBackend):
     async def load(self, runtime: dict[str, Any]) -> None:
         """``ready``, ``missing`` or ``no_memory`` (speech on the CPU of a computer with too little RAM: nothing is
         loaded)."""
-        if not installed(runtime):
+        self._runtime, self._paused = runtime, False
+        self._absent = not installed(runtime)
+        if self._absent:
             self._status = "missing"
             log.warning(
                 "OmniVoice is not installed (venv %s, model %s); run setup",
@@ -228,7 +248,8 @@ class OmniVoiceBackend(TtsBackend):
 
     async def release(self) -> None:
         """Ending the worker frees its VRAM and host RAM at once."""
-        self._status = "paused"
+        self._paused = True
+        self.set_status("paused")
         self._warm.clear()
         if self._client is not None:
             await self._client.stop()
@@ -311,11 +332,13 @@ class OmniVoiceBackend(TtsBackend):
         self._mark_warm(ref)
 
     async def inspect(self, reference: str, detect: bool = True) -> str | None:
-        """Whisper's language of the clip itself (no per-language swap), or None; never raises."""
-        if self._client is None or self._status != "ready":
+        """Whisper's language of the clip itself (no per-language swap), or None; never raises. Writes the clip's
+        transcript too, without the OmniVoice model."""
+        if self._paused or self._runtime is None or not core_installed(self._runtime):
             return None
+        client = self._ensure_client(self._runtime)
         try:
-            res = await self._client.call("inspect", {"ref": reference, "detect": detect}, **self.limits())
+            res = await client.call("inspect", {"ref": reference, "detect": detect}, **self.limits())
         except (WorkerError, WorkerDied, WorkerCancelled) as exc:
             log.warning("OmniVoice could not inspect %s: %s", reference, exc)
             return None

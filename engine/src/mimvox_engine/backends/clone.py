@@ -36,6 +36,7 @@ class WorkerBackend(TtsBackend):
         self._runtime: dict[str, Any] = {}
         self._status = "missing"
         self._loaded = False
+        self._cpu = False
         self.last_load: dict[str, Any] = {}
 
     def python(self, runtime: dict[str, Any]) -> Path | None:
@@ -67,6 +68,8 @@ class WorkerBackend(TtsBackend):
         return self._status in ("idle", "ready")
 
     def _device(self) -> str:
+        if self._cpu:
+            return "cpu"
         device = config.backend(self._runtime)
         return device if device in ("cuda", "mps", "cpu") else "cuda"
 
@@ -128,10 +131,18 @@ class WorkerBackend(TtsBackend):
                 if exc.code != "no_vram":
                     raise
                 stopped = await stop_idle(client)  # the released models' processes still held too much
-                if not stopped:
+                if stopped:
+                    log.warning(
+                        "%s: still no room on the GPU; stopped %s and trying again", self.label, ", ".join(stopped)
+                    )
+                    try:
+                        return await client.call(op, params, retry=False, **limits)
+                    except WorkerError as again:
+                        if again.code != "no_vram":
+                            raise
+                if self._device() != "cuda":
                     raise
-                log.warning("%s: still no room on the GPU; stopped %s and trying again", self.label, ", ".join(stopped))
-                return await client.call(op, params, retry=False, **limits)
+                return await self._on_cpu(op, params)
         except WorkerCancelled as exc:
             raise EngineError("cancelled", "generation cancelled") from exc
         except WorkerError as exc:
@@ -139,6 +150,17 @@ class WorkerBackend(TtsBackend):
             raise EngineError(code, f"{self.label}: {exc.message}") from exc
         except WorkerDied as exc:
             raise EngineError("internal", f"the {self.label} worker stopped: {exc}") from exc
+
+    async def _on_cpu(self, op: str, params: dict[str, Any]) -> dict[str, Any]:
+        log.warning("%s does not fit on the GPU: running it on the processor (much slower)", self.label)
+        if self._client is not None:
+            await self._client.stop()
+        self._client, self._cpu, self._loaded = None, True, False
+        client = self._ensure_client()
+        if op != "load":
+            self.last_load = await client.call("load", {}, timeout=LOAD_TIMEOUT_S)
+            self._loaded = True
+        return await client.call(op, params, **self._limits())
 
     async def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -153,19 +175,18 @@ class WorkerBackend(TtsBackend):
         log.info("%s loaded in %.1fs: %s", self.label, time.time() - t0, self.last_load)
 
     async def _prompt(self, reference: str, lang: str, params: SynthParams) -> dict[str, Any]:
-        """The clip and, when known, the stretch of it that OmniVoice transcribed (start, end, text)."""
+        """The clip and, when known, the stretch of it Whisper transcribed (start, end, text)."""
         if params.reference_text:
             return {"ref": reference, "ref_text": params.reference_text}
         from .omnivoice import OMNIVOICE, reference_for
 
         ref = reference_for(reference, lang)
         side = reflang.read_sidecar(ref)
-        if self.transcript and side is None and OMNIVOICE.status() == "ready":
-            try:
-                await OMNIVOICE.warm(ref, lang)
-            except EngineError as exc:
-                log.warning("%s: no transcript of %s (%s); cloning from the audio only", self.label, ref, exc.message)
+        if self.transcript and side is None:
+            await OMNIVOICE.inspect(str(ref), detect=False)
             side = reflang.read_sidecar(ref)
+            if side is None:
+                log.warning("%s: no transcript of %s; cloning from the audio only", self.label, ref)
         prompt: dict[str, Any] = {"ref": ref}
         if side and side.get("text") and side.get("end"):
             prompt.update(ref_text=str(side["text"]), start=float(side.get("start") or 0.0), end=float(side["end"]))

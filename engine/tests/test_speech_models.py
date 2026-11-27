@@ -92,3 +92,92 @@ def test_setup_installs_what_the_engine_looks_for():
         assert setup.CLONE_STAMP == clone.STAMP
         assert b.name in setup.COMPONENTS
         assert spec["revision"] and len(spec["revision"]) == 40
+
+
+@pytest.fixture
+def no_omnivoice(monkeypatch):
+    from mimvox_engine.backends.omnivoice import OMNIVOICE
+
+    monkeypatch.setattr(OMNIVOICE, "_status", "missing")
+    monkeypatch.setattr(OMNIVOICE, "_absent", True)
+
+
+def test_without_omnivoice_another_model_speaks_its_own_languages(tmp_path, no_omnivoice):
+    assert tts.speech_status() == "missing"
+    probe(install(tmp_path, "chatterbox"))
+    assert tts.speech_status() == "ready"
+    assert backends.languages() == set(clone.CHATTERBOX.languages)
+    assert tts.speech_language({"language": "en"}) == ("en", clone.CHATTERBOX)
+    with pytest.raises(EngineError):
+        tts.speech_language({"language": "uk"})
+
+
+def test_the_last_voice_model_stays_on(tmp_path, no_omnivoice):
+    import asyncio
+    from types import SimpleNamespace
+
+    from mimvox_engine import components
+
+    probe(install(tmp_path, "chatterbox", "voxcpm"))
+    ctx = SimpleNamespace(data_dir=tmp_path)
+    asyncio.run(components.components_set(ctx, {"id": "voxcpm", "on": False}))
+    with pytest.raises(EngineError) as e:
+        asyncio.run(components.components_set(ctx, {"id": "chatterbox", "on": False}))
+    assert e.value.code == "bad_request"
+
+
+def test_the_runtime_folder_is_found_without_applio_or_omnivoice(tmp_path):
+    from mimvox_engine import config
+
+    py = tmp_path / "runtime" / "engine" / ".venv" / "bin" / "python"
+    assert config.runtime_root({"python": {"engine": str(py)}, "paths": {}}) == tmp_path / "runtime"
+
+
+def test_a_model_that_does_not_fit_on_the_gpu_moves_to_the_processor(tmp_path, monkeypatch):
+    import asyncio
+
+    from mimvox_engine.workerproc import WorkerError
+
+    b = clone.CHATTERBOX
+    runtime = install(tmp_path, "chatterbox")
+    runtime["device"] = {"backend": "cuda"}
+    b.probe(runtime)
+    monkeypatch.setattr(b, "_cpu", False)
+    monkeypatch.setattr(b, "_client", None)
+    made = []
+
+    class Client:
+        def __init__(self, device):
+            self.device, self.calls = device, []
+
+        async def call(self, op, params, **kw):
+            self.calls.append(op)
+            if self.device == "cuda":
+                raise WorkerError("no_vram", "no room")
+            return {"op": op}
+
+        async def stop(self):
+            pass
+
+    def ensure(self):
+        if self._client is None:
+            self._client = Client(self._device())
+            made.append(self._client)
+        return self._client
+
+    async def nothing_to_stop(_client):
+        return []
+
+    monkeypatch.setattr(clone.WorkerBackend, "_ensure_client", ensure)
+    monkeypatch.setattr(clone, "stop_idle", nothing_to_stop)
+    assert asyncio.run(b._call("synth", {})) == {"op": "synth"}
+    assert [c.device for c in made] == ["cuda", "cpu"]
+    assert made[1].calls == ["load", "synth"]
+
+
+def test_a_small_card_keeps_less_vram_free(monkeypatch):
+    from mimvox_engine import worker_kit
+
+    monkeypatch.delenv("MIMVOX_VRAM_RESERVE_GB", raising=False)
+    assert worker_kit.vram_reserve_gb(4 * 2**30) == worker_kit.SMALL_CARD_RESERVE_GB
+    assert worker_kit.vram_reserve_gb(12 * 2**30) == worker_kit.VRAM_RESERVE_GB

@@ -208,6 +208,11 @@ fn options(s: &AppState, target: Target) -> Vec<SpeechLanguage> {
                 common: true,
             },
         ),
+        Target::Speak => {
+            if let Some(langs) = super::speak::model_languages(s) {
+                list.retain(|l| langs.contains(&l.code));
+            }
+        }
         Target::Reference => {
             // The voice's own language already has `reference.wav`.
             let own = super::shell::active_voice(s).map(|v| v.lang().to_owned()).unwrap_or_default();

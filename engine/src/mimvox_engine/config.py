@@ -28,7 +28,10 @@ def runtime_root(runtime: dict[str, Any]) -> Path | None:
     if applio:
         return applio.parent
     model = runtime_path(runtime, "paths", "omnivoice_model")
-    return model.parent.parent if model else None
+    if model:
+        return model.parent.parent
+    engine = runtime_path(runtime, "python", "engine")
+    return engine.parents[3] if engine and len(engine.parents) > 3 else None
 
 
 def rvc_python(runtime: dict[str, Any]) -> Path | None:

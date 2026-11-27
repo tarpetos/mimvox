@@ -1,5 +1,5 @@
 use super::components::{Button, Tone, badge, icons};
-use super::setuprun::{self, COMPONENTS, Component};
+use super::setuprun::{self, COMPONENTS, Component, SPEECH_MODELS};
 use super::shell::{self, EngineStatus};
 use super::theme::{Palette, radius, ty};
 use crate::engine::EngineMsg;
@@ -106,7 +106,7 @@ pub fn summary(s: &AppState) -> String {
 
 pub fn section(s: &AppState, p: Palette) -> El {
     let mut body = col().key("modules-list").w_full().gap(12.0).px(6.0).pb(6.0).child(
-        text("Optional parts of the speech engine. Turning one off keeps its files; removing it frees the disk. Speech itself is always installed.")
+        text("Optional parts of the speech engine. Turning one off keeps its files; removing it frees the disk. The speech engine and at least one voice-cloning model are always installed.")
             .font(ty::CAPTION)
             .color(p.text_dim)
             .wrap(),
@@ -127,6 +127,9 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
     let id = c.id;
     let state = status(s, id);
     let blocked = busy_reason(s).is_some() || s.modules.toggle_req.is_some();
+    let last_model = SPEECH_MODELS.contains(&id)
+        && state == Status::On
+        && SPEECH_MODELS.iter().filter(|m| status(s, m) == Status::On).count() == 1;
     let (word, tone) = match state {
         Status::On => ("On", Tone::Success),
         Status::Off => ("Off", Tone::Warning),
@@ -144,7 +147,13 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
                 .child(badge(p, word, tone))
                 .child(text(format!("{:.1} GB", c.gb)).font(ty::CAPTION).color(p.text_faint)),
         )
-        .child(text(c.what).font(ty::CAPTION).color(p.text_dim).wrap());
+        .child(text(c.what).font(ty::CAPTION).color(p.text_dim).wrap())
+        .children(last_model.then(|| {
+            text("The only voice-cloning model: install another one to turn this one off or remove it.")
+                .font(ty::CAPTION)
+                .color(p.text_faint)
+                .wrap()
+        }));
     let mut actions = row().gap(8.0).center_y();
     if s.modules.confirm_remove == Some(id) {
         actions = actions
@@ -183,7 +192,7 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
                         Button::new(if on { "Turn on" } else { "Turn off" })
                             .icon(&icons::POWER)
                             .key(format!("module-toggle-{id}"))
-                            .disabled(blocked)
+                            .disabled(blocked || last_model)
                             .on_press(move |s| set_on(s, id, on))
                             .build(p),
                     )
@@ -191,7 +200,7 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
                         Button::new("Remove")
                             .icon(&icons::TRASH)
                             .key(format!("module-remove-{id}"))
-                            .disabled(blocked)
+                            .disabled(blocked || last_model)
                             .on_press(move |s| s.modules.confirm_remove = Some(id))
                             .build(p),
                     );
@@ -214,6 +223,7 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
 pub fn demo(s: &mut AppState) {
     s.shell.components = Some(vec![
         "speech".into(),
+        "omnivoice".into(),
         "training".into(),
         "translation".into(),
         "music_removal".into(),

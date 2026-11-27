@@ -8,6 +8,12 @@
 * **AppImage:** at each start it adds itself to the list of apps with its icon, keeps that entry pointing at the file
   after an update renames it, and shows its icon on the file in the file manager. The dock shows Mimvox's icon for
   the window (the AppImage and the .deb alike).
+* **Choice of voice-cloning models:** OmniVoice is now an optional part like VoxCPM2 and Chatterbox, so a computer
+  that cannot run it (a 4 GB GPU) can use only the others. Setup's list groups the three as "Voice-cloning models · at
+  least one"; **Settings** > **Modules** never turns off or removes the last one. Speak's **Model** is a menu with
+  *Auto* and each installed model, and with a model picked the language list shows only that model's languages.
+* **4 GB GPUs:** on cards of 6 GB or less the engine keeps 0.5 GB of video memory free instead of 1.5 GB, and VoxCPM2
+  or Chatterbox that still does not fit runs on the processor (much slower) instead of failing.
 
 ## 0.6.0
 

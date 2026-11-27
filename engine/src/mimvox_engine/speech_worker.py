@@ -226,7 +226,7 @@ def pick_device(need_gb, allow_cuda, *others):
                     kit.gpu_fence(start=True)
                     return "cuda"
         log(
-            f"only {free:.1f} GB of VRAM free beyond the {kit.VRAM_RESERVE_GB:.1f} GB reserve (need {need_gb:.1f}): "
+            f"only {free:.1f} GB of VRAM free beyond the {kit.vram_reserve_gb():.1f} GB reserve (need {need_gb:.1f}): "
             "using the CPU"
         )
     for other in others:

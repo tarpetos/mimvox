@@ -1,7 +1,7 @@
 #!/bin/sh
 # Set Mimvox up on macOS or Linux with one command: ./setup.sh [options]
 # It installs uv when missing (Astral's installer; it adds uv to new terminals), then runs tools/setup/setup.py with
-# uv's Python. That installs the build toolchains, the voice runtime (the engine with OmniVoice, Applio, their models) and writes
+# uv's Python. That installs the build toolchains, the voice runtime (the engine, the voice-cloning models, Applio) and writes
 # runtime.toml, and ends with the command that starts the app. Safe to run again: it resumes where it stopped.
 # Options: --data-dir DIR  --skip-toolchain  --skip-models  --cpu  --yes  --quick-check  (see tools/setup/setup.py)
 set -eu
