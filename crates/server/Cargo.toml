@@ -1,6 +1,6 @@
 [package]
 name = "mimvox-server"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 description = "Mimvox local HTTP API, without the window"
 license = "PolyForm-Noncommercial-1.0.0"
