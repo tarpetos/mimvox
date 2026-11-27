@@ -70,3 +70,34 @@ jobs:
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       engine: ${{ needs.changes.outputs.engine == 'true' }}
+
+  result:
+    name: CI result
+    if: always()
+    needs: [title, changes, lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+    steps:
+      - name: Every job passed or was skipped
+        if: github.event.action != 'edited'
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != success ] && [ "$r" != skipped ]; then exit 1; fi
+          done
+
+      - name: The title passed and the code checks of this commit passed
+        if: github.event.action == 'edited'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ needs.title.result }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          [ "$TITLE" = success ] || exit 1
+          last=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?check_name=CI%20result" \
+            --jq '[.check_runs[] | select(.status == "completed" and .conclusion != "skipped")] | sort_by(.completed_at) | last | .conclusion')
+          echo "Last code result: $last"
+          [ "$last" = success ]
