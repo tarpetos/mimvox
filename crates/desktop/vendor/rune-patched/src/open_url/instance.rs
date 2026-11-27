@@ -31,7 +31,11 @@ pub fn single_instance(id: &str) -> bool {
     {
         windows::claim(id)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))] // PATCH
+    {
+        unix::claim(id) // PATCH
+    } // PATCH
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))] // PATCH
     {
         let _ = id;
         true
@@ -53,6 +57,120 @@ pub(crate) fn is_link(arg: &str) -> bool {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn launch_links() -> Vec<String> {
     std::env::args().skip(1).filter(|a| is_link(a)).collect()
+}
+
+#[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))] // PATCH
+pub(crate) use unix::{on_relaunch, take_token}; // PATCH
+
+#[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))] // PATCH
+mod unix {
+    use std::io::{Read, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    const MAGIC: &[u8] = b"rune-instance 1\0";
+    const MAX_MESSAGE: u64 = 1 << 20;
+
+    type Relaunch = Box<dyn Fn() -> bool + Send>;
+
+    static RELAUNCH: Mutex<Option<Relaunch>> = Mutex::new(None);
+    static TOKEN: Mutex<Option<String>> = Mutex::new(None);
+
+    pub(crate) fn on_relaunch(relaunch: impl Fn() -> bool + Send + 'static) {
+        *RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(relaunch));
+    }
+
+    pub(crate) fn take_token() -> Option<String> {
+        TOKEN.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    fn label(id: &str) -> String {
+        // SAFETY: getuid has no failure mode.
+        let uid = unsafe { libc::getuid() };
+        let clean: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' }).collect();
+        format!("rune-instance-{uid}-{clean}")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn bind(id: &str) -> std::io::Result<UnixListener> {
+        use std::os::linux::net::SocketAddrExt;
+        UnixListener::bind_addr(&std::os::unix::net::SocketAddr::from_abstract_name(label(id))?)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn connect(id: &str) -> std::io::Result<UnixStream> {
+        use std::os::linux::net::SocketAddrExt;
+        UnixStream::connect_addr(&std::os::unix::net::SocketAddr::from_abstract_name(label(id))?)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn path(id: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("{}.sock", label(id)))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn bind(id: &str) -> std::io::Result<UnixListener> {
+        UnixListener::bind(path(id))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn connect(id: &str) -> std::io::Result<UnixStream> {
+        UnixStream::connect(path(id))
+    }
+
+    pub(super) fn claim(id: &str) -> bool {
+        for _ in 0..2 {
+            match bind(id) {
+                Ok(listener) => {
+                    listen(listener);
+                    return true;
+                }
+                Err(_) if send(id) => return false,
+                #[cfg(not(target_os = "linux"))]
+                Err(_) => {
+                    let _ = std::fs::remove_file(path(id));
+                }
+                #[cfg(target_os = "linux")]
+                Err(_) => return true,
+            }
+        }
+        true
+    }
+
+    fn send(id: &str) -> bool {
+        let Ok(mut stream) = connect(id) else { return false };
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+        let token = std::env::var("XDG_ACTIVATION_TOKEN").or_else(|_| std::env::var("DESKTOP_STARTUP_ID")).unwrap_or_default();
+        let mut message = MAGIC.to_vec();
+        message.extend(token.into_bytes());
+        for arg in std::env::args().skip(1) {
+            message.push(0);
+            message.extend(arg.into_bytes());
+        }
+        stream.write_all(&message).is_ok()
+    }
+
+    fn listen(listener: UnixListener) {
+        let _ = std::thread::Builder::new().name("rune-instance".into()).spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut message = Vec::new();
+                if stream.take(MAX_MESSAGE).read_to_end(&mut message).is_err() {
+                    continue;
+                }
+                let Some(body) = message.strip_prefix(MAGIC) else { continue };
+                let text = String::from_utf8_lossy(body);
+                let mut parts = text.split('\0');
+                let token = parts.next().filter(|t| !t.is_empty()).map(str::to_owned);
+                *TOKEN.lock().unwrap_or_else(|e| e.into_inner()) = token;
+                if let Some(relaunch) = RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    relaunch();
+                }
+            }
+        });
+    }
 }
 
 /// Windows: the loop's side of a later launch without links (`on_relaunch`), and the window it brings forward.

@@ -98,3 +98,40 @@ the caption cells' width, and the app's buttons are ordinary elements under the 
 
 Touched: `src/window/chrome.rs`, `src/window/create.rs`, `src/window/events.rs`, `src/window/native.rs`,
 `src/input/cursor/os.rs` (`OsCursor::forget`). Lines are marked `PATCH`.
+
+### Patch 8: an element without a transition of its own leaves at once
+
+Upstream gives every element a 0.2 s fade in and a 0.15 s fade out. When the app swaps one element for another in the
+same place (Turn off / Remove for a delete confirmation, one version's notes for another's), the old one kept fading
+out over the new one, and a card that lost children shrank while they were still drawn, so they stuck out of it. The
+default now fades in as before and removes at once (`default_transition`: the exit spring is `Spring::NONE`).
+Elements that set `El::transition` (menus, popovers, toasts) keep theirs.
+
+Touched: `src/runtime/commit/apply.rs`. Lines are marked `PATCH`.
+
+### Patch 9: file drops on Wayland
+
+winit 0.30 reports file drags only on X11, Windows and macOS: on a Wayland session nothing could be dropped on the
+window. `platform::wayland_drop` binds `wl_data_device` on winit's own display connection, in a private queue that
+a thread of its own dispatches (the window's loop read the queue too late: Mutter had cancelled the drop because the
+offer's copy action arrived after the pointer left), accepts an offer with `text/uri-list` over the window's surface, reads the list through a
+pipe on a thread from the moment the drag enters (or at the drop, waiting at most 2 s), and hands `Host::flush_files`
+the same enter, move, drop and leave steps, in window points, as Windows' OLE target (`platform::win32::drop_target`).
+Offers are never destroyed and the queue and bindings are forgotten when the thread ends: an offer destroyed on leave
+could still get events queued for it, and at exit the bindings outlived the display winit had closed; both crashed in
+libwayland.
+`MIMVOX_DEBUG_DROP` prints each step to stderr.
+
+Touched: `src/platform/wayland_drop.rs` (new), `src/platform.rs`, `src/window/events.rs`. Lines are marked `PATCH`.
+
+### Patch 10: one running copy on Linux and macOS
+
+`single_instance` claimed the app only on Windows, so every launch on Linux, and `open -n` or the bare binary on
+macOS, opened another window with its own engine. `open_url::instance` now has a Unix side as well: the first process
+listens on a local socket per user (an abstract name on Linux, a file in the temp folder on macOS, removed and claimed
+again when nobody answers it); a later launch sends its `XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID` and exits. The
+first process reopens as on Windows and passes the token on, so Wayland lets it take focus; a window that already shows
+is brought forward too.
+
+Touched: `src/open_url/instance.rs`, `src/window.rs`, `src/window/app_events.rs`, `src/window/any_host.rs`. Lines are
+marked `PATCH`.

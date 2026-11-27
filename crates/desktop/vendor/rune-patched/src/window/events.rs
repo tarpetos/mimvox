@@ -53,6 +53,8 @@ impl<S: 'static> Host<S> {
         let appkit = self.win.as_ref().map(|l| crate::platform::macos::drop::take(&l.window)).unwrap_or_default();
         #[cfg(target_os = "windows")]
         let ole = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))] // PATCH
+        let wayland = self.win.as_ref().map(|l| crate::platform::wayland_drop::take(&l.window)).unwrap_or_default(); // PATCH
         let Some(l) = self.win.as_ref().filter(|_| self.life.shown()) else {
             self.files = FileDrop::default();
             return;
@@ -84,6 +86,18 @@ impl<S: 'static> Host<S> {
                 Step::Leave => { self.rt.drag_files_leave(); true }
             };
         }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))] // PATCH
+        for step in wayland { // PATCH
+            use crate::platform::wayland_drop::Step; // PATCH
+            let z = self.rt.zoom(); // PATCH
+            let at = |(x, y): (f32, f32)| Some((x / z, y / z)); // PATCH
+            queued |= match step { // PATCH
+                Step::Enter(paths, p) => { self.rt.drag_files(paths, at(p)); true } // PATCH
+                Step::Move(p) => self.rt.drag_files_to(at(p)), // PATCH
+                Step::Drop(paths, p) => { self.rt.drop_files(paths, at(p)); true } // PATCH
+                Step::Leave => { self.rt.drag_files_leave(); true } // PATCH
+            }; // PATCH
+        } // PATCH
         for step in std::mem::take(&mut f.steps) {
             queued = true;
             match step {

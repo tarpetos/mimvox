@@ -263,6 +263,11 @@ pub struct RecordState {
     pub own_language: Option<String>,
     prefs_loaded: bool,
     pub presets: Load<Vec<Preset>>,
+    /// The language changed: `presets` still holds the cards of the one before.
+    presets_stale: bool,
+    /// The language of the request in flight, then of `presets`.
+    presets_asked: String,
+    presets_lang: String,
     pub plan: Option<Plan>,
     pub current: usize,
     pub takes: Vec<Take>,
@@ -766,6 +771,7 @@ impl RecordState {
                     self.languages = langs;
                 }
                 self.presets = Load::Ready(list);
+                self.presets_lang.clone_from(&self.presets_asked);
             }
             (Pending::Presets, Err(e)) => self.presets = Load::Failed(e.message.clone()),
             (Pending::FilesCreate { paths, name }, r) => {
@@ -1145,7 +1151,7 @@ pub fn set_language(s: &mut AppState, code: &str) {
         return;
     }
     s.record.language = code.to_owned();
-    s.record.presets = Load::NotAsked;
+    s.record.presets_stale = true;
     if !s.shell.scripted() {
         super::onboarding::save_setting("record_language", json!(code));
     }
@@ -1198,6 +1204,9 @@ fn begin_in_language(s: &mut AppState, plan: Plan) {
 
 pub fn choose_preset(s: &mut AppState, id: &str) {
     let Load::Ready(list) = &s.record.presets else { return };
+    if !s.record.presets_lang.is_empty() && s.record.presets_lang != s.record.lang() {
+        return;
+    }
     let Some(p) = list.iter().find(|p| p.id == id) else { return };
     let plan = Plan {
         id: p.id.clone(),
@@ -1272,9 +1281,14 @@ pub fn settle(s: &mut AppState) -> bool {
             s.record.language = l;
         }
     }
-    if matches!(s.record.presets, Load::NotAsked) && shell::engine_ready(s) {
-        s.record.presets = Load::Loading;
+    let stale = std::mem::take(&mut s.record.presets_stale);
+    if (stale || matches!(s.record.presets, Load::NotAsked)) && shell::engine_ready(s) {
+        // The cards of the language before stay until the new ones come: the page does not jump.
+        if !matches!(s.record.presets, Load::Ready(_)) {
+            s.record.presets = Load::Loading;
+        }
         let language = s.record.lang().to_owned();
+        s.record.presets_asked.clone_from(&language);
         s.record.request("presets.list", json!({ "language": language }), Pending::Presets);
         changed = true;
     }

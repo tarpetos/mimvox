@@ -370,7 +370,7 @@ impl<S: 'static> Runtime<S> {
             if !was_present || was_exiting {
                 // Presence belongs to the transition. Layout tuning must not replace
                 // the caller's enter/exit springs when this node mounts or revives.
-                let tr = nodes[i].transition.as_deref().copied().unwrap_or_else(Transition::opacity);
+                let tr = nodes[i].transition.as_deref().copied().unwrap_or_else(default_transition); // PATCH
                 // Revive presence first, then let this transaction own the layout retarget.
                 // Scene::insert otherwise starts its default .4 s reflow before our .25 s
                 // menu curve; the equal target makes the intended retarget a no-op.
@@ -411,7 +411,7 @@ impl<S: 'static> Runtime<S> {
             if was_present {
                 // As in SwiftUI, a node leaves with the transition of its last render.
                 if !was_exiting {
-                    self.scene.set_transition(id, nodes[i].transition.as_deref().copied().unwrap_or_else(Transition::opacity));
+                    self.scene.set_transition(id, nodes[i].transition.as_deref().copied().unwrap_or_else(default_transition)); // PATCH
                 }
                 let stack_row = nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some()) || is_virtual
                     || (nodes[i].in_row == RowLayout::Horizontal && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&id)));
@@ -911,4 +911,10 @@ impl<S: 'static> Runtime<S> {
             self.scene.animate(id, prop, to, motion.unwrap_or_else(|| spring.into()));
         }
     }
+}
+
+// PATCH
+fn default_transition() -> Transition {
+    let t = Transition::opacity();
+    t.springs(rune_motion::SpringPair::new(t.springs.enter, Spring::NONE))
 }

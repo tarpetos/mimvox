@@ -154,7 +154,8 @@ fn module_row(s: &AppState, p: Palette, c: &'static Component) -> El {
                 .color(p.text_faint)
                 .wrap()
         }));
-    let mut actions = row().gap(8.0).center_y();
+    // Turn off / Remove and the delete confirmation swap at once: cross-fading, both sets overlapped and overflowed.
+    let mut actions = row().key(format!("module-actions-{id}")).gap(8.0).center_y().instant_changes();
     if s.modules.confirm_remove == Some(id) {
         actions = actions
             .child(text(format!("Delete {:.1} GB?", c.gb)).font(ty::CAPTION).color(p.text_dim))

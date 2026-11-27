@@ -708,18 +708,13 @@ pub(crate) fn side_column(s: &AppState, p: Palette, cx: &mut Cx<AppState>, resul
     let style_h = cx.layout_with("side-style", |r| r[3]).unwrap_or(0.0);
     let cramped = side_h.is_some_and(|h| h < style_h + 16.0 + RESULTS_MIN_H);
     let style = col().key("side-style").w_full().child(style_panel(s, p));
+    // One tree in both layouts: switching while the window resizes only changes sizes and the scroll, and nothing
+    // remounts (it blinked).
+    let list = col().key("side-results").w_full();
+    let list = if cramped { list.min_h(RESULTS_MIN_H) } else { list.grow(1.0).min_h(0.0) };
+    let inner = col().key("side-inner").w_full().gap(16.0).child(style).child(list.child(results(!cramped)));
     let side = col().key("side").w(320.0).h_full();
-    if cramped {
-        side.scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(14.0).child(
-            col()
-                .w_full()
-                .gap(16.0)
-                .child(style)
-                .child(col().key("side-results").w_full().min_h(RESULTS_MIN_H).child(results(false))),
-        )
-    } else {
-        side.gap(16.0).child(style).child(results(true))
-    }
+    if cramped { side.scroll(ScrollSpec { stick_bottom: false }).child(inner) } else { side.child(inner.h_full()) }
 }
 
 const UNDO_HELP: &str = if cfg!(target_os = "macos") { "Undo (Cmd+Z)" } else { "Undo (Ctrl+Z)" };
