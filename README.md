@@ -5,7 +5,8 @@
     <a href="https://github.com/tarpetos/mimvox/releases/latest"><img src="https://img.shields.io/github/v/release/tarpetos/mimvox?label=release&color=e8743b" alt="Latest release"></a>
     <a href="https://github.com/tarpetos/mimvox/actions/workflows/ci.yml?query=branch%3Amaster"><img src="https://github.com/tarpetos/mimvox/actions/workflows/ci.yml/badge.svg?branch=master&event=push" alt="CI"></a>
     <a href="https://github.com/tarpetos/mimvox/releases"><img src="https://img.shields.io/github/downloads/tarpetos/mimvox/total?label=downloads" alt="Downloads"></a>
-    <img src="https://img.shields.io/badge/runs%20on-Linux%20·%20Windows%20·%20macOS-0a7bbb" alt="Runs on Linux, Windows and macOS">  </p>
+    <img src="https://img.shields.io/badge/runs%20on-Linux%20·%20Windows%20·%20macOS-0a7bbb" alt="Runs on Linux, Windows and macOS">
+  </p>
   <p><strong>Clone your own voice on your own computer, then type text in English, Ukrainian or about 60 other languages and hear it in your voice.</strong></p>
 </div>
 
