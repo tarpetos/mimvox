@@ -62,7 +62,19 @@ pub(crate) fn take(window: &Window) -> Vec<Step> {
     })
 }
 
+fn debug() -> bool {
+    std::env::var_os("MIMVOX_DEBUG_DROP").is_some()
+}
+
 fn bind(window: &Window) -> Option<Binding> {
+    let b = bind_inner(window);
+    if debug() {
+        eprintln!("wayland drop: bound {}", b.is_some());
+    }
+    b
+}
+
+fn bind_inner(window: &Window) -> Option<Binding> {
     let (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(handle)) =
         (window.display_handle().ok()?.as_raw(), window.window_handle().ok()?.as_raw())
     else {
@@ -146,7 +158,11 @@ impl Dispatch<WlDataDevice, ()> for State {
             wl_data_device::Event::Enter { serial, surface, x, y, id } => {
                 let Some(offer) = id else { return };
                 let files = state.mimes.get(&offer.id()).is_some_and(|m| m.iter().any(|m| m == URI_LIST));
-                if surface != state.surface || !files {
+                let ours = surface.id().protocol_id() == state.surface.id().protocol_id();
+                if debug() {
+                    eprintln!("wayland drop: enter ours={ours} mimes={:?}", state.mimes.get(&offer.id()));
+                }
+                if !ours || !files {
                     offer.accept(serial, None);
                     return;
                 }
@@ -156,6 +172,9 @@ impl Dispatch<WlDataDevice, ()> for State {
                 }
                 let at = (x as f32, y as f32);
                 let paths = read_paths(&offer, conn);
+                if debug() {
+                    eprintln!("wayland drop: paths {paths:?}");
+                }
                 state.steps.push(Step::Enter(paths.clone(), at));
                 state.current = Some(Current { offer, paths, at });
             }
@@ -166,6 +185,9 @@ impl Dispatch<WlDataDevice, ()> for State {
                 }
             }
             wl_data_device::Event::Drop => {
+                if debug() {
+                    eprintln!("wayland drop: drop {}", state.current.is_some());
+                }
                 if let Some(c) = state.current.take() {
                     state.steps.push(Step::Drop(c.paths, c.at));
                     if c.offer.version() >= 3 {

@@ -750,7 +750,8 @@ fn details(s: &AppState, p: Palette, chosen: Option<&str>, kind: Kind) -> El {
 }
 
 fn action(s: &AppState, p: Palette, v: &str, kind: Kind) -> El {
-    let foot = col().key("updates-action").w_full().gap(10.0);
+    // Another version's foot is another element: its rows never glide in from where the last one's were.
+    let foot = col().key(format!("updates-action-{v}")).w_full().gap(10.0);
     let order = update::compare(v);
     if order == Ordering::Equal {
         return foot.child(
