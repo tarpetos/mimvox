@@ -365,10 +365,34 @@ fn on_line(s: &mut AppState, line: String) {
     if line.contains("hf skills add") || line.trim().is_empty() {
         return;
     }
+    let line = tidy_progress(&line).unwrap_or(line);
     s.setup.log.push_back(line);
     while s.setup.log.len() > LOG_KEEP {
         s.setup.log.pop_front();
     }
+}
+
+/// A tqdm bar ("model.safetensors:  41%|████      | 1.35G/3.30G [00:42<01:01, 31.8MB/s]") as
+/// "model.safetensors: 41% · 1.35G/3.30G · 01:01 left".
+fn tidy_progress(line: &str) -> Option<String> {
+    let (head, rest) = line.split_once("%|")?;
+    let (desc, pct) = head.rsplit_once(':')?;
+    let pct = pct.trim();
+    if pct.is_empty() || !pct.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (_, tail) = rest.split_once('|')?;
+    let (counts, timing) = tail.split_once('[').unwrap_or((tail, ""));
+    let mut out = format!("{}: {pct}%", desc.trim());
+    let counts = counts.trim();
+    if !counts.is_empty() {
+        out.push_str(&format!(" · {counts}"));
+    }
+    let left = timing.split_once('<').and_then(|(_, r)| r.split([',', ']']).next()).map(str::trim);
+    if let Some(left) = left.filter(|l| !l.is_empty() && !l.contains('?')) {
+        out.push_str(&format!(" · {left} left"));
+    }
+    Some(out)
 }
 
 /// The text without terminal colour codes (`ESC [ ... m` and the like).
@@ -896,12 +920,21 @@ mod tests {
     }
 
     #[test]
+    fn a_tqdm_bar_reads_as_text() {
+        let bar = "model.safetensors:  41%|████      | 1.35G/3.30G [00:42<01:01, 31.8MB/s]";
+        assert_eq!(tidy_progress(bar).as_deref(), Some("model.safetensors: 41% · 1.35G/3.30G · 01:01 left"));
+        let files = "Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]";
+        assert_eq!(tidy_progress(files).as_deref(), Some("Fetching 13 files: 0% · 0/13"));
+        assert_eq!(tidy_progress("Downloading torch (782.3MiB)"), None);
+    }
+
+    #[test]
     fn the_hub_token_advice_is_cut_from_a_line() {
         let mut s = AppState::default();
         on_line(
             &mut s,
             "Fetching 13 files:   0%|  | 0/13Warning: You are sending unauthenticated requests to the HF Hub.".into(),
         );
-        assert_eq!(s.setup.log.back().map(String::as_str), Some("Fetching 13 files:   0%|  | 0/13"));
+        assert_eq!(s.setup.log.back().map(String::as_str), Some("Fetching 13 files: 0% · 0/13"));
     }
 }
