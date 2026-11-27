@@ -324,7 +324,8 @@ continues (see [Pause and resume](#pause-and-resume)).
 
 ### `voices.create` / `voices.rename` / `voices.delete`
 `{"name","preset"?,"language"?}` -> `{"voice":{...as in list...}}` (a new voice has no dataset and no reference;
-`language` defaults to `"en"`, `"auto"` also means `"en"`, an unsupported code is `bad_request`) ·
+`language` defaults to `"en"`, `"auto"` also means `"en"`, an unsupported code is `bad_request`; a voice made from
+media files may get another language the speech model speaks from `media.combine`) ·
 `voices.rename {"id","name"?,"language"?}` -> `{"voice":{...}}` (`name` renames; `language` changes the recording
 language, e.g. when the first texts read into a still empty voice are in another language; at least one of the two) ·
 `{"id"}` -> `{}` (removes the whole folder). Names are trimmed to 80 characters.
@@ -475,16 +476,31 @@ speaks. Needs 3-40 s of speech after trimming (`bad_request` otherwise; about 10
 
 ### Combine media files (`media.combine`)
 
-`media.combine {"paths":["...",...],"remove_music"?}` -> `{"path","duration_s","files":[{"name","duration_s","truncated",
-"music_removed"}],"skipped":[{"name","path","reason"}],"unused":["name",...],"music_removed","music_files","music_reason",
-"music_device"}`. Joins many audio / video files of one speaker into one
-mono 16-bit 44.1 kHz WAV under `<data>/tmp/combined/`, cleaned like the media pool below (background music removed when
+`media.combine {"paths":["...",...],"remove_music"?,"language"?,"voice_id"?}` -> `{"path","duration_s","files":[{"name",
+"duration_s","truncated","music_removed"}],"skipped":[{"name","path","reason"}],"unused":["name",...],"language",
+"language_set","music_removed","music_files","music_reason","music_device"}`. Joins many audio / video files of one
+speaker into one mono 16-bit 44.1 kHz WAV under `<data>/tmp/combined/`, cleaned like the media pool below (background music removed when
 `remove_music` says so, DC removed, trimmed, long pauses shortened, loudness normalised, 0.4 s between files, at most 20
 minutes; files past that are `unused`). `remove_music` and the `music_*` fields are as in
 [Reference from media](#reference-from-media-voicesreference_from_media--voicesmedia_cancel--voicesclear_media). Files
 that cannot be read or have no clear speech are `skipped`; none usable -> `bad_request`. The app's Record screen
 imports the result as one take (`recording.check` -> `dataset.add`); it sends the `remove_music` the user last chose on
 the Voices screen, or nothing (`"auto"`) when they never did. It is a plain request (no progress events).
+
+- `language`: `"auto"` asks which language is spoken in the cleaned (and separated) result; omitted or `null`, nothing
+  is detected (`language` `null`, `language_set` false); anything else is `bad_request`. Whisper turbo (the speech
+  worker's `detect_language`) hears up to 5 windows of 30 s spread evenly over the whole result (3 without the GPU: no
+  CUDA, or a training holds it), each window's language probabilities are summed, weighted by its length, and the
+  winner is `language` when it has at least half of the total and the speech model speaks it (else `null`). Without
+  the Whisper model, or when the worker fails, `language` is `null` and the request goes on.
+- `voice_id` (with `language` `"auto"`): a voice that has no recordings (`dataset/part*.wav`) and no trained model
+  takes the detected language as its `language` in `voice.json` (`language_set` true); it may then be any language
+  the speech model speaks, not only a reading language. A voice with recordings keeps its own, and nothing is detected
+  for it. `not_found` for an unknown voice.
+- **App side.** Record's "Use recordings you already have" creates the new voice (`voices.create` with the reading
+  language as a stand-in), sends `media.combine` with `"language":"auto"` and its `voice_id` (the same for "More
+  recordings of" an empty active voice), then stores the result with `dataset.add`; when `language_set`, the result
+  card says "Language: <Language> (heard in the files)." and the voice list is read again.
 
 ### Reference from media (`voices.reference_from_media` / `voices.media_cancel` / `voices.clear_media`)
 The speech model clones from one short clip, so one noisy source makes a metallic clone. Instead, many audio / video files
@@ -1460,7 +1476,10 @@ importable format, also video) and convert it themselves: the app never has to.
   checked before every segment). `audio` may also be `(channels, n)` with 1 or 2 channels (stereo is separated as
   stereo, the model's native input); `out` then has the same shape, and `"background_out":"<.npy>"` also writes the
   accompaniment (drums + bass + other) there. The outputs are memory-mapped files written as `<name>.part.npy` and
-  renamed when done; the reply adds `"channels"`. A `release_gpu` that arrives during a separation waits for that one
+  renamed when done; the reply adds `"channels"`. Language detection: `detect_language {"audio":"<.npy 16 kHz mono
+  float32>","windows":[[start_s,end_s],...],"allow_cuda"}` -> `{"device","windows":[{"start","end","probs":{"<code>":
+  p}}]}` (Whisper's language probabilities of each window, its 5 likeliest; progress stages `load_model` then
+  `detect_language`). A `release_gpu` that arrives during a separation waits for that one
   file, except for a Redub preload's separation (request field `"tag"` in the client's background set), which it
   stops. Expect the worker at about 2-4 GB of host RAM while a model is
   loaded (peak 5.4 GB measured while loading the 600M's fp32 checkpoint; loading the 1.3B's fp16 safetensors afterwards did not raise it),

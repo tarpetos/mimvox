@@ -429,6 +429,11 @@ on, at most 20 minutes) and stored in the voice. The card then says how much cle
 minute is enough to **Speak with it**; with three minutes or more **Train a closer copy** is offered too. Files with
 no clear speech are left out and listed.
 
+The new voice is in the language spoken (or sung) in the files, not in the **Reading language** below: Whisper listens
+to several stretches of the cleaned speech, and the card says, for example, *"Language: Chinese (heard in the
+files)."* When it is unsure, or Whisper is not installed, the voice keeps the reading language. Files added to an
+empty active voice set its language the same way; a voice that already has recordings keeps its own.
+
 ### Pick a preset and a reading language
 
 Reading aloud goes into the voice chosen under **This is for**: the active voice, or **A new voice** (type its name;
