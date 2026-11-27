@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1
 
 * **Linux:** the window no longer has a second, grey title bar above its own on GNOME (Wayland): it draws its own
   minimize, maximize and close buttons as on Windows, moves by its header, resizes by its edges and corners, and

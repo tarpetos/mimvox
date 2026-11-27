@@ -739,7 +739,7 @@ typed is still there after a restart.
 
 The defaults are the validated settings; you do not need to change them.
 
-![The Model choice in the Style panel, with VoxCPM2 and Chatterbox installed](screenshots/usage-speak-models.png)
+![The Model menu in the Style panel, with OmniVoice, VoxCPM2 and Chatterbox installed](screenshots/usage-speak-models.png)
 
 ### Word stress (Ukrainian)
 
