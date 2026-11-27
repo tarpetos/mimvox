@@ -4,8 +4,6 @@ name: CI
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
-  push:
-    branches: [master]
 
 permissions:
   contents: read
@@ -17,7 +15,6 @@ concurrency:
 jobs:
   title:
     name: Conventional title
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Check the title
