@@ -360,7 +360,7 @@ fn voice_card(s: &AppState, p: &Palette, info: &VoiceInfo) -> El {
     } else {
         card = card.child(top).child(row().w_full().gap(8.0).center_y().justify_end().flex_wrap().child(actions));
     }
-    if active && renaming.is_none() && !confirming {
+    if active {
         card = card.child(crate::ui::refclip::section(s, p, info));
         let go = row()
             .w_full()
