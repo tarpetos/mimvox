@@ -557,6 +557,22 @@ pub fn current(s: &AppState) -> Option<&Step> {
     s.setup.steps.iter().find(|st| st.state == StepState::Running)
 }
 
+fn size(gb: f32) -> String {
+    if gb < 1.0 { format!("{:.0} MB", gb * 1000.0) } else { format!("{gb:.1} GB") }
+}
+
+/// The running step's bytes against its size, then the last log line unless it is a download counter.
+pub fn status_line(s: &AppState) -> String {
+    let line = last_line(s).unwrap_or("");
+    let counter = line.contains("% ·") || line.trim_end().ends_with('%');
+    let written = current(s).and_then(|st| st.written.filter(|w| *w >= 0.001).map(|w| (w, st.gb.max(w))));
+    match written {
+        Some((w, of)) if counter || line.is_empty() => format!("Downloaded {} of about {}", size(w), size(of)),
+        Some((w, of)) => format!("{} of about {} · {line}", size(w), size(of)),
+        None => line.to_owned(),
+    }
+}
+
 pub fn last_line(s: &AppState) -> Option<&str> {
     s.setup.log.iter().rev().map(String::as_str).find(|l| !l.trim().is_empty())
 }
@@ -594,10 +610,9 @@ pub fn panel(s: &AppState, p: Palette) -> El {
         c = c.child(progress_bar(p, (!s.setup.steps.is_empty()).then(|| progress(s))));
     }
     c = c.child(list);
-    if running(s)
-        && let Some(line) = last_line(s)
-    {
-        c = c.child(text(line.to_owned()).font(ty::CAPTION).color(p.text_dim).truncate());
+    let line = status_line(s);
+    if running(s) && !line.is_empty() {
+        c = c.child(text(line).font(ty::CAPTION).color(p.text_dim).truncate());
     }
     if s.setup.show_log && !s.setup.log.is_empty() {
         // One line each, cut with an ellipsis: a long path or a progress bar never widens the card.
@@ -798,7 +813,7 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
         let step = current(s).map(|st| st.label.clone()).unwrap_or_else(|| "Starting…".into());
         info = info
             .child(text(format!("Installing {}: {step}", c.label)).font(ty::LABEL).color(p.text))
-            .child(text(last_line(s).unwrap_or("").to_owned()).font(ty::CAPTION).color(p.text_dim).truncate())
+            .child(text(status_line(s)).font(ty::CAPTION).color(p.text_dim).truncate())
             .child(el().w_full().pt(4.0).child(progress_bar(p, Some(progress(s)))));
         Some(Button::new("Cancel").ghost().small().key(format!("install-{id}-cancel")).on_press(cancel).build(p))
     } else {
@@ -950,6 +965,26 @@ mod tests {
         feed(&mut s, serde_json::json!({"event": "step", "id": "holos_env", "state": "ok", "work": true, "gb": 0.1}));
         let after = progress(&s);
         assert!(after >= running && after - running < 0.05, "{running} -> {after}");
+    }
+
+    #[test]
+    fn the_status_line_counts_what_the_step_downloaded() {
+        let mut s = AppState::default();
+        s.setup.phase = Phase::Running;
+        feed(
+            &mut s,
+            serde_json::json!({"event": "plan", "steps": [{"id": "holos_models", "label": "Ukrainian speech: models", "gb": 0.9}]}),
+        );
+        feed(&mut s, serde_json::json!({"event": "step", "id": "holos_models", "state": "run"}));
+        on_line(&mut s, "Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]".into());
+        assert_eq!(status_line(&s), "Fetching 3 files: 0% · 0/3");
+        feed(&mut s, serde_json::json!({"event": "progress", "id": "holos_models", "done": 0.46, "gb": 0.412}));
+        assert_eq!(status_line(&s), "Downloaded 412 MB of about 900 MB");
+        on_line(&mut s, "Ukrainian speech: downloading Stanza's Ukrainian models (about 0.2 GB)...".into());
+        assert_eq!(
+            status_line(&s),
+            "412 MB of about 900 MB · Ukrainian speech: downloading Stanza's Ukrainian models (about 0.2 GB)..."
+        );
     }
 
     #[test]
