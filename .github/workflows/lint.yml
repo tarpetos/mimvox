@@ -20,23 +20,25 @@ env:
 jobs:
   python:
     name: Python
-    if: inputs.python
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        if: inputs.python
 
       - uses: astral-sh/setup-uv@v10.3.3
+        if: inputs.python
 
       - name: ruff format
+        if: inputs.python
         run: uvx "ruff@$RUFF_VERSION" format --check .
 
       - name: ruff check
+        if: inputs.python
         run: uvx "ruff@$RUFF_VERSION" check --output-format github .
 
   rust:
     name: Rust (${{ matrix.name }})
-    if: inputs.rust
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -51,24 +53,28 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+        if: inputs.rust
 
       - uses: dtolnay/rust-toolchain@stable
+        if: inputs.rust
         with:
           components: rustfmt, clippy
 
       - name: cargo fmt
-        if: runner.os == 'Linux'
+        if: inputs.rust && runner.os == 'Linux'
         run: cargo fmt --all --check
 
       - uses: Swatinem/rust-cache@v2
+        if: inputs.rust
 
       - name: Linux build dependencies
-        if: runner.os == 'Linux'
+        if: inputs.rust && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libxkbcommon-dev \
             libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev
 
       - name: cargo clippy
+        if: inputs.rust
         run: cargo clippy --workspace --all-targets -- -D warnings
 
