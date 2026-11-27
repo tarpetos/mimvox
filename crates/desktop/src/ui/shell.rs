@@ -655,7 +655,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     // Header, background and glass panels are cached textures (`El::cache`): uncached, hovering across the window
     // on a 165 Hz display drew whole frames at 36 W on the GPU against 12 W idle.
     let mut overlays: Vec<El> = Vec::new();
-    if s.shell.voice_menu_open {
+    if s.shell.voice_menu_open && s.screen != Screen::Onboarding {
         overlays.push(voice_menu(s, p));
     }
     overlays.extend(super::update::overlay(s, &p));
@@ -796,7 +796,7 @@ fn header(s: &AppState, p: Palette, insets: ChromeInsets, fit: HeaderFit) -> El 
         .center_y()
         .window_drag()
         .child(engine_pill(s, p, fit.tight))
-        .child(voice_pill(s, p));
+        .children((s.screen != Screen::Onboarding).then(|| voice_pill(s, p)));
     col()
         .key("header")
         .w_full()
@@ -949,7 +949,7 @@ fn train_badge(p: Palette, line: &str, on_lens: bool, compact: bool) -> El {
 
 pub struct EngineLook {
     pub tone: Tone,
-    pub label: &'static str,
+    pub label: String,
     pub pulse: bool,
     pub retry: bool,
 }
@@ -961,7 +961,17 @@ pub fn models_missing(s: &AppState) -> bool {
 }
 
 pub fn engine_look(s: &AppState) -> EngineLook {
-    let look = |tone, label, pulse, retry| EngineLook { tone, label, pulse, retry };
+    let look = |tone, label: &str, pulse, retry| EngineLook { tone, label: label.to_owned(), pulse, retry };
+    if super::setuprun::running(s) {
+        let label = match s.setup.steps.is_empty() {
+            true => "Setting up…".to_owned(),
+            false => format!("Setting up · {:.0}%", super::setuprun::progress(s) * 100.0),
+        };
+        return EngineLook { tone: Tone::Accent, label, pulse: true, retry: false };
+    }
+    if s.screen == Screen::Onboarding && s.setup.phase == super::setuprun::Phase::Stopped {
+        return look(Tone::Neutral, "Setup stopped", false, false);
+    }
     match &s.shell.engine {
         EngineStatus::Idle | EngineStatus::Starting { .. } => look(Tone::Warning, "Starting engine…", true, false),
         EngineStatus::Ready { tts, rvc, .. } => {
@@ -988,6 +998,9 @@ pub fn engine_look(s: &AppState) -> EngineLook {
 }
 
 pub fn engine_details(s: &AppState) -> (String, Vec<String>) {
+    if super::setuprun::running(s) {
+        return ("Setup is running; the engine starts again by itself when it finishes.".to_owned(), Vec::new());
+    }
     engine_help(&s.shell.engine, super::setuprun::has(s, "training"), s.shell.tts_message.as_deref())
 }
 
@@ -999,15 +1012,18 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
         help.push('\n');
         help.push_str(&f);
     }
-    glass_edge(
+    // On the start screen it only shows the state: Settings needs the engine, and moving the data folder while
+    // setup writes into it would break the install.
+    let settings = s.screen != Screen::Onboarding;
+    let pill = glass_edge(
         p,
         row()
             .key("engine-pill")
-            .role("button")
-            .label(format!("Engine status and settings: {}", look.label))
+            .role(if settings { "button" } else { "status" })
+            .label(if settings { format!("Engine status and settings: {}", look.label) } else { look.label.clone() })
             .h(32.0)
             .pl(13.0)
-            .pr(11.0)
+            .pr(if settings { 11.0 } else { 13.0 })
             .gap(8.0)
             .center()
             .radius(16.0)
@@ -1017,13 +1033,16 @@ fn engine_pill(s: &AppState, p: Palette, tight: bool) -> El {
             .shadow(3.0, 10.0, p.shadow_soft),
     )
     .motion(motion::UI)
-    .hover(p.glass_hover)
-    .focusable(true)
     .help(help)
-    .on_press(super::settings::open)
     .child(status_dot(p, look.tone, look.pulse))
-    .children((!tight).then(|| text(look.label).font(ty::LABEL).color(p.text).a11y_hidden()))
-    .child(icon_el(&icons::SLIDERS, 14.0, p.text_dim).a11y_hidden())
+    .children((!tight).then(|| text(look.label).font(ty::LABEL).color(p.text).a11y_hidden()));
+    if !settings {
+        return pill;
+    }
+    pill.hover(p.glass_hover)
+        .focusable(true)
+        .on_press(super::settings::open)
+        .child(icon_el(&icons::SLIDERS, 14.0, p.text_dim).a11y_hidden())
 }
 
 fn engine_help(engine: &EngineStatus, training: bool, tts_message: Option<&str>) -> (String, Vec<String>) {

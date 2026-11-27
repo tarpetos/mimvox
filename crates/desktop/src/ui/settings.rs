@@ -229,7 +229,7 @@ fn engine_line(s: &AppState, p: Palette) -> El {
         .grow(1.0)
         .min_w(0.0)
         .gap(2.0)
-        .child(text(look.label).font(ty::LABEL).color(p.text))
+        .child(text(look.label.clone()).font(ty::LABEL).color(p.text))
         .child(text(summary).font(ty::CAPTION).color(p.text_dim).wrap())
         .children((!facts.is_empty()).then(|| text(facts.join(" · ")).font(ty::CAPTION).color(p.text_faint).wrap()));
     row()
