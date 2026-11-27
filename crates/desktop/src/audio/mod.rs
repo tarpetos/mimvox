@@ -39,18 +39,76 @@ fn fetch_max_f32(a: &AtomicU32, v: f32) {
     }
 }
 
-/// Names of the available input devices; the first is the system default.
+/// Names of the available input devices; except on Linux, the first is the system default.
 pub fn input_devices() -> Vec<String> {
     let host = cpal::default_host();
-    let default = host.default_input_device().and_then(|d| d.name().ok());
-    let mut names: Vec<String> =
+    let names: Vec<String> =
         host.input_devices().map(|it| it.filter_map(|d| d.name().ok()).collect()).unwrap_or_default();
-    if let Some(def) = default {
-        names.retain(|n| *n != def);
-        names.insert(0, def);
+    #[cfg(target_os = "linux")]
+    {
+        alsa_cards(names)
     }
-    names.dedup();
-    names
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut names = names;
+        if let Some(def) = host.default_input_device().and_then(|d| d.name().ok()) {
+            names.retain(|n| *n != def);
+            names.insert(0, def);
+        }
+        names.dedup();
+        names
+    }
+}
+
+/// ALSA also lists its plugins ("default", "pipewire", "dsnoop:...") and each card twice (hw: and plughw:):
+/// keep one entry per capture device, plughw: (it converts the sample format and rate) when there is one.
+#[cfg(target_os = "linux")]
+fn alsa_cards(names: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in &names {
+        let Some(dev) = name.strip_prefix("plughw:").or_else(|| name.strip_prefix("hw:")) else { continue };
+        let plug = format!("plughw:{dev}");
+        let pick = if names.contains(&plug) { plug } else { name.clone() };
+        if !out.contains(&pick) {
+            out.push(pick);
+        }
+    }
+    out
+}
+
+/// What the device list shows: the card and device names the kernel gives, for an ALSA "plughw:CARD=X,DEV=N".
+pub fn device_label(name: &str) -> String {
+    #[cfg(target_os = "linux")]
+    if let Some(label) = alsa_label(name) {
+        return label;
+    }
+    name.to_owned()
+}
+
+#[cfg(target_os = "linux")]
+fn alsa_label(name: &str) -> Option<String> {
+    let spec = name.strip_prefix("plughw:").or_else(|| name.strip_prefix("hw:"))?;
+    let field = |key: &str| spec.split(',').find_map(|kv| kv.strip_prefix(key)).map(str::to_owned);
+    let (card, dev) = (field("CARD=")?, field("DEV=").unwrap_or_else(|| "0".into()));
+    let cards = std::fs::read_to_string("/proc/asound/cards").ok()?;
+    // " 2 [Generic        ]: HDA-Intel - HD-Audio Generic"
+    let (index, card_name) = cards.lines().find_map(|line| {
+        let (num, rest) = line.trim_start().split_once(' ')?;
+        let (id, rest) = rest.trim_start().strip_prefix('[')?.split_once(']')?;
+        (id.trim() == card).then(|| (num.parse::<u32>().ok(), rest.split_once(" - ").map(|(_, n)| n.trim().to_owned())))
+    })?;
+    let card_name = card_name.unwrap_or(card);
+    let pcm = index.and_then(|i| {
+        let dev: u32 = dev.parse().ok()?;
+        let pcm = std::fs::read_to_string("/proc/asound/pcm").ok()?;
+        // "02-00: ALC897 Analog : ALC897 Analog : playback 1 : capture 1"
+        let prefix = format!("{i:02}-{dev:02}:");
+        pcm.lines().find_map(|l| l.strip_prefix(&prefix).and_then(|r| r.split(':').nth(1)).map(|n| n.trim().to_owned()))
+    });
+    Some(match pcm.filter(|n| !n.is_empty() && *n != card_name) {
+        Some(device) => format!("{card_name} · {device}"),
+        None => card_name,
+    })
 }
 
 fn pick_input(device: Option<&str>) -> anyhow::Result<cpal::Device> {

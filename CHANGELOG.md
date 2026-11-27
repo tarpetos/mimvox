@@ -14,6 +14,15 @@
   *Auto* and each installed model, and with a model picked the language list shows only that model's languages.
 * **4 GB GPUs:** on cards of 6 GB or less the engine keeps 0.5 GB of video memory free instead of 1.5 GB, and VoxCPM2
   or Chatterbox that still does not fit runs on the processor (much slower) instead of failing.
+* **Setup's progress bar** moves while a step downloads instead of jumping when it ends, leaves out what is already
+  installed (adding a model no longer starts at 95%), and is hidden once setup stops. **Cancel** says that setup was
+  stopped instead of showing the last download line as an error.
+* **After the first setup** the app opens **Record**, not the empty voice list.
+* **While setup runs** the "voice engine stopped" banner with its **Retry** no longer shows: the engine starts again by
+  itself when setup is done.
+* **Linux microphones:** the list shows each microphone once by its name (*HD-Audio Generic · ALC897 Analog*)
+  instead of ALSA's plugins and device codes (*pipewire*, *hw:CARD=Generic,DEV=0*).
+* Speak's **Clear the text** button stays in place, disabled, when there is no text.
 
 ## 0.6.0
 

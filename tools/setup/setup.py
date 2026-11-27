@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -374,9 +375,46 @@ def say(line: str) -> None:
 
 
 def event(**fields: object) -> None:
-    """Only with --gui: ``plan`` (the steps that will run), ``step`` (one starts, succeeds or fails) and ``done``."""
+    """Only with --gui: ``plan`` (the steps that will run), ``step`` (one starts, succeeds or fails), ``progress``
+    (how far the running step is) and ``done``."""
     if GUI:
         print("@@mimvox " + json.dumps(fields), flush=True)
+
+
+class StepMeter:
+    """Sends ``progress`` events for a running step from how much the data drive filled against the step's size."""
+
+    def __init__(self, folder: Path, step: str, gb: float) -> None:
+        self.folder, self.step, self.expected = folder, step, max(gb, 0.05) * 1e9
+        self.start = self._used()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def _used(self) -> int:
+        folder = self.folder
+        while not folder.exists() and folder != folder.parent:
+            folder = folder.parent
+        try:
+            return shutil.disk_usage(folder).used
+        except OSError:
+            return 0
+
+    def written_gb(self) -> float:
+        return max(0, self._used() - self.start) / 1e9
+
+    def _watch(self) -> None:
+        sent = 0.0
+        while not self._stop.wait(1.0):
+            done = min(self.written_gb() * 1e9 / self.expected, 0.97)
+            if done - sent >= 0.005:
+                sent = done
+                event(event="progress", id=self.step, done=round(done, 3))
+
+    def stop(self) -> float:
+        self._stop.set()
+        self._thread.join()
+        return self.written_gb()
 
 
 def warn(line: str) -> None:
@@ -714,6 +752,28 @@ class Setup:
 
     def rvc_python(self) -> Path:
         return venv_python(self.applio / ".venv", self.plat)
+
+    def step_gb(self, step: str) -> float:
+        big = self.gpu.backend == "cuda"
+        sizes = {
+            "toolchain": 0.5,
+            "applio_source": 0.1,
+            "engine_env": 7.7 if big else 2.0,
+            "omnivoice": OMNIVOICE_GB,
+            "whisper": 1.6,
+            "speech_models": 2.5,
+            "better_translation": NLLB_BIG_DOWNLOAD_GB,
+            "separation": SEPARATION_GB,
+            "zero_shot_vc": ZERO_SHOT_GB,
+            "holos_env": UKRAINIAN_GB - 0.9,
+            "holos_models": 0.9,
+            "applio_env": 8.0 if big else 3.0,
+            "applio_models": 4.0,
+        }
+        for name, spec in CLONE_MODELS.items():
+            sizes[f"{name}_env"] = COMPONENTS[name] - float(spec["download_gb"])
+            sizes[f"{name}_models"] = float(spec["download_gb"])
+        return sizes.get(step, 0.05)
 
     def env(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
         env = dict(os.environ)
@@ -2776,11 +2836,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan.append(("applio_models", "Voice training: models"))
     plan.append(("runtime_toml", "Finishing"))
     labels = dict(plan)
-    event(event="plan", steps=[{"id": i, "label": label} for i, label in plan])
+    event(event="plan", steps=[{"id": i, "label": label, "gb": round(setup.step_gb(i), 2)} for i, label in plan])
 
     def attempt(step_id: str, step) -> bool:  # noqa: ANN001 - a bound method
         event(event="step", id=step_id, state="run")
         say(f"== {labels.get(step_id, step_id)} ==")
+        meter = StepMeter(setup.data_dir, step_id, setup.step_gb(step_id)) if GUI else None
         try:
             step()
         except SetupError as error:
@@ -2788,7 +2849,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             failed.append(str(error))
             event(event="step", id=step_id, state="fail", message=str(error))
             return False
-        event(event="step", id=step_id, state="ok")
+        finally:
+            wrote = meter.stop() if meter else 0.0
+        # A step that found everything in place wrote nothing: the app leaves it out of the progress.
+        event(event="step", id=step_id, state="ok", work=wrote >= 0.05)
         return True
 
     def skipped(*step_ids: str) -> None:

@@ -30,6 +30,11 @@ pub struct Step {
     pub label: String,
     pub state: StepState,
     pub message: Option<String>,
+    /// Its share of the progress bar.
+    pub gb: f32,
+    pub done: f32,
+    /// False when it found everything in place: left out of the progress.
+    pub work: bool,
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -40,7 +45,11 @@ pub enum Phase {
     /// True when every step worked.
     Finished(bool),
     Error(String),
+    /// Cancel was pressed.
+    Stopped,
 }
+
+pub const STOPPED: &str = "Setup was stopped. Run it again to continue where it stopped.";
 
 #[derive(Default)]
 pub struct SetupRunState {
@@ -349,6 +358,10 @@ fn on_line(s: &mut AppState, line: String) {
     let line = strip_ansi(&line);
     let line = line.strip_prefix("[setup] ").map(str::to_owned).unwrap_or(line);
     // Advice meant for a developer's terminal, not for this screen.
+    let line = match line.find("Warning: You are sending unauthenticated requests") {
+        Some(at) => line[..at].trim_end().to_owned(),
+        None => line,
+    };
     if line.contains("hf skills add") || line.trim().is_empty() {
         return;
     }
@@ -394,6 +407,9 @@ fn on_event(s: &mut AppState, v: &Value) {
                             label: st.get("label").and_then(Value::as_str).unwrap_or("").to_owned(),
                             state: StepState::Waiting,
                             message: None,
+                            gb: st.get("gb").and_then(Value::as_f64).unwrap_or(0.2) as f32,
+                            done: 0.0,
+                            work: true,
                         })
                         .collect()
                 })
@@ -410,6 +426,13 @@ fn on_event(s: &mut AppState, v: &Value) {
             if let Some(step) = s.setup.steps.iter_mut().find(|st| st.id == id) {
                 step.state = state;
                 step.message = v.get("message").and_then(Value::as_str).map(str::to_owned);
+                step.work = v.get("work").and_then(Value::as_bool).unwrap_or(true);
+            }
+        }
+        Some("progress") => {
+            let id = str_of("id");
+            if let Some(step) = s.setup.steps.iter_mut().find(|st| st.id == id) {
+                step.done = v.get("done").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0) as f32;
             }
         }
         Some("done") => s.setup.phase = Phase::Finished(v.get("ok").and_then(Value::as_bool).unwrap_or(false)),
@@ -424,7 +447,7 @@ fn on_exit(s: &mut AppState, code: Option<i32>, signal: Option<i32>) {
         let cancelled = std::mem::take(&mut *CANCELLED.lock().unwrap_or_else(|e| e.into_inner()));
         s.setup.phase = match code {
             Some(0) => Phase::Finished(true),
-            None if cancelled => Phase::Error("Setup was stopped. Run it again to continue where it stopped.".into()),
+            _ if cancelled => Phase::Stopped,
             None => Phase::Error(match signal {
                 Some(sig) => format!(
                     "Setup crashed (signal {sig}). Run it again; if it keeps crashing, report it on the project's GitHub page."
@@ -435,8 +458,9 @@ fn on_exit(s: &mut AppState, code: Option<i32>, signal: Option<i32>) {
             Some(_) => Phase::Error(last),
         };
     }
+    let stopped = s.setup.phase == Phase::Stopped;
     for step in s.setup.steps.iter_mut().filter(|st| st.state == StepState::Running) {
-        step.state = StepState::Failed;
+        step.state = if stopped { StepState::Waiting } else { StepState::Failed };
     }
     // The engine reads what is installed only when it starts, so it is restarted.
     let ok = s.setup.phase == Phase::Finished(true);
@@ -477,33 +501,18 @@ pub fn stop_on_exit() {
     }
 }
 
-/// Rough share of the work per step (download and install size), for the progress bar.
-fn weight(id: &str) -> f32 {
-    match id {
-        "engine_env" => 6.0,
-        "omnivoice" => 3.3,
-        "speech_models" => 4.5,
-        "better_translation" => 5.5,
-        "zero_shot_vc" => 2.0,
-        "applio_env" => 8.0,
-        "applio_models" => 4.0,
-        "separation" => 0.3,
-        "holos_env" => 1.0,
-        "holos_models" => 0.9,
-        _ => 0.2,
-    }
-}
-
 pub fn progress(s: &AppState) -> f32 {
-    let total: f32 = s.setup.steps.iter().map(|st| weight(&st.id)).sum();
-    let done: f32 = s
-        .setup
-        .steps
-        .iter()
-        .filter(|st| !matches!(st.state, StepState::Waiting | StepState::Running))
-        .map(|st| weight(&st.id))
-        .sum();
-    if total > 0.0 { done / total } else { 0.0 }
+    let counted = s.setup.steps.iter().filter(|st| st.work || !matches!(st.state, StepState::Ok | StepState::Skipped));
+    let (mut total, mut done) = (0.0, 0.0);
+    for st in counted {
+        total += st.gb;
+        done += match st.state {
+            StepState::Waiting => 0.0,
+            StepState::Running => st.gb * st.done,
+            _ => st.gb,
+        };
+    }
+    if total > 0.0 { (done / total).clamp(0.0, 1.0) } else { 0.0 }
 }
 
 pub fn current(s: &AppState) -> Option<&Step> {
@@ -543,10 +552,8 @@ pub fn panel(s: &AppState, p: Palette) -> El {
         list = list.child(r);
     }
     let mut c = col().key("setup-panel").w_full().gap(12.0);
-    if !s.setup.steps.is_empty() {
-        c = c.child(progress_bar(p, Some(progress(s))));
-    } else if running(s) {
-        c = c.child(progress_bar(p, None));
+    if running(s) {
+        c = c.child(progress_bar(p, (!s.setup.steps.is_empty()).then(|| progress(s))));
     }
     c = c.child(list);
     if running(s)
@@ -595,7 +602,15 @@ pub fn scene_running(s: &mut AppState) {
     s.setup.steps = plan
         .iter()
         .zip(states)
-        .map(|((id, label), state)| Step { id: (*id).into(), label: (*label).into(), state, message: None })
+        .map(|((id, label), state)| Step {
+            id: (*id).into(),
+            label: (*label).into(),
+            done: if state == StepState::Running { 0.41 } else { 0.0 },
+            state,
+            message: None,
+            gb: 1.0,
+            work: true,
+        })
         .collect();
     s.setup.log = [
         "== Speech model ==",
@@ -696,7 +711,7 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
                     super::components::Button::new(if all { "Only what is required" } else { "Everything" })
                         .ghost()
                         .small()
-                        .key("components-all")
+                        .key(if all { "components-required" } else { "components-all" })
                         .on_press(toggle_all)
                         .build(p),
                 ),
@@ -761,6 +776,7 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
             .child(el().w_full().pt(4.0).child(progress_bar(p, Some(progress(s)))));
         Some(Button::new("Cancel").ghost().small().key(format!("install-{id}-cancel")).on_press(cancel).build(p))
     } else {
+        let stopped = this && s.setup.phase == Phase::Stopped;
         let failed = this && matches!(s.setup.phase, Phase::Error(_) | Phase::Finished(false));
         info = info.child(text(format!("{} is not installed", c.label)).font(ty::LABEL).color(p.text)).child(
             text(format!(
@@ -779,6 +795,8 @@ pub fn install_card(s: &AppState, p: Palette, id: &str, needed_for: &str) -> El 
                 _ => s.setup.steps.iter().find_map(|st| st.message.clone()).unwrap_or_else(|| "A step failed.".into()),
             };
             info = info.child(text(format!("The last attempt stopped: {why}")).font(ty::CAPTION).color(p.bad).wrap());
+        } else if stopped {
+            info = info.child(text(STOPPED).font(ty::CAPTION).color(p.text_dim).wrap());
         }
         let id_owned = id.to_owned();
         Some(
@@ -862,4 +880,41 @@ pub fn install_line(s: &AppState, p: Palette, id: &str, what: &str) -> El {
                 .on_press(move |s| install(s, &id_owned))
                 .build(p)
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feed(s: &mut AppState, v: serde_json::Value) {
+        on_line(s, format!("@@mimvox {v}"));
+    }
+
+    #[test]
+    fn progress_follows_the_running_step_and_skips_steps_already_done() {
+        let mut s = AppState::default();
+        s.setup.phase = Phase::Running;
+        let plan = serde_json::json!({"event": "plan", "steps": [
+            {"id": "engine_env", "label": "Speech engine", "gb": 7.7},
+            {"id": "chatterbox_env", "label": "Chatterbox: environment", "gb": 1.3},
+            {"id": "chatterbox_models", "label": "Chatterbox: model", "gb": 3.0},
+        ]});
+        feed(&mut s, plan);
+        assert_eq!(progress(&s), 0.0);
+        feed(&mut s, serde_json::json!({"event": "step", "id": "engine_env", "state": "ok", "work": false}));
+        assert_eq!(progress(&s), 0.0);
+        feed(&mut s, serde_json::json!({"event": "step", "id": "chatterbox_env", "state": "run"}));
+        feed(&mut s, serde_json::json!({"event": "progress", "id": "chatterbox_env", "done": 0.5}));
+        assert!((progress(&s) - 0.65 / 4.3).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_hub_token_advice_is_cut_from_a_line() {
+        let mut s = AppState::default();
+        on_line(
+            &mut s,
+            "Fetching 13 files:   0%|  | 0/13Warning: You are sending unauthenticated requests to the HF Hub.".into(),
+        );
+        assert_eq!(s.setup.log.back().map(String::as_str), Some("Fetching 13 files:   0%|  | 0/13"));
+    }
 }

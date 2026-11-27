@@ -264,6 +264,8 @@ pub fn runtime_banner(s: &AppState, p: Palette) -> Option<El> {
         (format!("Updating the runtime: {step}"), setuprun::last_line(s).unwrap_or("").to_owned())
     } else if let setuprun::Phase::Error(e) = &s.setup.phase {
         ("The setup update stopped".to_owned(), e.clone())
+    } else if s.setup.phase == setuprun::Phase::Stopped {
+        ("The setup update stopped".to_owned(), setuprun::STOPPED.to_owned())
     } else if let setuprun::Phase::Finished(false) = &s.setup.phase {
         ("The setup update did not finish".to_owned(), "Some steps failed; run it again to retry them.".to_owned())
     } else {
@@ -386,7 +388,7 @@ fn run_setup(s: &mut AppState) {
 }
 
 fn finish(s: &mut AppState) {
-    s.screen = Screen::Voices;
+    super::shell::set_screen(s, Screen::Record);
 }
 
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
@@ -529,6 +531,9 @@ fn engine_card(p: &Palette, s: &AppState) -> El {
         }
         match &run.phase {
             super::setuprun::Phase::Error(e) => card = card.child(kit::notice(p, Tone::Danger, e)),
+            super::setuprun::Phase::Stopped => {
+                card = card.child(kit::notice(p, Tone::Neutral, super::setuprun::STOPPED))
+            }
             super::setuprun::Phase::Finished(true) => {
                 card = card.child(kit::notice(p, Tone::Success, "Setup finished."))
             }
