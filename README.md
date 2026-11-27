@@ -3,7 +3,7 @@
   <h1>Mimvox</h1>
   <p>
     <a href="https://github.com/tarpetos/mimvox/releases/latest"><img src="https://img.shields.io/github/v/release/tarpetos/mimvox?label=release&color=e8743b" alt="Latest release"></a>
-    <a href="https://github.com/tarpetos/mimvox/actions/workflows/ci.yml"><img src="https://github.com/tarpetos/mimvox/actions/workflows/ci.yml/badge.svg?event=pull_request" alt="CI"></a>
+    <a href="https://github.com/tarpetos/mimvox/actions/workflows/merged.yml"><img src="https://img.shields.io/github/actions/workflow/status/tarpetos/mimvox/merged.yml?branch=master&label=CI" alt="CI of the last merged pull request"></a>
     <a href="https://github.com/tarpetos/mimvox/releases"><img src="https://img.shields.io/github/downloads/tarpetos/mimvox/total?label=downloads" alt="Downloads"></a>
     <img src="https://img.shields.io/badge/runs%20on-Linux%20·%20Windows%20·%20macOS-0a7bbb" alt="Runs on Linux, Windows and macOS">
   </p>

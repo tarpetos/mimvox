@@ -1,0 +1,30 @@
+name: Merged PR CI
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  status:
+    name: CI of the merged pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: The merged pull request passed CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          pr=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then echo "No pull request was merged as $SHA"; exit 1; fi
+          head=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+          result=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$head&event=pull_request" \
+            --jq '[.workflow_runs[] | select(.status == "completed")] | sort_by(.updated_at) | last | .conclusion')
+          echo "Pull request #$pr ($head): CI $result"
+          [ "$result" = success ]
