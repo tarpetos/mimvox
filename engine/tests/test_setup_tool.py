@@ -509,3 +509,27 @@ def test_a_step_already_in_place_is_known_before_the_run(tmp_path):
     stamp.write_text("ok")
     assert s.step_present("chatterbox_models")
     assert not s.step_present("runtime_toml")
+
+
+def test_a_download_still_to_fetch_counts_what_is_missing(tmp_path, monkeypatch):
+    listing = [
+        {"type": "file", "path": "model.safetensors", "size": 135, "lfs": {"size": 3_000_000}},
+        {"type": "file", "path": "config.json", "size": 20},
+        {"type": "directory", "path": "sub"},
+    ]
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, *_):
+            return json.dumps(listing).encode()
+
+    monkeypatch.setattr(setup.urllib.request, "urlopen", lambda *_a, **_k: Response())
+    assert setup.hf_bytes("a/b", tmp_path) == 3_000_020
+    (tmp_path / "config.json").write_text("x" * 20)
+    assert setup.hf_bytes("a/b", tmp_path) == 3_000_000
+    assert setup.hf_bytes("a/b", tmp_path, ("config.json",)) == 0
