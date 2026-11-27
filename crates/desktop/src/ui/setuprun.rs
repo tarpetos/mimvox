@@ -641,34 +641,21 @@ pub fn chooser(s: &AppState, p: Palette) -> El {
         }
         let label = format!("{} · {:.1} GB{}", c.label, c.gb, if required { " · required" } else { "" });
         let last_model = on && models_on == 1 && SPEECH_MODELS.contains(&id);
-        let check = if required || last_model {
-            row()
-                .w_full()
-                .gap(12.0)
-                .items_start()
-                .opacity(0.5)
-                .help(if required {
-                    "Always installed: everything else builds on it."
-                } else {
-                    "At least one voice-cloning model is installed."
-                })
-                .child(
-                    el().size(20.0, 20.0)
-                        .radius(super::theme::radius::CONTROL * 0.4)
-                        .fill(p.text_faint)
-                        .center()
-                        .child(icon_el(&icons::CHECK, 13.0, p.bg_top)),
-                )
-                .child(text(label).font(ty::BODY).color(p.text))
-        } else {
-            kit::checkbox(&p, on, &label, move |s: &mut AppState| {
-                if let Some(i) = s.setup.left_out.iter().position(|x| x == id) {
-                    s.setup.left_out.remove(i);
-                } else {
-                    s.setup.left_out.push(id.to_owned());
-                }
-            })
-        };
+        let locked = required || last_model;
+        let mut check = kit::checkbox_if(&p, on, !locked, &label, move |s: &mut AppState| {
+            if let Some(i) = s.setup.left_out.iter().position(|x| x == id) {
+                s.setup.left_out.remove(i);
+            } else {
+                s.setup.left_out.push(id.to_owned());
+            }
+        });
+        if locked {
+            check = check.help(if required {
+                "Always installed: everything else builds on it."
+            } else {
+                "At least one voice-cloning model is installed."
+            });
+        }
         col()
             .key(format!("component-{id}"))
             .w_full()
