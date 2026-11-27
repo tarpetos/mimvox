@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -28,7 +28,9 @@ pub(crate) enum Step {
 
 struct Current {
     offer: WlDataOffer,
-    paths: Vec<PathBuf>,
+    serial: u32,
+    paths: Option<Vec<PathBuf>>,
+    reading: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
     at: (f32, f32),
 }
 
@@ -41,9 +43,7 @@ struct State {
 }
 
 struct Binding {
-    queue: EventQueue<State>,
-    state: State,
-    _device: WlDataDevice,
+    steps: std::sync::Arc<std::sync::Mutex<Vec<Step>>>,
 }
 
 thread_local! {
@@ -57,8 +57,7 @@ pub(crate) fn take(window: &Window) -> Vec<Step> {
     BINDINGS.with(|b| {
         let mut b = b.borrow_mut();
         let Some(binding) = b.entry(key).or_insert_with(|| bind(window)) else { return Vec::new() };
-        let _ = binding.queue.dispatch_pending(&mut binding.state);
-        std::mem::take(&mut binding.state.steps)
+        std::mem::take(&mut *binding.steps.lock().unwrap_or_else(|e| e.into_inner()))
     })
 }
 
@@ -94,12 +93,57 @@ fn bind_inner(window: &Window) -> Option<Binding> {
     let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), handle.surface.as_ptr().cast()) }.ok()?;
     let surface = WlSurface::from_id(&conn, id).ok()?;
     let _ = conn.flush();
-    let state = State { surface, mimes: HashMap::new(), current: None, selection: None, steps: Vec::new() };
-    Some(Binding { queue, state, _device: device })
+    let mut state = State { surface, mimes: HashMap::new(), current: None, selection: None, steps: Vec::new() };
+    let steps = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let out = steps.clone();
+    let mut queue = queue;
+    // PATCH: answers the compositor at once; the UI thread only wakes now and then during a drag
+    std::thread::Builder::new()
+        .name("wayland-drop".into())
+        .spawn(move || {
+            let _device = device;
+            while queue.dispatch_pending(&mut state).is_ok() {
+                state.poll_read();
+                if !state.steps.is_empty() {
+                    out.lock().unwrap_or_else(|e| e.into_inner()).append(&mut state.steps);
+                }
+                // PATCH: winit destroys the surface before it closes the display; stop reading first
+                if !state.surface.is_alive() || queue.flush().is_err() {
+                    break;
+                }
+                let Some(guard) = queue.prepare_read() else { continue };
+                let mut fds = [libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 }];
+                // SAFETY: one valid pollfd for the duration of the call.
+                let ready = unsafe { libc::poll(fds.as_mut_ptr(), 1, 100) };
+                if ready > 0 && state.surface.is_alive() && guard.read().is_err() {
+                    break;
+                }
+            }
+            // PATCH: dropping them would destroy proxies on the display winit has closed by now
+            std::mem::forget((queue, state, _device));
+        })
+        .ok()?;
+    Some(Binding { steps })
 }
 
-fn read_paths(offer: &WlDataOffer, conn: &Connection) -> Vec<PathBuf> {
-    let Ok((mut reader, writer)) = std::io::pipe() else { return Vec::new() };
+impl State {
+    fn poll_read(&mut self) {
+        let Some(c) = self.current.as_mut() else { return };
+        if c.paths.is_some() {
+            return;
+        }
+        let Some(bytes) = c.reading.as_ref().and_then(|r| r.try_recv().ok()) else { return };
+        let paths = uri_list(&bytes);
+        if debug() {
+            eprintln!("wayland drop: paths {paths:?}");
+        }
+        self.steps.push(Step::Enter(paths.clone(), c.at));
+        c.paths = Some(paths);
+    }
+}
+
+fn start_read(offer: &WlDataOffer, conn: &Connection) -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
+    let (mut reader, writer) = std::io::pipe().ok()?;
     offer.receive(URI_LIST.to_owned(), writer.as_fd());
     let _ = conn.flush();
     drop(writer);
@@ -109,7 +153,7 @@ fn read_paths(offer: &WlDataOffer, conn: &Connection) -> Vec<PathBuf> {
         let _ = reader.read_to_end(&mut bytes);
         let _ = tx.send(bytes);
     });
-    rx.recv_timeout(Duration::from_millis(500)).map(|b| uri_list(&b)).unwrap_or_default()
+    Some(rx)
 }
 
 fn uri_list(bytes: &[u8]) -> Vec<PathBuf> {
@@ -160,7 +204,7 @@ impl Dispatch<WlDataDevice, ()> for State {
                 let files = state.mimes.get(&offer.id()).is_some_and(|m| m.iter().any(|m| m == URI_LIST));
                 let ours = surface.id().protocol_id() == state.surface.id().protocol_id();
                 if debug() {
-                    eprintln!("wayland drop: enter ours={ours} mimes={:?}", state.mimes.get(&offer.id()));
+                    eprintln!("wayland drop: enter ours={ours} v{} mimes={:?}", offer.version(), state.mimes.get(&offer.id()));
                 }
                 if !ours || !files {
                     offer.accept(serial, None);
@@ -171,17 +215,16 @@ impl Dispatch<WlDataDevice, ()> for State {
                     offer.set_actions(DndAction::Copy, DndAction::Copy);
                 }
                 let at = (x as f32, y as f32);
-                let paths = read_paths(&offer, conn);
-                if debug() {
-                    eprintln!("wayland drop: paths {paths:?}");
-                }
-                state.steps.push(Step::Enter(paths.clone(), at));
-                state.current = Some(Current { offer, paths, at });
+                let reading = start_read(&offer, conn);
+                state.current = Some(Current { offer, serial, paths: None, reading, at });
             }
             wl_data_device::Event::Motion { x, y, .. } => {
                 if let Some(c) = state.current.as_mut() {
                     c.at = (x as f32, y as f32);
-                    state.steps.push(Step::Move(c.at));
+                    c.offer.accept(c.serial, Some(URI_LIST.to_owned()));
+                    if c.paths.is_some() {
+                        state.steps.push(Step::Move(c.at));
+                    }
                 }
             }
             wl_data_device::Event::Drop => {
@@ -189,25 +232,37 @@ impl Dispatch<WlDataDevice, ()> for State {
                     eprintln!("wayland drop: drop {}", state.current.is_some());
                 }
                 if let Some(c) = state.current.take() {
-                    state.steps.push(Step::Drop(c.paths, c.at));
+                    let paths = c.paths.or_else(|| {
+                        c.reading.and_then(|r| r.recv_timeout(Duration::from_secs(2)).ok()).map(|b| uri_list(&b))
+                    });
+                    if debug() {
+                        eprintln!("wayland drop: dropped {paths:?}");
+                    }
+                    if let Some(paths) = paths.filter(|p| !p.is_empty()) {
+                        state.steps.push(Step::Drop(paths, c.at));
+                    } else {
+                        state.steps.push(Step::Leave);
+                    }
                     if c.offer.version() >= 3 {
                         c.offer.finish();
                     }
                     state.mimes.remove(&c.offer.id());
-                    c.offer.destroy();
                 }
             }
             wl_data_device::Event::Leave => {
+                if debug() {
+                    eprintln!("wayland drop: leave");
+                }
                 if let Some(c) = state.current.take() {
-                    state.steps.push(Step::Leave);
+                    if c.paths.is_some() {
+                        state.steps.push(Step::Leave);
+                    }
                     state.mimes.remove(&c.offer.id());
-                    c.offer.destroy();
                 }
             }
             wl_data_device::Event::Selection { id } => {
                 if let Some(old) = std::mem::replace(&mut state.selection, id) {
                     state.mimes.remove(&old.id());
-                    old.destroy();
                 }
             }
             _ => {}
@@ -221,8 +276,13 @@ impl Dispatch<WlDataDevice, ()> for State {
 
 impl Dispatch<WlDataOffer, ()> for State {
     fn event(state: &mut Self, offer: &WlDataOffer, event: wl_data_offer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_data_offer::Event::Offer { mime_type } = event {
-            state.mimes.entry(offer.id()).or_default().push(mime_type);
+        match event {
+            wl_data_offer::Event::Offer { mime_type } => state.mimes.entry(offer.id()).or_default().push(mime_type),
+            other => {
+                if debug() {
+                    eprintln!("wayland drop: offer {other:?}");
+                }
+            }
         }
     }
 }
