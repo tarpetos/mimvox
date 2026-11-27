@@ -819,7 +819,7 @@ class Setup:
         for name, spec in CLONE_MODELS.items():
             sizes[f"{name}_env"] = COMPONENTS[name] - float(spec["download_gb"])
             sizes[f"{name}_models"] = float(spec["download_gb"])
-        return sizes.get(step, 0.05)
+        return sizes.get(step, 0.0)
 
     def step_present(self, step: str) -> bool:
         """What a step would find in place, checked before the run so the app's progress leaves it out."""
@@ -2923,7 +2923,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     event(
         event="plan",
         steps=[
-            {"id": i, "label": label, "gb": 0.05 if setup.step_present(i) else round(setup.step_gb(i), 2)}
+            {"id": i, "label": label, "gb": 0.0 if setup.step_present(i) else round(setup.step_gb(i), 2)}
             for i, label in plan
         ],
     )

@@ -493,7 +493,7 @@ def test_step_sizes_follow_the_device(tmp_path):
     cpu, gpu = make(tmp_path / "a"), make(tmp_path / "b", gpu=setup.Gpu("cuda"))
     assert gpu.step_gb("engine_env") > cpu.step_gb("engine_env")
     assert cpu.step_gb("chatterbox_models") == setup.CLONE_MODELS["chatterbox"]["download_gb"]
-    assert cpu.step_gb("runtime_toml") == 0.05
+    assert cpu.step_gb("runtime_toml") == 0.0
 
 
 def test_a_step_already_in_place_is_known_before_the_run(tmp_path):
